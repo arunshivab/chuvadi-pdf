@@ -1,190 +1,237 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// PHASE: Phase 2.0 — SVG export
+// PHASE: v2.0.0 R2 — SVG renderer
 
-using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
 namespace Chuvadi.Pdf.Svg;
 
 /// <summary>
-/// Builds an SVG document incrementally. Tracks open elements for proper closing.
+/// Internal helper that accumulates SVG text deterministically. Provides
+/// invariant-culture float formatting with fixed precision, XML attribute
+/// escaping, and monotonic id allocation.
 /// </summary>
 internal sealed class SvgWriter
 {
-    private readonly StringBuilder _body = new();
-    private readonly StringBuilder _defs = new();
-    private readonly StringBuilder _styles = new();
-    private readonly Stack<string> _openElements = new();
-    private readonly string _coordFormat;
+    private readonly StringBuilder _sb;
+    private readonly string _floatFormat;
+    private readonly bool _indent;
+    private int _depth;
+    private int _idCounter;
 
-    internal SvgWriter(int precision)
+    internal SvgWriter(int decimalPrecision, bool indent)
     {
-        _coordFormat = "0." + new string('#', precision);
+        _sb = new StringBuilder(4096);
+        _floatFormat = "0." + new string('#', decimalPrecision);
+        _indent = indent;
+        _depth = 0;
+        _idCounter = 0;
     }
 
-    internal void StartSvg(double width, double height)
-    {
-        _body.Append("<svg xmlns=\"http://www.w3.org/2000/svg\" ");
-        _body.Append("xmlns:xlink=\"http://www.w3.org/1999/xlink\" ");
-        _body.AppendFormat(CultureInfo.InvariantCulture,
-            "width=\"{0}\" height=\"{1}\" viewBox=\"0 0 {0} {1}\">",
-            F(width), F(height));
-    }
-
-    /// <summary>
-    /// Emits the page-level coordinate flip (PDF bottom-left → SVG top-left)
-    /// as an outer group. All subsequent content uses PDF-native coordinates.
-    /// </summary>
-    internal void OpenPageFlip(double pageHeight)
-    {
-        _body.AppendFormat(CultureInfo.InvariantCulture,
-            "<g transform=\"matrix(1 0 0 -1 0 {0})\">", F(pageHeight));
-        _openElements.Push("g");
-    }
-
-    internal void OpenGroup(string? transform = null, string? clipPathId = null,
-        string? extraAttrs = null)
-    {
-        _body.Append("<g");
-        if (transform is not null) { _body.Append(" transform=\"").Append(transform).Append('"'); }
-        if (clipPathId is not null) { _body.Append(" clip-path=\"url(#").Append(clipPathId).Append(")\""); }
-        if (extraAttrs is not null) { _body.Append(' ').Append(extraAttrs); }
-        _body.Append('>');
-        _openElements.Push("g");
-    }
-
-    internal void CloseGroup()
-    {
-        if (_openElements.Count == 0 || _openElements.Peek() != "g")
-        {
-            throw new System.InvalidOperationException("Mismatched group close.");
-        }
-        _openElements.Pop();
-        _body.Append("</g>");
-    }
-
-    internal void EmitPath(string d, string? fill, string? stroke,
-        double strokeWidth, string? fillRule = null, string? extraAttrs = null)
-    {
-        _body.Append("<path d=\"").Append(d).Append('"');
-        _body.Append(" fill=\"").Append(fill ?? "none").Append('"');
-        if (stroke is not null)
-        {
-            _body.Append(" stroke=\"").Append(stroke).Append('"');
-            _body.AppendFormat(CultureInfo.InvariantCulture,
-                " stroke-width=\"{0}\"", F(strokeWidth));
-        }
-        if (fillRule is not null) { _body.Append(" fill-rule=\"").Append(fillRule).Append('"'); }
-        if (extraAttrs is not null) { _body.Append(' ').Append(extraAttrs); }
-        _body.Append("/>");
-    }
-
-    internal void EmitText(string content, double x, double y, string fontFamily,
-        double fontSize, string fill, string? transform = null)
-    {
-        _body.Append("<text");
-        if (transform is not null) { _body.Append(" transform=\"").Append(transform).Append('"'); }
-        _body.AppendFormat(CultureInfo.InvariantCulture,
-            " x=\"{0}\" y=\"{1}\"", F(x), F(y));
-        _body.Append(" font-family=\"").Append(fontFamily).Append('"');
-        _body.AppendFormat(CultureInfo.InvariantCulture,
-            " font-size=\"{0}\"", F(fontSize));
-        _body.Append(" fill=\"").Append(fill).Append('"');
-        _body.Append('>').Append(EscapeXml(content)).Append("</text>");
-    }
-
-    internal void EmitImage(string href, double x, double y, double width, double height,
-        string? transform = null)
-    {
-        _body.Append("<image");
-        if (transform is not null) { _body.Append(" transform=\"").Append(transform).Append('"'); }
-        _body.AppendFormat(CultureInfo.InvariantCulture,
-            " x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{3}\"",
-            F(x), F(y), F(width), F(height));
-        _body.Append(" xlink:href=\"").Append(href).Append("\"/>");
-    }
-
-    /// <summary>Adds a clipPath definition; returns the assigned id.</summary>
-    internal string AddClipPath(string pathData, string fillRule = "nonzero")
-    {
-        string id = $"clip{_defs.Length:X}_{pathData.GetHashCode():X}";
-        _defs.Append("<clipPath id=\"").Append(id).Append("\">");
-        _defs.Append("<path d=\"").Append(pathData).Append("\" clip-rule=\"")
-            .Append(fillRule).Append("\"/></clipPath>");
-        return id;
-    }
-
-    /// <summary>Adds an <c>@font-face</c> rule.</summary>
-    internal void AddFontFace(string family, string dataUrl, string format)
-    {
-        _styles.Append("@font-face{font-family:\"").Append(family).Append("\";src:url(")
-            .Append(dataUrl).Append(") format(\"").Append(format).Append("\");}");
-    }
+    internal int Length => _sb.Length;
 
     internal string ToSvgString()
     {
-        StringBuilder result = new();
-        // Output: open svg, then <defs> (with style + clip-paths), then body, then close.
-        result.Append(_body.ToString());
-        // Insert <defs> after the opening <svg ...>. Look for the first '>'.
-        string built = result.ToString();
-        int firstClose = built.IndexOf('>');
-        StringBuilder finished = new();
-        finished.Append(built, 0, firstClose + 1);
-        if (_defs.Length > 0 || _styles.Length > 0)
-        {
-            finished.Append("<defs>");
-            if (_styles.Length > 0)
-            {
-                finished.Append("<style type=\"text/css\">").Append(_styles).Append("</style>");
-            }
-            finished.Append(_defs);
-            finished.Append("</defs>");
-        }
-        finished.Append(built, firstClose + 1, built.Length - firstClose - 1);
-        // Close any still-open groups (defensively).
-        while (_openElements.Count > 0)
-        {
-            string el = _openElements.Pop();
-            finished.Append("</").Append(el).Append('>');
-        }
-        finished.Append("</svg>");
-        return finished.ToString();
+        return _sb.ToString();
     }
 
-    /// <summary>Formats a coordinate with configured precision.</summary>
-    internal string F(double v)
+    /// <summary>Allocates the next stable id. Format: "c0", "c1", "c2", ...</summary>
+    internal string NextClipId()
     {
-        if (double.IsNaN(v) || double.IsInfinity(v)) { return "0"; }
-        return v.ToString(_coordFormat, CultureInfo.InvariantCulture);
+        string id = "c" + _idCounter.ToString(CultureInfo.InvariantCulture);
+        _idCounter++;
+        return id;
     }
 
-    private static string EscapeXml(string text)
+    /// <summary>Allocates the next stable glyph-defs id. Format: "g0", "g1", ...</summary>
+    internal string NextGlyphId()
     {
-        StringBuilder sb = new(text.Length + 8);
-        foreach (char ch in text)
+        string id = "g" + _idCounter.ToString(CultureInfo.InvariantCulture);
+        _idCounter++;
+        return id;
+    }
+
+    internal void WriteRaw(string s)
+    {
+        _sb.Append(s);
+    }
+
+    internal void WriteLine()
+    {
+        if (_indent)
         {
-            switch (ch)
+            _sb.Append('\n');
+        }
+    }
+
+    internal void WriteIndent()
+    {
+        if (_indent)
+        {
+            for (int i = 0; i < _depth; i++)
             {
-                case '<':  sb.Append("&lt;");   break;
-                case '>':  sb.Append("&gt;");   break;
-                case '&':  sb.Append("&amp;");  break;
-                case '"':  sb.Append("&quot;"); break;
-                case '\'': sb.Append("&apos;"); break;
-                default:
-                    if (ch < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
-                    {
-                        sb.Append(' ');   // Control char → space.
-                    }
-                    else
-                    {
-                        sb.Append(ch);
-                    }
-                    break;
+                _sb.Append("  ");
             }
         }
-        return sb.ToString();
+    }
+
+    internal void OpenTag(string name)
+    {
+        WriteIndent();
+        _sb.Append('<');
+        _sb.Append(name);
+    }
+
+    internal void CloseStartTag()
+    {
+        _sb.Append('>');
+        WriteLine();
+        _depth++;
+    }
+
+    internal void SelfCloseTag()
+    {
+        _sb.Append("/>");
+        WriteLine();
+    }
+
+    internal void CloseTag(string name)
+    {
+        _depth--;
+        WriteIndent();
+        _sb.Append("</");
+        _sb.Append(name);
+        _sb.Append('>');
+        WriteLine();
+    }
+
+    /// <summary>Writes a string attribute with XML escaping.</summary>
+    internal void Attr(string name, string value)
+    {
+        _sb.Append(' ');
+        _sb.Append(name);
+        _sb.Append("=\"");
+        AppendEscaped(value);
+        _sb.Append('"');
+    }
+
+    /// <summary>Writes an integer attribute.</summary>
+    internal void Attr(string name, int value)
+    {
+        _sb.Append(' ');
+        _sb.Append(name);
+        _sb.Append("=\"");
+        _sb.Append(value.ToString(CultureInfo.InvariantCulture));
+        _sb.Append('"');
+    }
+
+    /// <summary>Writes a double attribute using the configured precision.</summary>
+    internal void AttrDouble(string name, double value)
+    {
+        _sb.Append(' ');
+        _sb.Append(name);
+        _sb.Append("=\"");
+        AppendDouble(value);
+        _sb.Append('"');
+    }
+
+    /// <summary>Writes a literal attribute value with no escaping (caller-validated).</summary>
+    internal void AttrLiteral(string name, string literalValue)
+    {
+        _sb.Append(' ');
+        _sb.Append(name);
+        _sb.Append("=\"");
+        _sb.Append(literalValue);
+        _sb.Append('"');
+    }
+
+    internal void AppendDouble(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            // Non-finite values would corrupt the SVG; clamp to 0 silently.
+            _sb.Append('0');
+            return;
+        }
+
+        // ToString with the format pattern strips trailing zeros via the '#'
+        // placeholders, while InvariantCulture keeps '.' as the decimal
+        // separator across locales.
+        string text = value.ToString(_floatFormat, CultureInfo.InvariantCulture);
+
+        // Format leaves "0." (or "-0." etc.) when fraction rounds to zero;
+        // strip the trailing dot so we emit "0" rather than "0.".
+        if (text.Length > 0 && text[text.Length - 1] == '.')
+        {
+            text = text.Substring(0, text.Length - 1);
+        }
+
+        // Avoid the negative-zero string "-0".
+        if (text == "-0")
+        {
+            text = "0";
+        }
+
+        _sb.Append(text);
+    }
+
+    /// <summary>
+    /// Appends a string to the buffer with the five XML attribute escapes
+    /// applied: &amp; &lt; &gt; &quot; &apos;.
+    /// </summary>
+    internal void AppendEscaped(string value)
+    {
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+
+            switch (c)
+            {
+                case '&': _sb.Append("&amp;"); break;
+                case '<': _sb.Append("&lt;"); break;
+                case '>': _sb.Append("&gt;"); break;
+                case '"': _sb.Append("&quot;"); break;
+                case '\'': _sb.Append("&apos;"); break;
+                default: _sb.Append(c); break;
+            }
+        }
+    }
+
+    /// <summary>Appends a space-separated number to a path "d" buffer.</summary>
+    internal void AppendPathNumber(StringBuilder buffer, double value, bool needsLeadingSpace)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            if (needsLeadingSpace)
+            {
+                buffer.Append(' ');
+            }
+
+            buffer.Append('0');
+            return;
+        }
+
+        string text = value.ToString(_floatFormat, CultureInfo.InvariantCulture);
+
+        if (text.Length > 0 && text[text.Length - 1] == '.')
+        {
+            text = text.Substring(0, text.Length - 1);
+        }
+
+        if (text == "-0")
+        {
+            text = "0";
+        }
+
+        // SVG path data allows omitting the separator before a negative
+        // number; emit a space only when the previous character would
+        // otherwise concatenate digits.
+        if (needsLeadingSpace && text.Length > 0 && text[0] != '-')
+        {
+            buffer.Append(' ');
+        }
+
+        buffer.Append(text);
     }
 }

@@ -1,7 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §12.5.6 — Annotation types
-// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations
+// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations (v2.0.0 R3 adds shape subtypes)
 
 namespace Chuvadi.Pdf.Annotations;
 
@@ -42,4 +42,19 @@ public enum AnnotationType
 
     /// <summary>Free-hand ink annotation (§12.5.6.13).</summary>
     Ink,
+
+    /// <summary>Square (axis-aligned rectangle outline) shape annotation (§12.5.6.8).</summary>
+    Square,
+
+    /// <summary>Circle (ellipse) shape annotation (§12.5.6.8).</summary>
+    Circle,
+
+    /// <summary>Straight-line shape annotation (§12.5.6.7).</summary>
+    Line,
+
+    /// <summary>Open polyline shape annotation (§12.5.6.9).</summary>
+    Polyline,
+
+    /// <summary>Closed polygon shape annotation (§12.5.6.9).</summary>
+    Polygon,
 }

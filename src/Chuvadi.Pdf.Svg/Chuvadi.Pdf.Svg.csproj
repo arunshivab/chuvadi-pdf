@@ -1,21 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <Description>
-      Chuvadi SVG export — translates PDF page content streams to SVG.
-      Supports paths, images, clipping, text (selectable), and embedded
-      TrueType/OpenType fonts via @font-face. Phase 2.0.
-    </Description>
+    <AssemblyName>Chuvadi.Pdf.Svg</AssemblyName>
+    <RootNamespace>Chuvadi.Pdf.Svg</RootNamespace>
     <PackageId>Chuvadi.Pdf.Svg</PackageId>
+    <Description>
+      SVG renderer for the Chuvadi PDF library.
+      Consumes a PageDisplayList and emits deterministic, byte-for-byte
+      reproducible SVG markup with native clipping support, glyph-outline
+      reuse via &lt;defs&gt;/&lt;use&gt;, and optional Woff2 font embedding.
+      Zero raster, zero OS-coupled APIs — safe for WebAssembly.
+    </Description>
   </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Content\Chuvadi.Pdf.Content.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
   </ItemGroup>
+
 </Project>

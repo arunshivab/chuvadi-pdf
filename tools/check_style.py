@@ -7,6 +7,9 @@ Checks performed:
   1. var in src/ files (IDE0008)
   2. Duplicate using directives (IDE0005 partial)
   3. Missing using directives for known Chuvadi and System namespaces
+  4. Declared usings whose namespace isn't referenced anywhere (IDE0005)
+  5. ProjectReference completeness against Chuvadi.Pdf.* usings (CS0234)
+  6. Basic syntax sanity (control chars in source, corrupt char literals)
 """
 
 import re
@@ -16,7 +19,7 @@ import os
 # Map: type name -> required using directive
 # Add entries whenever a new type is introduced in any Chuvadi project.
 REQUIRED_USINGS = {
-    # Chuvadi.Pdf.Primitives types
+    # ── Chuvadi.Pdf.Primitives ────────────────────────────────────────────
     "PdfObjectId":      "using Chuvadi.Pdf.Primitives;",
     "PdfPrimitive":     "using Chuvadi.Pdf.Primitives;",
     "PdfNull":          "using Chuvadi.Pdf.Primitives;",
@@ -32,21 +35,20 @@ REQUIRED_USINGS = {
     "PdfTokenType":     "using Chuvadi.Pdf.Primitives;",
     "PdfToken":         "using Chuvadi.Pdf.Primitives;",
     "PdfTokenizer":     "using Chuvadi.Pdf.Primitives;",
-    # v2 R1 D1 — exception hierarchy moved to Chuvadi.Pdf.Primitives
     "PdfException":           "using Chuvadi.Pdf.Primitives;",
     "PdfParseException":      "using Chuvadi.Pdf.Primitives;",
     "PdfCorruptionException": "using Chuvadi.Pdf.Primitives;",
     "PdfEncryptionException": "using Chuvadi.Pdf.Primitives;",
     "PdfPermissionException": "using Chuvadi.Pdf.Primitives;",
     "PdfPermissions":         "using Chuvadi.Pdf.Primitives;",
-    # Chuvadi.Pdf.Filters types
+    # ── Chuvadi.Pdf.Filters ───────────────────────────────────────────────
     "IStreamFilter":    "using Chuvadi.Pdf.Filters;",
     "FilterException":  "using Chuvadi.Pdf.Filters;",
     "FilterParameters": "using Chuvadi.Pdf.Filters;",
     "FilterPipeline":   "using Chuvadi.Pdf.Filters;",
     "FilterRegistry":   "using Chuvadi.Pdf.Filters;",
     "DeflateFilter":    "using Chuvadi.Pdf.Filters;",
-    # Chuvadi.Pdf.Objects types
+    # ── Chuvadi.Pdf.Objects ───────────────────────────────────────────────
     "PdfIndirectObject":    "using Chuvadi.Pdf.Objects;",
     "IPdfObjectResolver":   "using Chuvadi.Pdf.Objects;",
     "PdfObjectStore":       "using Chuvadi.Pdf.Objects;",
@@ -54,7 +56,58 @@ REQUIRED_USINGS = {
     "XrefEntryType":        "using Chuvadi.Pdf.Objects;",
     "XrefTable":            "using Chuvadi.Pdf.Objects;",
     "XrefStreamTable":      "using Chuvadi.Pdf.Objects;",
-    # System types commonly forgotten
+    # ── Chuvadi.Pdf.Rendering.DisplayList (v2 R2 — own project) ───────────
+    "PageDisplayList":        "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "DisplayListBuilder":     "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "RenderOp":               "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "FillPathOp":             "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "StrokePathOp":           "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "DrawGlyphOp":            "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "DrawImageOp":            "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "NestedDisplayListOp":    "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "ClipPath":               "using Chuvadi.Pdf.Rendering.DisplayList;",
+    # Phase 2.1 grouped text-op surface
+    "TextOp":                 "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "DisplayListGlyph":       "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "TextRenderingMode":      "using Chuvadi.Pdf.Rendering.DisplayList;",
+    "TextRunExtractor":       "using Chuvadi.Pdf.Rendering.DisplayList;",
+    # ── Chuvadi.Pdf.Svg (v2 R2) ───────────────────────────────────────────
+    "SvgRenderer":            "using Chuvadi.Pdf.Svg;",
+    "SvgRenderOptions":       "using Chuvadi.Pdf.Svg;",
+    "FontEmbedding":          "using Chuvadi.Pdf.Svg;",
+    # ── Chuvadi.Pdf.Text (v2 R3 additions) ────────────────────────────────
+    # SearchOptions/SearchMatch live here, NOT in Documents — Documents would
+    # need to take a ProjectReference on Text, which would cycle.
+    "TextRun":                "using Chuvadi.Pdf.Text;",
+    "GlyphPosition":          "using Chuvadi.Pdf.Text;",
+    "TextDirection":          "using Chuvadi.Pdf.Text;",
+    "TextRunBuilder":         "using Chuvadi.Pdf.Text;",
+    "SearchOptions":          "using Chuvadi.Pdf.Text;",
+    "SearchMatch":            "using Chuvadi.Pdf.Text;",
+    # ── Chuvadi.Pdf.Documents (v2 R3 — DocumentInfo aggregate) ────────────
+    "DocumentInfo":           "using Chuvadi.Pdf.Documents;",
+    "EncryptionInfo":         "using Chuvadi.Pdf.Documents;",
+    "PdfDocument":            "using Chuvadi.Pdf.Documents;",
+    "PdfPage":                "using Chuvadi.Pdf.Documents;",
+    "PdfPageCollection":      "using Chuvadi.Pdf.Documents;",
+    "LinearizationInfo":      "using Chuvadi.Pdf.Documents;",
+    "LinearizationReader":    "using Chuvadi.Pdf.Documents;",
+    # ── Chuvadi.Pdf.Annotations (Phase 1.1 + v2 R3 shapes) ────────────────
+    "PdfAnnotation":          "using Chuvadi.Pdf.Annotations;",
+    "AnnotationType":         "using Chuvadi.Pdf.Annotations;",
+    "AnnotationException":    "using Chuvadi.Pdf.Annotations;",
+    "AnnotationReader":       "using Chuvadi.Pdf.Annotations;",
+    "AnnotationWriter":       "using Chuvadi.Pdf.Annotations;",
+    "TextAnnotation":         "using Chuvadi.Pdf.Annotations;",
+    "LinkAnnotation":         "using Chuvadi.Pdf.Annotations;",
+    "FreeTextAnnotation":     "using Chuvadi.Pdf.Annotations;",
+    "MarkupAnnotation":       "using Chuvadi.Pdf.Annotations;",
+    "StampAnnotation":        "using Chuvadi.Pdf.Annotations;",
+    "InkAnnotation":          "using Chuvadi.Pdf.Annotations;",
+    "GenericAnnotation":      "using Chuvadi.Pdf.Annotations;",
+    "ShapeAnnotation":        "using Chuvadi.Pdf.Annotations;",
+    "ShapeKind":              "using Chuvadi.Pdf.Annotations;",
+    # ── System types commonly forgotten ───────────────────────────────────
     "StringBuilder":        "using System.Text;",
     "MemoryStream":         "using System.IO;",
     "Stream":               "using System.IO;",
@@ -69,8 +122,10 @@ REQUIRED_USINGS = {
     "Directory":            "using System.IO;",
     "Path":                 "using System.IO;",
     "SeekOrigin":           "using System.IO;",
-    "BinaryReader":         "using System.IO;",
-    "BinaryWriter":         "using System.IO;",
+    "FileMode":             "using System.IO;",
+    "FileAccess":           "using System.IO;",
+    "FileShare":            "using System.IO;",
+    "IOException":          "using System.IO;",
     "List":                 "using System.Collections.Generic;",
     "Dictionary":           "using System.Collections.Generic;",
     "HashSet":              "using System.Collections.Generic;",
@@ -83,7 +138,6 @@ REQUIRED_USINGS = {
     "KeyValuePair":         "using System.Collections.Generic;",
     "IReadOnlyDictionary":  "using System.Collections.Generic;",
     "IReadOnlyCollection":  "using System.Collections.Generic;",
-    # System namespace — expanded to catch unused 'using System;'
     "Math":                     "using System;",
     "Exception":                "using System;",
     "ArgumentException":        "using System;",
@@ -101,6 +155,7 @@ REQUIRED_USINGS = {
     "TimeSpan":                 "using System;",
     "Guid":                     "using System;",
     "Uri":                      "using System;",
+    "UriKind":                  "using System;",
     "Random":                   "using System;",
     "Console":                  "using System;",
     "Environment":              "using System;",
@@ -117,27 +172,63 @@ REQUIRED_USINGS = {
     "Predicate":                "using System;",
     "EventHandler":             "using System;",
     "Attribute":                "using System;",
-    "Flags":                    "using System;",
     "FlagsAttribute":           "using System;",
     "Type":                     "using System;",
     "StringComparison":         "using System;",
     "StringSplitOptions":       "using System;",
-    "Math":                     "using System;",
-    "Convert":                  "using System;",
-    "BitConverter":             "using System;",
-    "Environment":              "using System;",
     "Enum":                     "using System;",
     "Tuple":                    "using System;",
     "ReadOnlyMemory":           "using System;",
     "ReadOnlySpan":             "using System;",
     "Span":                     "using System;",
     "Memory":                   "using System;",
+    "OperationCanceledException":   "using System;",
     "CultureInfo":          "using System.Globalization;",
     "NumberStyles":         "using System.Globalization;",
+    "UnicodeCategory":      "using System.Globalization;",
+    "CharUnicodeInfo":      "using System.Globalization;",
     "Encoding":             "using System.Text;",
     "Regex":                "using System.Text.RegularExpressions;",
     "ConcurrentDictionary": "using System.Collections.Concurrent;",
+    "CancellationToken":            "using System.Threading;",
+    "CancellationTokenSource":      "using System.Threading;",
+    "Task":                         "using System.Threading.Tasks;",
+    "ValueTask":                    "using System.Threading.Tasks;",
+    "IAsyncEnumerable":             "using System.Collections.Generic;",
+    "IAsyncEnumerator":             "using System.Collections.Generic;",
+    "EnumeratorCancellation":          "using System.Runtime.CompilerServices;",
+    "EnumeratorCancellationAttribute": "using System.Runtime.CompilerServices;",
 }
+
+# Project-local type shadows: bare names that exist BOTH in System.* AND in a
+# Chuvadi namespace. When a file is in that Chuvadi namespace or imports it,
+# the bare name refers to the project-local type and System.* is not required.
+CONFLICT_OVERRIDES = {
+    "Path":       ["Chuvadi.Pdf.Graphics", "Chuvadi.Pdf.Rendering.DisplayList"],
+    "Stream":     ["Chuvadi.Pdf.Primitives"],
+    "Dictionary": ["Chuvadi.Pdf.Primitives"],
+    "Type":       ["Chuvadi.Pdf.Primitives"],
+}
+
+# Map: namespace -> required csproj ProjectReference name fragment
+REQUIRED_REFERENCES = {
+    "Chuvadi.Pdf.Primitives":           "Chuvadi.Pdf.Primitives",
+    "Chuvadi.Pdf.Filters":              "Chuvadi.Pdf.Filters",
+    "Chuvadi.Pdf.Objects":              "Chuvadi.Pdf.Objects",
+    "Chuvadi.Pdf.IO":                   "Chuvadi.Pdf.IO",
+    "Chuvadi.Pdf.Documents":            "Chuvadi.Pdf.Documents",
+    "Chuvadi.Pdf.Fonts":                "Chuvadi.Pdf.Fonts",
+    "Chuvadi.Pdf.Content":              "Chuvadi.Pdf.Content",
+    "Chuvadi.Pdf.Text":                 "Chuvadi.Pdf.Text",
+    "Chuvadi.Pdf.Annotations":          "Chuvadi.Pdf.Annotations",
+    "Chuvadi.Pdf.Rendering.DisplayList": "Chuvadi.Pdf.Rendering.DisplayList",
+    "Chuvadi.Pdf.Rendering":            "Chuvadi.Pdf.Rendering",
+    "Chuvadi.Pdf.Svg":                  "Chuvadi.Pdf.Svg",
+    "Chuvadi.Pdf.Graphics":             "Chuvadi.Pdf.Graphics",
+    "Chuvadi.Pdf.Images":               "Chuvadi.Pdf.Images",
+    "Chuvadi.Pdf.Authoring":            "Chuvadi.Pdf.Authoring",
+}
+
 
 def check_file(path):
     issues = []
@@ -146,7 +237,6 @@ def check_file(path):
     with open(path) as f:
         lines = f.readlines()
 
-    # Collect declared using directives
     declared_usings = set()
     namespace_line = 0
     for i, line in enumerate(lines):
@@ -157,11 +247,9 @@ def check_file(path):
             namespace_line = i
             break
 
-    # Code body for type reference scanning
-    code = "".join(lines[namespace_line:])
     declared_ns_set = {u.removeprefix('using ').removesuffix(';') for u in declared_usings}
 
-    # Rule 1: var in src/ files (IDE0008)
+    # Rule 1: var in src/ files
     if is_src:
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -181,12 +269,7 @@ def check_file(path):
                 seen.append(stripped)
 
     # Rule 3: missing using directives for known types
-    # Only check the code body (after namespace declaration), not comments
     code_lines = lines[namespace_line:]
-    # Strip strings and comments line-by-line. Within each line:
-    #   1. Replace string literals (handling C# escape sequences \" \\)
-    #   2. Strip // line comments (URLs in step 1 are now empty strings)
-    # Multi-line verbatim/raw strings are approximated but rare in this codebase.
     cleaned_lines = []
     for _ln in code_lines:
         _ln_no_strings = re.sub(r'"(?:[^"\\]|\\.)*"', '""', _ln)
@@ -194,25 +277,16 @@ def check_file(path):
         cleaned_lines.append(_ln_clean)
     code_no_strings = "".join(cleaned_lines)
 
-    # Compute the file's namespace once; some files (placeholders, top-level
-    # scripts) may have none, in which case file_ns is the empty string.
     ns_match = re.search(r'^namespace\s+(\S+)', "".join(lines), re.MULTILINE)
     file_ns = ns_match.group(1).rstrip(";") if ns_match else ""
 
     for type_name, required_using in REQUIRED_USINGS.items():
-        # Skip if the required using is already declared
         if required_using in declared_usings:
             continue
-        # Skip if we're in the namespace that defines this type
-        # (e.g., Chuvadi.Pdf.Objects files don't need using Chuvadi.Pdf.Objects)
         if file_ns:
             required_ns = required_using.removeprefix("using ").removesuffix(";")
-            # Skip when the file IS the defining namespace OR a child of it.
-            # e.g. Chuvadi.Pdf.Objects.Tests can use Objects types without a using.
             if file_ns == required_ns or file_ns.startswith(required_ns + '.'):
                 continue
-        # CONFLICT_OVERRIDES: skip when file is in or imports a Chuvadi namespace
-        # that defines a project-local type with this name.
         if type_name in CONFLICT_OVERRIDES:
             override_namespaces = CONFLICT_OVERRIDES[type_name]
             file_or_imports = {file_ns} | declared_ns_set
@@ -222,27 +296,28 @@ def check_file(path):
                 for override_ns in override_namespaces
             ):
                 continue
-        # Check if the type name appears as a word in the code
         if re.search(r'\b' + re.escape(type_name) + r'\b', code_no_strings):
-            # Skip if the type is already used fully-qualified
             required_ns = required_using.removeprefix("using ").removesuffix(";")
             fully_qualified = required_ns + "." + type_name
             if fully_qualified in code_no_strings:
                 continue
-            # Skip "Dictionary" if it only appears as "PdfDictionary"
+            # C# type aliases: `using TypeName = Some.Namespace.TypeName;`
+            # binds TypeName to the alias target, satisfying the import.
+            alias_pattern = re.compile(
+                r'using\s+' + re.escape(type_name) + r'\s*=\s*' +
+                re.escape(required_ns) + r'\.' + re.escape(type_name) + r'\s*;')
+            if alias_pattern.search("".join(lines)):
+                continue
             if type_name == "Dictionary":
                 matches = re.findall(r'(\w*)Dictionary\b', code_no_strings)
                 if all(m == "Pdf" for m in matches if m):
                     continue
-            # Skip "Type" if it only appears as "PdfName.Type" or ".Type" (member access)
             if type_name == "Type":
-                # Find all standalone Type tokens not preceded by "." (member access)
                 bare_matches = re.findall(r'(?<![.\w])Type\b', code_no_strings)
                 if len(bare_matches) == 0:
                     continue
             issues.append(
                 f"  CS0246 possible: '{type_name}' used but '{required_using}' not declared")
-
 
     # Rule 4: IDE0005 — declared using with no known type from it used
     ns_to_types_map = {}
@@ -252,7 +327,6 @@ def check_file(path):
             ns_to_types_map[_ns] = []
         ns_to_types_map[_ns].append(_type_name)
 
-    # Rule 4 runs on all files (src and tests)
     for _decl in declared_usings:
         _ns = _decl.removeprefix("using ").removesuffix(";")
         if _ns not in ns_to_types_map:
@@ -268,39 +342,11 @@ def check_file(path):
 
     return issues
 
-# Map: namespace -> required csproj ProjectReference (relative path fragment)
-REQUIRED_REFERENCES = {
-    "Chuvadi.Pdf.Primitives": "Chuvadi.Pdf.Primitives",
-    "Chuvadi.Pdf.Filters":    "Chuvadi.Pdf.Filters",
-    "Chuvadi.Pdf.Objects":    "Chuvadi.Pdf.Objects",
-    "Chuvadi.Pdf.IO":         "Chuvadi.Pdf.IO",
-    "Chuvadi.Pdf.Documents":  "Chuvadi.Pdf.Documents",
-    "Chuvadi.Pdf.Fonts":      "Chuvadi.Pdf.Fonts",
-    "Chuvadi.Pdf.Content":    "Chuvadi.Pdf.Content",
-    "Chuvadi.Pdf.Text":       "Chuvadi.Pdf.Text",
-}
-
-# Project-local type shadows: type names that exist BOTH in System.* AND in a
-# Chuvadi namespace. When a file is in that Chuvadi namespace or imports it,
-# the bare name refers to the project-local type and System.* is not required.
-CONFLICT_OVERRIDES = {
-    "Path":       ["Chuvadi.Pdf.Graphics", "Chuvadi.Pdf.Rendering.DisplayList"],
-    "Stream":     ["Chuvadi.Pdf.Primitives"],
-    "Dictionary": ["Chuvadi.Pdf.Primitives"],
-    "Type":       ["Chuvadi.Pdf.Primitives"],
-}
-
 
 def check_csproj(cs_path):
-    """
-    For each .cs file, find its project's .csproj and verify that every
-    Chuvadi.Pdf.* namespace imported via 'using' has a matching ProjectReference.
-    Raises no issues for the project's own namespace.
-    """
+    """For each src .cs file, verify every Chuvadi.Pdf.* using is in csproj refs."""
     issues = []
-    import os
 
-    # Find the csproj in the same directory or parent
     directory = os.path.dirname(cs_path)
     csproj_path = None
     for fname in os.listdir(directory):
@@ -317,11 +363,15 @@ def check_csproj(cs_path):
     with open(cs_path) as f:
         cs_content = f.read()
 
-    # Find all Chuvadi.Pdf.* usings in the cs file
-    used_namespaces = re.findall(r"^using (Chuvadi\.Pdf\.[A-Za-z]+);", cs_content, re.MULTILINE)
+    used_namespaces = re.findall(
+        r"^using (Chuvadi\.Pdf\.[A-Za-z][A-Za-z0-9_.]*);",
+        cs_content,
+        re.MULTILINE)
 
-    # Get own namespace
-    own_ns_match = re.search(r"^namespace (Chuvadi\.Pdf\.[A-Za-z]+)", cs_content, re.MULTILINE)
+    own_ns_match = re.search(
+        r"^namespace (Chuvadi\.Pdf\.[A-Za-z][A-Za-z0-9_.]*)",
+        cs_content,
+        re.MULTILINE)
     own_ns = own_ns_match.group(1) if own_ns_match else ""
 
     for ns in used_namespaces:
@@ -331,6 +381,28 @@ def check_csproj(cs_path):
         if required_ref and required_ref not in csproj_content:
             issues.append(
                 f"  CS0234: '{ns}' used but not in ProjectReferences of {os.path.basename(csproj_path)}")
+
+    return issues
+
+
+def check_syntax(path):
+    """Basic C# syntax sanity checks to catch Python-escaping corruption."""
+    issues = []
+
+    with open(path, 'rb') as f:
+        raw = f.read()
+
+    text = raw.decode('utf-8', errors='replace')
+    lines = text.splitlines()
+
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        if "'\\" in line and "'\\\\" not in line and "'\\n'" not in line and "'\\r'" not in line and "'\\t'" not in line:
+            if re.search(r"'\\'[^']", line) or re.search(r"== \(byte\)'\\'\s", line):
+                issues.append(
+                    f"  SYNTAX L{i}: possible corrupt char literal (lone backslash): {stripped[:60]}")
 
     return issues
 
@@ -349,7 +421,6 @@ def main():
             total_issues += 1
             continue
 
-        # Skip non-C# files and build artefacts (auto-generated AssemblyInfo, etc.)
         if not path.endswith('.cs'):
             continue
         norm = path.replace(os.sep, '/')
@@ -357,6 +428,7 @@ def main():
             continue
 
         issues = check_file(path)
+        issues.extend(check_syntax(path))
         if "/src/" in path or os.sep + "src" + os.sep in path:
             issues.extend(check_csproj(path))
         name = os.path.basename(path)
@@ -376,50 +448,6 @@ def main():
         print(f"Style check FAILED — {total_issues} issue(s). Fix before packaging.")
         sys.exit(1)
 
+
 if __name__ == "__main__":
     main()
-
-
-
-def check_syntax(path):
-    """Basic C# syntax sanity checks to catch Python-escaping corruption."""
-    issues = []
-
-    with open(path, 'rb') as f:
-        raw = f.read()
-
-    # Check for control characters (CR, LF, TAB are OK; others are suspicious inside code)
-    text = raw.decode('utf-8', errors='replace')
-    lines = text.splitlines()
-
-    for i, line in enumerate(lines, 1):
-        # Detect unterminated character literals: a line with an odd number of
-        # unescaped single quotes that are NOT inside a string literal.
-        # Simple heuristic: if a line has a char literal like '\'  (backslash then quote-close)
-        # that's malformed.
-        stripped = line.strip()
-        if stripped.startswith("//"):
-            continue
-
-        # Detect common Python escape corruption patterns:
-        # 1. A bare backslash at end of a char literal: (byte)'\' 
-        if "'\\" in line and "'\\\\" not in line and "'\\n'" not in line and "'\\r'" not in line and "'\\t'" not in line:
-            # Check if there's a lone backslash char literal
-            import re
-            if re.search(r"'\\'[^']", line) or re.search(r"== \(byte\)'\\'\s", line):
-                issues.append(f"  SYNTAX L{i}: possible corrupt char literal (lone backslash): {stripped[:60]}")
-
-        # 2. Actual newline/CR/TAB embedded inside a char/string literal
-        # This is caught by checking raw bytes for control chars in suspicious positions
-        # (Too complex for heuristic — rely on the heredoc rule instead)
-
-    return issues
-
-
-# Patch the main check_file to also call check_syntax
-_original_check_file = check_file
-
-def check_file(path):
-    issues = _original_check_file(path)
-    issues.extend(check_syntax(path))
-    return issues

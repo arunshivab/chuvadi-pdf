@@ -122,6 +122,10 @@ jobs:
         run: dotnet restore tests/Chuvadi.Pdf.WasmSmoke/Chuvadi.Pdf.WasmSmoke.csproj
 
       - name: Build WASM
+        # Linker-clean build is the smoke assertion: if any referenced
+        # assembly (Chuvadi.Pdf.Svg, Documents, DisplayList, Authoring, Text)
+        # pulls in OS-coupled APIs (Process, Registry, System.Drawing.*),
+        # the WebAssembly publish step fails.
         run: >
           dotnet build
           tests/Chuvadi.Pdf.WasmSmoke/Chuvadi.Pdf.WasmSmoke.csproj

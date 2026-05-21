@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §12.5.2 — Annotation dictionaries
 //        PDF 32000-1:2008 §12.5.6 — Annotation types
-// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations
+// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations (v2.0.0 R3 adds ShapeAnnotation)
 // Immutable annotation model classes.
 
 using System;
@@ -272,6 +272,133 @@ public sealed class InkAnnotation : PdfAnnotation
     /// (X, Y) points in PDF user space.
     /// </summary>
     public IReadOnlyList<IReadOnlyList<PointF>> Strokes { get; }
+}
+
+/// <summary>
+/// Distinguishes the geometric subtype of a <see cref="ShapeAnnotation"/>.
+/// </summary>
+public enum ShapeKind
+{
+    /// <summary>Axis-aligned rectangle (PDF subtype <c>/Square</c>).</summary>
+    Square,
+
+    /// <summary>Ellipse fitting the annotation rect (PDF subtype <c>/Circle</c>).</summary>
+    Circle,
+
+    /// <summary>Straight line between two endpoints (PDF subtype <c>/Line</c>).</summary>
+    Line,
+
+    /// <summary>Open polyline (PDF subtype <c>/PolyLine</c>).</summary>
+    Polyline,
+
+    /// <summary>Closed polygon (PDF subtype <c>/Polygon</c>).</summary>
+    Polygon,
+}
+
+/// <summary>
+/// Shape annotation: <c>/Square</c>, <c>/Circle</c>, <c>/Line</c>,
+/// <c>/PolyLine</c>, or <c>/Polygon</c> — PDF 32000-1:2008 §12.5.6.7-9.
+/// </summary>
+/// <remarks>
+/// <para>
+/// For <see cref="ShapeKind.Square"/> and <see cref="ShapeKind.Circle"/>
+/// the geometry is fully described by <see cref="PdfAnnotation.Rect"/>;
+/// <see cref="Vertices"/> is empty.
+/// </para>
+/// <para>
+/// For <see cref="ShapeKind.Line"/> the list contains exactly two
+/// endpoints. For <see cref="ShapeKind.Polyline"/> and
+/// <see cref="ShapeKind.Polygon"/> it contains the vertex list in PDF
+/// user space (Y up, points).
+/// </para>
+/// </remarks>
+public sealed class ShapeAnnotation : PdfAnnotation
+{
+    /// <summary>Initialises a shape annotation.</summary>
+    public ShapeAnnotation(
+        ShapeKind kind,
+        int pageIndex,
+        RectangleF rect,
+        IReadOnlyList<PointF> vertices,
+        string? contents = null,
+        ColorF? color = null,
+        string? author = null,
+        float opacity = 1f,
+        float borderWidth = 1f,
+        ColorF? interiorColor = null)
+        : base(MapKind(kind), pageIndex, rect, contents, color, author, opacity)
+    {
+        ArgumentNullException.ThrowIfNull(vertices);
+        ValidateVertices(kind, vertices);
+
+        Kind = kind;
+        Vertices = vertices;
+        BorderWidth = borderWidth;
+        InteriorColor = interiorColor;
+    }
+
+    /// <summary>Gets the geometric subtype of the shape.</summary>
+    public ShapeKind Kind { get; }
+
+    /// <summary>
+    /// Gets the vertex list in PDF user space. Empty for square and circle
+    /// (whose geometry is the <see cref="PdfAnnotation.Rect"/>); two
+    /// endpoints for line; three or more for polyline / polygon.
+    /// </summary>
+    public IReadOnlyList<PointF> Vertices { get; }
+
+    /// <summary>Gets the stroke width of the shape outline in points.</summary>
+    public float BorderWidth { get; }
+
+    /// <summary>Gets the interior fill colour, or null for a stroke-only shape.</summary>
+    public ColorF? InteriorColor { get; }
+
+    private static AnnotationType MapKind(ShapeKind kind)
+    {
+        switch (kind)
+        {
+            case ShapeKind.Square:
+                return AnnotationType.Square;
+            case ShapeKind.Circle:
+                return AnnotationType.Circle;
+            case ShapeKind.Line:
+                return AnnotationType.Line;
+            case ShapeKind.Polyline:
+                return AnnotationType.Polyline;
+            case ShapeKind.Polygon:
+                return AnnotationType.Polygon;
+            default:
+                throw new ArgumentException($"Unknown shape kind: {kind}.", nameof(kind));
+        }
+    }
+
+    private static void ValidateVertices(ShapeKind kind, IReadOnlyList<PointF> vertices)
+    {
+        switch (kind)
+        {
+            case ShapeKind.Square:
+            case ShapeKind.Circle:
+                // Geometry is the bounding rect; vertices should be empty.
+                break;
+            case ShapeKind.Line:
+                if (vertices.Count != 2)
+                {
+                    throw new ArgumentException(
+                        "Line annotation requires exactly two endpoints.",
+                        nameof(vertices));
+                }
+                break;
+            case ShapeKind.Polyline:
+            case ShapeKind.Polygon:
+                if (vertices.Count < 2)
+                {
+                    throw new ArgumentException(
+                        "Polyline and polygon annotations require at least two vertices.",
+                        nameof(vertices));
+                }
+                break;
+        }
+    }
 }
 
 /// <summary>

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §12.5.2 — Annotation dictionaries
 //        PDF 32000-1:2008 §12.5.6 — Annotation types
-// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations
+// PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations (v2.0.0 R3 adds shape decoders)
 // Reads annotations from a PDF page's /Annots array.
 
 using System;
@@ -108,8 +108,10 @@ public static class AnnotationReader
         RectangleF rect = ReadRect(dict);
         string? contents = ReadString(dict, PdfName.Intern("Contents"));
         string? author = ReadString(dict, PdfName.Intern("T"));
-        ColorF? color = ReadColor(dict);
+        ColorF? color = ReadColor(dict, PdfName.Intern("C"));
         float opacity = ReadOpacity(dict);
+        ColorF? interior = ReadColor(dict, PdfName.Intern("IC"));
+        float borderWidth = ReadBorderWidth(dict);
 
         // Subtype dispatch
         if (!dict.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? subPrim) ||
@@ -129,6 +131,11 @@ public static class AnnotationReader
             "StrikeOut" => ReadMarkup(AnnotationType.StrikeOut, pageIndex, rect, contents, color, author, opacity, dict),
             "Stamp" => ReadStamp(pageIndex, rect, contents, color, author, opacity, dict),
             "Ink" => ReadInk(pageIndex, rect, contents, color, author, opacity, dict),
+            "Square" => ReadShape(ShapeKind.Square, pageIndex, rect, contents, color, author, opacity, borderWidth, interior, dict),
+            "Circle" => ReadShape(ShapeKind.Circle, pageIndex, rect, contents, color, author, opacity, borderWidth, interior, dict),
+            "Line" => ReadShape(ShapeKind.Line, pageIndex, rect, contents, color, author, opacity, borderWidth, interior, dict),
+            "PolyLine" => ReadShape(ShapeKind.Polyline, pageIndex, rect, contents, color, author, opacity, borderWidth, interior, dict),
+            "Polygon" => ReadShape(ShapeKind.Polygon, pageIndex, rect, contents, color, author, opacity, borderWidth, interior, dict),
             _ => new GenericAnnotation(pageIndex, rect, subName.Value, contents, color, author, opacity),
         };
     }
@@ -287,6 +294,80 @@ public static class AnnotationReader
         return new InkAnnotation(pageIndex, rect, strokes, contents, color, author, opacity);
     }
 
+    private static ShapeAnnotation? ReadShape(
+        ShapeKind kind, int pageIndex, RectangleF rect, string? contents,
+        ColorF? color, string? author, float opacity, float borderWidth,
+        ColorF? interior, PdfDictionary dict)
+    {
+        IReadOnlyList<PointF> vertices = ExtractShapeVertices(kind, dict);
+
+        // Validate vertex shape requirements before constructing — readers
+        // must not throw on malformed PDFs; we drop the annotation instead.
+        if (kind == ShapeKind.Line && vertices.Count != 2)
+        {
+            return null;
+        }
+
+        if ((kind == ShapeKind.Polyline || kind == ShapeKind.Polygon) && vertices.Count < 2)
+        {
+            return null;
+        }
+
+        return new ShapeAnnotation(
+            kind,
+            pageIndex,
+            rect,
+            vertices,
+            contents,
+            color,
+            author,
+            opacity,
+            borderWidth,
+            interior);
+    }
+
+    private static IReadOnlyList<PointF> ExtractShapeVertices(ShapeKind kind, PdfDictionary dict)
+    {
+        if (kind == ShapeKind.Square || kind == ShapeKind.Circle)
+        {
+            return Array.Empty<PointF>();
+        }
+
+        // /Line annotations carry endpoints in /L: [x1 y1 x2 y2].
+        if (kind == ShapeKind.Line)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("L"), out PdfPrimitive? lPrim) ||
+                lPrim is not PdfArray lArr || lArr.Count < 4)
+            {
+                return Array.Empty<PointF>();
+            }
+
+            return new[]
+            {
+                new PointF(ToDouble(lArr[0]), ToDouble(lArr[1])),
+                new PointF(ToDouble(lArr[2]), ToDouble(lArr[3])),
+            };
+        }
+
+        // /PolyLine and /Polygon carry vertex pairs in /Vertices.
+        if (!dict.TryGetValue(PdfName.Intern("Vertices"), out PdfPrimitive? vPrim) ||
+            vPrim is not PdfArray vArr)
+        {
+            return Array.Empty<PointF>();
+        }
+
+        List<PointF> points = new List<PointF>(vArr.Count / 2);
+
+        for (int i = 0; i + 1 < vArr.Count; i += 2)
+        {
+            double x = ToDouble(vArr[i]);
+            double y = ToDouble(vArr[i + 1]);
+            points.Add(new PointF(x, y));
+        }
+
+        return points;
+    }
+
     // ── Field helpers ─────────────────────────────────────────────────────
 
     private static RectangleF ReadRect(PdfDictionary dict)
@@ -319,9 +400,9 @@ public static class AnnotationReader
         };
     }
 
-    private static ColorF? ReadColor(PdfDictionary dict)
+    private static ColorF? ReadColor(PdfDictionary dict, PdfName key)
     {
-        if (!dict.TryGetValue(PdfName.Intern("C"), out PdfPrimitive? cPrim) ||
+        if (!dict.TryGetValue(key, out PdfPrimitive? cPrim) ||
             cPrim is not PdfArray arr)
         {
             return null;
@@ -351,6 +432,25 @@ public static class AnnotationReader
         if (dict.TryGetValue(PdfName.Intern("CA"), out PdfPrimitive? p))
         {
             return (float)ToDouble(p);
+        }
+
+        return 1f;
+    }
+
+    private static float ReadBorderWidth(PdfDictionary dict)
+    {
+        // /BS dictionary takes precedence; otherwise fall back to /Border[2].
+        if (dict.TryGetValue(PdfName.Intern("BS"), out PdfPrimitive? bsPrim) &&
+            bsPrim is PdfDictionary bs &&
+            bs.TryGetValue(PdfName.Intern("W"), out PdfPrimitive? wPrim))
+        {
+            return (float)ToDouble(wPrim);
+        }
+
+        if (dict.TryGetValue(PdfName.Intern("Border"), out PdfPrimitive? borderPrim) &&
+            borderPrim is PdfArray borderArr && borderArr.Count >= 3)
+        {
+            return (float)ToDouble(borderArr[2]);
         }
 
         return 1f;

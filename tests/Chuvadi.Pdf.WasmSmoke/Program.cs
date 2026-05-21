@@ -8,6 +8,7 @@ using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Rendering.DisplayList;
 using Chuvadi.Pdf.Svg;
+using Chuvadi.Pdf.Text;
 
 // Exercise the full pipeline: author a PDF, open it, build a display list, render to SVG.
 // Any OS-coupling (Process, Registry, File.*, System.Drawing.*) will fail the WASM build.

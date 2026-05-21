@@ -206,7 +206,7 @@ public sealed class PageRasterizer
         GraphicsPath device = UserSpacePathToDevice(op.Path, pageHeight, outerTransform);
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
-        _scanline.Fill(buffer, subPaths, op.Color, op.Rule);
+        _scanline.Fill(buffer, subPaths, op.Color, (Graphics.FillRule)op.Rule);
     }
 
     private void PaintStrokeOp(

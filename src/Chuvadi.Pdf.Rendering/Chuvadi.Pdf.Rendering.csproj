@@ -7,7 +7,8 @@
       Page rasterizer for the Chuvadi PDF library.
       Converts a PDF page to a PixelBuffer using a pure managed scanline
       fill algorithm. Supports path filling and stroking, text rendering
-      via TrueType glyph outlines, and image XObject compositing.
+      via TrueType glyph outlines, and image XObject compositing. Consumes
+      the renderer-neutral PageDisplayList from Chuvadi.Pdf.Rendering.DisplayList.
       Zero external dependencies.
     </Description>
   </PropertyGroup>
@@ -21,6 +22,7 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
   </ItemGroup>
 
 </Project>

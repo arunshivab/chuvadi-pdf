@@ -1,6 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 1.1 — Chuvadi.Pdf.Annotations tests
+//        v2.0.0 R3 — adds ShapeAnnotation coverage and PdfDocument.GetAnnotations()
 
 using System;
 using System.Collections.Generic;
@@ -112,6 +113,123 @@ public sealed class PdfAnnotationTests
     }
 }
 
+// ── ShapeAnnotation ───────────────────────────────────────────────────────
+
+public sealed class ShapeAnnotationTests
+{
+    [Fact]
+    public void Square_ConstructsWithEmptyVertices()
+    {
+        ShapeAnnotation s = new(
+            ShapeKind.Square, 0,
+            new RectangleF(10, 10, 100, 50),
+            Array.Empty<PointF>());
+
+        s.Kind.Should().Be(ShapeKind.Square);
+        s.Type.Should().Be(AnnotationType.Square);
+        s.Vertices.Should().BeEmpty();
+        s.BorderWidth.Should().Be(1f);
+    }
+
+    [Fact]
+    public void Circle_ConstructsWithEmptyVertices()
+    {
+        ShapeAnnotation s = new(
+            ShapeKind.Circle, 0,
+            new RectangleF(10, 10, 100, 100),
+            Array.Empty<PointF>());
+
+        s.Kind.Should().Be(ShapeKind.Circle);
+        s.Type.Should().Be(AnnotationType.Circle);
+    }
+
+    [Fact]
+    public void Line_RequiresExactlyTwoVertices()
+    {
+        ShapeAnnotation s = new(
+            ShapeKind.Line, 0,
+            new RectangleF(0, 0, 50, 0),
+            new[] { new PointF(0, 0), new PointF(50, 0) });
+
+        s.Kind.Should().Be(ShapeKind.Line);
+        s.Vertices.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void Line_ThreeVertices_Throws()
+    {
+        Action act = () => new ShapeAnnotation(
+            ShapeKind.Line, 0,
+            new RectangleF(0, 0, 50, 0),
+            new[] { new PointF(0, 0), new PointF(50, 0), new PointF(100, 0) });
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Line_OneVertex_Throws()
+    {
+        Action act = () => new ShapeAnnotation(
+            ShapeKind.Line, 0,
+            new RectangleF(0, 0, 50, 0),
+            new[] { new PointF(0, 0) });
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Polyline_RequiresAtLeastTwoVertices()
+    {
+        ShapeAnnotation s = new(
+            ShapeKind.Polyline, 0,
+            new RectangleF(0, 0, 100, 100),
+            new[] { new PointF(0, 0), new PointF(50, 50), new PointF(100, 100) });
+
+        s.Kind.Should().Be(ShapeKind.Polyline);
+        s.Vertices.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void Polyline_OneVertex_Throws()
+    {
+        Action act = () => new ShapeAnnotation(
+            ShapeKind.Polyline, 0,
+            new RectangleF(0, 0, 100, 100),
+            new[] { new PointF(0, 0) });
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Polygon_StoresVerticesAndInteriorColor()
+    {
+        ColorF fill = ColorF.FromRgb(0.5f, 0.5f, 0.5f);
+        ShapeAnnotation s = new(
+            ShapeKind.Polygon, 0,
+            new RectangleF(0, 0, 100, 100),
+            new[]
+            {
+                new PointF(0, 0),
+                new PointF(100, 0),
+                new PointF(50, 100),
+            },
+            interiorColor: fill,
+            borderWidth: 2.5f);
+
+        s.Kind.Should().Be(ShapeKind.Polygon);
+        s.Vertices.Should().HaveCount(3);
+        s.InteriorColor.Should().Be(fill);
+        s.BorderWidth.Should().Be(2.5f);
+    }
+
+    [Fact]
+    public void Constructor_NullVertices_Throws()
+    {
+        Action act = () => new ShapeAnnotation(
+            ShapeKind.Square, 0,
+            new RectangleF(0, 0, 10, 10),
+            vertices: null!);
+        act.Should().Throw<ArgumentNullException>();
+    }
+}
+
 // ── Reader ────────────────────────────────────────────────────────────────
 
 public sealed class AnnotationReaderTests
@@ -159,6 +277,59 @@ public sealed class AnnotationReaderTests
         using MemoryStream ms = TestBuilder.BuildPdfWithTextAnnot("X");
         using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
         AnnotationReader.GetAllAnnotations(doc).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void GetAnnotations_SquareSubtype_DecodesShapeAnnotation()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithShapeAnnot("Square");
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+        IReadOnlyList<PdfAnnotation> annots = AnnotationReader.GetAnnotations(doc, 0);
+
+        annots.Should().HaveCount(1);
+        annots[0].Should().BeOfType<ShapeAnnotation>();
+        ((ShapeAnnotation)annots[0]).Kind.Should().Be(ShapeKind.Square);
+    }
+
+    [Fact]
+    public void GetAnnotations_CircleSubtype_DecodesShapeAnnotation()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithShapeAnnot("Circle");
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+        IReadOnlyList<PdfAnnotation> annots = AnnotationReader.GetAnnotations(doc, 0);
+
+        annots.Should().HaveCount(1);
+        ((ShapeAnnotation)annots[0]).Kind.Should().Be(ShapeKind.Circle);
+    }
+
+    [Fact]
+    public void GetAnnotations_LineSubtype_ReadsEndpointsFromL()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithLineAnnot();
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+        IReadOnlyList<PdfAnnotation> annots = AnnotationReader.GetAnnotations(doc, 0);
+
+        annots.Should().HaveCount(1);
+        ShapeAnnotation line = (ShapeAnnotation)annots[0];
+        line.Kind.Should().Be(ShapeKind.Line);
+        line.Vertices.Should().HaveCount(2);
+        line.Vertices[0].X.Should().Be(10);
+        line.Vertices[0].Y.Should().Be(20);
+        line.Vertices[1].X.Should().Be(110);
+        line.Vertices[1].Y.Should().Be(220);
+    }
+
+    [Fact]
+    public void GetAnnotations_PolygonSubtype_ReadsVerticesFromVertices()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithPolygonAnnot();
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+        IReadOnlyList<PdfAnnotation> annots = AnnotationReader.GetAnnotations(doc, 0);
+
+        annots.Should().HaveCount(1);
+        ShapeAnnotation poly = (ShapeAnnotation)annots[0];
+        poly.Kind.Should().Be(ShapeKind.Polygon);
+        poly.Vertices.Should().HaveCount(3);
     }
 }
 
@@ -284,6 +455,47 @@ public sealed class AnnotationWriterTests
     }
 }
 
+// ── Extension methods ─────────────────────────────────────────────────────
+
+public sealed class PdfDocumentAnnotationExtensionsTests
+{
+    [Fact]
+    public void GetAnnotations_NullDocument_Throws()
+    {
+        Action act = () => PdfDocumentAnnotationExtensions.GetAnnotations(null!, 0);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void GetAnnotations_WrapsAnnotationReader()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithTextAnnot("hi");
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+
+        IReadOnlyList<PdfAnnotation> via_extension = doc.GetAnnotations(0);
+        IReadOnlyList<PdfAnnotation> via_reader = AnnotationReader.GetAnnotations(doc, 0);
+
+        via_extension.Should().HaveCount(via_reader.Count);
+        via_extension[0].Contents.Should().Be(via_reader[0].Contents);
+    }
+
+    [Fact]
+    public void GetAllAnnotations_NullDocument_Throws()
+    {
+        Action act = () => PdfDocumentAnnotationExtensions.GetAllAnnotations(null!);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void GetAllAnnotations_WrapsAnnotationReader()
+    {
+        using MemoryStream ms = TestBuilder.BuildPdfWithTextAnnot("hi");
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+
+        doc.GetAllAnnotations().Should().HaveCount(1);
+    }
+}
+
 // ── Test PDF builder ──────────────────────────────────────────────────────
 
 internal static class TestBuilder
@@ -327,11 +539,6 @@ internal static class TestBuilder
 
     internal static MemoryStream BuildPdfWithTextAnnot(string contents)
     {
-        PdfObjectId catalogId = new(1, 0);
-        PdfObjectId pagesId = new(2, 0);
-        PdfObjectId pageId = new(3, 0);
-        PdfObjectId annotId = new(4, 0);
-
         PdfDictionary annotDict = new();
         annotDict.Set(PdfName.Type, PdfName.Intern("Annot"));
         annotDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Text"));
@@ -341,6 +548,61 @@ internal static class TestBuilder
         ]));
         annotDict.Set(PdfName.Intern("Contents"),
             new PdfString(Encoding.Latin1.GetBytes(contents)));
+
+        return BuildPdfWithAnnot(annotDict);
+    }
+
+    internal static MemoryStream BuildPdfWithShapeAnnot(string subtype)
+    {
+        PdfDictionary annotDict = new();
+        annotDict.Set(PdfName.Type, PdfName.Intern("Annot"));
+        annotDict.Set(PdfName.Intern("Subtype"), PdfName.Intern(subtype));
+        annotDict.Set(PdfName.Intern("Rect"), new PdfArray([
+            new PdfReal(50), new PdfReal(50),
+            new PdfReal(150), new PdfReal(150),
+        ]));
+        return BuildPdfWithAnnot(annotDict);
+    }
+
+    internal static MemoryStream BuildPdfWithLineAnnot()
+    {
+        PdfDictionary annotDict = new();
+        annotDict.Set(PdfName.Type, PdfName.Intern("Annot"));
+        annotDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Line"));
+        annotDict.Set(PdfName.Intern("Rect"), new PdfArray([
+            new PdfReal(10), new PdfReal(20),
+            new PdfReal(110), new PdfReal(220),
+        ]));
+        annotDict.Set(PdfName.Intern("L"), new PdfArray([
+            new PdfReal(10), new PdfReal(20),
+            new PdfReal(110), new PdfReal(220),
+        ]));
+        return BuildPdfWithAnnot(annotDict);
+    }
+
+    internal static MemoryStream BuildPdfWithPolygonAnnot()
+    {
+        PdfDictionary annotDict = new();
+        annotDict.Set(PdfName.Type, PdfName.Intern("Annot"));
+        annotDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Polygon"));
+        annotDict.Set(PdfName.Intern("Rect"), new PdfArray([
+            new PdfReal(0), new PdfReal(0),
+            new PdfReal(100), new PdfReal(100),
+        ]));
+        annotDict.Set(PdfName.Intern("Vertices"), new PdfArray([
+            new PdfReal(0), new PdfReal(0),
+            new PdfReal(100), new PdfReal(0),
+            new PdfReal(50), new PdfReal(100),
+        ]));
+        return BuildPdfWithAnnot(annotDict);
+    }
+
+    private static MemoryStream BuildPdfWithAnnot(PdfDictionary annotDict)
+    {
+        PdfObjectId catalogId = new(1, 0);
+        PdfObjectId pagesId = new(2, 0);
+        PdfObjectId pageId = new(3, 0);
+        PdfObjectId annotId = new(4, 0);
 
         PdfDictionary pageDict = new();
         pageDict.Set(PdfName.Type, PdfName.Page);

@@ -1,11 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
+    <AssemblyName>Chuvadi.Pdf.Svg.Tests</AssemblyName>
+    <RootNamespace>Chuvadi.Pdf.Svg.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Svg\Chuvadi.Pdf.Svg.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
   </ItemGroup>
+
 </Project>

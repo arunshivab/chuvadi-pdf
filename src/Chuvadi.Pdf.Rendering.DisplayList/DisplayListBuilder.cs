@@ -1,752 +1,1458 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  PDF 32000-1:2008 §8 (Graphics), §9 (Text)
-// PHASE: Phase 2.1 — display-list intermediate
+// SPEC:  PDF 32000-1:2008 §7.8 — Content streams; §8 — Graphics; §9 — Text
+// PHASE: v2.0.0 R1 D3c-2 — DisplayList builder
 
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using Chuvadi.Pdf.Documents;
-using Chuvadi.Pdf.Fonts;
+using Chuvadi.Pdf.Filters;
+using Chuvadi.Pdf.Fonts.Rendering;
+using Chuvadi.Pdf.Graphics;
+using Chuvadi.Pdf.Images;
+using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
+using Path = Chuvadi.Pdf.Graphics.Path;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
 
 /// <summary>
-/// Builds a <see cref="PageDisplayList"/> by walking a page's content stream
-/// and translating each PDF operator to a <see cref="RenderOp"/>.
+/// Builds a <see cref="PageDisplayList"/> from a <see cref="PdfPage"/> by
+/// interpreting the page's content stream.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The builder is renderer-neutral. It walks the PDF operator stream once,
+/// maintaining graphics-state and path-construction state, and emits an
+/// immutable sequence of <see cref="RenderOp"/> values into a
+/// <see cref="PageDisplayList"/>. Every op carries the CTM-baked geometry
+/// plus a snapshot of the active clip paths, so downstream consumers
+/// (pixel rasterizer, SVG writer, accessibility walker) do not need to
+/// track CTM or clip-stack state.
+/// </para>
+/// <para>
+/// Operators supported in v2.0.0 R1: q Q cm; w J j M d (state); g G rg RG
+/// k K sc SC scn SCN cs CS (colour); m l c v y h re (path construction);
+/// S s f F f* B B* b b* n (path painting); W W* (clipping); BT ET Tf Tc
+/// Tw Tz TL Ts Tr Td TD Tm T* Tj TJ ' " (text); Do (XObject - Image and
+/// Form); BMC BDC EMC MP DP BX EX (marked content / compatibility - no-op).
+/// </para>
+/// <para>
+/// Operators deferred to v2.1+: sh (shading), Pattern colorspaces (sc/scn
+/// with /Pattern), BI/ID/EI (inline images), ExtGState soft masks.
+/// </para>
+/// </remarks>
 public static class DisplayListBuilder
 {
-    /// <summary>Builds a display list for the given page.</summary>
-    public static PageDisplayList Build(PdfDocument document, int pageIndex)
+    /// <summary>
+    /// Builds a display list for the page's content stream.
+    /// </summary>
+    /// <param name="page">The PDF page to interpret.</param>
+    /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <returns>
+    /// An immutable display list. Empty if the page has no content
+    /// stream. CTM-baked geometry; per-op clip snapshots. Page rotation
+    /// is not applied here; that is a consumer concern.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="page"/> or <paramref name="objects"/> is null.
+    /// </exception>
+    public static PageDisplayList Build(PdfPage page, PdfObjectStore objects)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        if (pageIndex < 0 || pageIndex >= document.PageCount)
-        {
-            throw new ArgumentOutOfRangeException(nameof(pageIndex));
-        }
-        PdfPage page = document.Pages[pageIndex];
-        return new Builder(document).BuildPage(page);
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(objects);
+
+        Worker worker = new Worker(objects);
+        byte[] content = worker.LoadContentBytes(page.Contents);
+        return worker.BuildFromBytes(content, page.Resources, page.Width, page.Height);
     }
 
-    private sealed class Builder
+    /// <summary>
+    /// Builds a display list directly from raw content-stream bytes.
+    /// </summary>
+    /// <remarks>
+    /// This overload bypasses <see cref="PdfPage"/> entirely and is useful
+    /// for: (a) testing the operator interpreter in isolation, (b) rendering
+    /// arbitrary content streams (e.g. Form XObject contents in custom
+    /// pipelines), (c) tooling that constructs content streams in memory.
+    ///
+    /// The caller is responsible for supplying a resources dictionary that
+    /// resolves any /Font and /XObject references used by the content
+    /// stream. Pass null when the stream uses no resources.
+    /// </remarks>
+    /// <param name="content">The raw (decoded) content-stream bytes.</param>
+    /// <param name="resources">
+    /// The resources dictionary for font and XObject lookup. May be null.
+    /// </param>
+    /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <param name="pageWidth">The MediaBox width for the resulting display list.</param>
+    /// <param name="pageHeight">The MediaBox height for the resulting display list.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="content"/> or <paramref name="objects"/> is null.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="pageWidth"/> or <paramref name="pageHeight"/> is negative.
+    /// </exception>
+    public static PageDisplayList Build(
+        byte[] content,
+        PdfDictionary? resources,
+        PdfObjectStore objects,
+        double pageWidth,
+        double pageHeight)
     {
-        private readonly PdfDocument _doc;
-        private readonly List<RenderOp> _ops = new();
-        private readonly Dictionary<string, FontWidths> _widthsByKey = new();
-        private readonly Dictionary<string, bool> _compositeByKey = new();
-        private PdfDictionary? _resources;
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(objects);
 
-        internal Builder(PdfDocument doc) { _doc = doc; }
+        Worker worker = new Worker(objects);
+        return worker.BuildFromBytes(content, resources, pageWidth, pageHeight);
+    }
 
-        internal PageDisplayList BuildPage(PdfPage page)
+    /// <summary>
+    /// Internal worker that owns mutable interpretation state. A new
+    /// instance is created per Build call so the public API is stateless.
+    /// </summary>
+    private sealed class Worker
+    {
+        private readonly PdfObjectStore _objects;
+        private readonly FilterPipeline _pipeline;
+        private readonly Dictionary<string, FontRenderer?> _fontCache;
+
+        // Render-op accumulator
+        private readonly List<RenderOp> _ops;
+
+        // Graphics-state stack (q/Q)
+        private BuilderGraphicsState _state;
+        private readonly Stack<BuilderGraphicsState> _stateStack;
+
+        // Path construction (pre-CTM, user-space coords)
+        private Path _currentPath;
+
+        // Text state (NOT in q/Q stack — these reset on BT)
+        private Transform _textMatrix;
+        private Transform _textLineMatrix;
+
+        // Deferred clip (W or W* observed; applies AFTER the next painting op)
+        private bool _clipPending;
+        private FillRule _clipRule;
+
+        public Worker(PdfObjectStore objects)
         {
-            _resources = page.Resources;
-            byte[] content = LoadContent(page);
-            BuilderStateStack stack = new();
-            Dispatch(content, stack);
-            int rotation = 0;
-            if (page.Dictionary.TryGetValue(PdfName.Intern("Rotate"), out PdfPrimitive? rv)
-                && rv is PdfInteger ri) { rotation = ri.Value; }
-            return new PageDisplayList(_ops, page.Width, page.Height, rotation);
+            _objects = objects;
+            _pipeline = FilterRegistry.CreateDefaultPipeline();
+            _fontCache = new Dictionary<string, FontRenderer?>();
+            _ops = new List<RenderOp>();
+            _state = new BuilderGraphicsState();
+            _stateStack = new Stack<BuilderGraphicsState>();
+            _currentPath = new Path();
+            _textMatrix = Transform.Identity;
+            _textLineMatrix = Transform.Identity;
+            _clipPending = false;
+            _clipRule = FillRule.NonZeroWinding;
         }
 
-        private byte[] LoadContent(PdfPage page)
+        public PageDisplayList BuildFromBytes(
+            byte[] content,
+            PdfDictionary? resources,
+            double pageWidth,
+            double pageHeight)
         {
-            if (!page.Dictionary.TryGetValue(PdfName.Intern("Contents"), out PdfPrimitive? cv))
+            if (content.Length > 0)
+            {
+                Interpret(content, resources);
+            }
+
+            return new PageDisplayList(_ops, pageWidth, pageHeight);
+        }
+
+        // ── Content stream loading ────────────────────────────────────────
+
+        public byte[] LoadContentBytes(PdfPrimitive? contents)
+        {
+            if (contents is null || contents is PdfNull)
             {
                 return Array.Empty<byte>();
             }
-            PdfPrimitive resolved = _doc.Objects.Resolve(cv);
-            using MemoryStream merged = new();
-            if (resolved is PdfStream s)
+
+            PdfPrimitive resolved = _objects.Resolve(contents);
+
+            if (resolved is PdfStream single)
             {
-                byte[] data = StreamDecodeHelper.Decode(s);
-                merged.Write(data, 0, data.Length);
+                return DecodeStream(single);
             }
-            else if (resolved is PdfArray arr)
+
+            if (resolved is PdfArray array)
             {
-                foreach (PdfPrimitive entry in arr)
+                using (MemoryStream ms = new MemoryStream())
                 {
-                    if (_doc.Objects.Resolve(entry) is PdfStream st)
+                    for (int i = 0; i < array.Count; i++)
                     {
-                        byte[] data = StreamDecodeHelper.Decode(st);
-                        merged.Write(data, 0, data.Length);
-                        merged.WriteByte((byte)' ');
-                    }
-                }
-            }
-            return merged.ToArray();
-        }
+                        PdfPrimitive item = _objects.Resolve(array[i]);
 
-        private void Dispatch(byte[] content, BuilderStateStack stack)
-        {
-            using MemoryStream ms = new(content);
-            using PdfTokenizer tokenizer = new(ms);
-            List<PdfToken> operands = new();
-
-            while (true)
-            {
-                PdfToken token = tokenizer.Read();
-                if (token.IsEndOfStream) { break; }
-
-                if (token.Type == PdfTokenType.ArrayStart)
-                {
-                    operands.Add(token);
-                    while (true)
-                    {
-                        PdfToken inner = tokenizer.Read();
-                        if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
+                        if (item is PdfStream s)
                         {
-                            operands.Add(new PdfToken(PdfTokenType.ArrayEnd, Array.Empty<byte>(), 0));
-                            break;
+                            byte[] decoded = DecodeStream(s);
+                            ms.Write(decoded, 0, decoded.Length);
+
+                            if (i < array.Count - 1)
+                            {
+                                ms.WriteByte(32);
+                            }
                         }
-                        operands.Add(inner);
                     }
-                    continue;
-                }
 
-                if (token.Type != PdfTokenType.Keyword)
+                    return ms.ToArray();
+                }
+            }
+
+            return Array.Empty<byte>();
+        }
+
+        private byte[] DecodeStream(PdfStream stream)
+        {
+            if (!stream.IsFiltered)
+            {
+                return stream.RawBytes;
+            }
+
+            PdfPrimitive? filter = stream.Filter;
+
+            if (filter is PdfName filterName)
+            {
+                string resolved = FilterRegistry.ResolveAlias(filterName.Value);
+                return _pipeline.Decode(resolved, stream.RawBytes, null);
+            }
+
+            if (filter is PdfArray filterArray)
+            {
+                byte[] data = stream.RawBytes;
+
+                for (int i = 0; i < filterArray.Count; i++)
                 {
-                    operands.Add(token);
-                    continue;
+                    PdfName? fn = filterArray.GetAs<PdfName>(i);
+
+                    if (fn is null)
+                    {
+                        continue;
+                    }
+
+                    string resolved = FilterRegistry.ResolveAlias(fn.Value);
+                    data = _pipeline.Decode(resolved, data, null);
                 }
 
-                Execute(token.RawText, operands, stack);
-                operands.Clear();
+                return data;
+            }
+
+            return stream.RawBytes;
+        }
+
+        // ── Interpreter loop ──────────────────────────────────────────────
+
+        private void Interpret(byte[] content, PdfDictionary? resources)
+        {
+            using (MemoryStream ms = new MemoryStream(content))
+            using (PdfTokenizer tokenizer = new PdfTokenizer(ms))
+            {
+                List<PdfToken> operands = new List<PdfToken>();
+
+                while (true)
+                {
+                    PdfToken token = tokenizer.Read();
+
+                    if (token.IsEndOfStream)
+                    {
+                        break;
+                    }
+
+                    if (token.Type == PdfTokenType.ArrayStart)
+                    {
+                        // Collect array inline for TJ
+                        List<PdfToken> arrTokens = new List<PdfToken>();
+
+                        while (true)
+                        {
+                            PdfToken inner = tokenizer.Read();
+
+                            if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
+                            {
+                                break;
+                            }
+
+                            arrTokens.Add(inner);
+                        }
+
+                        operands.Add(new PdfToken(PdfTokenType.ArrayStart, Array.Empty<byte>(), 0));
+                        operands.AddRange(arrTokens);
+                        operands.Add(new PdfToken(PdfTokenType.ArrayEnd, Array.Empty<byte>(), 0));
+                        continue;
+                    }
+
+                    if (token.Type != PdfTokenType.Keyword)
+                    {
+                        operands.Add(token);
+                        continue;
+                    }
+
+                    Execute(token.RawText, operands, resources);
+                    operands.Clear();
+                }
             }
         }
 
-        private void Execute(string op, List<PdfToken> operands, BuilderStateStack stack)
+        // ── Operator dispatch ─────────────────────────────────────────────
+
+        private void Execute(string op, List<PdfToken> operands, PdfDictionary? resources)
         {
-            BuilderState s = stack.Current;
             switch (op)
             {
-                // ── State ────────────────────────────────────────────────
-                case "q":
-                    stack.Push();
-                    _ops.Add(new TransformOp { Push = true, Ctm = s.Ctm });
-                    break;
-                case "Q":
-                    stack.Pop();
-                    _ops.Add(new TransformOp { Push = false, Ctm = stack.Current.Ctm });
-                    break;
-                case "cm":
-                    if (operands.Count >= 6)
-                    {
-                        AffineMatrix m = new(
-                            Num(operands[0]), Num(operands[1]),
-                            Num(operands[2]), Num(operands[3]),
-                            Num(operands[4]), Num(operands[5]));
-                        s.Ctm = m.Multiply(s.Ctm);
-                    }
-                    break;
+                // Graphics state
+                case "q": OpQ(); break;
+                case "Q": OpQUpper(); break;
+                case "cm": OpCm(operands); break;
 
-                // ── Stroke params ────────────────────────────────────────
-                case "w": if (operands.Count > 0) { s.LineWidth = Num(operands[0]); } break;
-                case "J": if (operands.Count > 0) { s.LineCap = (LineCap)(int)Num(operands[0]); } break;
-                case "j": if (operands.Count > 0) { s.LineJoin = (LineJoin)(int)Num(operands[0]); } break;
-                case "M": if (operands.Count > 0) { s.MiterLimit = Num(operands[0]); } break;
-                case "d": ParseDashArray(operands, s); break;
+                // Stroke state parameters
+                case "w": if (operands.Count > 0) { _state.LineWidth = ParseDouble(operands[0]); } break;
+                case "J": if (operands.Count > 0) { _state.LineCap = (LineCap)ParseInt(operands[0]); } break;
+                case "j": if (operands.Count > 0) { _state.LineJoin = (LineJoin)ParseInt(operands[0]); } break;
+                case "M": if (operands.Count > 0) { _state.MiterLimit = ParseDouble(operands[0]); } break;
+                case "d": OpDashPattern(operands); break;
+                case "i": break; // Flatness — visual hint, ignored
+                case "ri": break; // Rendering intent — ignored at builder level
+                case "gs": break; // ExtGState — deferred to v2.1+
 
-                // ── Color ────────────────────────────────────────────────
-                case "g":  if (operands.Count > 0) { s.FillColor = PdfColor.Gray(Num(operands[0])); } break;
-                case "G":  if (operands.Count > 0) { s.StrokeColor = PdfColor.Gray(Num(operands[0])); } break;
-                case "rg": if (operands.Count >= 3) { s.FillColor = PdfColor.Rgb(Num(operands[0]), Num(operands[1]), Num(operands[2])); } break;
-                case "RG": if (operands.Count >= 3) { s.StrokeColor = PdfColor.Rgb(Num(operands[0]), Num(operands[1]), Num(operands[2])); } break;
-                case "k":  if (operands.Count >= 4) { s.FillColor = PdfColor.Cmyk(Num(operands[0]), Num(operands[1]), Num(operands[2]), Num(operands[3])); } break;
-                case "K":  if (operands.Count >= 4) { s.StrokeColor = PdfColor.Cmyk(Num(operands[0]), Num(operands[1]), Num(operands[2]), Num(operands[3])); } break;
+                // Colour operators
+                case "g": OpFillGray(operands); break;
+                case "G": OpStrokeGray(operands); break;
+                case "rg": OpFillRgb(operands); break;
+                case "RG": OpStrokeRgb(operands); break;
+                case "k": OpFillCmyk(operands); break;
+                case "K": OpStrokeCmyk(operands); break;
+                case "cs": OpColorSpace(operands, stroke: false); break;
+                case "CS": OpColorSpace(operands, stroke: true); break;
+                case "sc": case "scn": OpScColor(operands, stroke: false); break;
+                case "SC": case "SCN": OpScColor(operands, stroke: true); break;
 
-                // ── Path construction ────────────────────────────────────
-                case "m":
-                    if (operands.Count >= 2)
-                    {
-                        (double mx, double my) = s.Ctm.Apply(Num(operands[0]), Num(operands[1]));
-                        s.AppendMoveTo(mx, my);
-                    }
-                    break;
-                case "l":
-                    if (operands.Count >= 2)
-                    {
-                        (double lx, double ly) = s.Ctm.Apply(Num(operands[0]), Num(operands[1]));
-                        s.AppendLineTo(lx, ly);
-                    }
-                    break;
-                case "c":
-                    if (operands.Count >= 6)
-                    {
-                        (double x1, double y1) = s.Ctm.Apply(Num(operands[0]), Num(operands[1]));
-                        (double x2, double y2) = s.Ctm.Apply(Num(operands[2]), Num(operands[3]));
-                        (double x3, double y3) = s.Ctm.Apply(Num(operands[4]), Num(operands[5]));
-                        s.AppendCubicTo(x1, y1, x2, y2, x3, y3);
-                    }
-                    break;
-                case "v":
-                    if (operands.Count >= 4)
-                    {
-                        (double vx2, double vy2) = s.Ctm.Apply(Num(operands[0]), Num(operands[1]));
-                        (double vx3, double vy3) = s.Ctm.Apply(Num(operands[2]), Num(operands[3]));
-                        s.AppendCubicTo(s.CurX, s.CurY, vx2, vy2, vx3, vy3);
-                    }
-                    break;
-                case "y":
-                    if (operands.Count >= 4)
-                    {
-                        (double yx1, double yy1) = s.Ctm.Apply(Num(operands[0]), Num(operands[1]));
-                        (double yx3, double yy3) = s.Ctm.Apply(Num(operands[2]), Num(operands[3]));
-                        s.AppendCubicTo(yx1, yy1, yx3, yy3, yx3, yy3);
-                    }
-                    break;
-                case "h":
-                    s.AppendClose();
-                    break;
-                case "re":
-                    if (operands.Count >= 4)
-                    {
-                        double rx = Num(operands[0]);
-                        double ry = Num(operands[1]);
-                        double rw = Num(operands[2]);
-                        double rh = Num(operands[3]);
-                        (double p0x, double p0y) = s.Ctm.Apply(rx, ry);
-                        (double p1x, double p1y) = s.Ctm.Apply(rx + rw, ry);
-                        (double p2x, double p2y) = s.Ctm.Apply(rx + rw, ry + rh);
-                        (double p3x, double p3y) = s.Ctm.Apply(rx, ry + rh);
-                        s.AppendMoveTo(p0x, p0y);
-                        s.AppendLineTo(p1x, p1y);
-                        s.AppendLineTo(p2x, p2y);
-                        s.AppendLineTo(p3x, p3y);
-                        s.AppendClose();
-                    }
-                    break;
+                // Path construction
+                case "m": if (operands.Count >= 2) { _currentPath.MoveTo(ParseDouble(operands[0]), ParseDouble(operands[1])); } break;
+                case "l": OpL(operands); break;
+                case "c": OpC(operands); break;
+                case "v": OpV(operands); break;
+                case "y": OpY(operands); break;
+                case "h": _currentPath.ClosePath(); break;
+                case "re": OpRe(operands); break;
 
-                // ── Path painting ────────────────────────────────────────
-                case "S":  EmitPath(s, PaintMode.Stroke, FillRule.NonZero); break;
-                case "s":  s.AppendClose(); EmitPath(s, PaintMode.Stroke, FillRule.NonZero); break;
-                case "f":
-                case "F":  EmitPath(s, PaintMode.Fill, FillRule.NonZero); break;
-                case "f*": EmitPath(s, PaintMode.Fill, FillRule.EvenOdd); break;
-                case "B":  EmitPath(s, PaintMode.FillAndStroke, FillRule.NonZero); break;
-                case "B*": EmitPath(s, PaintMode.FillAndStroke, FillRule.EvenOdd); break;
-                case "b":  s.AppendClose(); EmitPath(s, PaintMode.FillAndStroke, FillRule.NonZero); break;
-                case "b*": s.AppendClose(); EmitPath(s, PaintMode.FillAndStroke, FillRule.EvenOdd); break;
-                case "n":  s.ResetPath(); break;
+                // Path painting
+                case "f": case "F": OpFill(FillRule.NonZeroWinding); break;
+                case "f*": OpFill(FillRule.EvenOdd); break;
+                case "S": OpStroke(closeFirst: false); break;
+                case "s": OpStroke(closeFirst: true); break;
+                case "B": OpFillStroke(FillRule.NonZeroWinding, closeFirst: false); break;
+                case "B*": OpFillStroke(FillRule.EvenOdd, closeFirst: false); break;
+                case "b": OpFillStroke(FillRule.NonZeroWinding, closeFirst: true); break;
+                case "b*": OpFillStroke(FillRule.EvenOdd, closeFirst: true); break;
+                case "n": OpEndPath(); break;
 
-                // ── Clipping ─────────────────────────────────────────────
-                case "W":
-                case "W*":
-                    if (s.HasCurrentPath)
-                    {
-                        _ops.Add(new ClipOp
-                        {
-                            Geometry = s.CurrentPath,
-                            FillRule = op == "W*" ? FillRule.EvenOdd : FillRule.NonZero,
-                        });
-                    }
-                    break;
+                // Clipping
+                case "W": _clipPending = true; _clipRule = FillRule.NonZeroWinding; break;
+                case "W*": _clipPending = true; _clipRule = FillRule.EvenOdd; break;
 
-                // ── Text ─────────────────────────────────────────────────
-                case "BT":
-                    s.TextMatrix = AffineMatrix.Identity;
-                    s.TextLineMatrix = AffineMatrix.Identity;
-                    break;
+                // Text object delimiters
+                case "BT": _textMatrix = Transform.Identity; _textLineMatrix = Transform.Identity; break;
                 case "ET": break;
-                case "Tf":
-                    if (operands.Count >= 2)
-                    {
-                        s.FontKey = operands[0].RawText.TrimStart('/');
-                        s.FontSize = Num(operands[1]);
-                        s.BaseFont = ResolveBaseFont(s.FontKey);
-                    }
-                    break;
-                case "Td":
-                    if (operands.Count >= 2)
-                    {
-                        AffineMatrix t = new(1, 0, 0, 1, Num(operands[0]), Num(operands[1]));
-                        s.TextLineMatrix = t.Multiply(s.TextLineMatrix);
-                        s.TextMatrix = s.TextLineMatrix;
-                    }
-                    break;
-                case "TD":
-                    if (operands.Count >= 2)
-                    {
-                        double tdx = Num(operands[0]); double tdy = Num(operands[1]);
-                        s.Leading = -tdy;
-                        AffineMatrix t = new(1, 0, 0, 1, tdx, tdy);
-                        s.TextLineMatrix = t.Multiply(s.TextLineMatrix);
-                        s.TextMatrix = s.TextLineMatrix;
-                    }
-                    break;
-                case "Tm":
-                    if (operands.Count >= 6)
-                    {
-                        AffineMatrix tm = new(
-                            Num(operands[0]), Num(operands[1]),
-                            Num(operands[2]), Num(operands[3]),
-                            Num(operands[4]), Num(operands[5]));
-                        s.TextMatrix = tm;
-                        s.TextLineMatrix = tm;
-                    }
-                    break;
-                case "T*":
-                    {
-                        AffineMatrix t = new(1, 0, 0, 1, 0, -s.Leading);
-                        s.TextLineMatrix = t.Multiply(s.TextLineMatrix);
-                        s.TextMatrix = s.TextLineMatrix;
-                    }
-                    break;
-                case "Tc": if (operands.Count > 0) { s.CharSpacing = Num(operands[0]); } break;
-                case "Tw": if (operands.Count > 0) { s.WordSpacing = Num(operands[0]); } break;
-                case "Tz": if (operands.Count > 0) { s.HorizontalScaling = Num(operands[0]); } break;
-                case "TL": if (operands.Count > 0) { s.Leading = Num(operands[0]); } break;
-                case "Tr": if (operands.Count > 0) { s.RenderingMode = (TextRenderingMode)(int)Num(operands[0]); } break;
-                case "Ts": if (operands.Count > 0) { s.TextRise = Num(operands[0]); } break;
 
-                case "Tj":
-                    if (operands.Count > 0) { EmitText(operands[0], s); }
-                    break;
-                case "'":
-                    {
-                        AffineMatrix t = new(1, 0, 0, 1, 0, -s.Leading);
-                        s.TextLineMatrix = t.Multiply(s.TextLineMatrix);
-                        s.TextMatrix = s.TextLineMatrix;
-                        if (operands.Count > 0) { EmitText(operands[0], s); }
-                    }
-                    break;
-                case "\"":
-                    if (operands.Count >= 3)
-                    {
-                        s.WordSpacing = Num(operands[0]);
-                        s.CharSpacing = Num(operands[1]);
-                        AffineMatrix t = new(1, 0, 0, 1, 0, -s.Leading);
-                        s.TextLineMatrix = t.Multiply(s.TextLineMatrix);
-                        s.TextMatrix = s.TextLineMatrix;
-                        EmitText(operands[2], s);
-                    }
-                    break;
-                case "TJ":
-                    foreach (PdfToken tok in operands)
-                    {
-                        if (tok.Type == PdfTokenType.LiteralString || tok.Type == PdfTokenType.HexString)
-                        {
-                            EmitText(tok, s);
-                        }
-                    }
-                    break;
+                // Text state
+                case "Tc": if (operands.Count > 0) { _state.CharacterSpacing = ParseDouble(operands[0]); } break;
+                case "Tw": if (operands.Count > 0) { _state.WordSpacing = ParseDouble(operands[0]); } break;
+                case "Tz": if (operands.Count > 0) { _state.HorizontalScaling = ParseDouble(operands[0]); } break;
+                case "TL": if (operands.Count > 0) { _state.TextLeading = ParseDouble(operands[0]); } break;
+                case "Ts": if (operands.Count > 0) { _state.TextRise = ParseDouble(operands[0]); } break;
+                case "Tr": if (operands.Count > 0) { _state.TextRenderingMode = (int)ParseInt(operands[0]); } break;
+                case "Tf": OpTf(operands, resources); break;
 
-                // ── XObject ──────────────────────────────────────────────
-                case "Do":
-                    if (operands.Count > 0)
-                    {
-                        EmitXObject(operands[0].RawText.TrimStart('/'), s);
-                    }
-                    break;
+                // Text positioning
+                case "Td": OpTd(operands); break;
+                case "TD": OpTD(operands); break;
+                case "Tm": OpTm(operands); break;
+                case "T*": OpTStar(); break;
 
-                // ── Ignored / pass-through ───────────────────────────────
-                case "BMC": case "BDC": case "EMC":
-                case "gs": case "i":
-                case "CS": case "cs": case "sc": case "SC": case "scn": case "SCN":
-                case "ri": case "sh":
-                    break;
+                // Text showing
+                case "Tj": if (operands.Count > 0) { ShowText(ExtractString(operands[0])); } break;
+                case "TJ": OpTJ(operands); break;
+                case "'": OpQuote(operands); break;
+                case "\"": OpDoubleQuote(operands); break;
+
+                // XObjects
+                case "Do": OpDo(operands, resources); break;
+
+                // Marked content / compatibility — parsed, operands consumed, no emission
+                case "BMC": case "BDC": case "EMC": case "MP": case "DP": case "BX": case "EX": break;
+
+                // Unrecognised operator — silently ignored, operands cleared by caller
                 default: break;
             }
         }
 
-        private void EmitPath(BuilderState s, PaintMode mode, FillRule rule)
+        // ── Graphics state operators ──────────────────────────────────────
+
+        private void OpQ()
         {
-            if (!s.HasCurrentPath) { return; }
-            StrokeStyle? stroke = mode != PaintMode.Fill ? new StrokeStyle(
-                LineWidth: s.LineWidth * Math.Max(Math.Abs(s.Ctm.A), Math.Abs(s.Ctm.D)),
-                Cap: s.LineCap,
-                Join: s.LineJoin,
-                MiterLimit: s.MiterLimit,
-                DashArray: s.DashArray,
-                DashPhase: s.DashPhase) : null;
-            _ops.Add(new PathOp
-            {
-                Geometry = s.CurrentPath,
-                Mode = mode,
-                FillRule = rule,
-                FillColor = s.FillColor,
-                StrokeColor = s.StrokeColor,
-                Stroke = stroke,
-            });
-            s.ResetPath();
+            _stateStack.Push(_state.Clone());
         }
 
-        private void EmitText(PdfToken token, BuilderState s)
+        private void OpQUpper()
         {
-            if (s.FontKey is null) { return; }
-            byte[] bytes = StringExtractor.Extract(token);
-            if (bytes.Length == 0) { return; }
-
-            FontWidths widths = GetWidths(s.FontKey);
-            bool composite = _compositeByKey.GetValueOrDefault(s.FontKey, false);
-
-            // Walk bytes → codes → unicode + advance, accumulating positions.
-            List<DisplayListGlyph> glyphs = new();
-            double xAdvance = 0;
-            int codeStep = composite ? 2 : 1;
-
-            for (int i = 0; i + codeStep <= bytes.Length; i += codeStep)
+            if (_stateStack.Count > 0)
             {
-                int code = composite
-                    ? ((bytes[i] << 8) | bytes[i + 1])
-                    : bytes[i];
-
-                string unicode = DecodeSingleCode(bytes, i, codeStep, s.FontKey);
-
-                double rawWidth = widths.GetWidth(code);   // font units (1000ths em)
-                double advance = (rawWidth / 1000.0) * s.FontSize
-                                 + s.CharSpacing
-                                 + (unicode == " " ? s.WordSpacing : 0.0);
-                // Horizontal scaling (Tz) factor
-                advance *= s.HorizontalScaling / 100.0;
-
-                glyphs.Add(new DisplayListGlyph(
-                    GlyphId: code,
-                    Unicode: unicode,
-                    X: xAdvance,
-                    Y: 0,
-                    Advance: advance));
-
-                xAdvance += advance;
+                _state = _stateStack.Pop();
             }
-
-            if (glyphs.Count == 0) { return; }
-
-            AffineMatrix combined = s.TextMatrix.Multiply(s.Ctm);
-            _ops.Add(new TextOp
-            {
-                FontKey = s.FontKey,
-                BaseFont = s.BaseFont ?? "Helvetica",
-                FontSize = s.FontSize,
-                Glyphs = glyphs,
-                Transform = combined,
-                RenderingMode = s.RenderingMode,
-                FillColor = s.FillColor,
-                StrokeColor = s.StrokeColor,
-            });
-
-            // Advance text matrix by the total advance of this run.
-            AffineMatrix step = new(1, 0, 0, 1, xAdvance, 0);
-            s.TextMatrix = step.Multiply(s.TextMatrix);
         }
 
-        private FontWidths GetWidths(string fontKey)
+        private void OpCm(List<PdfToken> operands)
         {
-            if (_widthsByKey.TryGetValue(fontKey, out FontWidths? cached)) { return cached; }
-            PdfDictionary? fontDict = ResolveFontDict(fontKey);
-            if (fontDict is null)
-            {
-                FontWidths fallback = FontWidthsFallback();
-                _widthsByKey[fontKey] = fallback;
-                _compositeByKey[fontKey] = false;
-                return fallback;
-            }
-            FontWidths fw = FontWidths.FromDictionary(fontDict, _doc.Objects);
-            // Enable Standard 14 fallback if BaseFont is one of them — many PDFs
-            // (and Chuvadi's Authoring module) omit /Widths for Standard 14 fonts.
-            string? baseFont = ResolveBaseFont(fontKey);
-            if (baseFont is not null) { fw.EnableStandard14Fallback(baseFont); }
-            _widthsByKey[fontKey] = fw;
-            _compositeByKey[fontKey] = fw.IsComposite;
-            return fw;
-        }
-
-        private PdfDictionary? ResolveFontDict(string fontKey)
-        {
-            if (_resources is null) { return null; }
-            if (!_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fonts))
-            {
-                return null;
-            }
-            PdfDictionary? fd = _doc.Objects.ResolveAs<PdfDictionary>(fonts);
-            if (fd is null) { return null; }
-            if (!fd.TryGetValue(PdfName.Intern(fontKey), out PdfPrimitive? fv)) { return null; }
-            return _doc.Objects.ResolveAs<PdfDictionary>(fv);
-        }
-
-        private static FontWidths FontWidthsFallback()
-        {
-            // Build a stub FontWidths via reflection-free constructor proxy:
-            // a synthetic font dict with no /Widths gives the default 500 width.
-            PdfDictionary empty = new();
-            return FontWidths.FromDictionary(empty, NullResolver.Instance);
-        }
-
-        private string DecodeSingleCode(byte[] bytes, int offset, int codeStep, string fontKey)
-        {
-            // Decode just the bytes [offset, offset+codeStep) through PdfFont.
-            byte[] slice = new byte[codeStep];
-            System.Array.Copy(bytes, offset, slice, 0, codeStep);
-            return DecodeText(slice, fontKey);
-        }
-
-        private string DecodeText(byte[] bytes, string fontKey)
-        {
-            if (_resources is null) { return TryLatin(bytes); }
-            if (!_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fonts))
-            {
-                return TryLatin(bytes);
-            }
-            PdfDictionary? fd = _doc.Objects.ResolveAs<PdfDictionary>(fonts);
-            if (fd is null) { return TryLatin(bytes); }
-            if (!fd.TryGetValue(PdfName.Intern(fontKey), out PdfPrimitive? fv)) { return TryLatin(bytes); }
-            PdfDictionary? font = _doc.Objects.ResolveAs<PdfDictionary>(fv);
-            if (font is null) { return TryLatin(bytes); }
-            try
-            {
-                PdfFont pf = PdfFont.FromDictionary(font, _doc.Objects);
-                return pf.Decode(bytes);
-            }
-            catch { return TryLatin(bytes); }
-        }
-
-        private static string TryLatin(byte[] bytes)
-            => System.Text.Encoding.Latin1.GetString(bytes);
-
-        private string? ResolveBaseFont(string fontKey)
-        {
-            if (_resources is null) { return null; }
-            if (!_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fonts))
-            {
-                return null;
-            }
-            PdfDictionary? fd = _doc.Objects.ResolveAs<PdfDictionary>(fonts);
-            if (fd is null) { return null; }
-            if (!fd.TryGetValue(PdfName.Intern(fontKey), out PdfPrimitive? fv)) { return null; }
-            PdfDictionary? font = _doc.Objects.ResolveAs<PdfDictionary>(fv);
-            if (font is null) { return null; }
-            if (font.TryGetValue(PdfName.Intern("BaseFont"), out PdfPrimitive? bv)
-                && bv is PdfName bn)
-            {
-                string s = bn.Value;
-                int plus = s.IndexOf('+');
-                if (plus >= 0 && plus < s.Length - 1) { return s[(plus + 1)..]; }
-                return s;
-            }
-            return null;
-        }
-
-        private void EmitXObject(string name, BuilderState s)
-        {
-            if (_resources is null) { return; }
-            if (!_resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xv))
-            {
-                return;
-            }
-            PdfDictionary? xobjects = _doc.Objects.ResolveAs<PdfDictionary>(xv);
-            if (xobjects is null) { return; }
-            if (!xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? imgRef)) { return; }
-            if (_doc.Objects.Resolve(imgRef) is not PdfStream stream) { return; }
-            if (!stream.Dictionary.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? sub)
-                || sub is not PdfName subName || subName.Value != "Image")
+            if (operands.Count < 6)
             {
                 return;
             }
 
-            int width = IntOf(stream.Dictionary, "Width", 0);
-            int height = IntOf(stream.Dictionary, "Height", 0);
-            int bpc = IntOf(stream.Dictionary, "BitsPerComponent", 8);
-            if (width <= 0 || height <= 0) { return; }
+            Transform local = new Transform(
+                ParseDouble(operands[0]), ParseDouble(operands[1]),
+                ParseDouble(operands[2]), ParseDouble(operands[3]),
+                ParseDouble(operands[4]), ParseDouble(operands[5]));
 
-            string? filterName = ExtractFilterName(stream.Dictionary);
-            ImageFormat format;
-            byte[] pixelData;
-            PdfColorSpace cs = ExtractColorSpace(stream.Dictionary);
+            // PDF row-vector convention: local cm pre-multiplies the CTM
+            _state.Ctm = local.Multiply(_state.Ctm);
+        }
 
-            if (filterName == "DCTDecode")
+        private void OpDashPattern(List<PdfToken> operands)
+        {
+            // d [dashArray] phase
+            if (operands.Count < 1)
             {
-                format = ImageFormat.Jpeg;
-                pixelData = stream.RawBytes;
+                return;
+            }
+
+            int phaseIdx = operands.Count - 1;
+            double phase = ParseDouble(operands[phaseIdx]);
+
+            // Skip leading ArrayStart and trailing ArrayEnd tokens if present
+            int start = 0;
+            int end = phaseIdx;
+
+            while (start < end && operands[start].Type == PdfTokenType.ArrayStart)
+            {
+                start++;
+            }
+
+            while (end > start && operands[end - 1].Type == PdfTokenType.ArrayEnd)
+            {
+                end--;
+            }
+
+            int len = end - start;
+            double[] dashes = new double[len];
+
+            for (int i = 0; i < len; i++)
+            {
+                dashes[i] = ParseDouble(operands[start + i]);
+            }
+
+            _state.DashPattern = dashes;
+            _state.DashOffset = phase;
+        }
+
+        // ── Colour operators ──────────────────────────────────────────────
+
+        private void OpFillGray(List<PdfToken> operands)
+        {
+            if (operands.Count < 1)
+            {
+                return;
+            }
+            _state.FillColor = ColorF.FromGray((float)ParseDouble(operands[0]));
+            _state.FillValid = true;
+        }
+
+        private void OpStrokeGray(List<PdfToken> operands)
+        {
+            if (operands.Count < 1)
+            {
+                return;
+            }
+            _state.StrokeColor = ColorF.FromGray((float)ParseDouble(operands[0]));
+            _state.StrokeValid = true;
+        }
+
+        private void OpFillRgb(List<PdfToken> operands)
+        {
+            if (operands.Count < 3)
+            {
+                return;
+            }
+            _state.FillColor = ColorF.FromRgb(
+                (float)ParseDouble(operands[0]),
+                (float)ParseDouble(operands[1]),
+                (float)ParseDouble(operands[2]));
+            _state.FillValid = true;
+        }
+
+        private void OpStrokeRgb(List<PdfToken> operands)
+        {
+            if (operands.Count < 3)
+            {
+                return;
+            }
+            _state.StrokeColor = ColorF.FromRgb(
+                (float)ParseDouble(operands[0]),
+                (float)ParseDouble(operands[1]),
+                (float)ParseDouble(operands[2]));
+            _state.StrokeValid = true;
+        }
+
+        private void OpFillCmyk(List<PdfToken> operands)
+        {
+            if (operands.Count < 4)
+            {
+                return;
+            }
+            _state.FillColor = ColorF.FromCmyk(
+                (float)ParseDouble(operands[0]),
+                (float)ParseDouble(operands[1]),
+                (float)ParseDouble(operands[2]),
+                (float)ParseDouble(operands[3]));
+            _state.FillValid = true;
+        }
+
+        private void OpStrokeCmyk(List<PdfToken> operands)
+        {
+            if (operands.Count < 4)
+            {
+                return;
+            }
+            _state.StrokeColor = ColorF.FromCmyk(
+                (float)ParseDouble(operands[0]),
+                (float)ParseDouble(operands[1]),
+                (float)ParseDouble(operands[2]),
+                (float)ParseDouble(operands[3]));
+            _state.StrokeValid = true;
+        }
+
+        private void OpColorSpace(List<PdfToken> operands, bool stroke)
+        {
+            // cs / CS sets the active colour space. We track validity:
+            // device colour spaces remain valid; Pattern marks invalid so
+            // subsequent paints get suppressed until a representable
+            // colour is set via rg/g/k.
+            if (operands.Count < 1)
+            {
+                return;
+            }
+
+            string name = ExtractName(operands[0]);
+            bool isDevice = name == "DeviceGray" || name == "DeviceRGB" || name == "DeviceCMYK"
+                         || name == "G" || name == "RGB" || name == "CMYK";
+
+            if (stroke)
+            {
+                _state.StrokeValid = isDevice;
             }
             else
             {
-                format = ImageFormat.Raw;
-                try { pixelData = StreamDecodeHelper.Decode(stream); }
-                catch { return; }
+                _state.FillValid = isDevice;
             }
-
-            _ops.Add(new ImageOp
-            {
-                PixelData = pixelData,
-                Format = format,
-                Width = width,
-                Height = height,
-                BitsPerComponent = bpc,
-                ColorSpace = cs,
-                Transform = s.Ctm,
-            });
         }
 
-        private static int IntOf(PdfDictionary d, string key, int fallback)
+        private void OpScColor(List<PdfToken> operands, bool stroke)
         {
-            if (d.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v) && v is PdfInteger i)
+            // sc / scn / SC / SCN — set colour in current colour space.
+            // We support 1, 3, or 4 numeric operands (DeviceGray/RGB/CMYK).
+            // A trailing name operand (Pattern) suppresses validity.
+            int numericCount = 0;
+            bool hasName = false;
+
+            foreach (PdfToken t in operands)
             {
-                return i.Value;
+                if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
+                {
+                    numericCount++;
+                }
+                else if (t.Type == PdfTokenType.Name)
+                {
+                    hasName = true;
+                }
             }
-            return fallback;
+
+            if (hasName)
+            {
+                if (stroke) { _state.StrokeValid = false; } else { _state.FillValid = false; }
+                return;
+            }
+
+            ColorF c;
+
+            switch (numericCount)
+            {
+                case 1:
+                    c = ColorF.FromGray((float)ParseDouble(operands[0]));
+                    break;
+                case 3:
+                    c = ColorF.FromRgb(
+                        (float)ParseDouble(operands[0]),
+                        (float)ParseDouble(operands[1]),
+                        (float)ParseDouble(operands[2]));
+                    break;
+                case 4:
+                    c = ColorF.FromCmyk(
+                        (float)ParseDouble(operands[0]),
+                        (float)ParseDouble(operands[1]),
+                        (float)ParseDouble(operands[2]),
+                        (float)ParseDouble(operands[3]));
+                    break;
+                default:
+                    return;
+            }
+
+            if (stroke)
+            {
+                _state.StrokeColor = c;
+                _state.StrokeValid = true;
+            }
+            else
+            {
+                _state.FillColor = c;
+                _state.FillValid = true;
+            }
         }
 
-        private static string? ExtractFilterName(PdfDictionary d)
+        // ── Path construction ─────────────────────────────────────────────
+
+        private void OpL(List<PdfToken> operands)
         {
-            if (!d.TryGetValue(PdfName.Intern("Filter"), out PdfPrimitive? f)) { return null; }
-            return f switch
+            if (operands.Count < 2)
             {
-                PdfName n => n.Value,
-                PdfArray arr when arr.Count > 0 && arr[0] is PdfName n2 => n2.Value,
-                _ => null,
+                return;
+            }
+
+            // LineTo on an empty path is illegal in the Path API (it
+            // requires a current point). Defend against malformed streams.
+            if (_currentPath.IsEmpty)
+            {
+                _currentPath.MoveTo(ParseDouble(operands[0]), ParseDouble(operands[1]));
+                return;
+            }
+
+            _currentPath.LineTo(ParseDouble(operands[0]), ParseDouble(operands[1]));
+        }
+
+        private void OpC(List<PdfToken> operands)
+        {
+            if (operands.Count < 6)
+            {
+                return;
+            }
+
+            if (_currentPath.IsEmpty)
+            {
+                return; // Malformed — c requires a current point
+            }
+
+            _currentPath.CubicBezierTo(
+                ParsePoint(operands, 0),
+                ParsePoint(operands, 2),
+                ParsePoint(operands, 4));
+        }
+
+        private void OpV(List<PdfToken> operands)
+        {
+            // v x2 y2 x3 y3 — Bezier with initial point as first control
+            if (operands.Count < 4)
+            {
+                return;
+            }
+
+            if (_currentPath.IsEmpty)
+            {
+                return;
+            }
+
+            PointF current;
+
+            try
+            {
+                current = _currentPath.CurrentPoint;
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+
+            _currentPath.CubicBezierTo(
+                current,
+                ParsePoint(operands, 0),
+                ParsePoint(operands, 2));
+        }
+
+        private void OpY(List<PdfToken> operands)
+        {
+            // y x1 y1 x3 y3 — Bezier with final point as second control
+            if (operands.Count < 4)
+            {
+                return;
+            }
+
+            if (_currentPath.IsEmpty)
+            {
+                return;
+            }
+
+            PointF endPt = ParsePoint(operands, 2);
+            _currentPath.CubicBezierTo(
+                ParsePoint(operands, 0),
+                endPt,
+                endPt);
+        }
+
+        private void OpRe(List<PdfToken> operands)
+        {
+            if (operands.Count < 4)
+            {
+                return;
+            }
+
+            double x = ParseDouble(operands[0]);
+            double y = ParseDouble(operands[1]);
+            double w = ParseDouble(operands[2]);
+            double h = ParseDouble(operands[3]);
+
+            _currentPath.MoveTo(x, y);
+            _currentPath.LineTo(x + w, y);
+            _currentPath.LineTo(x + w, y + h);
+            _currentPath.LineTo(x, y + h);
+            _currentPath.ClosePath();
+        }
+
+        // ── Path painting ─────────────────────────────────────────────────
+
+        private void OpFill(FillRule rule)
+        {
+            if (_state.FillValid && !_currentPath.IsEmpty)
+            {
+                Path transformed = TransformPath(_currentPath, _state.Ctm);
+                _ops.Add(new FillPathOp(transformed, _state.FillColor, rule, SnapshotClips()));
+            }
+
+            ApplyDeferredClip();
+            _currentPath = new Path();
+        }
+
+        private void OpStroke(bool closeFirst)
+        {
+            if (closeFirst && !_currentPath.IsEmpty)
+            {
+                _currentPath.ClosePath();
+            }
+
+            if (_state.StrokeValid && !_currentPath.IsEmpty)
+            {
+                Path transformed = TransformPath(_currentPath, _state.Ctm);
+                StrokeStyle style = BuildStrokeStyle();
+                _ops.Add(new StrokePathOp(transformed, style, SnapshotClips()));
+            }
+
+            ApplyDeferredClip();
+            _currentPath = new Path();
+        }
+
+        private void OpFillStroke(FillRule rule, bool closeFirst)
+        {
+            if (closeFirst && !_currentPath.IsEmpty)
+            {
+                _currentPath.ClosePath();
+            }
+
+            if (!_currentPath.IsEmpty)
+            {
+                Path transformed = TransformPath(_currentPath, _state.Ctm);
+                IReadOnlyList<ClipPath>? snapshot = SnapshotClips();
+
+                if (_state.FillValid)
+                {
+                    _ops.Add(new FillPathOp(transformed, _state.FillColor, rule, snapshot));
+                }
+
+                if (_state.StrokeValid)
+                {
+                    StrokeStyle style = BuildStrokeStyle();
+                    _ops.Add(new StrokePathOp(transformed, style, snapshot));
+                }
+            }
+
+            ApplyDeferredClip();
+            _currentPath = new Path();
+        }
+
+        private void OpEndPath()
+        {
+            // n — no painting, but a pending clip still applies
+            ApplyDeferredClip();
+            _currentPath = new Path();
+        }
+
+        private void ApplyDeferredClip()
+        {
+            if (!_clipPending)
+            {
+                return;
+            }
+
+            if (!_currentPath.IsEmpty)
+            {
+                Path transformedClip = TransformPath(_currentPath, _state.Ctm);
+                _state.ActiveClips.Add(new ClipPath(transformedClip, _clipRule));
+            }
+
+            _clipPending = false;
+        }
+
+        private StrokeStyle BuildStrokeStyle()
+        {
+            return new StrokeStyle
+            {
+                Width = _state.LineWidth,
+                Cap = _state.LineCap,
+                Join = _state.LineJoin,
+                MiterLimit = _state.MiterLimit,
+                DashPattern = _state.DashPattern,
+                DashOffset = _state.DashOffset,
+                Color = _state.StrokeColor,
             };
         }
 
-        private static PdfColorSpace ExtractColorSpace(PdfDictionary d)
+        private IReadOnlyList<ClipPath>? SnapshotClips()
         {
-            if (!d.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? cs)) { return PdfColorSpace.DeviceRgb; }
-            if (cs is PdfName n)
+            if (_state.ActiveClips.Count == 0)
             {
-                return n.Value switch
-                {
-                    "DeviceGray" => PdfColorSpace.DeviceGray,
-                    "DeviceRGB"  => PdfColorSpace.DeviceRgb,
-                    "DeviceCMYK" => PdfColorSpace.DeviceCmyk,
-                    _ => PdfColorSpace.DeviceRgb,
-                };
+                return null;
             }
-            return PdfColorSpace.DeviceRgb;
+
+            // RenderOp will defensively copy; pass the list reference.
+            return _state.ActiveClips;
         }
 
-        private static void ParseDashArray(List<PdfToken> operands, BuilderState s)
+        // ── Path geometry helpers ─────────────────────────────────────────
+
+        private static Path TransformPath(Path source, Transform ctm)
         {
-            List<double> values = new();
-            double phase = 0;
-            int phaseIndex = -1;
-            for (int i = 0; i < operands.Count; i++)
+            Path result = new Path();
+
+            foreach (PathSegment seg in source.Segments)
             {
-                if (operands[i].Type == PdfTokenType.ArrayStart || operands[i].Type == PdfTokenType.ArrayEnd) { continue; }
-                if (operands[i].IsNumeric)
+                switch (seg.Kind)
                 {
-                    if (phaseIndex < 0) { values.Add(Num(operands[i])); phaseIndex = i; }
-                    else { phase = Num(operands[i]); }
-                }
-            }
-            s.DashArray = values.Count > 0 ? values.ToArray() : null;
-            s.DashPhase = phase;
-        }
-
-        private static double Num(PdfToken t)
-            => double.Parse(t.RawText, NumberStyles.Float, CultureInfo.InvariantCulture);
-    }
-}
-
-internal static class StreamDecodeHelper
-{
-    private static readonly Chuvadi.Pdf.Filters.FilterPipeline Pipeline
-        = Chuvadi.Pdf.Filters.FilterRegistry.CreateDefaultPipeline();
-
-    internal static byte[] Decode(PdfStream stream)
-    {
-        if (!stream.IsFiltered) { return stream.RawBytes; }
-        PdfPrimitive? filter = stream.Filter;
-        if (filter is PdfName fn)
-        {
-            string resolved = Chuvadi.Pdf.Filters.FilterRegistry.ResolveAlias(fn.Value);
-            return Pipeline.Decode(resolved, stream.RawBytes, null);
-        }
-        if (filter is PdfArray fa)
-        {
-            byte[] data = stream.RawBytes;
-            for (int i = 0; i < fa.Count; i++)
-            {
-                if (fa[i] is PdfName n)
-                {
-                    string resolved = Chuvadi.Pdf.Filters.FilterRegistry.ResolveAlias(n.Value);
-                    data = Pipeline.Decode(resolved, data, null);
-                }
-            }
-            return data;
-        }
-        return stream.RawBytes;
-    }
-}
-
-internal static class StringExtractor
-{
-    internal static byte[] Extract(PdfToken token)
-    {
-        if (token.Type == PdfTokenType.LiteralString) { return UnescapeLiteral(token.RawBytes); }
-        if (token.Type == PdfTokenType.HexString) { return UnescapeHex(token.RawBytes); }
-        return token.RawBytes;
-    }
-
-    private static byte[] UnescapeLiteral(byte[] raw)
-    {
-        int start = 0, end = raw.Length;
-        if (end > 0 && raw[0] == (byte)'(') { start = 1; }
-        if (end > start && raw[end - 1] == (byte)')') { end--; }
-        List<byte> result = new(end - start);
-        for (int i = start; i < end; i++)
-        {
-            byte b = raw[i];
-            if (b == (byte)'\\' && i + 1 < end)
-            {
-                byte next = raw[++i];
-                switch (next)
-                {
-                    case (byte)'n': result.Add((byte)'\n'); break;
-                    case (byte)'r': result.Add((byte)'\r'); break;
-                    case (byte)'t': result.Add((byte)'\t'); break;
-                    case (byte)'b': result.Add(0x08); break;
-                    case (byte)'f': result.Add(0x0C); break;
-                    case (byte)'(': result.Add((byte)'('); break;
-                    case (byte)')': result.Add((byte)')'); break;
-                    case (byte)'\\': result.Add((byte)'\\'); break;
-                    default:
-                        if (next >= (byte)'0' && next <= (byte)'7')
-                        {
-                            int v = next - (byte)'0';
-                            int digits = 1;
-                            while (digits < 3 && i + 1 < end
-                                && raw[i + 1] >= (byte)'0' && raw[i + 1] <= (byte)'7')
-                            {
-                                v = v * 8 + (raw[++i] - (byte)'0');
-                                digits++;
-                            }
-                            result.Add((byte)v);
-                        }
-                        else { result.Add(next); }
+                    case PathSegmentKind.MoveTo:
+                        PointF mp = ctm.TransformPoint(seg.P0);
+                        result.MoveTo(mp.X, mp.Y);
+                        break;
+                    case PathSegmentKind.LineTo:
+                        PointF lp = ctm.TransformPoint(seg.P0);
+                        result.LineTo(lp.X, lp.Y);
+                        break;
+                    case PathSegmentKind.CubicBezierTo:
+                        result.CubicBezierTo(
+                            ctm.TransformPoint(seg.P0),
+                            ctm.TransformPoint(seg.P1),
+                            ctm.TransformPoint(seg.P2));
+                        break;
+                    case PathSegmentKind.ClosePath:
+                        result.ClosePath();
                         break;
                 }
             }
-            else { result.Add(b); }
-        }
-        return result.ToArray();
-    }
 
-    private static byte[] UnescapeHex(byte[] raw)
-    {
-        int start = 0, end = raw.Length;
-        if (end > 0 && raw[0] == (byte)'<') { start = 1; }
-        if (end > start && raw[end - 1] == (byte)'>') { end--; }
-        List<byte> result = new();
-        int pending = -1;
-        for (int i = start; i < end; i++)
+            return result;
+        }
+
+        // ── Text operators ────────────────────────────────────────────────
+
+        private void OpTf(List<PdfToken> operands, PdfDictionary? resources)
         {
-            int v = HexVal(raw[i]);
-            if (v < 0) { continue; }
-            if (pending < 0) { pending = v; }
-            else { result.Add((byte)((pending << 4) | v)); pending = -1; }
-        }
-        if (pending >= 0) { result.Add((byte)(pending << 4)); }
-        return result.ToArray();
-    }
+            if (operands.Count < 2)
+            {
+                return;
+            }
 
-    private static int HexVal(byte b)
-    {
-        if (b >= (byte)'0' && b <= (byte)'9') { return b - (byte)'0'; }
-        if (b >= (byte)'A' && b <= (byte)'F') { return 10 + b - (byte)'A'; }
-        if (b >= (byte)'a' && b <= (byte)'f') { return 10 + b - (byte)'a'; }
-        return -1;
+            _state.FontName = ExtractName(operands[0]);
+            _state.FontSize = ParseDouble(operands[1]);
+            _state.FontResources = resources;
+        }
+
+        private void OpTd(List<PdfToken> operands)
+        {
+            if (operands.Count < 2)
+            {
+                return;
+            }
+
+            double tx = ParseDouble(operands[0]);
+            double ty = ParseDouble(operands[1]);
+
+            Transform t = new Transform(1, 0, 0, 1, tx, ty);
+            _textLineMatrix = t.Multiply(_textLineMatrix);
+            _textMatrix = _textLineMatrix;
+        }
+
+        private void OpTD(List<PdfToken> operands)
+        {
+            if (operands.Count < 2)
+            {
+                return;
+            }
+
+            double tx = ParseDouble(operands[0]);
+            double ty = ParseDouble(operands[1]);
+            _state.TextLeading = -ty;
+
+            Transform t = new Transform(1, 0, 0, 1, tx, ty);
+            _textLineMatrix = t.Multiply(_textLineMatrix);
+            _textMatrix = _textLineMatrix;
+        }
+
+        private void OpTm(List<PdfToken> operands)
+        {
+            if (operands.Count < 6)
+            {
+                return;
+            }
+
+            Transform t = new Transform(
+                ParseDouble(operands[0]), ParseDouble(operands[1]),
+                ParseDouble(operands[2]), ParseDouble(operands[3]),
+                ParseDouble(operands[4]), ParseDouble(operands[5]));
+
+            _textMatrix = t;
+            _textLineMatrix = t;
+        }
+
+        private void OpTStar()
+        {
+            // T* — move to start of next line: 0 -leading Td
+            Transform t = new Transform(1, 0, 0, 1, 0, -_state.TextLeading);
+            _textLineMatrix = t.Multiply(_textLineMatrix);
+            _textMatrix = _textLineMatrix;
+        }
+
+        private void OpTJ(List<PdfToken> operands)
+        {
+            // [( str ) num ( str ) num ...] TJ
+            bool inArray = false;
+
+            foreach (PdfToken t in operands)
+            {
+                if (t.Type == PdfTokenType.ArrayStart)
+                {
+                    inArray = true;
+                    continue;
+                }
+
+                if (t.Type == PdfTokenType.ArrayEnd)
+                {
+                    inArray = false;
+                    continue;
+                }
+
+                if (!inArray)
+                {
+                    continue;
+                }
+
+                if (t.Type == PdfTokenType.LiteralString || t.Type == PdfTokenType.HexString)
+                {
+                    ShowText(ExtractString(t));
+                }
+                else if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
+                {
+                    // Positive displacement = move BACK in text direction.
+                    // Per §9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
+                    double disp = ParseDouble(t);
+                    double tx = -disp / 1000.0 * _state.FontSize * (_state.HorizontalScaling / 100.0);
+                    Transform tr = new Transform(1, 0, 0, 1, tx, 0);
+                    _textMatrix = tr.Multiply(_textMatrix);
+                }
+            }
+        }
+
+        private void OpQuote(List<PdfToken> operands)
+        {
+            // ' — move to next line and show text
+            OpTStar();
+
+            if (operands.Count > 0)
+            {
+                ShowText(ExtractString(operands[0]));
+            }
+        }
+
+        private void OpDoubleQuote(List<PdfToken> operands)
+        {
+            // " — aw ac string — set word/char spacing, move to next line, show
+            if (operands.Count < 3)
+            {
+                return;
+            }
+
+            _state.WordSpacing = ParseDouble(operands[0]);
+            _state.CharacterSpacing = ParseDouble(operands[1]);
+            OpTStar();
+            ShowText(ExtractString(operands[2]));
+        }
+
+        // ── Text showing ──────────────────────────────────────────────────
+
+        private void ShowText(string text)
+        {
+            if (string.IsNullOrEmpty(text) || _state.FontSize <= 0)
+            {
+                return;
+            }
+
+            // Rendering mode 3 = invisible; skip emission but still advance.
+            bool emit = _state.TextRenderingMode != 3;
+
+            FontRenderer? renderer = GetFontRenderer();
+
+            foreach (char c in text)
+            {
+                double advance;
+
+                if (renderer is null)
+                {
+                    // No font available — approximate advance, no glyph emission
+                    advance = 0.6 * _state.FontSize;
+                }
+                else
+                {
+                    GlyphOutline scaled = renderer.GetGlyphOutlineForChar(c).Scale(_state.FontSize);
+
+                    if (emit && !scaled.IsEmpty && _state.FillValid)
+                    {
+                        // Glyph outline is in PDF text space with the
+                        // font-size scale already applied. Compose:
+                        //   final = textMatrix · ctm
+                        // and apply to the glyph path.
+                        Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
+
+                        // Apply text rise if non-zero
+                        if (_state.TextRise != 0.0)
+                        {
+                            Transform rise = new Transform(1, 0, 0, 1, 0, _state.TextRise);
+                            glyphPlacement = rise.Multiply(glyphPlacement);
+                        }
+
+                        Path placed = TransformPath(scaled.Outline, glyphPlacement);
+                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                    }
+
+                    advance = scaled.Metrics.AdvanceWidthAt(_state.FontSize);
+                }
+
+                // Per §9.4.4: tx = (w + Tc + Tw·(c==space ? 1 : 0)) · Th/100
+                double extra = _state.CharacterSpacing;
+
+                if (c == ' ')
+                {
+                    extra += _state.WordSpacing;
+                }
+
+                double tx = (advance + extra) * (_state.HorizontalScaling / 100.0);
+
+                Transform advanceMatrix = new Transform(1, 0, 0, 1, tx, 0);
+                _textMatrix = advanceMatrix.Multiply(_textMatrix);
+            }
+        }
+
+        // ── Font resolution ───────────────────────────────────────────────
+
+        private FontRenderer? GetFontRenderer()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_fontCache.TryGetValue(_state.FontName, out FontRenderer? cached))
+            {
+                return cached;
+            }
+
+            FontRenderer? renderer = ResolveFontRenderer();
+            _fontCache[_state.FontName] = renderer;
+            return renderer;
+        }
+
+        private FontRenderer? ResolveFontRenderer()
+        {
+            PdfDictionary? resources = _state.FontResources;
+
+            if (resources is null)
+            {
+                return null;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDict))
+            {
+                return null;
+            }
+
+            PdfDictionary? fonts = _objects.ResolveAs<PdfDictionary>(fontDict ?? PdfNull.Value);
+
+            if (fonts is null)
+            {
+                return null;
+            }
+
+            if (!fonts.TryGetValue(PdfName.Intern(_state.FontName), out PdfPrimitive? fontRef))
+            {
+                return null;
+            }
+
+            byte[]? fontBytes = ExtractFontBytes(fontRef ?? PdfNull.Value);
+
+            if (fontBytes is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return new FontRenderer(fontBytes);
+            }
+            catch (FontRenderingException)
+            {
+                return null;
+            }
+        }
+
+        private byte[]? ExtractFontBytes(PdfPrimitive fontRef)
+        {
+            PdfDictionary? fontDict = _objects.ResolveAs<PdfDictionary>(fontRef);
+
+            if (fontDict is null)
+            {
+                return null;
+            }
+
+            if (!fontDict.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? fdRef))
+            {
+                return null;
+            }
+
+            PdfDictionary? fd = _objects.ResolveAs<PdfDictionary>(fdRef ?? PdfNull.Value);
+
+            if (fd is null)
+            {
+                return null;
+            }
+
+            string[] keys = ["FontFile2", "FontFile", "FontFile3"];
+
+            foreach (string key in keys)
+            {
+                if (!fd.TryGetValue(PdfName.Intern(key), out PdfPrimitive? ffRef))
+                {
+                    continue;
+                }
+
+                PdfStream? fontStream = _objects.ResolveAs<PdfStream>(ffRef ?? PdfNull.Value);
+
+                if (fontStream is not null)
+                {
+                    return DecodeStream(fontStream);
+                }
+            }
+
+            return null;
+        }
+
+        // ── XObject Do ────────────────────────────────────────────────────
+
+        private void OpDo(List<PdfToken> operands, PdfDictionary? resources)
+        {
+            if (operands.Count < 1 || resources is null)
+            {
+                return;
+            }
+
+            string name = ExtractName(operands[0]);
+
+            if (string.IsNullOrEmpty(name))
+            {
+                return;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xobjDictRef))
+            {
+                return;
+            }
+
+            PdfDictionary? xObjects = _objects.ResolveAs<PdfDictionary>(xobjDictRef ?? PdfNull.Value);
+
+            if (xObjects is null)
+            {
+                return;
+            }
+
+            if (!xObjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? xobjRef))
+            {
+                return;
+            }
+
+            PdfStream? xobjStream = _objects.ResolveAs<PdfStream>(xobjRef ?? PdfNull.Value);
+
+            if (xobjStream is null)
+            {
+                return;
+            }
+
+            if (!xobjStream.Dictionary.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? subtypePrim))
+            {
+                return;
+            }
+
+            if (subtypePrim is not PdfName subtype)
+            {
+                return;
+            }
+
+            if (subtype.Value == "Image")
+            {
+                EmitImageXObject(xobjStream);
+            }
+            else if (subtype.Value == "Form")
+            {
+                EmitFormXObject(xobjStream, resources);
+            }
+        }
+
+        private void EmitImageXObject(PdfStream xobjStream)
+        {
+            byte[] imageBytes;
+
+            try
+            {
+                imageBytes = DecodeStream(xobjStream);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            ImageFrame? frame = null;
+
+            try
+            {
+                if (imageBytes.Length > 2 &&
+                    imageBytes[0] == 0xFF && imageBytes[1] == 0xD8)
+                {
+                    frame = JpegDecoder.Decode(imageBytes);
+                }
+                else if (imageBytes.Length > 8 &&
+                         imageBytes[0] == 137 && imageBytes[1] == 80)
+                {
+                    frame = PngDecoder.Decode(imageBytes);
+                }
+            }
+            catch (ImageException)
+            {
+                return;
+            }
+
+            if (frame is null)
+            {
+                return;
+            }
+
+            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips()));
+        }
+
+        private void EmitFormXObject(PdfStream xobjStream, PdfDictionary? outerResources)
+        {
+            // Form XObject's Matrix entry composes with the current CTM
+            Transform formMatrix = Transform.Identity;
+
+            if (xobjStream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? matrixPrim))
+            {
+                PdfArray? arr = _objects.ResolveAs<PdfArray>(matrixPrim ?? PdfNull.Value);
+
+                if (arr is not null && arr.Count >= 6)
+                {
+                    formMatrix = new Transform(
+                        AsDouble(arr[0]), AsDouble(arr[1]),
+                        AsDouble(arr[2]), AsDouble(arr[3]),
+                        AsDouble(arr[4]), AsDouble(arr[5]));
+                }
+            }
+
+            // Resolve form's own resources, or inherit from outer page
+            PdfDictionary? formResources = outerResources;
+
+            if (xobjStream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? resPrim))
+            {
+                PdfDictionary? r = _objects.ResolveAs<PdfDictionary>(resPrim ?? PdfNull.Value);
+
+                if (r is not null)
+                {
+                    formResources = r;
+                }
+            }
+
+            // Build the sub-display-list in form-local space with a fresh
+            // worker (identity CTM, fresh path/text state, fresh stack).
+            Worker sub = new Worker(_objects);
+
+            byte[] formContent;
+
+            try
+            {
+                formContent = sub.DecodeStream(xobjStream);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            PageDisplayList inner;
+
+            if (formContent.Length > 0)
+            {
+                sub.Interpret(formContent, formResources);
+            }
+
+            inner = new PageDisplayList(sub._ops, 0, 0);
+
+            // Composition: form-local · outer CTM (row-vector convention)
+            Transform composition = formMatrix.Multiply(_state.Ctm);
+
+            _ops.Add(new NestedDisplayListOp(inner, composition, SnapshotClips()));
+        }
+
+        private static double AsDouble(PdfPrimitive p)
+        {
+            return p switch
+            {
+                PdfInteger i => i.Value,
+                PdfReal r => r.Value,
+                _ => 0.0,
+            };
+        }
+
+        // ── Token parsing helpers ─────────────────────────────────────────
+
+        private static double ParseDouble(PdfToken token)
+        {
+            if (double.TryParse(token.RawText,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double v))
+            {
+                return v;
+            }
+
+            return 0.0;
+        }
+
+        private static long ParseInt(PdfToken token)
+        {
+            if (long.TryParse(token.RawText,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out long v))
+            {
+                return v;
+            }
+
+            return 0;
+        }
+
+        private static PointF ParsePoint(List<PdfToken> operands, int startIndex)
+        {
+            return new PointF(
+                ParseDouble(operands[startIndex]),
+                ParseDouble(operands[startIndex + 1]));
+        }
+
+        private static string ExtractString(PdfToken token)
+        {
+            // Literal string and hex string both deliver bytes; we treat
+            // bytes as Latin-1 for now (the rasterizer does the same).
+            // Proper Unicode mapping via ToUnicode CMaps is future work.
+            byte[] bytes = token.RawBytes;
+
+            if (token.Type == PdfTokenType.HexString)
+            {
+                // Hex bytes are already decoded by the tokenizer
+                char[] chars = new char[bytes.Length];
+
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    chars[i] = (char)bytes[i];
+                }
+
+                return new string(chars);
+            }
+
+            // Literal string: handle escape sequences
+            return DecodeLiteralString(bytes);
+        }
+
+        private static string DecodeLiteralString(byte[] bytes)
+        {
+            // Bytes from a literal string token may contain backslash
+            // escapes per §7.3.4.2. We decode common ones.
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(bytes.Length);
+
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                byte b = bytes[i];
+
+                if (b == (byte)'\\' && i + 1 < bytes.Length)
+                {
+                    byte next = bytes[i + 1];
+
+                    switch (next)
+                    {
+                        case (byte)'n': sb.Append('\n'); i++; continue;
+                        case (byte)'r': sb.Append('\r'); i++; continue;
+                        case (byte)'t': sb.Append('\t'); i++; continue;
+                        case (byte)'b': sb.Append('\b'); i++; continue;
+                        case (byte)'f': sb.Append('\f'); i++; continue;
+                        case (byte)'(': sb.Append('('); i++; continue;
+                        case (byte)')': sb.Append(')'); i++; continue;
+                        case (byte)'\\': sb.Append('\\'); i++; continue;
+                    }
+                }
+
+                sb.Append((char)b);
+            }
+
+            return sb.ToString();
+        }
+
+        private static string ExtractName(PdfToken token)
+        {
+            if (token.Type != PdfTokenType.Name)
+            {
+                return string.Empty;
+            }
+
+            byte[] bytes = token.RawBytes;
+            char[] chars = new char[bytes.Length];
+
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                chars[i] = (char)bytes[i];
+            }
+
+            return new string(chars);
+        }
     }
 }
