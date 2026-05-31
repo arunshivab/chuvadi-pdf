@@ -1,6 +1,6 @@
 # ClipPath
 
-**Struct** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Struct** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 A clipping path applied to a single render operation.
 
@@ -47,5 +47,5 @@ Gets the fill rule used to evaluate the clip region.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/ClipPath.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/ClipPath.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/ClipPath.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/ClipPath.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

@@ -390,8 +390,8 @@ python tools/gen_api_docs.py
 | [ClipPath](Rendering/ClipPath.md) | struct | A clipping path applied to a single render operation. |
 | [ClipRegion](Rendering/ClipRegion.md) | class | A device-space clipping region used by `ScanlineRasterizer` to restrict where a fill is painted. |
 | [DiagnosticKind](Rendering/DiagnosticKind.md) | enum | Classifies a `RenderingDiagnostic`. |
-| [DisplayListBuilder](Rendering/DisplayListBuilder.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
 | [DisplayListBuilder](Rendering/DisplayListBuilder.md) | class | Builds a `PageDisplayList` by walking a page's content stream and translating each PDF operator to a `RenderOp`. |
+| [DisplayListBuilder](Rendering/DisplayListBuilder.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
 | [DocumentSearch](Rendering/DocumentSearch.md) | class | Searches the text of a `PdfDocument` by page, streaming matches asynchronously. |
 | [DrawGlyphOp](Rendering/DrawGlyphOp.md) | class | Paints a single glyph outline. |
 | [DrawImageOp](Rendering/DrawImageOp.md) | class | Paints a decoded image at the position specified by a transformation matrix. |
@@ -404,8 +404,8 @@ python tools/gen_api_docs.py
 | [LineJoin](Rendering/LineJoin.md) | enum | Line join style (PDF §8.4.3.4). |
 | [NestedDisplayListOp](Rendering/NestedDisplayListOp.md) | class | Paints another `PageDisplayList` with a composing transform. |
 | [OpacityOp](Rendering/OpacityOp.md) | class | Pushes or pops an opacity group. |
-| [PageDisplayList](Rendering/PageDisplayList.md) | class | An immutable, renderer-neutral representation of a PDF page's drawable content. |
 | [PageDisplayList](Rendering/PageDisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
+| [PageDisplayList](Rendering/PageDisplayList.md) | class | An immutable, renderer-neutral representation of a PDF page's drawable content. |
 | [PageRasterizer](Rendering/PageRasterizer.md) | class | Rasterizes a PDF page to a `PixelBuffer`. |
 | [PaintMode](Rendering/PaintMode.md) | enum | Whether a path is filled, stroked, or both. |
 | [PathCommand](Rendering/PathCommand.md) | enum | Type of a path command. |

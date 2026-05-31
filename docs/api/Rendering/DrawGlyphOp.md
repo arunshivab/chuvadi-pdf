@@ -1,6 +1,6 @@
 # DrawGlyphOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 Paints a single glyph outline.
 
@@ -34,5 +34,5 @@ Gets the fill colour.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/DrawGlyphOp.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/DrawGlyphOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawGlyphOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawGlyphOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._
