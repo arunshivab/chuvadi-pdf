@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Fills a path with a flat colour, applying the configured fill rule.

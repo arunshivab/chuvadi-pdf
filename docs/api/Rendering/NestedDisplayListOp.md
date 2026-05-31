@@ -1,6 +1,6 @@
 # NestedDisplayListOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 Paints another `PageDisplayList` with a composing transform.
 
@@ -34,5 +34,5 @@ Gets the transform composing inner-space into the parent's user space.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/NestedDisplayListOp.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/NestedDisplayListOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/NestedDisplayListOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/NestedDisplayListOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

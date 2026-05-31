@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Mutable graphics state used by <see cref="DisplayListBuilder"/> while

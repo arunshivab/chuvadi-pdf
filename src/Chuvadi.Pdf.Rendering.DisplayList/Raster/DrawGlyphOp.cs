@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Paints a single glyph outline.

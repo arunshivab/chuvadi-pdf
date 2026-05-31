@@ -1,6 +1,6 @@
 # DrawImageOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 Paints a decoded image at the position specified by a transformation matrix.
 
@@ -36,5 +36,5 @@ Gets the device-placement transform that maps the image's unit square (0,0)–(1
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/DrawImageOp.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/DrawImageOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

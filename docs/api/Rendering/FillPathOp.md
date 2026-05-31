@@ -1,6 +1,6 @@
 # FillPathOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 Fills a path with a flat colour, applying the configured fill rule.
 
@@ -42,5 +42,5 @@ Gets the fill rule.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/FillPathOp.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/FillPathOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/FillPathOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/FillPathOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Paints another <see cref="PageDisplayList"/> with a composing transform.

@@ -1,6 +1,6 @@
 # StrokePathOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
 Strokes a path with the supplied `StrokeStyle`.
 
@@ -34,5 +34,5 @@ Gets the stroke parameters (colour, width, cap, join, miter limit, dash).
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering/DisplayList/StrokePathOp.cs`](../../../src/Chuvadi.Pdf.Rendering/DisplayList/StrokePathOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/StrokePathOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/StrokePathOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

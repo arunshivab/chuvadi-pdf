@@ -9,7 +9,7 @@ using System.Text;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
-using Chuvadi.Pdf.Rendering.DisplayList;
+using Chuvadi.Pdf.Rendering.Raster;
 using FluentAssertions;
 using Xunit;
 

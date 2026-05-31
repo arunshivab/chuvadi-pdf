@@ -10,7 +10,7 @@ using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.Objects;
-using Chuvadi.Pdf.Rendering.DisplayList;
+using Chuvadi.Pdf.Rendering.Raster;
 using GraphicsPath = Chuvadi.Pdf.Graphics.Path;
 
 namespace Chuvadi.Pdf.Rendering;

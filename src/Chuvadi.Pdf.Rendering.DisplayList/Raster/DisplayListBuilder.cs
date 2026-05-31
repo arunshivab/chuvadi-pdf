@@ -16,7 +16,7 @@ using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 using Path = Chuvadi.Pdf.Graphics.Path;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Builds a <see cref="PageDisplayList"/> from a <see cref="PdfPage"/> by

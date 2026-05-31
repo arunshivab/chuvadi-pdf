@@ -1,90 +1,62 @@
 # PageDisplayList
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
-A page's content as a neutral, ordered sequence of `RenderOp`s.
+An immutable, renderer-neutral representation of a PDF page's drawable content.
 
 ```csharp
-public sealed class PageDisplayList : IReadOnlyList<RenderOp>
+public sealed class PageDisplayList
 ```
 
 ## Remarks
 
-Built by `DisplayListBuilder.Build`; consumed by output adapters such as `SvgRenderer`, `WpfRenderer`, or future software rasterizers.  
+A `PageDisplayList` is the output of the content-stream builder (added in D3c-2) and the input of any renderer: the existing pixel rasterizer, an SVG writer, a PDF/UA accessibility walker, etc.  
 
- Pure value-like type: same page bytes, same display list. No rendering side effects.  
+ Coordinate space: PDF user space (Y up, origin at the bottom-left of the MediaBox, units of 1/72 inch). DPI scaling and Y-flipping happen in the renderer, not the display list — which means the same list can be re-rendered at any zoom level without rebuilding.  
 
- v2.1.2: also exposes the page's font dictionaries keyed by the resource name used in `TextOp.FontKey`. This allows downstream renderers that want to embed font programs (e.g. `SvgRenderer` emitting CSS `@font-face` rules with base64-encoded TrueType data URLs) to access the source font dictionaries without re-walking the page resources or holding a reference to the original `PdfDocument`.
+ `PageWidth` and `PageHeight` are the MediaBox dimensions in points. They are advisory information for the renderer (e.g. for sizing the pixel buffer); the ops themselves are not clipped to the page rectangle.  
+
+ Page rotation (the PDF /Rotate entry) is NOT baked into the ops here. A renderer that honours rotation applies an outer transform of the appropriate multiple of 90°.
+
+## Constructors
+
+### `PageDisplayList(IReadOnlyList<RenderOp> ops, double pageWidth, double pageHeight)`
+
+Initialises a `PageDisplayList` by defensively copying `ops`.
+
+**Parameters**
+
+- `ops` — The render operations, in paint order.
+- `pageWidth` — The MediaBox width in PDF user-space points. Must be non-negative.
+- `pageHeight` — The MediaBox height in PDF user-space points. Must be non-negative. <exception cref="ArgumentNullException"> Thrown when `ops` is null. </exception> <exception cref="ArgumentException"> Thrown when `ops` contains a null entry. </exception> <exception cref="ArgumentOutOfRangeException"> Thrown when `pageWidth` or `pageHeight` is negative. </exception>
 
 ## Properties
 
-### `MediaWidth`
+### `Ops`
 
 ```csharp
-double MediaWidth
+IReadOnlyList<RenderOp> Ops
 ```
 
-Page width in points.
+Gets the render operations in paint order.
 
-### `MediaHeight`
+### `PageWidth`
 
 ```csharp
-double MediaHeight
+double PageWidth
 ```
 
-Page height in points.
+Gets the MediaBox width in PDF user-space points.
 
-### `Rotation`
+### `PageHeight`
 
 ```csharp
-int Rotation
+double PageHeight
 ```
 
-Clockwise rotation in degrees (0, 90, 180, 270).
-
-### `FontDictsByKey`
-
-```csharp
-IReadOnlyDictionary<string, PdfDictionary> FontDictsByKey
-```
-
-Font dictionaries for every font referenced on this page, keyed by the resource-name used in `TextOp.FontKey`. Empty when the builder did not populate it (e.g. legacy callers using the four-argument constructor). Never null.
-
-### `Diagnostics`
-
-```csharp
-IReadOnlyList<RenderingDiagnostic> Diagnostics
-```
-
-Graceful-degradation events recorded by the builder during page construction (e.g. a font that could not be resolved, causing `DiagnosticKind.DecodeFallback`). Empty when nothing went wrong. Never null. New in v2.1.8 — older callers using constructors without this argument see an empty list.
-
-### `Count`
-
-```csharp
-int Count => _ops.Count
-```
-
-<inheritdoc />
-
-### `index]`
-
-```csharp
-RenderOp this[int index] => _ops[index]
-```
-
-<inheritdoc />
-
-## Methods
-
-### `GetEnumerator`
-
-```csharp
-IEnumerator<RenderOp> GetEnumerator() => _ops.GetEnumerator()
-```
-
-<inheritdoc />
+Gets the MediaBox height in PDF user-space points.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/PageDisplayList.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/PageDisplayList.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/PageDisplayList.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/PageDisplayList.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

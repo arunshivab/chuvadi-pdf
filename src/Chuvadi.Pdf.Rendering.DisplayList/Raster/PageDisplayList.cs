@@ -6,7 +6,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// An immutable, renderer-neutral representation of a PDF page's drawable content.

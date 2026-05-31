@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Strokes a path with the supplied <see cref="StrokeStyle"/>.
