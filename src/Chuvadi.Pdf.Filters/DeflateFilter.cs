@@ -161,8 +161,12 @@ public sealed class DeflateFilter : IStreamFilter
         // Write compressed payload.
         output.Write(compressed, 0, compressed.Length);
 
-        // Write Adler-32 checksum (big-endian).
-        uint checksum = Adler32.Compute(raw);
+        // Write Adler-32 checksum (big-endian). RFC 1950 §2.2: the checksum
+        // is computed over the uncompressed data that was actually deflated,
+        // i.e. the post-predictor bytes (toCompress), not the original raw
+        // input. Decode mirrors this — it verifies Adler-32 against the
+        // inflated bytes before reversing any predictor.
+        uint checksum = Adler32.Compute(toCompress);
         output.WriteByte((byte)((checksum >> 24) & 0xFF));
         output.WriteByte((byte)((checksum >> 16) & 0xFF));
         output.WriteByte((byte)((checksum >> 8) & 0xFF));

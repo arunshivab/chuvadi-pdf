@@ -5,6 +5,7 @@
 // Contract implemented by every PDF stream filter in Chuvadi.
 
 using System.IO;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters;
 
@@ -108,4 +109,63 @@ public sealed record FilterParameters
     /// 0 = compatible with original LZW; 1 = early change (PDF default).
     /// </summary>
     public int EarlyChange { get; init; } = 1;
+
+    /// <summary>
+    /// Builds <see cref="FilterParameters"/> from a <c>/DecodeParms</c> (or
+    /// <c>/DecodeParams</c>) value taken from a stream dictionary.
+    /// </summary>
+    /// <param name="decodeParms">
+    /// The raw <c>/DecodeParms</c> primitive. May be a single
+    /// <see cref="PdfDictionary"/> (applies to the sole or
+    /// <paramref name="filterIndex"/>-th filter), a <see cref="PdfArray"/> of
+    /// per-filter dictionaries (possibly containing nulls), or null when the
+    /// stream has no <c>/DecodeParms</c> entry.
+    /// </param>
+    /// <param name="filterIndex">
+    /// Zero-based index of the filter these parameters apply to, used to
+    /// select the entry when <paramref name="decodeParms"/> is an array.
+    /// Defaults to 0 for the single-filter case.
+    /// </param>
+    /// <returns>
+    /// A populated <see cref="FilterParameters"/>, or null when there are no
+    /// parameters for the given filter (no <c>/DecodeParms</c>, a null array
+    /// entry, or a non-dictionary value).
+    /// </returns>
+    public static FilterParameters? FromDictionary(PdfPrimitive? decodeParms, int filterIndex = 0)
+    {
+        PdfDictionary? parmsDict = decodeParms switch
+        {
+            PdfDictionary single => single,
+            PdfArray array => array.GetAs<PdfDictionary>(filterIndex),
+            _ => null,
+        };
+
+        if (parmsDict is null)
+        {
+            return null;
+        }
+
+        int predictor = ReadInt(parmsDict, "Predictor", 1);
+        int columns = ReadInt(parmsDict, "Columns", 1);
+        int colors = ReadInt(parmsDict, "Colors", 1);
+        int bitsPerComponent = ReadInt(parmsDict, "BitsPerComponent", 8);
+        int earlyChange = ReadInt(parmsDict, "EarlyChange", 1);
+
+        return new FilterParameters
+        {
+            Predictor = predictor,
+            Columns = columns,
+            Colors = colors,
+            BitsPerComponent = bitsPerComponent,
+            EarlyChange = earlyChange,
+        };
+    }
+
+    private static int ReadInt(PdfDictionary dict, string key, int fallback)
+    {
+        return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+            && value is PdfInteger integer
+            ? integer.Value
+            : fallback;
+    }
 }

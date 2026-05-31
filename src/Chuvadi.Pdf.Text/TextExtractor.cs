@@ -202,6 +202,7 @@ public sealed class TextExtractor
         }
 
         PdfPrimitive? filter = stream.Filter;
+        stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? decodeParms);
 
         // Single filter name.
         if (filter is PdfName filterName)
@@ -211,7 +212,7 @@ public sealed class TextExtractor
             return _pipeline.Decode(
                 resolved,
                 stream.RawBytes,
-                BuildFilterParams(stream.Dictionary, 0));
+                FilterParameters.FromDictionary(decodeParms, 0));
         }
 
         // Array of filter names applied in sequence.
@@ -229,74 +230,12 @@ public sealed class TextExtractor
                 }
 
                 string resolved = FilterRegistry.ResolveAlias(fn.Value);
-                data = _pipeline.Decode(resolved, data, BuildFilterParams(stream.Dictionary, i));
+                data = _pipeline.Decode(resolved, data, FilterParameters.FromDictionary(decodeParms, i));
             }
 
             return data;
         }
 
         return stream.RawBytes;
-    }
-
-    private static FilterParameters? BuildFilterParams(PdfDictionary dict, int index)
-    {
-        // /DecodeParms may be a single dictionary or an array of dictionaries.
-        if (!dict.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms))
-        {
-            return null;
-        }
-
-        PdfDictionary? parmsDict = null;
-
-        if (parms is PdfDictionary singleParms)
-        {
-            parmsDict = singleParms;
-        }
-        else if (parms is PdfArray parmsArray)
-        {
-            parmsDict = parmsArray.GetAs<PdfDictionary>(index);
-        }
-
-        if (parmsDict is null)
-        {
-            return null;
-        }
-
-        int predictor = 1;
-        int columns = 1;
-        int colors = 1;
-        int bitsPerComponent = 8;
-
-        if (parmsDict.TryGetValue(PdfName.Intern("Predictor"), out PdfPrimitive? pred)
-            && pred is PdfInteger predInt)
-        {
-            predictor = predInt.Value;
-        }
-
-        if (parmsDict.TryGetValue(PdfName.Intern("Columns"), out PdfPrimitive? cols)
-            && cols is PdfInteger colsInt)
-        {
-            columns = colsInt.Value;
-        }
-
-        if (parmsDict.TryGetValue(PdfName.Intern("Colors"), out PdfPrimitive? colorsPrim)
-            && colorsPrim is PdfInteger colorsInt)
-        {
-            colors = colorsInt.Value;
-        }
-
-        if (parmsDict.TryGetValue(PdfName.Intern("BitsPerComponent"), out PdfPrimitive? bpc)
-            && bpc is PdfInteger bpcInt)
-        {
-            bitsPerComponent = bpcInt.Value;
-        }
-
-        return new FilterParameters
-        {
-            Predictor = predictor,
-            Columns = columns,
-            Colors = colors,
-            BitsPerComponent = bitsPerComponent,
-        };
     }
 }
