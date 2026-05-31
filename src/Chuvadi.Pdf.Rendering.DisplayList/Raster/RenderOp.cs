@@ -5,7 +5,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Abstract base for all operations in a <see cref="PageDisplayList"/>.

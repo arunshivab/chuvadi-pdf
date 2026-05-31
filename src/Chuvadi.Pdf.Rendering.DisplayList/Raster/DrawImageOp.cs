@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// Paints a decoded image at the position specified by a transformation matrix.

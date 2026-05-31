@@ -6,7 +6,7 @@
 using System;
 using Chuvadi.Pdf.Graphics;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Rendering.Raster;
 
 /// <summary>
 /// A clipping path applied to a single render operation.

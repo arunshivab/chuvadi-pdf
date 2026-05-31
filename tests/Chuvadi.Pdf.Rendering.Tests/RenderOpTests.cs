@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
-using Chuvadi.Pdf.Rendering.DisplayList;
+using Chuvadi.Pdf.Rendering.Raster;
 using FluentAssertions;
 using Xunit;
 
