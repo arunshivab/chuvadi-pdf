@@ -399,6 +399,11 @@ public sealed class ContentStreamParser
             return PdfFont.Default();
         }
 
+        if (string.IsNullOrEmpty(fontName))
+        {
+            return PdfFont.Default();
+        }
+
         PdfDictionary? fontDict = _resources.GetDictionary(PdfName.Font);
 
         if (fontDict is null)

@@ -294,6 +294,17 @@ public sealed class PdfNameTests
         Action act = () => PdfName.Intern(string.Empty);
         act.Should().Throw<ArgumentException>();
     }
+
+    [Fact]
+    public void FromRawBytes_EmptyInput_ThrowsPdfParseException()
+    {
+        // A name token that decodes to an empty string is invalid PDF syntax.
+        // FromRawBytes is the parser entry point for untrusted bytes, so the
+        // failure must surface as a catchable parse error, not the
+        // argument-validation exception thrown by Intern.
+        Action act = () => PdfName.FromRawBytes(ReadOnlySpan<byte>.Empty);
+        act.Should().Throw<PdfParseException>();
+    }
 }
 
 public sealed class PdfStringTests

@@ -433,13 +433,13 @@ public sealed class TrueTypeLoader
 
         while (i < numPoints)
         {
-            byte flag = _data[offset++];
+            byte flag = ReadByte(offset++);
             flags[i++] = flag;
 
             // Bit 3: repeat flag
             if ((flag & 0x08) != 0)
             {
-                byte repeatCount = _data[offset++];
+                byte repeatCount = ReadByte(offset++);
 
                 for (int r = 0; r < repeatCount && i < numPoints; r++)
                 {
@@ -467,7 +467,7 @@ public sealed class TrueTypeLoader
             if ((flag & shortBit) != 0)
             {
                 // 1-byte delta; positive if same bit set
-                int delta = _data[offset++];
+                int delta = ReadByte(offset++);
 
                 if ((flag & sameBit) == 0)
                 {
@@ -656,8 +656,8 @@ public sealed class TrueTypeLoader
                 }
                 else
                 {
-                    dx = (sbyte)_data[pos];
-                    dy = (sbyte)_data[pos + 1];
+                    dx = (sbyte)ReadByte(pos);
+                    dy = (sbyte)ReadByte(pos + 1);
                     pos += 2;
                 }
             }
@@ -728,11 +728,13 @@ public sealed class TrueTypeLoader
 
     private string ReadTag(uint offset)
     {
+        EnsureReadable(offset, 4);
         return Encoding.ASCII.GetString(_data, (int)offset, 4);
     }
 
     private uint ReadUInt32(uint offset)
     {
+        EnsureReadable(offset, 4);
         return ((uint)_data[offset] << 24)
              | ((uint)_data[offset + 1] << 16)
              | ((uint)_data[offset + 2] << 8)
@@ -741,12 +743,33 @@ public sealed class TrueTypeLoader
 
     private int ReadUInt16(uint offset)
     {
+        EnsureReadable(offset, 2);
         return (_data[offset] << 8) | _data[offset + 1];
     }
 
     private int ReadInt16(uint offset)
     {
+        EnsureReadable(offset, 2);
         int raw = (_data[offset] << 8) | _data[offset + 1];
         return raw >= 0x8000 ? raw - 0x10000 : raw;
+    }
+
+    private void EnsureReadable(uint offset, uint count)
+    {
+        // (long) arithmetic so a near-uint.MaxValue offset cannot wrap when
+        // count is added. A malformed font that points a table or glyph
+        // offset past the end of the data must surface as a typed font error,
+        // not an IndexOutOfRangeException.
+        if ((long)offset + count > _data.Length)
+        {
+            throw new FontRenderingException(
+                $"TrueType font data is truncated or malformed: attempted to read {count} byte(s) at offset {offset}, but the font is only {_data.Length} byte(s).");
+        }
+    }
+
+    private byte ReadByte(uint offset)
+    {
+        EnsureReadable(offset, 1);
+        return _data[offset];
     }
 }

@@ -50,6 +50,54 @@ public sealed class TrueTypeFontPatchTests
         act.Should().Throw<FontRenderingException>();
     }
 
+    // ── TrueTypeLoader bounds checks (truncated / malformed input) ────────
+
+    [Fact]
+    public void Loader_TruncatedAfterHeader_ThrowsFontRenderingException()
+    {
+        // A valid font whose byte array is cut off mid-table-directory leaves
+        // table offsets pointing past the end of the data. Parsing must surface
+        // a typed FontRenderingException, never an IndexOutOfRangeException.
+        byte[] font = BuildMinimalTtfWithGlyphs(numGlyphs: 4);
+        byte[] truncated = new byte[20];
+        Array.Copy(font, truncated, Math.Min(20, font.Length));
+
+        Action act = () => _ = new TrueTypeLoader(truncated);
+        act.Should().Throw<FontRenderingException>();
+    }
+
+    [Fact]
+    public void Loader_TruncatedMidFont_OnlyThrowsFontRenderingException()
+    {
+        // Cut the font at a series of lengths past the header. Whatever fails,
+        // the only acceptable failure is a typed FontRenderingException — never
+        // an unguarded IndexOutOfRangeException or ArgumentOutOfRangeException
+        // leaking from a raw buffer read.
+        byte[] font = BuildMinimalTtfWithGlyphs(numGlyphs: 4);
+
+        for (int cut = 16; cut < font.Length; cut += 7)
+        {
+            byte[] truncated = new byte[cut];
+            Array.Copy(font, truncated, cut);
+
+            try
+            {
+                TrueTypeLoader loader = new(truncated);
+                _ = loader.GetGlyphOutline(1);
+            }
+            catch (FontRenderingException)
+            {
+                // Expected: malformed input rejected with a typed error.
+            }
+            catch (Exception ex)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"Truncation at {cut} bytes leaked {ex.GetType().Name} " +
+                    $"instead of FontRenderingException: {ex.Message}");
+            }
+        }
+    }
+
     // ── Format 4 (BMP) — single and multiple mappings ────────────────────
 
     [Fact]

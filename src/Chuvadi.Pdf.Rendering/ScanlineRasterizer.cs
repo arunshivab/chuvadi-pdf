@@ -42,6 +42,29 @@ public sealed class ScanlineRasterizer
         ColorF color,
         FillRule fillRule)
     {
+        Fill(buffer, subPaths, color, fillRule, clip: null);
+    }
+
+    /// <summary>
+    /// Fills the given sub-paths into the pixel buffer, restricted to the
+    /// supplied clip region.
+    /// </summary>
+    /// <param name="buffer">The pixel buffer to draw into.</param>
+    /// <param name="subPaths">Sub-paths from <see cref="PathFlattener.Flatten"/>, in device space.</param>
+    /// <param name="color">The fill colour.</param>
+    /// <param name="fillRule">Non-zero winding or even-odd.</param>
+    /// <param name="clip">
+    /// The clip region in device space, or null for no clipping. When non-null,
+    /// a pixel is painted only when it lies inside the region (the intersection
+    /// of every clip path the region was built from).
+    /// </param>
+    public void Fill(
+        PixelBuffer buffer,
+        List<List<PointF>> subPaths,
+        ColorF color,
+        FillRule fillRule,
+        ClipRegion? clip)
+    {
         if (buffer is null)
         {
             throw new ArgumentNullException(nameof(buffer));
@@ -53,6 +76,12 @@ public sealed class ScanlineRasterizer
         }
 
         if (subPaths.Count == 0)
+        {
+            return;
+        }
+
+        // An empty (fully-excluding) clip paints nothing.
+        if (clip is not null && clip.IsEmpty)
         {
             return;
         }
@@ -110,7 +139,17 @@ public sealed class ScanlineRasterizer
 
             crossings.Sort((a, b) => a.X.CompareTo(b.X));
 
-            FillScanline(buffer, y, crossings, color, fillRule);
+            // Allowed x-intervals from the clip region for this scanline.
+            // Null clip means the whole row is allowed.
+            List<(double Start, double End)>? allowed =
+                clip?.AllowedIntervals(scanY);
+
+            if (allowed is not null && allowed.Count == 0)
+            {
+                continue;
+            }
+
+            FillScanline(buffer, y, crossings, color, fillRule, allowed);
         }
     }
 
@@ -152,60 +191,111 @@ public sealed class ScanlineRasterizer
     private static void FillScanline(
         PixelBuffer buffer, int y,
         List<Crossing> crossings,
-        ColorF color, FillRule fillRule)
+        ColorF color, FillRule fillRule,
+        List<(double Start, double End)>? allowed)
     {
         if (fillRule == FillRule.EvenOdd)
         {
-            FillEvenOdd(buffer, y, crossings, color);
+            FillEvenOdd(buffer, y, crossings, color, allowed);
         }
         else
         {
-            FillNonZeroWinding(buffer, y, crossings, color);
+            FillNonZeroWinding(buffer, y, crossings, color, allowed);
         }
     }
 
     private static void FillEvenOdd(
         PixelBuffer buffer, int y,
-        List<Crossing> crossings, ColorF color)
+        List<Crossing> crossings, ColorF color,
+        List<(double Start, double End)>? allowed)
     {
         // Even-odd: fill between pairs (0-1, 2-3, …)
         for (int i = 0; i + 1 < crossings.Count; i += 2)
         {
-            int xStart = Math.Max(0, (int)Math.Ceiling(crossings[i].X));
-            int xEnd = Math.Min(buffer.Width - 1, (int)Math.Floor(crossings[i + 1].X));
-
-            for (int x = xStart; x <= xEnd; x++)
+            if (allowed is null)
             {
-                buffer.BlendPixel(x, y, color);
-            }
-        }
-    }
-
-    private static void FillNonZeroWinding(
-        PixelBuffer buffer, int y,
-        List<Crossing> crossings, ColorF color)
-    {
-        // Non-zero: track winding number; fill where winding != 0
-        int winding = 0;
-        int prevX = 0;
-        bool inside = false;
-
-        foreach (Crossing crossing in crossings)
-        {
-            if (inside)
-            {
-                int xStart = Math.Max(0, prevX);
-                int xEnd = Math.Min(buffer.Width - 1, (int)Math.Floor(crossing.X));
+                // Unclipped: original integer-rounded span (byte-for-byte preserved).
+                int xStart = Math.Max(0, (int)Math.Ceiling(crossings[i].X));
+                int xEnd = Math.Min(buffer.Width - 1, (int)Math.Floor(crossings[i + 1].X));
 
                 for (int x = xStart; x <= xEnd; x++)
                 {
                     buffer.BlendPixel(x, y, color);
                 }
             }
+            else
+            {
+                BlendClippedSpan(buffer, y, crossings[i].X, crossings[i + 1].X, color, allowed);
+            }
+        }
+    }
+
+    private static void FillNonZeroWinding(
+        PixelBuffer buffer, int y,
+        List<Crossing> crossings, ColorF color,
+        List<(double Start, double End)>? allowed)
+    {
+        // Non-zero: track winding number; fill where winding != 0
+        int winding = 0;
+        int prevX = 0;
+        double prevXExact = 0;
+        bool inside = false;
+
+        foreach (Crossing crossing in crossings)
+        {
+            if (inside)
+            {
+                if (allowed is null)
+                {
+                    // Unclipped: original integer-rounded span (byte-for-byte preserved).
+                    int xStart = Math.Max(0, prevX);
+                    int xEnd = Math.Min(buffer.Width - 1, (int)Math.Floor(crossing.X));
+
+                    for (int x = xStart; x <= xEnd; x++)
+                    {
+                        buffer.BlendPixel(x, y, color);
+                    }
+                }
+                else
+                {
+                    BlendClippedSpan(buffer, y, prevXExact, crossing.X, color, allowed);
+                }
+            }
 
             winding += crossing.Winding;
             inside = winding != 0;
             prevX = (int)Math.Ceiling(crossing.X);
+            prevXExact = crossing.X;
+        }
+    }
+
+    /// <summary>
+    /// Blends a single horizontal fill span [spanStart, spanEnd) at row
+    /// <paramref name="y"/>, restricted to the clip region's allowed intervals
+    /// for this scanline. Used only on the clipped path; the unclipped path
+    /// keeps its original integer-rounded span logic untouched.
+    /// </summary>
+    private static void BlendClippedSpan(
+        PixelBuffer buffer, int y,
+        double spanStart, double spanEnd,
+        ColorF color,
+        List<(double Start, double End)> allowed)
+    {
+        foreach ((double Start, double End) interval in allowed)
+        {
+            double lo = Math.Max(spanStart, interval.Start);
+            double hi = Math.Min(spanEnd, interval.End);
+
+            if (hi > lo)
+            {
+                int xStart = Math.Max(0, (int)Math.Ceiling(lo));
+                int xEnd = Math.Min(buffer.Width - 1, (int)Math.Floor(hi));
+
+                for (int x = xStart; x <= xEnd; x++)
+                {
+                    buffer.BlendPixel(x, y, color);
+                }
+            }
         }
     }
 

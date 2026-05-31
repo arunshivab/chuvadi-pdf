@@ -36,10 +36,12 @@ namespace Chuvadi.Pdf.Rendering;
 ///   </item>
 /// </list>
 /// <para>
-/// Clipping is recorded by the display list but not yet honoured by this
-/// rasterizer (deferred to v2.1). The pre-v2 PageRasterizer also ignored
-/// clipping, so this is a preserved behaviour. The forthcoming SVG renderer
-/// in PR R2 will honour clipping natively via &lt;clipPath&gt;.
+/// Clipping recorded by the display list is honoured: each op's
+/// <see cref="RenderOp.Clips"/> are transformed to device space and applied
+/// as an intersection region by the <see cref="ScanlineRasterizer"/>.
+/// Axis-aligned rectangular clips (the common <c>re W n</c> case) take a fast
+/// path; arbitrary clip paths are evaluated per scanline against their fill
+/// rule. Image painting honours the same region per pixel.
 /// </para>
 /// <para>
 /// PDF 32000-1:2008 §8 — Graphics model.
@@ -172,10 +174,6 @@ public sealed class PageRasterizer
         PageDisplayList list, PixelBuffer buffer,
         double pageHeight, Transform outerTransform)
     {
-        // TODO v2.1: honour op.Clips. Today, clip lists are recorded by the
-        // display list but ignored at paint time (matches pre-v2 PageRasterizer
-        // behaviour). The SVG renderer in PR R2 will honour them natively.
-
         foreach (RenderOp op in list.Ops)
         {
             switch (op)
@@ -206,7 +204,8 @@ public sealed class PageRasterizer
         GraphicsPath device = UserSpacePathToDevice(op.Path, pageHeight, outerTransform);
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
-        _scanline.Fill(buffer, subPaths, op.Color, op.Rule);
+        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.Fill(buffer, subPaths, op.Color, op.Rule, clip);
     }
 
     private void PaintStrokeOp(
@@ -230,7 +229,8 @@ public sealed class PageRasterizer
         };
 
         List<List<PointF>> filled = _stroke.Expand(subPaths, deviceStyle);
-        _scanline.Fill(buffer, filled, op.Style.Color, FillRule.NonZeroWinding);
+        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.Fill(buffer, filled, op.Style.Color, FillRule.NonZeroWinding, clip);
     }
 
     private void PaintGlyphOp(
@@ -243,7 +243,8 @@ public sealed class PageRasterizer
 
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
-        _scanline.Fill(buffer, subPaths, op.Color, FillRule.NonZeroWinding);
+        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.Fill(buffer, subPaths, op.Color, FillRule.NonZeroWinding, clip);
     }
 
     private void PaintImageOp(
@@ -270,7 +271,14 @@ public sealed class PageRasterizer
             return;
         }
 
-        CompositeImage(op.Image, buffer, destX, destY - destH, destW, destH);
+        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+
+        if (clip is not null && clip.IsEmpty)
+        {
+            return;
+        }
+
+        CompositeImage(op.Image, buffer, destX, destY - destH, destW, destH, clip);
     }
 
     private void PaintNestedOp(
@@ -281,6 +289,36 @@ public sealed class PageRasterizer
         // is op.CtmComposition; outer-space → page-space is outerTransform.
         Transform innerToPage = op.CtmComposition.Multiply(outerTransform);
         PaintDisplayList(op.Inner, buffer, pageHeight, innerToPage);
+    }
+
+    // ── Clip helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a device-space <see cref="ClipRegion"/> from an op's clip paths,
+    /// or returns null when the op is unclipped. Each clip path is transformed
+    /// through the same user-space-to-device pipeline as the op's own geometry,
+    /// so the clip and the painted content share one coordinate frame.
+    /// </summary>
+    private ClipRegion? BuildClipRegion(
+        IReadOnlyList<ClipPath> clips, double pageHeight, Transform outerTransform)
+    {
+        if (clips.Count == 0)
+        {
+            return null;
+        }
+
+        List<List<List<PointF>>> deviceClips = new List<List<List<PointF>>>(clips.Count);
+        List<FillRule> rules = new List<FillRule>(clips.Count);
+        PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
+
+        foreach (ClipPath clip in clips)
+        {
+            GraphicsPath device = UserSpacePathToDevice(clip.Path, pageHeight, outerTransform);
+            deviceClips.Add(flattener.Flatten(device));
+            rules.Add(clip.Rule);
+        }
+
+        return ClipRegion.Build(deviceClips, rules);
     }
 
     // ── Geometry helpers ──────────────────────────────────────────────────
@@ -342,7 +380,8 @@ public sealed class PageRasterizer
 
     private static void CompositeImage(
         ImageFrame frame, PixelBuffer buffer,
-        double x, double y, double w, double h)
+        double x, double y, double w, double h,
+        ClipRegion? clip)
     {
         int dstX0 = Math.Max(0, (int)Math.Round(x));
         int dstY0 = Math.Max(0, (int)Math.Round(y));
@@ -351,8 +390,22 @@ public sealed class PageRasterizer
 
         for (int py = dstY0; py <= dstY1; py++)
         {
+            // Allowed x-intervals from the clip region for this row (null = all).
+            List<(double Start, double End)>? allowed =
+                clip?.AllowedIntervals(py + 0.5);
+
+            if (allowed is not null && allowed.Count == 0)
+            {
+                continue;
+            }
+
             for (int px = dstX0; px <= dstX1; px++)
             {
+                if (allowed is not null && !InAnyInterval(allowed, px + 0.5))
+                {
+                    continue;
+                }
+
                 double srcFracX = (px - x) / w;
                 double srcFracY = (py - y) / h;
                 int srcX = (int)(srcFracX * frame.Width);
@@ -364,5 +417,18 @@ public sealed class PageRasterizer
                 buffer.SetPixelBgra(px, py, sb, sg, sr, sa);
             }
         }
+    }
+
+    private static bool InAnyInterval(List<(double Start, double End)> intervals, double x)
+    {
+        foreach ((double Start, double End) interval in intervals)
+        {
+            if (x >= interval.Start && x < interval.End)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
