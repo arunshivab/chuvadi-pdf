@@ -15,7 +15,7 @@ public sealed class PageRasterizer
 -  `DisplayListBuilder` interprets the page's content stream and produces an immutable `PageDisplayList`. CTM and text matrices are baked into each op's geometry; the list is renderer-neutral.  
 -  `PageRasterizer` walks the display list and paints each op into a `PixelBuffer`. The painter handles scale and Y-flip only; it does not interpret PDF operators.   
 
- Clipping is recorded by the display list but not yet honoured by this rasterizer (deferred to v2.1). The pre-v2 PageRasterizer also ignored clipping, so this is a preserved behaviour. The forthcoming SVG renderer in PR R2 will honour clipping natively via &lt;clipPath&gt;.  
+ Clipping recorded by the display list is honoured: each op's `RenderOp.Clips` are transformed to device space and applied as an intersection region by the `ScanlineRasterizer`. Axis-aligned rectangular clips (the common `re W n` case) take a fast path; arbitrary clip paths are evaluated per scanline against their fill rule. Image painting honours the same region per pixel.  
 
  PDF 32000-1:2008 §8 — Graphics model.
 

@@ -238,6 +238,12 @@ static PdfName FromRawBytes(ReadOnlySpan<byte> rawBytes)
 
 Parses and interns a `PdfName` from raw PDF bytes, decoding `#XX` escape sequences.
 
+**Parameters**
+
+- `rawBytes` — The raw name bytes from the content stream or object parser, excluding the leading solidus.
+
+**Returns:** The interned `PdfName` for the decoded value. <exception cref="PdfParseException"> Thrown when `rawBytes` decodes to an empty name. An empty name is not valid PDF syntax; because this method is the parser entry point for untrusted document bytes, the failure is surfaced as a catchable parse error rather than the argument-validation exception thrown by `Intern(string)`. </exception>
+
 ### `Equals`
 
 ```csharp

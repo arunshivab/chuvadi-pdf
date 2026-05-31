@@ -77,6 +77,18 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
     /// Parses and interns a <see cref="PdfName"/> from raw PDF bytes,
     /// decoding <c>#XX</c> escape sequences.
     /// </summary>
+    /// <param name="rawBytes">
+    /// The raw name bytes from the content stream or object parser, excluding
+    /// the leading solidus.
+    /// </param>
+    /// <returns>The interned <see cref="PdfName"/> for the decoded value.</returns>
+    /// <exception cref="PdfParseException">
+    /// Thrown when <paramref name="rawBytes"/> decodes to an empty name. An
+    /// empty name is not valid PDF syntax; because this method is the parser
+    /// entry point for untrusted document bytes, the failure is surfaced as a
+    /// catchable parse error rather than the argument-validation exception
+    /// thrown by <see cref="Intern(string)"/>.
+    /// </exception>
     public static PdfName FromRawBytes(ReadOnlySpan<byte> rawBytes)
     {
         bool needsDecode = false;
@@ -93,6 +105,11 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
         string decoded = needsDecode
             ? DecodeNameBytes(rawBytes)
             : Encoding.Latin1.GetString(rawBytes);
+
+        if (string.IsNullOrEmpty(decoded))
+        {
+            throw new PdfParseException("PDF name token decoded to an empty name, which is not valid PDF syntax.");
+        }
 
         return Intern(decoded);
     }

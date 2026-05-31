@@ -252,35 +252,97 @@ public sealed class PageRasterizerRegressionTests
 
     // ── Currently-skipped operators must remain non-fatal ─────────────────
 
+    // ── Clipping (W / W* honoured since the v2.1 clip work) ───────────────
+
     [Fact]
-    public void Clip_W_n_DoesNotCrash()
+    public void Clip_W_n_RestrictsFillToClipRegion()
     {
-        // W (non-zero winding clip) is silently skipped today. This test confirms
-        // the rasterizer parses and consumes its operands without throwing.
-        // After D3c lands, clipping becomes effective and a stronger test will
-        // assert that pixels outside the clip stay white.
+        // Clip to the rectangle PDF (10,10)-(90,90) with non-zero winding,
+        // then fill the entire page black. Pixels inside the clip must be
+        // black; pixels outside it must remain white.
         string content =
             "q " +
             "10 10 80 80 re W n " +
             "0 g 0 0 100 100 re f " +
             "Q";
 
-        Action act = () => RenderAt72Dpi(content);
-        act.Should().NotThrow();
+        PixelBuffer buf = RenderAt72Dpi(content);
+
+        // Inside the clip region: filled black.
+        AssertBlack(buf, 50, 50);
+
+        // Outside the clip region (PDF (5,5) and (95,95)) but inside the page:
+        // must stay white because the clip excludes them.
+        AssertWhite(buf, 5, PdfYToPixelRow(5));
+        AssertWhite(buf, 95, PdfYToPixelRow(95));
     }
 
     [Fact]
-    public void Clip_WStar_n_DoesNotCrash()
+    public void Clip_WStar_n_RestrictsFillToClipRegion()
     {
-        // W* (even-odd clip) is also silently skipped today.
+        // Same as above but with the even-odd clip operator W*.
         string content =
             "q " +
             "10 10 80 80 re W* n " +
             "0 g 0 0 100 100 re f " +
             "Q";
 
-        Action act = () => RenderAt72Dpi(content);
-        act.Should().NotThrow();
+        PixelBuffer buf = RenderAt72Dpi(content);
+
+        AssertBlack(buf, 50, 50);
+        AssertWhite(buf, 5, PdfYToPixelRow(5));
+        AssertWhite(buf, 95, PdfYToPixelRow(95));
+    }
+
+    [Fact]
+    public void Clip_NonRectangularPath_RestrictsFill()
+    {
+        // A triangular clip path (not axis-aligned), then fill the whole page.
+        // A point near the wide base-centre of the triangle is inside; a point
+        // in the top corner of the page is outside and must stay white.
+        // Triangle vertices in PDF space: (50,80) apex, (20,20), (80,20).
+        string content =
+            "q " +
+            "50 80 m 20 20 l 80 20 l h W n " +
+            "0 g 0 0 100 100 re f " +
+            "Q";
+
+        PixelBuffer buf = RenderAt72Dpi(content);
+
+        // Near the centroid of the triangle (PDF ~ (50,40)): inside → black.
+        AssertBlack(buf, 50, PdfYToPixelRow(40));
+
+        // Page top-left corner (PDF (5,95)): well outside the triangle → white.
+        AssertWhite(buf, 5, PdfYToPixelRow(95));
+
+        // Bottom-left page corner (PDF (5,5)): below-left of the triangle → white.
+        AssertWhite(buf, 5, PdfYToPixelRow(5));
+    }
+
+    [Fact]
+    public void Clip_OutsideRegion_StaysBackgroundEvenWithColoredFill()
+    {
+        // Regression guard: a coloured fill must also be clipped, not just black.
+        string content =
+            "q " +
+            "40 40 20 20 re W n " +
+            "1 0 0 rg 0 0 100 100 re f " +
+            "Q";
+
+        PixelBuffer buf = RenderAt72Dpi(content);
+
+        // Inside the small clip: must be true RED, not white and not black.
+        // Asserting only R > 200 is insufficient because white (255,255,255)
+        // also satisfies it; we require G and B to be low so the pixel is
+        // unambiguously red - this is what guards against a colour-under-clip
+        // regression (the symptom originally suspected during clip bring-up).
+        (byte b, byte g, byte r, byte _) = buf.GetPixelBgra(50, 50);
+        r.Should().BeGreaterThan(200, "centre of the clip should be filled red (R high)");
+        g.Should().BeLessThan(60, "centre of the clip should be filled red (G low)");
+        b.Should().BeLessThan(60, "centre of the clip should be filled red (B low)");
+
+        // Outside the clip: untouched white background.
+        AssertWhite(buf, 10, PdfYToPixelRow(10));
     }
 
     [Fact]
