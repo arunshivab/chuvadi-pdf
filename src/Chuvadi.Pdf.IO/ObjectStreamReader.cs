@@ -157,10 +157,13 @@ internal sealed class ObjectStreamReader
     /// filter) or an Array of Names (chain of filters applied in order).
     /// Up to v2.1.7 PdfReader handled only the single-Name case and
     /// silently emitted raw (undecoded) bytes when /Filter was an array;
-    /// that was the bug fixed here.
+    /// that was the bug fixed in v2.1.8.
     ///
-    /// /DecodeParms (the per-filter parameter sibling of /Filter) is not
-    /// yet threaded through; see docs/v2.1.8-filter-array-and-followups.md.
+    /// /DecodeParms (the per-filter parameter sibling of /Filter) is threaded
+    /// through here: a single dictionary applies to the sole filter, and an
+    /// array of dictionaries pairs positionally with the /Filter array.
+    /// Per-filter parameters (e.g. a Predictor on a FlateDecode entry) are
+    /// built via <see cref="FilterParameters.FromDictionary(PdfPrimitive?, int)"/>.
     /// </remarks>
     internal static byte[] Decode(PdfDictionary dict, byte[] rawBytes)
     {
@@ -169,13 +172,15 @@ internal sealed class ObjectStreamReader
             return rawBytes;
         }
 
+        dict.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? decodeParms);
+
         FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
         byte[] current = rawBytes;
 
         if (filterPrim is PdfName singleName)
         {
             string resolved = FilterRegistry.ResolveAlias(singleName.Value);
-            current = pipeline.Decode(resolved, current);
+            current = pipeline.Decode(resolved, current, FilterParameters.FromDictionary(decodeParms, 0));
             return current;
         }
 
@@ -189,7 +194,7 @@ internal sealed class ObjectStreamReader
                         "Stream /Filter array contains a non-Name entry.");
                 }
                 string resolved = FilterRegistry.ResolveAlias(filterName.Value);
-                current = pipeline.Decode(resolved, current);
+                current = pipeline.Decode(resolved, current, FilterParameters.FromDictionary(decodeParms, i));
             }
             return current;
         }
