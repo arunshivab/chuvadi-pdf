@@ -379,7 +379,7 @@ public static class DisplayListBuilder
                 case "T*": OpTStar(); break;
 
                 // Text showing
-                case "Tj": if (operands.Count > 0) { ShowText(ExtractString(operands[0])); } break;
+                case "Tj": if (operands.Count > 0) { if (_state.FontIsComposite) { ShowTextComposite(ExtractStringBytes(operands[0])); } else { ShowText(ExtractString(operands[0])); } } break;
                 case "TJ": OpTJ(operands); break;
                 case "'": OpQuote(operands); break;
                 case "\"": OpDoubleQuote(operands); break;
@@ -886,6 +886,32 @@ public static class DisplayListBuilder
             _state.FontName = ExtractName(operands[0]);
             _state.FontSize = ParseDouble(operands[1]);
             _state.FontResources = resources;
+            _state.FontIsComposite = DetermineComposite(resources, _state.FontName);
+        }
+
+        // Returns true when the named font resource is a Type0 (composite) font.
+        private bool DetermineComposite(PdfDictionary? resources, string fontName)
+        {
+            if (resources is null || string.IsNullOrEmpty(fontName))
+            {
+                return false;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDictRef))
+            {
+                return false;
+            }
+
+            PdfDictionary? fonts = _objects.ResolveAs<PdfDictionary>(fontDictRef ?? PdfNull.Value);
+
+            if (fonts is null || !fonts.TryGetValue(PdfName.Intern(fontName), out PdfPrimitive? fontRef))
+            {
+                return false;
+            }
+
+            PdfDictionary? fd = _objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value);
+            PdfName? subtype = fd?.GetName(PdfName.Intern("Subtype"));
+            return subtype is not null && subtype.Value == "Type0";
         }
 
         private void OpTd(List<PdfToken> operands)
@@ -969,7 +995,14 @@ public static class DisplayListBuilder
 
                 if (t.Type == PdfTokenType.LiteralString || t.Type == PdfTokenType.HexString)
                 {
-                    ShowText(ExtractString(t));
+                    if (_state.FontIsComposite)
+                    {
+                        ShowTextComposite(ExtractStringBytes(t));
+                    }
+                    else
+                    {
+                        ShowText(ExtractString(t));
+                    }
                 }
                 else if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
                 {
@@ -1068,6 +1101,56 @@ public static class DisplayListBuilder
 
                 double tx = (advance + extra) * (_state.HorizontalScaling / 100.0);
 
+                Transform advanceMatrix = new Transform(1, 0, 0, 1, tx, 0);
+                _textMatrix = advanceMatrix.Multiply(_textMatrix);
+            }
+        }
+
+        // Renders a composite (Type0) text string. Codes are two bytes
+        // (Identity-H); with an Identity CIDToGIDMap the code is the GID,
+        // so the outline is resolved directly by glyph index.
+        private void ShowTextComposite(byte[] raw)
+        {
+            if (raw.Length < 2 || _state.FontSize <= 0)
+            {
+                return;
+            }
+
+            bool emit = _state.TextRenderingMode != 3;
+            FontRenderer? renderer = GetFontRenderer();
+
+            for (int i = 0; i + 1 < raw.Length; i += 2)
+            {
+                int code = (raw[i] << 8) | raw[i + 1];
+                double advance;
+
+                if (renderer is null)
+                {
+                    advance = 0.5 * _state.FontSize;
+                }
+                else
+                {
+                    GlyphOutline glyph = renderer.GetGlyphOutline(code);
+                    GlyphOutline scaled = glyph.Scale(_state.FontSize);
+
+                    if (emit && !scaled.IsEmpty && _state.FillValid)
+                    {
+                        Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
+
+                        if (_state.TextRise != 0.0)
+                        {
+                            Transform rise = new Transform(1, 0, 0, 1, 0, _state.TextRise);
+                            glyphPlacement = rise.Multiply(glyphPlacement);
+                        }
+
+                        Path placed = TransformPath(scaled.Outline, glyphPlacement);
+                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                    }
+
+                    advance = glyph.Metrics.AdvanceWidthAt(_state.FontSize);
+                }
+
+                double tx = (advance + _state.CharacterSpacing) * (_state.HorizontalScaling / 100.0);
                 Transform advanceMatrix = new Transform(1, 0, 0, 1, tx, 0);
                 _textMatrix = advanceMatrix.Multiply(_textMatrix);
             }
@@ -1206,7 +1289,28 @@ public static class DisplayListBuilder
 
             if (!fontDict.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? fdRef))
             {
-                return null;
+                // Type0 (composite) fonts carry no direct FontDescriptor;
+                // the embedded program lives on the descendant CIDFont.
+                if (fontDict.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? dfRef))
+                {
+                    PdfArray? descendants = _objects.ResolveAs<PdfArray>(dfRef ?? PdfNull.Value);
+
+                    if (descendants is not null && descendants.Count > 0)
+                    {
+                        PdfDictionary? cidFont = _objects.ResolveAs<PdfDictionary>(descendants[0]);
+
+                        if (cidFont is not null
+                            && cidFont.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? cidFdRef))
+                        {
+                            fdRef = cidFdRef;
+                        }
+                    }
+                }
+
+                if (fdRef is null)
+                {
+                    return null;
+                }
             }
 
             PdfDictionary? fd = _objects.ResolveAs<PdfDictionary>(fdRef ?? PdfNull.Value);
@@ -1514,7 +1618,7 @@ public static class DisplayListBuilder
 
             if (token.Type == PdfTokenType.HexString)
             {
-                return bytes;
+                return DecodeHexString(bytes);
             }
 
             // Literal string: strip wrapping ( ) delimiters if present, then handle escapes
@@ -1558,6 +1662,52 @@ public static class DisplayListBuilder
             }
 
             return sb.ToArray();
+        }
+
+        // Decodes a hex string token (e.g. <0039>) into its raw bytes.
+        // Angle-bracket delimiters and interior whitespace are ignored; an
+        // odd final hex digit is padded with 0 per PDF 32000-1 §7.3.4.3.
+        private static byte[] DecodeHexString(byte[] bytes)
+        {
+            System.Collections.Generic.List<int> digits = new System.Collections.Generic.List<int>(bytes.Length);
+
+            foreach (byte b in bytes)
+            {
+                int v;
+
+                if (b >= (byte)'0' && b <= (byte)'9')
+                {
+                    v = b - (byte)'0';
+                }
+                else if (b >= (byte)'A' && b <= (byte)'F')
+                {
+                    v = b - (byte)'A' + 10;
+                }
+                else if (b >= (byte)'a' && b <= (byte)'f')
+                {
+                    v = b - (byte)'a' + 10;
+                }
+                else
+                {
+                    continue;
+                }
+
+                digits.Add(v);
+            }
+
+            if ((digits.Count & 1) == 1)
+            {
+                digits.Add(0);
+            }
+
+            byte[] result = new byte[digits.Count / 2];
+
+            for (int i = 0; i < result.Length; i++)
+            {
+                result[i] = (byte)((digits[i * 2] << 4) | digits[(i * 2) + 1]);
+            }
+
+            return result;
         }
 
         private static string ExtractName(PdfToken token)

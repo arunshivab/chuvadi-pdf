@@ -87,6 +87,9 @@ internal sealed class BuilderGraphicsState
     /// <summary>Font size in user-space units (set by Tf).</summary>
     public double FontSize { get; set; } = 0.0;
 
+    /// <summary>Whether the current font is a Type0 (composite) font using multi-byte codes.</summary>
+    public bool FontIsComposite { get; set; }
+
     /// <summary>Character spacing in unscaled text-space units (Tc).</summary>
     public double CharacterSpacing { get; set; } = 0.0;
 
@@ -136,6 +139,7 @@ internal sealed class BuilderGraphicsState
             DashPattern = DashPattern,
             DashOffset = DashOffset,
             FontName = FontName,
+            FontIsComposite = FontIsComposite,
             FontResources = FontResources,
             FontSize = FontSize,
             CharacterSpacing = CharacterSpacing,
