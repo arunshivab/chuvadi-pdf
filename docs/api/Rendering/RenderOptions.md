@@ -24,7 +24,7 @@ __static__
 static RenderOptions Default
 ```
 
-Default options: 96 DPI, opaque white background.
+Default options: 150 DPI, opaque white background.
 
 ### `Dpi`
 
@@ -32,7 +32,7 @@ Default options: 96 DPI, opaque white background.
 double Dpi
 ```
 
-Gets or initialises the output resolution in dots per inch. Higher values produce larger, sharper images. Typical values: 72 (screen), 96 (Windows default), 150, 300 (print). Default: 96.
+Gets or initialises the output resolution in dots per inch. Higher values produce larger, sharper images. Typical values: 72 (screen), 96 (Windows default), 150, 300 (print). Default: 150.
 
 ### `Background`
 
@@ -49,6 +49,22 @@ double FlatnessTolerance
 ```
 
 Gets or initialises the flatness tolerance for Bezier curve flattening in device pixels. Smaller = smoother curves, more segments. Default: 0.25 pixels.
+
+### `SuperSample`
+
+```csharp
+int SuperSample
+```
+
+Computes the scale factor from PDF points to device pixels for this DPI. Gets or initialises the supersampling factor for anti-aliasing. The page is rendered at this multiple of the target resolution and box-filtered down, smoothing glyph and path edges. 1 disables supersampling (pixel-identical to the single-sample rasterizer). Typical quality value: 3 or 4. Default: 1.
+
+### `AntiAlias`
+
+```csharp
+bool AntiAlias
+```
+
+Gets or initialises whether the scanline fill computes fractional pixel coverage (anti-aliasing). When false, fills are binary (pixel-identical to the original rasterizer). Default: true.
 
 ### `Scale`
 

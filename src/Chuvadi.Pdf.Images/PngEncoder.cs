@@ -42,15 +42,8 @@ public static class PngEncoder
     /// </param>
     public static void Encode(ImageFrame frame, Stream output, bool includeAlpha = false)
     {
-        if (frame is null)
-        {
-            throw new ArgumentNullException(nameof(frame));
-        }
-
-        if (output is null)
-        {
-            throw new ArgumentNullException(nameof(output));
-        }
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(output);
 
         int width = frame.Width;
         int height = frame.Height;
@@ -80,7 +73,7 @@ public static class PngEncoder
         WriteChunk(output, "IEND", []);
     }
 
-    // ── Row filtering ─────────────────────────────────────────────────────
+    // ── Row filtering ────────────────────────────────────────────────────────
 
     private static byte[] BuildFilteredRows(
         ImageFrame frame, int width, int height, int channels, bool includeAlpha)
@@ -130,44 +123,24 @@ public static class PngEncoder
         return filtered;
     }
 
-    // ── zlib / DEFLATE compression ────────────────────────────────────────
+    // ── zlib / DEFLATE compression ───────────────────────────────────────────
 
     private static byte[] CompressWithZlib(byte[] raw)
     {
-        // Use the existing DeflateFilter which writes raw DEFLATE.
-        // PNG IDAT uses zlib format (RFC 1950): 2-byte header + DEFLATE + Adler32.
+        // DeflateFilter.Encode already emits a complete zlib stream
+        // (RFC 1950): the 2-byte CMF/FLG header, the DEFLATE payload, and the
+        // trailing 4-byte Adler-32. PNG IDAT data is exactly that zlib stream,
+        // so we use the encoder's output verbatim. Wrapping it again here would
+        // produce a doubly-framed stream that no PNG decoder can inflate.
         DeflateFilter deflate = new DeflateFilter();
 
-        byte[] deflated;
-
-        using (MemoryStream inputStream = new MemoryStream(raw))
-        using (MemoryStream outputStream = new MemoryStream())
-        {
-            deflate.Encode(inputStream, outputStream, null);
-            deflated = outputStream.ToArray();
-        }
-
-        // Build zlib stream: CMF + FLG + deflate data + Adler-32
-        byte cmf = 0x78; // deflate, window size 32K
-        byte flg = 0x9C; // default compression, check bits
-        // Ensure (CMF * 256 + FLG) is divisible by 31
-        uint checksum = Adler32.Compute(raw);
-
-        byte[] zlib = new byte[2 + deflated.Length + 4];
-        zlib[0] = cmf;
-        zlib[1] = flg;
-        Array.Copy(deflated, 0, zlib, 2, deflated.Length);
-
-        int adlerOffset = 2 + deflated.Length;
-        zlib[adlerOffset] = (byte)((checksum >> 24) & 0xFF);
-        zlib[adlerOffset + 1] = (byte)((checksum >> 16) & 0xFF);
-        zlib[adlerOffset + 2] = (byte)((checksum >> 8) & 0xFF);
-        zlib[adlerOffset + 3] = (byte)(checksum & 0xFF);
-
-        return zlib;
+        using MemoryStream inputStream = new MemoryStream(raw);
+        using MemoryStream outputStream = new MemoryStream();
+        deflate.Encode(inputStream, outputStream, null);
+        return outputStream.ToArray();
     }
 
-    // ── PNG chunk writing ─────────────────────────────────────────────────
+    // ── PNG chunk writing ──────────────────────────────────────────────────────
 
     private static void WriteChunk(Stream output, string type, byte[] data)
     {
@@ -205,7 +178,7 @@ public static class PngEncoder
         buf[offset + 3] = (byte)(value & 0xFF);
     }
 
-    // ── CRC-32 (PNG spec §5) ──────────────────────────────────────────────
+    // ── CRC-32 (PNG spec §5) ────────────────────────────────────────────────
 
     private static readonly uint[] Crc32Table = BuildCrc32Table();
 

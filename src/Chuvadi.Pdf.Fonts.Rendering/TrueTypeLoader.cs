@@ -556,6 +556,13 @@ public sealed class TrueTypeLoader
 
             path.MoveTo(startX, startY);
 
+            // Current pen position. Updated after EVERY segment (line or curve)
+            // so each quadratic is anchored at the actual preceding point, not
+            // the contour start. Failing to advance this after a LineTo is what
+            // produced spurious spikes on serifs (line-to-curve junctions).
+            double curX = startX;
+            double curY = startY;
+
             int idx = start;
 
             for (int step = 0; step < count; step++)
@@ -566,6 +573,8 @@ public sealed class TrueTypeLoader
                 {
                     // Straight line to on-curve point
                     path.LineTo(px[next], py[next]);
+                    curX = px[next];
+                    curY = py[next];
                     idx = next;
                 }
                 else
@@ -580,9 +589,9 @@ public sealed class TrueTypeLoader
                         // Implied on-curve at midpoint
                         double midX = (qx + px[after]) / 2.0;
                         double midY = (qy + py[after]) / 2.0;
-                        EmitQuadraticAsCubic(path, startX, startY, qx, qy, midX, midY);
-                        startX = midX;
-                        startY = midY;
+                        EmitQuadraticAsCubic(path, curX, curY, qx, qy, midX, midY);
+                        curX = midX;
+                        curY = midY;
                         qx = px[after];
                         qy = py[after];
                         after = (after + 1) % count;
@@ -590,9 +599,9 @@ public sealed class TrueTypeLoader
 
                     double endX = onCurve[after] ? px[after] : (qx + px[after]) / 2.0;
                     double endY = onCurve[after] ? py[after] : (qy + py[after]) / 2.0;
-                    EmitQuadraticAsCubic(path, startX, startY, qx, qy, endX, endY);
-                    startX = endX;
-                    startY = endY;
+                    EmitQuadraticAsCubic(path, curX, curY, qx, qy, endX, endY);
+                    curX = endX;
+                    curY = endY;
                     idx = after;
                     step += (after - next + count) % count;
                 }

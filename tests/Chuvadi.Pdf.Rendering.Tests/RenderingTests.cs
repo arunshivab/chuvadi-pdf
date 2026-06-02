@@ -50,7 +50,7 @@ public sealed class RenderOptionsTests
     [Fact]
     public void Default_HasReasonableDpi()
     {
-        RenderOptions.Default.Dpi.Should().Be(96);
+        RenderOptions.Default.Dpi.Should().Be(150);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public sealed class RenderOptionsTests
     public void PixelSize_StandardA4At96Dpi_IsReasonable()
     {
         // A4 at 96 DPI: 595pt × 842pt → (595/72*96) × (842/72*96)
-        (int w, int h) = RenderOptions.Default.PixelSize(595, 842);
+        (int w, int h) = new RenderOptions { Dpi = 96 }.PixelSize(595, 842);
         w.Should().BeInRange(790, 800);
         h.Should().BeInRange(1120, 1130);
     }

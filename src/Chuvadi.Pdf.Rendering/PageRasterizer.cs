@@ -66,7 +66,7 @@ public sealed class PageRasterizer
     {
         _objects = objects ?? throw new ArgumentNullException(nameof(objects));
         _options = options ?? RenderOptions.Default;
-        _scanline = new ScanlineRasterizer();
+        _scanline = new ScanlineRasterizer { AntiAlias = _options.AntiAlias };
         _stroke = new StrokeExpander();
     }
 
@@ -84,12 +84,35 @@ public sealed class PageRasterizer
     {
         ArgumentNullException.ThrowIfNull(page);
 
+        int s = _options.SuperSample > 1 ? _options.SuperSample : 1;
+
+        if (s == 1)
+        {
+            return RasterizeInternal(page, _options);
+        }
+
+        // Supersample: render at s times the resolution, then box-filter down.
+        RenderOptions hi = new RenderOptions
+        {
+            Dpi = _options.Dpi * s,
+            Background = _options.Background,
+            FlatnessTolerance = _options.FlatnessTolerance,
+            SuperSample = 1,
+        };
+
+        PixelBuffer big = RasterizeInternal(page, hi);
+        (int dstW, int dstH) = _options.PixelSize(page.Width, page.Height);
+        return Downsample(big, dstW, dstH, s);
+    }
+
+    private PixelBuffer RasterizeInternal(PdfPage page, RenderOptions options)
+    {
         double pageW = page.Width;
         double pageH = page.Height;
 
-        (int pixW, int pixH) = _options.PixelSize(pageW, pageH);
+        (int pixW, int pixH) = options.PixelSize(pageW, pageH);
         PixelBuffer buffer = new PixelBuffer(pixW, pixH);
-        buffer.Clear(_options.Background);
+        buffer.Clear(options.Background);
 
         PageDisplayList list = DisplayListBuilder.Build(page, _objects);
 
@@ -98,8 +121,67 @@ public sealed class PageRasterizer
             return buffer;
         }
 
-        PaintDisplayList(list, buffer, pageH, Transform.Identity);
+        PageRasterizer painter = new PageRasterizer(_objects, options);
+        painter.PaintDisplayList(list, buffer, pageH, Transform.Identity);
         return buffer;
+    }
+
+    private static PixelBuffer Downsample(PixelBuffer src, int dstW, int dstH, int s)
+    {
+        PixelBuffer dst = new PixelBuffer(dstW, dstH);
+
+        for (int y = 0; y < dstH; y++)
+        {
+            for (int x = 0; x < dstW; x++)
+            {
+                int sumB = 0;
+                int sumG = 0;
+                int sumR = 0;
+                int sumA = 0;
+                int count = 0;
+
+                for (int dy = 0; dy < s; dy++)
+                {
+                    int sy = (y * s) + dy;
+
+                    if (sy >= src.Height)
+                    {
+                        continue;
+                    }
+
+                    for (int dx = 0; dx < s; dx++)
+                    {
+                        int sx = (x * s) + dx;
+
+                        if (sx >= src.Width)
+                        {
+                            continue;
+                        }
+
+                        (byte b, byte g, byte r, byte a) = src.GetPixelBgra(sx, sy);
+                        sumB += b;
+                        sumG += g;
+                        sumR += r;
+                        sumA += a;
+                        count++;
+                    }
+                }
+
+                if (count == 0)
+                {
+                    count = 1;
+                }
+
+                dst.SetPixelBgra(
+                    x, y,
+                    (byte)(sumB / count),
+                    (byte)(sumG / count),
+                    (byte)(sumR / count),
+                    (byte)(sumA / count));
+            }
+        }
+
+        return dst;
     }
 
     /// <summary>

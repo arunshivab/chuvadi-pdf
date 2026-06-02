@@ -175,12 +175,12 @@ public static class PngDecoder
             throw new ImageException("PNG IDAT data too short.");
         }
 
-        byte[] deflateData = new byte[data.Length - 6];
-        Array.Copy(data, 2, deflateData, 0, deflateData.Length);
-
+        // DeflateFilter consumes the complete zlib envelope (2-byte header,
+        // DEFLATE payload, 4-byte Adler-32 trailer). Pass the IDAT bytes
+        // through unmodified rather than pre-stripping the header/trailer.
         DeflateFilter filter = new DeflateFilter();
 
-        using (MemoryStream input = new MemoryStream(deflateData))
+        using (MemoryStream input = new MemoryStream(data))
         using (MemoryStream output = new MemoryStream())
         {
             filter.Decode(input, output, null);

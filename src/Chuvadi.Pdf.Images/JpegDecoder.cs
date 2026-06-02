@@ -407,7 +407,10 @@ public static class JpegDecoder
                                 {
                                     for (int k = 0; k < 64; k++)
                                     {
-                                        block[k] *= qt[k];
+                                        // block is natural-order; qt is zig-zag order.
+                                        // Pair each zig-zag quant value with the natural
+                                        // position its coefficient was placed at.
+                                        block[ZigZag[k]] *= qt[k];
                                     }
                                 }
 
@@ -474,108 +477,68 @@ public static class JpegDecoder
         // ── IDCT (AAN algorithm) ──────────────────────────────────────────
 
         // AAN IDCT scaling factors (Arai, Agui, Nakajima 1988)
-        private static readonly double[] AanScales =
-        [
-            1.0,
-            1.387039845, 1.306562965, 1.175875602,
-            1.0,         0.785694958, 0.541196100, 0.275899379,
-        ];
+        // Precomputed separable IDCT basis: IdctCos[u, x] = C(u) * cos((2x+1)u*pi/16),
+        // where C(0) = 1/sqrt(2) and C(u) = 1 otherwise. A direct (non-fast) IDCT is
+        // used for unambiguous correctness; per-block cost is negligible for decoding.
+        private static readonly double[,] IdctCos = BuildIdctCos();
 
+        private static double[,] BuildIdctCos()
+        {
+            double[,] c = new double[8, 8];
+
+            for (int u = 0; u < 8; u++)
+            {
+                double cu = u == 0 ? (1.0 / Math.Sqrt(2.0)) : 1.0;
+
+                for (int x = 0; x < 8; x++)
+                {
+                    c[u, x] = cu * Math.Cos(((2 * x + 1) * u * Math.PI) / 16.0);
+                }
+            }
+
+            return c;
+        }
+
+        // Direct separable inverse DCT. Input is the dequantised coefficient block in
+        // natural (row-major) order; output is level-shifted, clamped 8-bit samples.
         private static byte[] IDCT(int[] input)
         {
-            double[] work = new double[64];
+            double[] tmp = new double[64];
             byte[] output = new byte[64];
 
-            // Row IDCT
+            // Row pass: for each row, inverse-transform the 8 coefficients.
             for (int row = 0; row < 8; row++)
             {
                 int off = row * 8;
-                double v0 = input[off] * AanScales[0];
-                double v1 = input[off + 1] * AanScales[1];
-                double v2 = input[off + 2] * AanScales[2];
-                double v3 = input[off + 3] * AanScales[3];
-                double v4 = input[off + 4] * AanScales[4];
-                double v5 = input[off + 5] * AanScales[5];
-                double v6 = input[off + 6] * AanScales[6];
-                double v7 = input[off + 7] * AanScales[7];
 
-                double t0 = v0 + v4;
-                double t1 = v0 - v4;
-                double t2 = v2 + v6;
-                double t3 = (v2 - v6) * 1.414213562 - t2;
-                double t4 = t0 + t2;
-                double t5 = t0 - t2;
-                double t6 = t1 + t3;
-                double t7 = t1 - t3;
-                double m0 = v5 + v3;
-                double m1 = v5 - v3;
-                double m2 = v1 + v7;
-                double m3 = v1 - v7;
-                double s0 = (m0 - m2) * 1.847759065;
-                double s1 = m1 * 2.613125930 + s0;
-                double s2 = m3 * 1.082392201 - s0;
-                double s3 = m2 * 1.847759065;
-                double s4 = s1 - s3;
-                double s5 = s2 + s3;
-                double n0 = s4 + s5;
-                double n1 = s4 - s5;
-                double n2 = (m1 - m3) * 1.414213562 - n0;
-                double n3 = n2 + n1 * 2.0;
+                for (int x = 0; x < 8; x++)
+                {
+                    double sum = 0.0;
 
-                work[off] = t4 + n0;
-                work[off + 7] = t4 - n0;
-                work[off + 1] = t6 + n3;
-                work[off + 6] = t6 - n3;
-                work[off + 2] = t7 + n2;
-                work[off + 5] = t7 - n2;
-                work[off + 3] = t5 + n1;
-                work[off + 4] = t5 - n1;
+                    for (int u = 0; u < 8; u++)
+                    {
+                        sum += IdctCos[u, x] * input[off + u];
+                    }
+
+                    tmp[off + x] = sum;
+                }
             }
 
-            // Column IDCT
+            // Column pass: inverse-transform each column, apply the overall 1/4 scale,
+            // level shift (+128) and clamp.
             for (int col = 0; col < 8; col++)
             {
-                double v0 = work[col] * AanScales[0];
-                double v1 = work[col + 8] * AanScales[1];
-                double v2 = work[col + 16] * AanScales[2];
-                double v3 = work[col + 24] * AanScales[3];
-                double v4 = work[col + 32] * AanScales[4];
-                double v5 = work[col + 40] * AanScales[5];
-                double v6 = work[col + 48] * AanScales[6];
-                double v7 = work[col + 56] * AanScales[7];
+                for (int y = 0; y < 8; y++)
+                {
+                    double sum = 0.0;
 
-                double t0 = v0 + v4;
-                double t1 = v0 - v4;
-                double t2 = v2 + v6;
-                double t3 = (v2 - v6) * 1.414213562 - t2;
-                double t4 = t0 + t2;
-                double t5 = t0 - t2;
-                double t6 = t1 + t3;
-                double t7 = t1 - t3;
-                double m0 = v5 + v3;
-                double m1 = v5 - v3;
-                double m2 = v1 + v7;
-                double m3 = v1 - v7;
-                double s0 = (m0 - m2) * 1.847759065;
-                double s1 = m1 * 2.613125930 + s0;
-                double s2 = m3 * 1.082392201 - s0;
-                double s3 = m2 * 1.847759065;
-                double s4 = s1 - s3;
-                double s5 = s2 + s3;
-                double n0 = s4 + s5;
-                double n1 = s4 - s5;
-                double n2 = (m1 - m3) * 1.414213562 - n0;
-                double n3 = n2 + n1 * 2.0;
+                    for (int v = 0; v < 8; v++)
+                    {
+                        sum += IdctCos[v, y] * tmp[col + v * 8];
+                    }
 
-                double scale = 1.0 / 8.0;
-                output[col] = Clamp(t4 + n0, scale);
-                output[col + 56] = Clamp(t4 - n0, scale);
-                output[col + 8] = Clamp(t6 + n3, scale);
-                output[col + 48] = Clamp(t6 - n3, scale);
-                output[col + 16] = Clamp(t7 + n2, scale);
-                output[col + 40] = Clamp(t7 - n2, scale);
-                output[col + 24] = Clamp(t5 + n1, scale);
-                output[col + 32] = Clamp(t5 - n1, scale);
+                    output[y * 8 + col] = Clamp(sum, 0.25);
+                }
             }
 
             return output;
@@ -635,32 +598,48 @@ public static class JpegDecoder
                 throw new ImageException("JPEG scan data was not decoded.");
             }
 
-            int planeW = _mcuWidth * (GetMaxHSampling() * 8);
-            PixelBuffer buffer = new PixelBuffer(_width, _height);
+            int maxH = GetMaxHSampling();
+            int maxV = GetMaxVSampling();
+            int planeW = _mcuWidth * (maxH * 8);
 
+            // Per-component sampling factors (component 0 = Y, 1 = Cb, 2 = Cr).
+            int yH = _components.Length > 0 ? _components[0].HorizontalSampling : 1;
+            int yV = _components.Length > 0 ? _components[0].VerticalSampling : 1;
+            int cbH = _components.Length > 1 ? _components[1].HorizontalSampling : 1;
+            int cbV = _components.Length > 1 ? _components[1].VerticalSampling : 1;
+            int crH = _components.Length > 2 ? _components[2].HorizontalSampling : 1;
+            int crV = _components.Length > 2 ? _components[2].VerticalSampling : 1;
+
+            PixelBuffer buffer = new PixelBuffer(_width, _height);
             bool isGray = _numComponents == 1;
 
             for (int y = 0; y < _height; y++)
             {
                 for (int x = 0; x < _width; x++)
                 {
-                    int idx = y * planeW + x;
-
                     if (isGray || _cbPlane is null || _crPlane is null)
                     {
-                        byte luma = idx < _yPlane.Length ? _yPlane[idx] : (byte)128;
+                        int yi = ((y * yV / maxV) * planeW) + (x * yH / maxH);
+                        byte luma = yi < _yPlane.Length ? _yPlane[yi] : (byte)128;
                         buffer.SetPixelBgra(x, y, luma, luma, luma, 255);
                     }
                     else
                     {
-                        // YCbCr → RGB conversion (ISO 10918-1 §A.3.3)
-                        double yv = idx < _yPlane.Length ? _yPlane[idx] : 128;
-                        double cb = idx < _cbPlane.Length ? _cbPlane[idx] : 128;
-                        double cr = idx < _crPlane.Length ? _crPlane[idx] : 128;
+                        // Each component is sampled at its own resolution: the
+                        // plane was filled at component scale (blocks packed with
+                        // no gaps), so map the output pixel down by the ratio of
+                        // this component's sampling to the maximum.
+                        int yi = ((y * yV / maxV) * planeW) + (x * yH / maxH);
+                        int cbi = ((y * cbV / maxV) * planeW) + (x * cbH / maxH);
+                        int cri = ((y * crV / maxV) * planeW) + (x * crH / maxH);
 
-                        int r = (int)(yv + 1.402 * (cr - 128));
-                        int g = (int)(yv - 0.34414 * (cb - 128) - 0.71414 * (cr - 128));
-                        int bv = (int)(yv + 1.772 * (cb - 128));
+                        double yv = yi < _yPlane.Length ? _yPlane[yi] : 128;
+                        double cb = cbi < _cbPlane.Length ? _cbPlane[cbi] : 128;
+                        double cr = cri < _crPlane.Length ? _crPlane[cri] : 128;
+
+                        int r = (int)(yv + (1.402 * (cr - 128)));
+                        int g = (int)(yv - (0.34414 * (cb - 128)) - (0.71414 * (cr - 128)));
+                        int bv = (int)(yv + (1.772 * (cb - 128)));
 
                         buffer.SetPixelBgra(
                             x, y,
@@ -673,6 +652,19 @@ public static class JpegDecoder
             }
 
             return new ImageFrame(buffer, isGray ? ImageColorFormat.Gray8 : ImageColorFormat.Rgb24);
+        }
+
+        private int GetMaxVSampling()
+        {
+            int max = 1;
+            foreach (ComponentInfo c in _components)
+            {
+                if (c.VerticalSampling > max)
+                {
+                    max = c.VerticalSampling;
+                }
+            }
+            return max;
         }
 
         private int GetMaxHSampling()
@@ -800,7 +792,7 @@ public static class JpegDecoder
             {
                 code = (code << 1) | bits.ReadBit();
 
-                if (_codes[len] > 0 && code < _maxCodes[len])
+                if (_codes[len] > 0 && code >= _minCodes[len] && code < _maxCodes[len])
                 {
                     int idx = _valPtrs[len] + code - _minCodes[len];
 
