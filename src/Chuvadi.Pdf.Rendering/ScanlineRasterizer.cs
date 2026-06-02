@@ -24,10 +24,29 @@ namespace Chuvadi.Pdf.Rendering;
 /// Input is a list of sub-paths from <see cref="PathFlattener"/>,
 /// each being a closed list of <see cref="PointF"/> vertices in device space.
 ///
+/// When <see cref="AntiAlias"/> is false (the default), the fill is binary:
+/// a pixel is either painted or not, sampled at the pixel centre. This is the
+/// original behaviour and is preserved byte-for-byte.
+///
+/// When <see cref="AntiAlias"/> is true, each pixel row is sampled at several
+/// sub-scanlines and exact fractional horizontal coverage is accumulated per
+/// pixel, then blended once at the corresponding alpha. This produces smooth,
+/// properly-weighted edges.
+///
 /// PDF 32000-1:2008 §8.5.3.3 — Filling.
 /// </remarks>
 public sealed class ScanlineRasterizer
 {
+    // Number of sub-scanlines sampled per pixel row in anti-aliased mode.
+    private const int AaSubSamples = 4;
+
+    /// <summary>
+    /// Gets or sets whether the fill computes fractional pixel coverage
+    /// (anti-aliasing). Default: false (binary fill, pixel-identical to the
+    /// original rasterizer).
+    /// </summary>
+    public bool AntiAlias { get; set; }
+
     /// <summary>
     /// Fills the given sub-paths into the pixel buffer with the given colour
     /// and fill rule.
@@ -110,27 +129,18 @@ public sealed class ScanlineRasterizer
         yMin = Math.Max(0, yMin);
         yMax = Math.Min(buffer.Height - 1, yMax);
 
-        // Scanline fill
+        if (AntiAlias)
+        {
+            FillAntiAliased(buffer, edges, color, fillRule, clip, yMin, yMax);
+            return;
+        }
+
+        // Scanline fill (binary, original behaviour)
         for (int y = yMin; y <= yMax; y++)
         {
             double scanY = y + 0.5; // Sample at pixel centre
 
-            List<Crossing> crossings = new List<Crossing>();
-
-            foreach (Edge edge in edges)
-            {
-                double eYMin = Math.Min(edge.Y0, edge.Y1);
-                double eYMax = Math.Max(edge.Y0, edge.Y1);
-
-                if (scanY < eYMin || scanY >= eYMax)
-                {
-                    continue;
-                }
-
-                double t = (scanY - edge.Y0) / (edge.Y1 - edge.Y0);
-                double x = edge.X0 + t * (edge.X1 - edge.X0);
-                crossings.Add(new Crossing(x, edge.Winding));
-            }
+            List<Crossing> crossings = ScanCrossings(edges, scanY);
 
             if (crossings.Count == 0)
             {
@@ -151,6 +161,226 @@ public sealed class ScanlineRasterizer
 
             FillScanline(buffer, y, crossings, color, fillRule, allowed);
         }
+    }
+
+    // ── Anti-aliased fill ─────────────────────────────────────────────────
+
+    private static void FillAntiAliased(
+        PixelBuffer buffer, List<Edge> edges,
+        ColorF color, FillRule fillRule, ClipRegion? clip,
+        int yMin, int yMax)
+    {
+        ColorF rgb = color.ToRgb();
+        float baseAlpha = rgb.Alpha;
+
+        if (baseAlpha <= 0f)
+        {
+            return;
+        }
+
+        int width = buffer.Width;
+        float[] coverage = new float[width];
+        float weight = 1f / AaSubSamples;
+
+        for (int y = yMin; y <= yMax; y++)
+        {
+            Array.Clear(coverage, 0, width);
+            bool any = false;
+
+            for (int sub = 0; sub < AaSubSamples; sub++)
+            {
+                double scanY = y + ((sub + 0.5) / AaSubSamples);
+
+                List<Crossing> crossings = ScanCrossings(edges, scanY);
+
+                if (crossings.Count == 0)
+                {
+                    continue;
+                }
+
+                crossings.Sort((a, b) => a.X.CompareTo(b.X));
+
+                List<(double Start, double End)>? allowed =
+                    clip?.AllowedIntervals(scanY);
+
+                if (allowed is not null && allowed.Count == 0)
+                {
+                    continue;
+                }
+
+                any |= AccumulateScanline(coverage, width, crossings, fillRule, allowed, weight);
+            }
+
+            if (!any)
+            {
+                continue;
+            }
+
+            for (int x = 0; x < width; x++)
+            {
+                float cov = coverage[x];
+
+                if (cov <= 0f)
+                {
+                    continue;
+                }
+
+                if (cov > 1f)
+                {
+                    cov = 1f;
+                }
+
+                ColorF px = ColorF.FromRgb(rgb.R, rgb.G, rgb.B, baseAlpha * cov);
+                buffer.BlendPixel(x, y, px);
+            }
+        }
+    }
+
+    // Accumulates fractional horizontal coverage for one sub-scanline into the
+    // per-row coverage buffer. Returns true if any coverage was added.
+    private static bool AccumulateScanline(
+        float[] coverage, int width,
+        List<Crossing> crossings, FillRule fillRule,
+        List<(double Start, double End)>? allowed,
+        float weight)
+    {
+        bool any = false;
+
+        if (fillRule == FillRule.EvenOdd)
+        {
+            for (int i = 0; i + 1 < crossings.Count; i += 2)
+            {
+                any |= AddSpan(coverage, width, crossings[i].X, crossings[i + 1].X, allowed, weight);
+            }
+        }
+        else
+        {
+            int winding = 0;
+            double spanStart = 0;
+            bool inside = false;
+
+            foreach (Crossing crossing in crossings)
+            {
+                if (inside)
+                {
+                    any |= AddSpan(coverage, width, spanStart, crossing.X, allowed, weight);
+                }
+
+                winding += crossing.Winding;
+                bool nowInside = winding != 0;
+
+                if (nowInside && !inside)
+                {
+                    spanStart = crossing.X;
+                }
+
+                inside = nowInside;
+            }
+        }
+
+        return any;
+    }
+
+    // Adds 'weight' coverage across [start, end), clipped to allowed intervals,
+    // computing exact fractional coverage at the partially-covered end pixels.
+    private static bool AddSpan(
+        float[] coverage, int width,
+        double start, double end,
+        List<(double Start, double End)>? allowed,
+        float weight)
+    {
+        if (allowed is null)
+        {
+            return AddSpanRaw(coverage, width, start, end, weight);
+        }
+
+        bool any = false;
+
+        foreach ((double Start, double End) interval in allowed)
+        {
+            double lo = Math.Max(start, interval.Start);
+            double hi = Math.Min(end, interval.End);
+
+            if (hi > lo)
+            {
+                any |= AddSpanRaw(coverage, width, lo, hi, weight);
+            }
+        }
+
+        return any;
+    }
+
+    private static bool AddSpanRaw(
+        float[] coverage, int width,
+        double start, double end, float weight)
+    {
+        if (end <= start)
+        {
+            return false;
+        }
+
+        if (end <= 0 || start >= width)
+        {
+            return false;
+        }
+
+        if (start < 0)
+        {
+            start = 0;
+        }
+
+        if (end > width)
+        {
+            end = width;
+        }
+
+        int xStart = (int)Math.Floor(start);
+        int xEnd = (int)Math.Floor(end - 1e-9);
+
+        if (xStart == xEnd)
+        {
+            // Span lies within a single pixel column.
+            coverage[xStart] += weight * (float)(end - start);
+            return true;
+        }
+
+        // First (partial) pixel.
+        coverage[xStart] += weight * (float)((xStart + 1) - start);
+
+        // Full interior pixels.
+        for (int x = xStart + 1; x < xEnd; x++)
+        {
+            coverage[x] += weight;
+        }
+
+        // Last (partial) pixel.
+        coverage[xEnd] += weight * (float)(end - xEnd);
+
+        return true;
+    }
+
+    // ── Crossing scan ─────────────────────────────────────────────────────
+
+    private static List<Crossing> ScanCrossings(List<Edge> edges, double scanY)
+    {
+        List<Crossing> crossings = new List<Crossing>();
+
+        foreach (Edge edge in edges)
+        {
+            double eYMin = Math.Min(edge.Y0, edge.Y1);
+            double eYMax = Math.Max(edge.Y0, edge.Y1);
+
+            if (scanY < eYMin || scanY >= eYMax)
+            {
+                continue;
+            }
+
+            double t = (scanY - edge.Y0) / (edge.Y1 - edge.Y0);
+            double x = edge.X0 + t * (edge.X1 - edge.X0);
+            crossings.Add(new Crossing(x, edge.Winding));
+        }
+
+        return crossings;
     }
 
     // ── Edge construction ─────────────────────────────────────────────────
@@ -186,7 +416,7 @@ public sealed class ScanlineRasterizer
         return edges;
     }
 
-    // ── Scanline fill ─────────────────────────────────────────────────────
+    // ── Scanline fill (binary) ────────────────────────────────────────────
 
     private static void FillScanline(
         PixelBuffer buffer, int y,

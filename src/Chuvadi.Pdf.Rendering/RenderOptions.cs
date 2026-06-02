@@ -13,22 +13,24 @@ namespace Chuvadi.Pdf.Rendering;
 /// </summary>
 public sealed class RenderOptions
 {
-    /// <summary>Default options: 96 DPI, opaque white background.</summary>
+    /// <summary>Default options: 150 DPI, opaque white background.</summary>
     public static RenderOptions Default { get; } = new RenderOptions();
 
     /// <summary>Initialises <see cref="RenderOptions"/> with default values.</summary>
     public RenderOptions()
     {
-        Dpi = 96;
+        Dpi = 150;
         Background = ColorF.White;
         FlatnessTolerance = 0.25;
+        SuperSample = 1;
+        AntiAlias = true;
     }
 
     /// <summary>
     /// Gets or initialises the output resolution in dots per inch.
     /// Higher values produce larger, sharper images.
     /// Typical values: 72 (screen), 96 (Windows default), 150, 300 (print).
-    /// Default: 96.
+    /// Default: 150.
     /// </summary>
     public double Dpi { get; init; }
 
@@ -65,6 +67,25 @@ public sealed class RenderOptions
         int h = Math.Max(1, (int)Math.Round(pageHeightPt * Dpi / 72.0));
         return (w, h);
     }
+
+    /// <summary>
+    /// Computes the scale factor from PDF points to device pixels for this DPI.
+    /// </summary>
+    /// <summary>
+    /// Gets or initialises the supersampling factor for anti-aliasing.
+    /// The page is rendered at this multiple of the target resolution and
+    /// box-filtered down, smoothing glyph and path edges. 1 disables
+    /// supersampling (pixel-identical to the single-sample rasterizer).
+    /// Typical quality value: 3 or 4. Default: 1.
+    /// </summary>
+    public int SuperSample { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether the scanline fill computes fractional
+    /// pixel coverage (anti-aliasing). When false, fills are binary
+    /// (pixel-identical to the original rasterizer). Default: true.
+    /// </summary>
+    public bool AntiAlias { get; init; }
 
     /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.

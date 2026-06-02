@@ -1,7 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  PDF 32000-1:2008 §7.8 — Content streams; §8 — Graphics; §9 — Text
-// PHASE: v2.0.0 R1 D3c-2 — DisplayList builder
+// SPEC:  PDF 32000-1:2008 Â§7.8 â€” Content streams; Â§8 â€” Graphics; Â§9 â€” Text
+// PHASE: v2.0.0 R1 D3c-2 â€” DisplayList builder
 
 using System;
 using System.Collections.Generic;
@@ -118,6 +118,7 @@ public static class DisplayListBuilder
         private readonly PdfObjectStore _objects;
         private readonly FilterPipeline _pipeline;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
+        private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
 
         // Render-op accumulator
         private readonly List<RenderOp> _ops;
@@ -129,7 +130,7 @@ public static class DisplayListBuilder
         // Path construction (pre-CTM, user-space coords)
         private Path _currentPath;
 
-        // Text state (NOT in q/Q stack — these reset on BT)
+        // Text state (NOT in q/Q stack â€” these reset on BT)
         private Transform _textMatrix;
         private Transform _textLineMatrix;
 
@@ -142,6 +143,7 @@ public static class DisplayListBuilder
             _objects = objects;
             _pipeline = FilterRegistry.CreateDefaultPipeline();
             _fontCache = new Dictionary<string, FontRenderer?>();
+            _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
             _ops = new List<RenderOp>();
             _state = new BuilderGraphicsState();
             _stateStack = new Stack<BuilderGraphicsState>();
@@ -166,7 +168,7 @@ public static class DisplayListBuilder
             return new PageDisplayList(_ops, pageWidth, pageHeight);
         }
 
-        // ── Content stream loading ────────────────────────────────────────
+        // â”€â”€ Content stream loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         public byte[] LoadContentBytes(PdfPrimitive? contents)
         {
@@ -247,7 +249,7 @@ public static class DisplayListBuilder
             return stream.RawBytes;
         }
 
-        // ── Interpreter loop ──────────────────────────────────────────────
+        // â”€â”€ Interpreter loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void Interpret(byte[] content, PdfDictionary? resources)
         {
@@ -300,7 +302,7 @@ public static class DisplayListBuilder
             }
         }
 
-        // ── Operator dispatch ─────────────────────────────────────────────
+        // â”€â”€ Operator dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void Execute(string op, List<PdfToken> operands, PdfDictionary? resources)
         {
@@ -317,9 +319,9 @@ public static class DisplayListBuilder
                 case "j": if (operands.Count > 0) { _state.LineJoin = (LineJoin)ParseInt(operands[0]); } break;
                 case "M": if (operands.Count > 0) { _state.MiterLimit = ParseDouble(operands[0]); } break;
                 case "d": OpDashPattern(operands); break;
-                case "i": break; // Flatness — visual hint, ignored
-                case "ri": break; // Rendering intent — ignored at builder level
-                case "gs": break; // ExtGState — deferred to v2.1+
+                case "i": break; // Flatness â€” visual hint, ignored
+                case "ri": break; // Rendering intent â€” ignored at builder level
+                case "gs": break; // ExtGState â€” deferred to v2.1+
 
                 // Colour operators
                 case "g": OpFillGray(operands); break;
@@ -385,15 +387,15 @@ public static class DisplayListBuilder
                 // XObjects
                 case "Do": OpDo(operands, resources); break;
 
-                // Marked content / compatibility — parsed, operands consumed, no emission
+                // Marked content / compatibility â€” parsed, operands consumed, no emission
                 case "BMC": case "BDC": case "EMC": case "MP": case "DP": case "BX": case "EX": break;
 
-                // Unrecognised operator — silently ignored, operands cleared by caller
+                // Unrecognised operator â€” silently ignored, operands cleared by caller
                 default: break;
             }
         }
 
-        // ── Graphics state operators ──────────────────────────────────────
+        // â”€â”€ Graphics state operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpQ()
         {
@@ -461,7 +463,7 @@ public static class DisplayListBuilder
             _state.DashOffset = phase;
         }
 
-        // ── Colour operators ──────────────────────────────────────────────
+        // â”€â”€ Colour operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpFillGray(List<PdfToken> operands)
         {
@@ -564,7 +566,7 @@ public static class DisplayListBuilder
 
         private void OpScColor(List<PdfToken> operands, bool stroke)
         {
-            // sc / scn / SC / SCN — set colour in current colour space.
+            // sc / scn / SC / SCN â€” set colour in current colour space.
             // We support 1, 3, or 4 numeric operands (DeviceGray/RGB/CMYK).
             // A trailing name operand (Pattern) suppresses validity.
             int numericCount = 0;
@@ -624,7 +626,7 @@ public static class DisplayListBuilder
             }
         }
 
-        // ── Path construction ─────────────────────────────────────────────
+        // â”€â”€ Path construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpL(List<PdfToken> operands)
         {
@@ -653,7 +655,7 @@ public static class DisplayListBuilder
 
             if (_currentPath.IsEmpty)
             {
-                return; // Malformed — c requires a current point
+                return; // Malformed â€” c requires a current point
             }
 
             _currentPath.CubicBezierTo(
@@ -664,7 +666,7 @@ public static class DisplayListBuilder
 
         private void OpV(List<PdfToken> operands)
         {
-            // v x2 y2 x3 y3 — Bezier with initial point as first control
+            // v x2 y2 x3 y3 â€” Bezier with initial point as first control
             if (operands.Count < 4)
             {
                 return;
@@ -694,7 +696,7 @@ public static class DisplayListBuilder
 
         private void OpY(List<PdfToken> operands)
         {
-            // y x1 y1 x3 y3 — Bezier with final point as second control
+            // y x1 y1 x3 y3 â€” Bezier with final point as second control
             if (operands.Count < 4)
             {
                 return;
@@ -731,7 +733,7 @@ public static class DisplayListBuilder
             _currentPath.ClosePath();
         }
 
-        // ── Path painting ─────────────────────────────────────────────────
+        // â”€â”€ Path painting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpFill(FillRule rule)
         {
@@ -793,7 +795,7 @@ public static class DisplayListBuilder
 
         private void OpEndPath()
         {
-            // n — no painting, but a pending clip still applies
+            // n â€” no painting, but a pending clip still applies
             ApplyDeferredClip();
             _currentPath = new Path();
         }
@@ -839,7 +841,7 @@ public static class DisplayListBuilder
             return _state.ActiveClips;
         }
 
-        // ── Path geometry helpers ─────────────────────────────────────────
+        // â”€â”€ Path geometry helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private static Path TransformPath(Path source, Transform ctm)
         {
@@ -872,7 +874,7 @@ public static class DisplayListBuilder
             return result;
         }
 
-        // ── Text operators ────────────────────────────────────────────────
+        // â”€â”€ Text operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpTf(List<PdfToken> operands, PdfDictionary? resources)
         {
@@ -935,7 +937,7 @@ public static class DisplayListBuilder
 
         private void OpTStar()
         {
-            // T* — move to start of next line: 0 -leading Td
+            // T* â€” move to start of next line: 0 -leading Td
             Transform t = new Transform(1, 0, 0, 1, 0, -_state.TextLeading);
             _textLineMatrix = t.Multiply(_textLineMatrix);
             _textMatrix = _textLineMatrix;
@@ -972,7 +974,7 @@ public static class DisplayListBuilder
                 else if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
                 {
                     // Positive displacement = move BACK in text direction.
-                    // Per §9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
+                    // Per Â§9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
                     double disp = ParseDouble(t);
                     double tx = -disp / 1000.0 * _state.FontSize * (_state.HorizontalScaling / 100.0);
                     Transform tr = new Transform(1, 0, 0, 1, tx, 0);
@@ -983,7 +985,7 @@ public static class DisplayListBuilder
 
         private void OpQuote(List<PdfToken> operands)
         {
-            // ' — move to next line and show text
+            // ' â€” move to next line and show text
             OpTStar();
 
             if (operands.Count > 0)
@@ -994,7 +996,7 @@ public static class DisplayListBuilder
 
         private void OpDoubleQuote(List<PdfToken> operands)
         {
-            // " — aw ac string — set word/char spacing, move to next line, show
+            // " â€” aw ac string â€” set word/char spacing, move to next line, show
             if (operands.Count < 3)
             {
                 return;
@@ -1006,7 +1008,7 @@ public static class DisplayListBuilder
             ShowText(ExtractString(operands[2]));
         }
 
-        // ── Text showing ──────────────────────────────────────────────────
+        // â”€â”€ Text showing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void ShowText(string text)
         {
@@ -1026,18 +1028,19 @@ public static class DisplayListBuilder
 
                 if (renderer is null)
                 {
-                    // No font available — approximate advance, no glyph emission
+                    // No font available â€” approximate advance, no glyph emission
                     advance = 0.6 * _state.FontSize;
                 }
                 else
                 {
-                    GlyphOutline scaled = renderer.GetGlyphOutlineForChar(c).Scale(_state.FontSize);
+                    GlyphOutline glyph = renderer.GetGlyphOutlineForChar(c);
+                    GlyphOutline scaled = glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
                     {
                         // Glyph outline is in PDF text space with the
                         // font-size scale already applied. Compose:
-                        //   final = textMatrix · ctm
+                        //   final = textMatrix Â· ctm
                         // and apply to the glyph path.
                         Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
 
@@ -1052,10 +1055,10 @@ public static class DisplayListBuilder
                         _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
                     }
 
-                    advance = scaled.Metrics.AdvanceWidthAt(_state.FontSize);
+                    advance = glyph.Metrics.AdvanceWidthAt(_state.FontSize);
                 }
 
-                // Per §9.4.4: tx = (w + Tc + Tw·(c==space ? 1 : 0)) · Th/100
+                // Per Â§9.4.4: tx = (w + Tc + TwÂ·(c==space ? 1 : 0)) Â· Th/100
                 double extra = _state.CharacterSpacing;
 
                 if (c == ' ')
@@ -1070,7 +1073,7 @@ public static class DisplayListBuilder
             }
         }
 
-        // ── Font resolution ───────────────────────────────────────────────
+        // â”€â”€ Font resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private FontRenderer? GetFontRenderer()
         {
@@ -1087,6 +1090,66 @@ public static class DisplayListBuilder
             FontRenderer? renderer = ResolveFontRenderer();
             _fontCache[_state.FontName] = renderer;
             return renderer;
+        }
+
+        private Chuvadi.Pdf.Fonts.PdfFont? GetPdfFont()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_pdfFontCache.TryGetValue(_state.FontName, out Chuvadi.Pdf.Fonts.PdfFont? cached))
+            {
+                return cached;
+            }
+
+            Chuvadi.Pdf.Fonts.PdfFont? font = ResolvePdfFont();
+            _pdfFontCache[_state.FontName] = font;
+            return font;
+        }
+
+        private Chuvadi.Pdf.Fonts.PdfFont? ResolvePdfFont()
+        {
+            PdfDictionary? resources = _state.FontResources;
+
+            if (resources is null)
+            {
+                return null;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDict))
+            {
+                return null;
+            }
+
+            PdfDictionary? fonts = _objects.ResolveAs<PdfDictionary>(fontDict ?? PdfNull.Value);
+
+            if (fonts is null)
+            {
+                return null;
+            }
+
+            if (!fonts.TryGetValue(PdfName.Intern(_state.FontName), out PdfPrimitive? fontRef))
+            {
+                return null;
+            }
+
+            PdfDictionary? fd = _objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value);
+
+            if (fd is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Chuvadi.Pdf.Fonts.PdfFont.FromDictionary(fd, _objects);
+            }
+            catch (System.Exception)
+            {
+                return null;
+            }
         }
 
         private FontRenderer? ResolveFontRenderer()
@@ -1173,7 +1236,7 @@ public static class DisplayListBuilder
             return null;
         }
 
-        // ── XObject Do ────────────────────────────────────────────────────
+        // â”€â”€ XObject Do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private void OpDo(List<PdfToken> operands, PdfDictionary? resources)
         {
@@ -1233,13 +1296,45 @@ public static class DisplayListBuilder
             }
         }
 
+        // Image-format filters (DCTDecode/JPXDecode) carry the encoded image
+        // bytes directly; they must not go through the sample-filter pipeline.
+        private static bool StreamIsJpegOrJpx(PdfStream stream)
+        {
+            if (!stream.IsFiltered)
+            {
+                return false;
+            }
+
+            PdfPrimitive? filter = stream.Filter;
+
+            if (filter is PdfName name)
+            {
+                string r = FilterRegistry.ResolveAlias(name.Value);
+                return r == "DCTDecode" || r == "JPXDecode";
+            }
+
+            if (filter is PdfArray array && array.Count > 0)
+            {
+                PdfName? last = array.GetAs<PdfName>(array.Count - 1);
+                if (last is null)
+                {
+                    return false;
+                }
+
+                string r = FilterRegistry.ResolveAlias(last.Value);
+                return r == "DCTDecode" || r == "JPXDecode";
+            }
+
+            return false;
+        }
+
         private void EmitImageXObject(PdfStream xobjStream)
         {
             byte[] imageBytes;
 
             try
             {
-                imageBytes = DecodeStream(xobjStream);
+                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : DecodeStream(xobjStream);
             }
             catch (Exception)
             {
@@ -1329,7 +1424,7 @@ public static class DisplayListBuilder
 
             inner = new PageDisplayList(sub._ops, 0, 0);
 
-            // Composition: form-local · outer CTM (row-vector convention)
+            // Composition: form-local Â· outer CTM (row-vector convention)
             Transform composition = formMatrix.Multiply(_state.Ctm);
 
             _ops.Add(new NestedDisplayListOp(inner, composition, SnapshotClips()));
@@ -1345,7 +1440,7 @@ public static class DisplayListBuilder
             };
         }
 
-        // ── Token parsing helpers ─────────────────────────────────────────
+        // â”€â”€ Token parsing helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         private static double ParseDouble(PdfToken token)
         {
@@ -1380,7 +1475,37 @@ public static class DisplayListBuilder
                 ParseDouble(operands[startIndex + 1]));
         }
 
-        private static string ExtractString(PdfToken token)
+        private string ExtractString(PdfToken token)
+        {
+            byte[] raw = ExtractStringBytes(token);
+            Chuvadi.Pdf.Fonts.PdfFont? font = GetPdfFont();
+
+
+            if (font is null)
+            {
+                // No font resolved; fall back to Latin-1 byte interpretation.
+                char[] fallback = new char[raw.Length];
+                for (int i = 0; i < raw.Length; i++)
+                {
+                    fallback[i] = (char)raw[i];
+                }
+                return new string(fallback);
+            }
+
+            // Decode each single-byte code through the font's encoding/ToUnicode
+            // so the glyph lookup receives the correct character. One code maps
+            // to one glyph and one advance for simple fonts, preserving the
+            // per-code advance bookkeeping in ShowText.
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(raw.Length);
+            foreach (byte code in raw)
+            {
+                string u = font.DecodeCode(code);
+                sb.Append(u.Length > 0 ? u[0] : (char)code);
+            }
+            return sb.ToString();
+        }
+
+        private static byte[] ExtractStringBytes(PdfToken token)
         {
             // Literal string and hex string both deliver bytes; we treat
             // bytes as Latin-1 for now (the rasterizer does the same).
@@ -1389,26 +1514,24 @@ public static class DisplayListBuilder
 
             if (token.Type == PdfTokenType.HexString)
             {
-                // Hex bytes are already decoded by the tokenizer
-                char[] chars = new char[bytes.Length];
-
-                for (int i = 0; i < bytes.Length; i++)
-                {
-                    chars[i] = (char)bytes[i];
-                }
-
-                return new string(chars);
+                return bytes;
             }
 
-            // Literal string: handle escape sequences
+            // Literal string: strip wrapping ( ) delimiters if present, then handle escapes
+            if (bytes.Length >= 2 && bytes[0] == (byte)'(' && bytes[bytes.Length - 1] == (byte)')')
+            {
+                byte[] inner = new byte[bytes.Length - 2];
+                System.Array.Copy(bytes, 1, inner, 0, bytes.Length - 2);
+                bytes = inner;
+            }
             return DecodeLiteralString(bytes);
         }
 
-        private static string DecodeLiteralString(byte[] bytes)
+        private static byte[] DecodeLiteralString(byte[] bytes)
         {
             // Bytes from a literal string token may contain backslash
-            // escapes per §7.3.4.2. We decode common ones.
-            System.Text.StringBuilder sb = new System.Text.StringBuilder(bytes.Length);
+            // escapes per Â§7.3.4.2. We decode common ones.
+            System.Collections.Generic.List<byte> sb = new System.Collections.Generic.List<byte>(bytes.Length);
 
             for (int i = 0; i < bytes.Length; i++)
             {
@@ -1420,21 +1543,21 @@ public static class DisplayListBuilder
 
                     switch (next)
                     {
-                        case (byte)'n': sb.Append('\n'); i++; continue;
-                        case (byte)'r': sb.Append('\r'); i++; continue;
-                        case (byte)'t': sb.Append('\t'); i++; continue;
-                        case (byte)'b': sb.Append('\b'); i++; continue;
-                        case (byte)'f': sb.Append('\f'); i++; continue;
-                        case (byte)'(': sb.Append('('); i++; continue;
-                        case (byte)')': sb.Append(')'); i++; continue;
-                        case (byte)'\\': sb.Append('\\'); i++; continue;
+                        case (byte)'n': sb.Add((byte)'\n'); i++; continue;
+                        case (byte)'r': sb.Add((byte)'\r'); i++; continue;
+                        case (byte)'t': sb.Add((byte)'\t'); i++; continue;
+                        case (byte)'b': sb.Add((byte)'\b'); i++; continue;
+                        case (byte)'f': sb.Add((byte)'\f'); i++; continue;
+                        case (byte)'(': sb.Add((byte)'('); i++; continue;
+                        case (byte)')': sb.Add((byte)')'); i++; continue;
+                        case (byte)'\\': sb.Add((byte)'\\'); i++; continue;
                     }
                 }
 
-                sb.Append((char)b);
+                sb.Add(b);
             }
 
-            return sb.ToString();
+            return sb.ToArray();
         }
 
         private static string ExtractName(PdfToken token)
