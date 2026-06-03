@@ -78,7 +78,7 @@ public sealed class RenderCommand : ICommand
 
         if (p.Positional.Count == 0)
         {
-            stderr.WriteLine("Usage: chuvadi render <input.pdf> --output <out.png> [--page N] [--dpi 150] [--supersample 3]");
+            stderr.WriteLine("Usage: chuvadi render <input.pdf> --output <out.png> [--page N] [--dpi 150] [--supersample 3] [--aa 0|1] [--gamma 0|1]");
             return 2;
         }
 
@@ -88,6 +88,7 @@ public sealed class RenderCommand : ICommand
         double dpi = double.Parse(p.Get("dpi", "150")!, CultureInfo.InvariantCulture);
         int superSample = int.Parse(p.Get("supersample", "1")!, CultureInfo.InvariantCulture);
         bool antiAlias = p.Get("aa", "1") != "0";
+        bool gammaCorrect = p.Get("gamma", "1") != "0";
 
         using (FileStream fs = File.OpenRead(inputPath))
         using (PdfDocument doc = PdfDocument.Open(fs, leaveOpen: false))
@@ -103,6 +104,7 @@ public sealed class RenderCommand : ICommand
                 Dpi = dpi,
                 SuperSample = superSample,
                 AntiAlias = antiAlias,
+                GammaCorrect = gammaCorrect,
             };
 
             PageRasterizer rasterizer = new PageRasterizer(doc.Objects, options);

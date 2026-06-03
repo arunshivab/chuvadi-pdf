@@ -117,10 +117,28 @@ public sealed class PixelBuffer
 
     /// <summary>
     /// Blends a colour over the existing pixel using standard alpha compositing
-    /// (Porter-Duff "over" operation).
-    /// PDF 32000-1:2008 §11.3 — Basic compositing formula.
+    /// (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing.
+    /// PDF 32000-1:2008 -11.3 - Basic compositing formula.
     /// </summary>
     public void BlendPixel(int x, int y, ColorF color)
+    {
+        BlendPixel(x, y, color, gammaCorrect: true);
+    }
+
+    /// <summary>
+    /// Blends a colour over the existing pixel using standard alpha compositing
+    /// (Porter-Duff "over" operation). When <paramref name="gammaCorrect"/> is
+    /// true the colour channels are mixed in linear light (sRGB decoded before
+    /// and re-encoded after the blend), which gives anti-aliased edges their
+    /// correct perceptual weight; when false the channels are mixed directly in
+    /// sRGB space (the legacy behaviour).
+    /// PDF 32000-1:2008 -11.3 - Basic compositing formula.
+    /// </summary>
+    /// <param name="x">Destination pixel X coordinate.</param>
+    /// <param name="y">Destination pixel Y coordinate.</param>
+    /// <param name="color">Source colour to blend over the destination.</param>
+    /// <param name="gammaCorrect">Whether to mix channels in linear light.</param>
+    public void BlendPixel(int x, int y, ColorF color, bool gammaCorrect)
     {
         if (x < 0 || x >= Width || y < 0 || y >= Height)
         {
@@ -151,15 +169,39 @@ public sealed class PixelBuffer
         }
 
         float invOutA = 1f / outA;
+        float weight = dstA * (1f - srcA);
+        float outR;
+        float outG;
+        float outB;
 
-        float outR = (rgb.R * srcA + (_pixels[offset + 2] / 255f) * dstA * (1f - srcA)) * invOutA;
-        float outG = (rgb.G * srcA + (_pixels[offset + 1] / 255f) * dstA * (1f - srcA)) * invOutA;
-        float outB = (rgb.B * srcA + (_pixels[offset] / 255f) * dstA * (1f - srcA)) * invOutA;
+        if (gammaCorrect)
+        {
+            float srcRl = Srgb.ToLinear(rgb.R);
+            float srcGl = Srgb.ToLinear(rgb.G);
+            float srcBl = Srgb.ToLinear(rgb.B);
+            float dstRl = Srgb.ByteToLinear(_pixels[offset + 2]);
+            float dstGl = Srgb.ByteToLinear(_pixels[offset + 1]);
+            float dstBl = Srgb.ByteToLinear(_pixels[offset]);
 
-        _pixels[offset] = (byte)(outB * 255f + 0.5f);
-        _pixels[offset + 1] = (byte)(outG * 255f + 0.5f);
-        _pixels[offset + 2] = (byte)(outR * 255f + 0.5f);
-        _pixels[offset + 3] = (byte)(outA * 255f + 0.5f);
+            float outRl = ((srcRl * srcA) + (dstRl * weight)) * invOutA;
+            float outGl = ((srcGl * srcA) + (dstGl * weight)) * invOutA;
+            float outBl = ((srcBl * srcA) + (dstBl * weight)) * invOutA;
+
+            outR = Srgb.ToSrgb(outRl);
+            outG = Srgb.ToSrgb(outGl);
+            outB = Srgb.ToSrgb(outBl);
+        }
+        else
+        {
+            outR = ((rgb.R * srcA) + ((_pixels[offset + 2] / 255f) * weight)) * invOutA;
+            outG = ((rgb.G * srcA) + ((_pixels[offset + 1] / 255f) * weight)) * invOutA;
+            outB = ((rgb.B * srcA) + ((_pixels[offset] / 255f) * weight)) * invOutA;
+        }
+
+        _pixels[offset] = (byte)((outB * 255f) + 0.5f);
+        _pixels[offset + 1] = (byte)((outG * 255f) + 0.5f);
+        _pixels[offset + 2] = (byte)((outR * 255f) + 0.5f);
+        _pixels[offset + 3] = (byte)((outA * 255f) + 0.5f);
     }
 
     /// <summary>Fills the entire buffer with the given colour.</summary>

@@ -89,7 +89,22 @@ Sets a pixel at (x, y) from packed BGRA bytes. Out-of-range coordinates are sile
 void BlendPixel(int x, int y, ColorF color)
 ```
 
-Blends a colour over the existing pixel using standard alpha compositing (Porter-Duff "over" operation). PDF 32000-1:2008 §11.3 — Basic compositing formula.
+Blends a colour over the existing pixel using standard alpha compositing (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing. PDF 32000-1:2008 -11.3 - Basic compositing formula.
+
+### `BlendPixel`
+
+```csharp
+void BlendPixel(int x, int y, ColorF color, bool gammaCorrect)
+```
+
+Blends a colour over the existing pixel using standard alpha compositing (Porter-Duff "over" operation). When `gammaCorrect` is true the colour channels are mixed in linear light (sRGB decoded before and re-encoded after the blend), which gives anti-aliased edges their correct perceptual weight; when false the channels are mixed directly in sRGB space (the legacy behaviour). PDF 32000-1:2008 -11.3 - Basic compositing formula.
+
+**Parameters**
+
+- `x` — Destination pixel X coordinate.
+- `y` — Destination pixel Y coordinate.
+- `color` — Source colour to blend over the destination.
+- `gammaCorrect` — Whether to mix channels in linear light.
 
 ### `Clear`
 
