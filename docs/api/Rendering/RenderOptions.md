@@ -66,6 +66,14 @@ bool AntiAlias
 
 Gets or initialises whether the scanline fill computes fractional pixel coverage (anti-aliasing). When false, fills are binary (pixel-identical to the original rasterizer). Default: true.
 
+### `GammaCorrect`
+
+```csharp
+bool GammaCorrect
+```
+
+Gets or initialises whether anti-aliased fills blend colour channels in linear light (gamma-correct). When false, channels are blended directly in sRGB space (the legacy behaviour, which renders edges slightly lighter). Has no effect when `AntiAlias` is false. Default: true.
+
 ### `Scale`
 
 ```csharp

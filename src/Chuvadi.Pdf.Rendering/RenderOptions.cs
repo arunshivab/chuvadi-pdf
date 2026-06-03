@@ -24,6 +24,7 @@ public sealed class RenderOptions
         FlatnessTolerance = 0.25;
         SuperSample = 1;
         AntiAlias = true;
+        GammaCorrect = true;
     }
 
     /// <summary>
@@ -86,6 +87,15 @@ public sealed class RenderOptions
     /// (pixel-identical to the original rasterizer). Default: true.
     /// </summary>
     public bool AntiAlias { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether anti-aliased fills blend colour channels
+    /// in linear light (gamma-correct). When false, channels are blended
+    /// directly in sRGB space (the legacy behaviour, which renders edges
+    /// slightly lighter). Has no effect when <see cref="AntiAlias"/> is false.
+    /// Default: true.
+    /// </summary>
+    public bool GammaCorrect { get; init; }
 
     /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.

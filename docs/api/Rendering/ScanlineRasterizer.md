@@ -25,6 +25,14 @@ bool AntiAlias
 
 Gets or sets whether the fill computes fractional pixel coverage (anti-aliasing). Default: false (binary fill, pixel-identical to the original rasterizer).
 
+### `GammaCorrect`
+
+```csharp
+bool GammaCorrect
+```
+
+Gets or sets whether anti-aliased fills blend colour channels in linear light (gamma-correct). Forwarded to `PixelBuffer.BlendPixel(int, int, ColorF, bool)`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs`](../../../src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs)_

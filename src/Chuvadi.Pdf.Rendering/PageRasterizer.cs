@@ -66,7 +66,7 @@ public sealed class PageRasterizer
     {
         _objects = objects ?? throw new ArgumentNullException(nameof(objects));
         _options = options ?? RenderOptions.Default;
-        _scanline = new ScanlineRasterizer { AntiAlias = _options.AntiAlias };
+        _scanline = new ScanlineRasterizer { AntiAlias = _options.AntiAlias, GammaCorrect = _options.GammaCorrect };
         _stroke = new StrokeExpander();
     }
 

@@ -408,6 +408,44 @@ public sealed class PixelBufferTests
         g.Should().Be(0);
         b.Should().Be(0);
     }
+
+    [Fact]
+    public void BlendPixel_GammaCorrect_ProducesLighterEdgeThanNaive()
+    {
+        // Blending 50%-alpha black over white in linear light leaves more of
+        // the white background showing through than a naive sRGB-space blend,
+        // so the gamma-correct result is the lighter (higher) byte value.
+        PixelBuffer gamma = new PixelBuffer(4, 4);
+        gamma.ClearWhite();
+        gamma.BlendPixel(2, 2, ColorF.FromRgb(0f, 0f, 0f, 0.5f), gammaCorrect: true);
+
+        PixelBuffer naive = new PixelBuffer(4, 4);
+        naive.ClearWhite();
+        naive.BlendPixel(2, 2, ColorF.FromRgb(0f, 0f, 0f, 0.5f), gammaCorrect: false);
+
+        (byte gb, byte gg, byte gr, byte _) = gamma.GetPixelBgra(2, 2);
+        (byte nb, byte ng, byte nr, byte _) = naive.GetPixelBgra(2, 2);
+
+        gr.Should().BeGreaterThan(nr);
+        gg.Should().BeGreaterThan(ng);
+        gb.Should().BeGreaterThan(nb);
+    }
+
+    [Fact]
+    public void BlendPixel_GammaCorrect_MatchesLinearLightValue()
+    {
+        // 50%-alpha black over white, mixed in linear light: out_linear = 0.5,
+        // re-encoded to sRGB = 188 (+/- 1 for rounding). The naive sRGB blend
+        // would give 128, so this pins the gamma-correct math specifically.
+        PixelBuffer buf = new PixelBuffer(4, 4);
+        buf.ClearWhite();
+        buf.BlendPixel(2, 2, ColorF.FromRgb(0f, 0f, 0f, 0.5f), gammaCorrect: true);
+
+        (byte b, byte g, byte r, byte _) = buf.GetPixelBgra(2, 2);
+        r.Should().BeInRange(187, 189);
+        g.Should().BeInRange(187, 189);
+        b.Should().BeInRange(187, 189);
+    }
 }
 
 // ── PathFlattener ─────────────────────────────────────────────────────────

@@ -48,6 +48,12 @@ public sealed class ScanlineRasterizer
     public bool AntiAlias { get; set; }
 
     /// <summary>
+    /// Gets or sets whether anti-aliased fills blend colour channels in linear
+    /// light (gamma-correct). Forwarded to <see cref="PixelBuffer.BlendPixel(int, int, ColorF, bool)"/>.
+    /// </summary>
+    public bool GammaCorrect { get; set; }
+
+    /// <summary>
     /// Fills the given sub-paths into the pixel buffer with the given colour
     /// and fill rule.
     /// </summary>
@@ -131,7 +137,7 @@ public sealed class ScanlineRasterizer
 
         if (AntiAlias)
         {
-            FillAntiAliased(buffer, edges, color, fillRule, clip, yMin, yMax);
+            FillAntiAliased(buffer, edges, color, fillRule, clip, yMin, yMax, GammaCorrect);
             return;
         }
 
@@ -168,7 +174,7 @@ public sealed class ScanlineRasterizer
     private static void FillAntiAliased(
         PixelBuffer buffer, List<Edge> edges,
         ColorF color, FillRule fillRule, ClipRegion? clip,
-        int yMin, int yMax)
+        int yMin, int yMax, bool gammaCorrect)
     {
         ColorF rgb = color.ToRgb();
         float baseAlpha = rgb.Alpha;
@@ -231,7 +237,7 @@ public sealed class ScanlineRasterizer
                 }
 
                 ColorF px = ColorF.FromRgb(rgb.R, rgb.G, rgb.B, baseAlpha * cov);
-                buffer.BlendPixel(x, y, px);
+                buffer.BlendPixel(x, y, px, gammaCorrect);
             }
         }
     }
