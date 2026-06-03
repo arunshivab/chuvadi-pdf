@@ -11,6 +11,41 @@ numbered A01..ANN).
 
 ---
 
+## [2.4.0] - 2026-06-04
+
+### Added
+- **TrueType bytecode hinting — Stage 1 (raw-glyph foundation)** in
+  `Chuvadi.Pdf.Fonts.Rendering`. Additive groundwork for a spec-complete
+  TrueType instruction interpreter; no interpreter yet, and render output is
+  unchanged
+  - `TrueTypeLoader.ParseOffsetTable` now captures the `cvt `, `fpgm`, and
+    `prep` table offsets and lengths, with internal accessors
+    `GetControlValueTable`, `GetFontProgram`, and `GetControlValueProgram`
+    returning the raw (unparsed) table bytes on demand
+  - New internal `BuildRawGlyph(int)` parse path producing an un-cubicized
+    point set in font design units — on/off-curve flags, contour ends, the
+    glyph's captured instruction bytecode, and four appended phantom points —
+    alongside the existing cubic `GetGlyphOutline` path, which stays the
+    rendering path. Composite glyphs return null (deferred to a later stage);
+    empty glyphs return phantom points only
+  - New internal `RawGlyph` model in the new
+    `Chuvadi.Pdf.Fonts.Rendering.Hinting` sub-namespace
+  - New `RenderOptions.Hinting` flag (default `false`), currently unconsumed;
+    it gates the hinted pipeline once later stages wire it in
+
+### Notes
+- Purely additive and inert: nothing in the render path calls the new
+  members, the 9-page reference CV renders identically, and `Hinting` has no
+  effect yet
+- No new tests this stage — the foundation is exercised once the VM skeleton
+  (Stage 2) calls into it
+- Stage-1 simplifications: vertical phantom points (pp3/pp4) are synthesised
+  pending `vmtx`/`vhea` parsing; touched-flag arrays for IUP live on the
+  interpreter working set rather than the parsed model
+- Architecture and staging rationale: decision log A20
+
+---
+
 ## [2.1.0] - 2026-05-22
 
 ### Added

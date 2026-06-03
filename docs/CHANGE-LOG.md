@@ -516,3 +516,41 @@ opens an issue on regression.
 **Files affected:** `benchmarks/Chuvadi.Benchmarks/**`, solution file.
 
 ---
+
+## A20 — TrueType Bytecode Hinting: Architecture and Staging
+
+**Date:** 2026-06-04
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` — TrueType instruction interpreter
+**Rationale:** Small text from embedded TrueType fonts is blurry without
+grid-fitting. A spec-complete bytecode hinting interpreter is the fix, but the
+existing glyph pipeline cubicizes immediately and discards the raw point data
+and instruction bytecode that hinting requires.
+
+Key findings and decisions:
+
+- `TrueTypeLoader.BuildSimpleGlyph` consumes raw points inline and emits a
+  cubic `Path`, reads `instructionLength` only to skip the bytecode, and never
+  parses `cvt `/`fpgm`/`prep`. Hinting therefore cannot be a post-pass on
+  `GlyphOutline`; it needs a parallel raw-glyph pipeline inside the loader:
+  parse → raw point set (not cubicized) → scale to 26.6 → run prep per size →
+  run glyph instructions → then cubicize the hinted points.
+
+- **Decision A — Fixed-point math (26.6 / F2Dot14), not double.** Spec rounding
+  behaviour is defined in fixed-point and hint programs assume it; matching
+  FreeType/the spec requires fixed-point throughout.
+
+- **Decision B — `RenderOptions.Hinting` ships default OFF through all stages**,
+  flipped on only after Stage 7 visual confirmation, so partial interpreters
+  never touch real output.
+
+- **Staging:** seven sequential PRs, each building clean. Stage 1 (v2.4.0) lays
+  the foundation — `cvt `/`fpgm`/`prep` parsing, the internal `RawGlyph` model
+  in the new `Chuvadi.Pdf.Fonts.Rendering.Hinting` sub-namespace, an internal
+  non-cubicizing `BuildRawGlyph`, and the inert `Hinting` flag — with render
+  output unchanged.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/RawGlyph.cs`,
+`src/Chuvadi.Pdf.Rendering/RenderOptions.cs`.
+
+---

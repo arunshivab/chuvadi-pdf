@@ -1,0 +1,26 @@
+feat(fonts): TT hinting stage 1 - raw-glyph foundation
+
+Foundation for the TrueType bytecode hinting interpreter. Purely additive;
+no interpreter yet, render output unchanged (9-page CV SVGs verified
+identical), and RenderOptions.Hinting is inert.
+
+TrueTypeLoader:
+- ParseOffsetTable now captures cvt /fpgm/prep table offsets and lengths.
+- Add internal accessors GetControlValueTable / GetFontProgram /
+  GetControlValueProgram that lazily slice the raw table bytes.
+- Add internal BuildRawGlyph: non-cubicized point set in font units, plus
+  on/off-curve flags, contour ends, the captured instruction bytecode, and
+  four appended phantom points. Reuses ParseFlags/ParseCoordinates.
+  Composite glyphs return null (deferred to a later stage); empty glyphs
+  return phantoms only.
+
+New model:
+- internal RawGlyph in Chuvadi.Pdf.Fonts.Rendering.Hinting (new sub-namespace,
+  no csproj change).
+
+RenderOptions:
+- Add public Hinting flag, default false, currently unconsumed.
+
+Known stage-1 simplifications: vertical phantom points (pp3/pp4) are
+synthesised pending vmtx/vhea parsing; touched-flag arrays live on the
+interpreter working set, not the parsed model.
