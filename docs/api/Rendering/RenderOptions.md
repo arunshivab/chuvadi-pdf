@@ -74,6 +74,14 @@ bool GammaCorrect
 
 Gets or initialises whether anti-aliased fills blend colour channels in linear light (gamma-correct). When false, channels are blended directly in sRGB space (the legacy behaviour, which renders edges slightly lighter). Has no effect when `AntiAlias` is false. Default: true.
 
+### `Hinting`
+
+```csharp
+bool Hinting
+```
+
+Gets or initialises whether embedded TrueType fonts are grid-fitted using their bytecode hinting instructions before rasterization. When false, glyph outlines are scaled directly with no hinting (the current behaviour). Default: false.
+
 ### `Scale`
 
 ```csharp
