@@ -25,6 +25,7 @@ public sealed class RenderOptions
         SuperSample = 1;
         AntiAlias = true;
         GammaCorrect = true;
+        Hinting = false;
     }
 
     /// <summary>
@@ -96,6 +97,14 @@ public sealed class RenderOptions
     /// Default: true.
     /// </summary>
     public bool GammaCorrect { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether embedded TrueType fonts are grid-fitted using
+    /// their bytecode hinting instructions before rasterization. When false,
+    /// glyph outlines are scaled directly with no hinting (the current
+    /// behaviour). Default: false.
+    /// </summary>
+    public bool Hinting { get; init; }
 
     /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.

@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Chuvadi.Pdf.Fonts.Rendering.Hinting;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Fonts.Rendering;
@@ -47,6 +48,15 @@ public sealed class TrueTypeLoader
     private uint _glyfOffset;
     private uint _hmtxOffset;
     private uint _cmapOffset;
+
+    // Parsed hinting-table offsets and lengths (cvt , fpgm, prep). Captured in
+    // Stage 1 only; the bytecode interpreter consumes them in a later stage.
+    private uint _cvtOffset;
+    private uint _cvtLength;
+    private uint _fpgmOffset;
+    private uint _fpgmLength;
+    private uint _prepOffset;
+    private uint _prepLength;
 
     // Parsed header values
     private int _unitsPerEm;
@@ -179,6 +189,7 @@ public sealed class TrueTypeLoader
             uint entryOffset = 12 + (uint)(i * 16);
             string tag = ReadTag(entryOffset);
             uint tableOffset = ReadUInt32(entryOffset + 8);
+            uint tableLength = ReadUInt32(entryOffset + 12);
 
             switch (tag)
             {
@@ -189,6 +200,18 @@ public sealed class TrueTypeLoader
                 case "glyf": _glyfOffset = tableOffset; break;
                 case "hmtx": _hmtxOffset = tableOffset; break;
                 case "cmap": _cmapOffset = tableOffset; break;
+                case "cvt ":
+                    _cvtOffset = tableOffset;
+                    _cvtLength = tableLength;
+                    break;
+                case "fpgm":
+                    _fpgmOffset = tableOffset;
+                    _fpgmLength = tableLength;
+                    break;
+                case "prep":
+                    _prepOffset = tableOffset;
+                    _prepLength = tableLength;
+                    break;
             }
         }
 
@@ -780,5 +803,203 @@ public sealed class TrueTypeLoader
     {
         EnsureReadable(offset, 1);
         return _data[offset];
+    }
+
+    // ── Hinting foundation (Stage 1) ──────────────────────────────────────
+    // The members below feed the TrueType bytecode hinting interpreter. They
+    // are not used by the default (non-hinted) rendering pipeline; the cubic
+    // GlyphOutline path above remains the rendering path until hinting is
+    // wired in. Output is therefore identical to the pre-hinting build.
+
+    /// <summary>
+    /// Returns a copy of the raw bytes of the <c>cvt </c> (Control Value) table,
+    /// or <c>null</c> when the font has none. The bytes are an array of
+    /// big-endian <c>int16</c> FUnit values; they are neither parsed nor scaled
+    /// here. Consumed by the bytecode hinting interpreter in a later stage.
+    /// </summary>
+    internal byte[]? GetControlValueTable()
+    {
+        if (_cvtOffset == 0 || _cvtLength == 0)
+        {
+            return null;
+        }
+
+        return ReadBytes(_cvtOffset, (int)_cvtLength);
+    }
+
+    /// <summary>
+    /// Returns a copy of the raw bytes of the <c>fpgm</c> (Font Program) table,
+    /// or <c>null</c> when absent. The font program runs once before any glyph
+    /// is hinted. Not interpreted here.
+    /// </summary>
+    internal byte[]? GetFontProgram()
+    {
+        if (_fpgmOffset == 0 || _fpgmLength == 0)
+        {
+            return null;
+        }
+
+        return ReadBytes(_fpgmOffset, (int)_fpgmLength);
+    }
+
+    /// <summary>
+    /// Returns a copy of the raw bytes of the <c>prep</c> (Control Value Program)
+    /// table, or <c>null</c> when absent. It runs once per point size, after
+    /// <c>fpgm</c>, to prepare the CVT for that size. Not interpreted here.
+    /// </summary>
+    internal byte[]? GetControlValueProgram()
+    {
+        if (_prepOffset == 0 || _prepLength == 0)
+        {
+            return null;
+        }
+
+        return ReadBytes(_prepOffset, (int)_prepLength);
+    }
+
+    /// <summary>
+    /// Parses a glyph into its raw, un-cubicized TrueType point set: on/off-curve
+    /// points in font design units, contour end indices, the glyph's instruction
+    /// bytecode, and four appended phantom points. This is the input the bytecode
+    /// hinting interpreter requires; the existing
+    /// <see cref="GetGlyphOutline(int)"/> cubic path remains the rendering path.
+    /// </summary>
+    /// <param name="glyphId">Zero-based glyph index.</param>
+    /// <returns>
+    /// The raw glyph, or <c>null</c> for composite glyphs (composite hinting is
+    /// added in a later stage). Empty glyphs return a <see cref="RawGlyph"/> with
+    /// no contours but with the four phantom points populated.
+    /// </returns>
+    /// <exception cref="FontRenderingException">
+    /// Thrown when <paramref name="glyphId"/> is out of range.
+    /// </exception>
+    internal RawGlyph? BuildRawGlyph(int glyphId)
+    {
+        if (glyphId < 0 || glyphId >= _numGlyphs)
+        {
+            throw new FontRenderingException(
+                $"Glyph index {glyphId} is out of range [0, {_numGlyphs}).");
+        }
+
+        uint offset = GetGlyfOffset(glyphId);
+
+        if (offset == 0)
+        {
+            // Empty / whitespace glyph: no contours, phantoms still carry advance.
+            return BuildRawGlyphPhantomsOnly(glyphId);
+        }
+
+        int numberOfContours = ReadInt16(offset);
+
+        if (numberOfContours < 0)
+        {
+            // Composite glyph — deferred to the composite-hinting stage.
+            return null;
+        }
+
+        if (numberOfContours == 0)
+        {
+            return BuildRawGlyphPhantomsOnly(glyphId);
+        }
+
+        int[] endPtsOfContours = new int[numberOfContours];
+
+        for (int i = 0; i < numberOfContours; i++)
+        {
+            endPtsOfContours[i] = ReadUInt16(offset + 10 + (uint)(i * 2));
+        }
+
+        int numPoints = endPtsOfContours[numberOfContours - 1] + 1;
+
+        int instructionLength = ReadUInt16(offset + 10 + (uint)(numberOfContours * 2));
+        uint instructionOffset = offset + 10 + (uint)(numberOfContours * 2) + 2;
+        byte[] instructions = ReadBytes(instructionOffset, instructionLength);
+
+        uint flagsOffset = instructionOffset + (uint)instructionLength;
+
+        byte[] flags = ParseFlags(flagsOffset, numPoints, out uint afterFlags);
+        int[] xCoords = ParseCoordinates(afterFlags, flags, numPoints, true, out uint afterX);
+        int[] yCoords = ParseCoordinates(afterX, flags, numPoints, false, out uint _);
+
+        int total = numPoints + 4;
+        int[] xs = new int[total];
+        int[] ys = new int[total];
+        bool[] onCurve = new bool[total];
+
+        for (int i = 0; i < numPoints; i++)
+        {
+            xs[i] = xCoords[i];
+            ys[i] = yCoords[i];
+            onCurve[i] = (flags[i] & 0x01) != 0;
+        }
+
+        AppendPhantomPoints(glyphId, xs, ys, onCurve, numPoints);
+
+        return new RawGlyph(xs, ys, onCurve, endPtsOfContours, instructions, numPoints);
+    }
+
+    private RawGlyph BuildRawGlyphPhantomsOnly(int glyphId)
+    {
+        int[] xs = new int[4];
+        int[] ys = new int[4];
+        bool[] onCurve = new bool[4];
+        AppendPhantomPoints(glyphId, xs, ys, onCurve, 0);
+        return new RawGlyph(xs, ys, onCurve, Array.Empty<int>(), Array.Empty<byte>(), 0);
+    }
+
+    private void AppendPhantomPoints(
+        int glyphId, int[] xs, int[] ys, bool[] onCurve, int realPointCount)
+    {
+        GlyphMetrics metrics = GetGlyphMetrics(glyphId);
+        RectangleF bounds = GetGlyfBounds(glyphId);
+
+        int xMin = (int)bounds.X;
+        int yMax = (int)(bounds.Y + bounds.Height);
+        int advanceWidth = metrics.AdvanceWidth;
+        int leftSideBearing = metrics.LeftSideBearing;
+
+        // Horizontal phantom points (well-defined by hmtx):
+        //   pp1 = glyph origin  = (xMin - lsb, 0)
+        //   pp2 = advance point = (pp1.x + advanceWidth, 0)
+        int pp1x = xMin - leftSideBearing;
+
+        // Vertical phantom points: this loader parses no vmtx/vhea, so the
+        // vertical metrics are SYNTHESISED for now — pp3 at the glyph top and
+        // pp4 one em below. Vertical hinting is not yet a target; revisit when
+        // vmtx parsing lands. Horizontal hinting (the common case) uses pp1/pp2.
+        xs[realPointCount + 0] = pp1x;
+        ys[realPointCount + 0] = 0;
+        xs[realPointCount + 1] = pp1x + advanceWidth;
+        ys[realPointCount + 1] = 0;
+        xs[realPointCount + 2] = 0;
+        ys[realPointCount + 2] = yMax;
+        xs[realPointCount + 3] = 0;
+        ys[realPointCount + 3] = yMax - _unitsPerEm;
+
+        // Phantom points are not contour points; the on-curve flag is meaningless
+        // for them. Marked true so they are never mistaken for Bézier controls.
+        onCurve[realPointCount + 0] = true;
+        onCurve[realPointCount + 1] = true;
+        onCurve[realPointCount + 2] = true;
+        onCurve[realPointCount + 3] = true;
+    }
+
+    private byte[] ReadBytes(uint offset, int length)
+    {
+        if (length < 0)
+        {
+            throw new FontRenderingException(
+                $"Cannot read a negative number of bytes ({length}).");
+        }
+
+        if (length == 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        EnsureReadable(offset, (uint)length);
+        byte[] result = new byte[length];
+        Array.Copy(_data, (int)offset, result, 0, length);
+        return result;
     }
 }
