@@ -279,6 +279,139 @@ public sealed class PageRasterizer
         }
     }
 
+    // Snaps thin axis-aligned rectangles (hairline table borders) onto the
+    // pixel grid so a sub-pixel-thin fill renders as one crisp, fully-covered
+    // line instead of splitting its coverage faintly across two pixel rows or
+    // columns. Only near-axis-aligned rectangles thinner than ~1.5px in one
+    // dimension are affected; all other fills pass through unchanged.
+    private static void SnapThinAxisAlignedRects(List<List<PointF>> subPaths)
+    {
+        const double thinThreshold = 1.5;
+
+        foreach (List<PointF> sp in subPaths)
+        {
+            int n = sp.Count;
+
+            // A rectangle is 4 distinct points, optionally repeating the first.
+            bool closed = n == 5 && sp[0].X == sp[4].X && sp[0].Y == sp[4].Y;
+
+            if (n != 4 && !closed)
+            {
+                continue;
+            }
+
+            double minX = sp[0].X, maxX = sp[0].X, minY = sp[0].Y, maxY = sp[0].Y;
+
+            for (int i = 1; i < 4; i++)
+            {
+                if (sp[i].X < minX) { minX = sp[i].X; }
+                if (sp[i].X > maxX) { maxX = sp[i].X; }
+                if (sp[i].Y < minY) { minY = sp[i].Y; }
+                if (sp[i].Y > maxY) { maxY = sp[i].Y; }
+            }
+
+            // Verify every vertex sits on a corner of the bounding box, i.e.
+            // the shape is an axis-aligned rectangle (no diagonal edges).
+            bool axisAligned = true;
+
+            for (int i = 0; i < 4; i++)
+            {
+                bool onX = sp[i].X == minX || sp[i].X == maxX;
+                bool onY = sp[i].Y == minY || sp[i].Y == maxY;
+
+                if (!onX || !onY)
+                {
+                    axisAligned = false;
+                    break;
+                }
+            }
+
+            if (!axisAligned)
+            {
+                continue;
+            }
+
+            double width = maxX - minX;
+            double height = maxY - minY;
+
+            // Thin horizontal bar: snap the Y extent onto one pixel row.
+            if (height < thinThreshold && width >= thinThreshold)
+            {
+                double center = (minY + maxY) / 2.0;
+                double top = Math.Floor(center);
+                double bottom = top + 1.0;
+                ReplaceY(sp, minY, top);
+                ReplaceY(sp, maxY, bottom);
+            }
+            // Thin vertical bar: snap the X extent onto one pixel column.
+            else if (width < thinThreshold && height >= thinThreshold)
+            {
+                double center = (minX + maxX) / 2.0;
+                double left = Math.Floor(center);
+                double right = left + 1.0;
+                ReplaceX(sp, minX, left);
+                ReplaceX(sp, maxX, right);
+            }
+        }
+    }
+
+    private static void ReplaceX(List<PointF> sp, double oldX, double newX)
+    {
+        for (int i = 0; i < sp.Count; i++)
+        {
+            if (sp[i].X == oldX)
+            {
+                sp[i] = new PointF(newX, sp[i].Y);
+            }
+        }
+    }
+
+    private static void ReplaceY(List<PointF> sp, double oldY, double newY)
+    {
+        for (int i = 0; i < sp.Count; i++)
+        {
+            if (sp[i].Y == oldY)
+            {
+                sp[i] = new PointF(sp[i].X, newY);
+            }
+        }
+    }
+
+    // Snaps thin axis-aligned stroke segments onto pixel centres so a
+    // hairline stroke renders as a single crisp, fully-covered pixel line
+    // rather than splitting its coverage faintly across two rows/columns.
+    private static void SnapThinStrokePath(List<List<PointF>> subPaths)
+    {
+        const double tolerance = 0.01;
+
+        foreach (List<PointF> sp in subPaths)
+        {
+            for (int i = 0; i < sp.Count - 1; i++)
+            {
+                PointF a = sp[i];
+                PointF b = sp[i + 1];
+
+                double dx = Math.Abs(a.X - b.X);
+                double dy = Math.Abs(a.Y - b.Y);
+
+                if (dy <= tolerance && dx > tolerance)
+                {
+                    // Horizontal segment: snap its shared Y to a pixel centre.
+                    double snapY = Math.Floor(a.Y) + 0.5;
+                    sp[i] = new PointF(a.X, snapY);
+                    sp[i + 1] = new PointF(b.X, snapY);
+                }
+                else if (dx <= tolerance && dy > tolerance)
+                {
+                    // Vertical segment: snap its shared X to a pixel centre.
+                    double snapX = Math.Floor(a.X) + 0.5;
+                    sp[i] = new PointF(snapX, a.Y);
+                    sp[i + 1] = new PointF(snapX, b.Y);
+                }
+            }
+        }
+    }
+
     private void PaintFillOp(
         FillPathOp op, PixelBuffer buffer,
         double pageHeight, Transform outerTransform)
@@ -286,6 +419,7 @@ public sealed class PageRasterizer
         GraphicsPath device = UserSpacePathToDevice(op.Path, pageHeight, outerTransform);
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
+        SnapThinAxisAlignedRects(subPaths);
         ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
         _scanline.Fill(buffer, subPaths, op.Color, op.Rule, clip);
     }
@@ -299,9 +433,23 @@ public sealed class PageRasterizer
         List<List<PointF>> subPaths = flattener.Flatten(device);
 
         // Stroke width in op.Style is in PDF user-space points; scale to device.
+        double deviceWidth = op.Style.Width * _options.Scale;
+
+        // Hairline crispening: a thin axis-aligned stroke (e.g. a table-cell
+        // border drawn as "re S") whose 1px-wide body straddles a pixel
+        // boundary splits its coverage across two rows/columns and renders
+        // faint or broken. Snap each axis-aligned segment centre onto a pixel
+        // centre and clamp the width to at least one device pixel so the line
+        // lands fully within a single row/column at full coverage.
+        if (deviceWidth <= 1.5)
+        {
+            SnapThinStrokePath(subPaths);
+            deviceWidth = Math.Max(1.0, deviceWidth);
+        }
+
         StrokeStyle deviceStyle = new StrokeStyle
         {
-            Width = op.Style.Width * _options.Scale,
+            Width = deviceWidth,
             Cap = op.Style.Cap,
             Join = op.Style.Join,
             MiterLimit = op.Style.MiterLimit,

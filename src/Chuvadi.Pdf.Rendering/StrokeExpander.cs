@@ -80,6 +80,12 @@ public sealed class StrokeExpander
         List<PointF> left = new List<PointF>(n * 2);
         List<PointF> right = new List<PointF>(n * 2);
 
+        // Track the previous segment direction so each interior join can be
+        // mitred (offset lines intersected) instead of naively snapped to one
+        // segment, which would tilt a flat edge by up to half the stroke width.
+        double prevDx = 0, prevDy = 0;
+        bool havePrev = false;
+
         for (int i = 0; i < n - 1; i++)
         {
             PointF p0 = points[i];
@@ -88,21 +94,48 @@ public sealed class StrokeExpander
             (PointF l0, PointF l1, PointF r0, PointF r1) =
                 OffsetSegment(p0, p1, halfWidth);
 
+            double curDx = p1.X - p0.X;
+            double curDy = p1.Y - p0.Y;
+
             if (i == 0)
             {
                 left.Add(l0);
                 right.Add(r0);
             }
-
-            // Join with previous segment (simple bevel)
-            if (i > 0 && left.Count > 0)
+            else if (havePrev && left.Count > 0)
             {
-                left[left.Count - 1] = l0;
-                right[right.Count - 1] = r0;
+                // Mitre the join: intersect the previous and current offset
+                // lines on each side. Fall back to the current segment's start
+                // offset (bevel) when the lines are parallel or the mitre is
+                // excessively long.
+                PointF prevL = left[left.Count - 1];
+                PointF prevR = right[right.Count - 1];
+
+                if (TryMitre(prevL, prevDx, prevDy, l0, curDx, curDy, halfWidth, out PointF mitL))
+                {
+                    left[left.Count - 1] = mitL;
+                }
+                else
+                {
+                    left[left.Count - 1] = l0;
+                }
+
+                if (TryMitre(prevR, prevDx, prevDy, r0, curDx, curDy, halfWidth, out PointF mitR))
+                {
+                    right[right.Count - 1] = mitR;
+                }
+                else
+                {
+                    right[right.Count - 1] = r0;
+                }
             }
 
             left.Add(l1);
             right.Add(r1);
+
+            prevDx = curDx;
+            prevDy = curDy;
+            havePrev = true;
         }
 
         // Apply end caps for open paths
@@ -127,6 +160,34 @@ public sealed class StrokeExpander
         }
 
         return new List<List<PointF>> { outline };
+    }
+
+    private static bool TryMitre(
+        PointF prevOff, double prevDx, double prevDy,
+        PointF curOff, double curDx, double curDy,
+        double halfWidth, out PointF result)
+    {
+        result = curOff;
+        double denom = (prevDx * curDy) - (prevDy * curDx);
+
+        if (Math.Abs(denom) < 1e-9)
+        {
+            return false;
+        }
+
+        double t = (((curOff.X - prevOff.X) * curDy) - ((curOff.Y - prevOff.Y) * curDx)) / denom;
+        PointF p = new PointF(prevOff.X + (prevDx * t), prevOff.Y + (prevDy * t));
+
+        double mdx = p.X - curOff.X;
+        double mdy = p.Y - curOff.Y;
+
+        if (Math.Sqrt((mdx * mdx) + (mdy * mdy)) > halfWidth * 8.0)
+        {
+            return false;
+        }
+
+        result = p;
+        return true;
     }
 
     private static (PointF l0, PointF l1, PointF r0, PointF r1) OffsetSegment(
