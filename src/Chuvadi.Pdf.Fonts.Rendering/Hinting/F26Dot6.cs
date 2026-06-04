@@ -89,4 +89,20 @@ internal static class F26Dot6
         bool negative = (numerator < 0) ^ (b < 0);
         return (int)(negative ? -magnitude : magnitude);
     }
+
+    /// <summary>
+    /// Multiplies a value by a 16.16 fixed-point scale, returning the product
+    /// rounded half away from zero. Used to scale font-unit coordinates and
+    /// Control Value Table entries to 26.6 device units with a precomputed size
+    /// scale (16.16 device-units-per-font-unit).
+    /// </summary>
+    /// <param name="value">The value to scale (for example, a font-unit coordinate).</param>
+    /// <param name="scale16Dot16">The scale factor in 16.16 fixed point.</param>
+    internal static int MulFix(int value, int scale16Dot16)
+    {
+        long product = (long)value * scale16Dot16;
+        return product >= 0
+            ? (int)((product + 0x8000) >> 16)
+            : (int)(-(((-product) + 0x8000) >> 16));
+    }
 }

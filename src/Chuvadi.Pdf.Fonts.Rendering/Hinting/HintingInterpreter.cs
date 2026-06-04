@@ -67,6 +67,67 @@ internal sealed class HintingInterpreter
     private const byte OpRutg = 0x7C;
     private const byte OpRdtg = 0x7D;
 
+    // Stage 4 — vector-to-line setters (flag bit 0 selects perpendicular).
+    private const byte OpSpvtlParallel = 0x06;
+    private const byte OpSpvtlPerp = 0x07;
+    private const byte OpSfvtlParallel = 0x08;
+    private const byte OpSfvtlPerp = 0x09;
+    private const byte OpSdpvtlParallel = 0x86;
+    private const byte OpSdpvtlPerp = 0x87;
+
+    // Reference points, zone pointers, loop, and state setters.
+    private const byte OpSrp0 = 0x10;
+    private const byte OpSrp1 = 0x11;
+    private const byte OpSrp2 = 0x12;
+    private const byte OpSzp0 = 0x13;
+    private const byte OpSzp1 = 0x14;
+    private const byte OpSzp2 = 0x15;
+    private const byte OpSzps = 0x16;
+    private const byte OpSloop = 0x17;
+    private const byte OpSmd = 0x1A;
+    private const byte OpScvtci = 0x1D;
+    private const byte OpSswci = 0x1E;
+    private const byte OpSsw = 0x1F;
+    private const byte OpFlipOn = 0x4D;
+    private const byte OpFlipOff = 0x4E;
+    private const byte OpSdb = 0x5E;
+    private const byte OpSds = 0x5F;
+    private const byte OpScanctrl = 0x85;
+    private const byte OpScantype = 0x8D;
+    private const byte OpInstctrl = 0x8E;
+
+    // Control Value Table access.
+    private const byte OpWcvtp = 0x44;
+    private const byte OpRcvt = 0x45;
+    private const byte OpWcvtf = 0x70;
+
+    // Measurement.
+    private const byte OpGcCurrent = 0x46;
+    private const byte OpGcOriginal = 0x47;
+    private const byte OpScfs = 0x48;
+    private const byte OpMdCurrent = 0x49;
+    private const byte OpMdOriginal = 0x4A;
+    private const byte OpMppem = 0x4B;
+    private const byte OpMps = 0x4C;
+
+    // Absolute movement.
+    private const byte OpMdap = 0x2E;
+    private const byte OpMdapRound = 0x2F;
+    private const byte OpMiap = 0x3E;
+    private const byte OpMiapRound = 0x3F;
+
+    // Relative movement — opcode ranges, decoded by their flag bits in the
+    // dispatch default arm.
+    private const byte OpMdrpLow = 0xC0;
+    private const byte OpMdrpHigh = 0xDF;
+    private const byte OpMirpLow = 0xE0;
+    private const byte OpMirpHigh = 0xFF;
+
+    // Move-op flag bits (shared by MDRP and MIRP).
+    private const byte MoveFlagSetRp0 = 0x10;
+    private const byte MoveFlagMinDistance = 0x08;
+    private const byte MoveFlagRound = 0x04;
+
     // Grid period bases for SROUND/S45ROUND, in F26Dot6 (64 = 1 pixel).
     // S45ROUND rounds along the 45-degree diagonal: 1 pixel * sqrt(2)/2 ~= 45.25,
     // taken as 45. This single constant is the one rounding value worth
@@ -79,6 +140,14 @@ internal sealed class HintingInterpreter
     private readonly Dictionary<int, byte[]> _functions = new Dictionary<int, byte[]>();
     private readonly Dictionary<int, byte[]> _instructionDefs = new Dictionary<int, byte[]>();
     private readonly HintingLimits _limits;
+
+    // Stage 4 — per-size state (set by PrepareSize) and per-glyph state (set by
+    // HintGlyph). The scale is 16.16 device-units-per-font-unit.
+    private Zone? _twilightZone;
+    private Zone? _glyphZone;
+    private int[] _controlValues = Array.Empty<int>();
+    private int _ppem;
+    private int _scale;
     private int _sp;
     private int _callDepth;
 
@@ -287,11 +356,158 @@ internal sealed class HintingInterpreter
             case OpS45Round:
                 SetSuperRound(RoundState.Super45, S45RoundGridPeriod, Pop());
                 break;
+            case OpSpvtlParallel:
+                SetVectorToLine(projection: true, perpendicular: false);
+                break;
+            case OpSpvtlPerp:
+                SetVectorToLine(projection: true, perpendicular: true);
+                break;
+            case OpSfvtlParallel:
+                SetVectorToLine(projection: false, perpendicular: false);
+                break;
+            case OpSfvtlPerp:
+                SetVectorToLine(projection: false, perpendicular: true);
+                break;
+            case OpSdpvtlParallel:
+                SetDualVectorToLine(perpendicular: false);
+                break;
+            case OpSdpvtlPerp:
+                SetDualVectorToLine(perpendicular: true);
+                break;
+            case OpSrp0:
+                State.Rp0 = Pop();
+                break;
+            case OpSrp1:
+                State.Rp1 = Pop();
+                break;
+            case OpSrp2:
+                State.Rp2 = Pop();
+                break;
+            case OpSzp0:
+                State.Zp0 = Pop();
+                break;
+            case OpSzp1:
+                State.Zp1 = Pop();
+                break;
+            case OpSzp2:
+                State.Zp2 = Pop();
+                break;
+            case OpSzps:
+                {
+                    int zone = Pop();
+                    State.Zp0 = zone;
+                    State.Zp1 = zone;
+                    State.Zp2 = zone;
+                    break;
+                }
+
+            case OpSloop:
+                State.Loop = Pop();
+                break;
+            case OpSmd:
+                State.MinimumDistance = Pop();
+                break;
+            case OpScvtci:
+                State.ControlValueCutIn = Pop();
+                break;
+            case OpSswci:
+                State.SingleWidthCutIn = Pop();
+                break;
+            case OpSsw:
+                State.SingleWidthValue = Pop();
+                break;
+            case OpFlipOn:
+                State.AutoFlip = true;
+                break;
+            case OpFlipOff:
+                State.AutoFlip = false;
+                break;
+            case OpSdb:
+                State.DeltaBase = Pop();
+                break;
+            case OpSds:
+                State.DeltaShift = Pop();
+                break;
+            case OpScanctrl:
+                State.ScanControl = Pop();
+                break;
+            case OpScantype:
+                State.ScanType = Pop();
+                break;
+            case OpInstctrl:
+                {
+                    int selector = Pop();
+                    int value = Pop();
+                    ApplyInstructControl(selector, value);
+                    break;
+                }
+
+            case OpRcvt:
+                Push(GetControlValue(Pop()));
+                break;
+            case OpWcvtp:
+                {
+                    int value = Pop();
+                    int location = Pop();
+                    SetControlValue(location, value);
+                    break;
+                }
+
+            case OpWcvtf:
+                {
+                    int funits = Pop();
+                    int location = Pop();
+                    SetControlValue(location, F26Dot6.MulFix(funits, _scale));
+                    break;
+                }
+
+            case OpMppem:
+                Push(_ppem);
+                break;
+            case OpMps:
+                Push(_ppem);
+                break;
+            case OpGcCurrent:
+                GetCoordinate(useDual: false);
+                break;
+            case OpGcOriginal:
+                GetCoordinate(useDual: true);
+                break;
+            case OpScfs:
+                SetCoordinateFromStack();
+                break;
+            case OpMdCurrent:
+                MeasureDistance(useOriginal: false);
+                break;
+            case OpMdOriginal:
+                MeasureDistance(useOriginal: true);
+                break;
+            case OpMdap:
+                MoveDirectAbsolute(round: false);
+                break;
+            case OpMdapRound:
+                MoveDirectAbsolute(round: true);
+                break;
+            case OpMiap:
+                MoveIndirectAbsolute(round: false);
+                break;
+            case OpMiapRound:
+                MoveIndirectAbsolute(round: true);
+                break;
             default:
-                // Either a custom instruction (IDEF) or an opcode not yet
-                // implemented in this stage. Custom instructions run; anything
-                // else is a no-op while the interpreter is inert.
-                if (_instructionDefs.TryGetValue(op, out byte[]? body))
+                // A relative-move opcode (decoded by flag bits), a custom
+                // instruction (IDEF), or an opcode not yet implemented in this
+                // stage. Unimplemented opcodes are a no-op while the interpreter
+                // is inert.
+                if (op >= OpMdrpLow && op <= OpMdrpHigh)
+                {
+                    MoveDirectRelative(op);
+                }
+                else if (op >= OpMirpLow && op <= OpMirpHigh)
+                {
+                    MoveIndirectRelative(op);
+                }
+                else if (_instructionDefs.TryGetValue(op, out byte[]? body))
                 {
                     CallBody(body);
                 }
@@ -705,6 +921,605 @@ internal sealed class HintingInterpreter
         {
             int val = -FloorToMultiple(threshold - phase - distance + compensation, period) - phase;
             return val > 0 ? -phase : val;
+        }
+    }
+
+    // ── Sizing and glyph hinting (Stage 4) ────────────────────────────────
+
+    /// <summary>
+    /// Prepares the interpreter for a specific size: computes the font-unit to
+    /// 26.6 scale, scales the Control Value Table, allocates the twilight zone,
+    /// resets the graphics state, and runs the control-value program
+    /// (<c>prep</c>) once for this size.
+    /// </summary>
+    /// <param name="ppem">The size in pixels per em.</param>
+    /// <param name="unitsPerEm">The font's units-per-em from the <c>head</c> table.</param>
+    /// <param name="controlValueTable">Raw <c>cvt </c> table bytes (big-endian int16 entries), or null.</param>
+    /// <param name="controlValueProgram">Raw <c>prep</c> program bytes, or null.</param>
+    internal void PrepareSize(int ppem, int unitsPerEm, byte[]? controlValueTable, byte[]? controlValueProgram)
+    {
+        if (unitsPerEm <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(unitsPerEm));
+        }
+
+        _ppem = ppem;
+        _scale = (int)(((long)ppem * F26Dot6.One * 0x10000) / unitsPerEm);
+        _controlValues = ScaleControlValueTable(controlValueTable);
+        _twilightZone = Zone.CreateTwilight(Math.Max(_limits.MaxTwilightPoints, 0));
+        State.Reset();
+
+        if (controlValueProgram is { Length: > 0 })
+        {
+            RunProgram(controlValueProgram);
+        }
+    }
+
+    /// <summary>
+    /// Hints a single glyph at the prepared size: builds the glyph zone by
+    /// scaling the raw outline to 26.6, resets the graphics state, runs the
+    /// glyph's instruction stream, and returns the fitted zone.
+    /// <see cref="PrepareSize"/> must be called first.
+    /// </summary>
+    /// <param name="glyph">The raw glyph outline in font units (phantom points appended).</param>
+    /// <returns>The glyph zone, with grid-fitted coordinates in <see cref="Zone.CurrentX"/>/<see cref="Zone.CurrentY"/>.</returns>
+    internal Zone HintGlyph(RawGlyph glyph)
+    {
+        ArgumentNullException.ThrowIfNull(glyph);
+
+        int count = glyph.PointCount;
+        Zone zone = new Zone(count, glyph.ContourEnds, glyph.OnCurve);
+        for (int i = 0; i < count; i++)
+        {
+            int x = F26Dot6.MulFix(glyph.X[i], _scale);
+            int y = F26Dot6.MulFix(glyph.Y[i], _scale);
+            zone.CurrentX[i] = x;
+            zone.OriginalX[i] = x;
+            zone.CurrentY[i] = y;
+            zone.OriginalY[i] = y;
+        }
+
+        _glyphZone = zone;
+
+        // The graphics state resets to its defaults before each glyph program;
+        // the scaled Control Value Table modified by prep persists.
+        State.Reset();
+
+        if (glyph.Instructions is { Length: > 0 })
+        {
+            RunProgram(glyph.Instructions);
+        }
+
+        return zone;
+    }
+
+    // Parses big-endian int16 CVT entries (font units) and scales them to 26.6.
+    private int[] ScaleControlValueTable(byte[]? table)
+    {
+        if (table is null || table.Length < 2)
+        {
+            return Array.Empty<int>();
+        }
+
+        int count = table.Length / 2;
+        int[] values = new int[count];
+        for (int i = 0; i < count; i++)
+        {
+            short funits = (short)((table[i * 2] << 8) | table[(i * 2) + 1]);
+            values[i] = F26Dot6.MulFix(funits, _scale);
+        }
+
+        return values;
+    }
+
+    private int GetControlValue(int index)
+    {
+        return index >= 0 && index < _controlValues.Length ? _controlValues[index] : 0;
+    }
+
+    private void SetControlValue(int index, int value)
+    {
+        if (index >= 0 && index < _controlValues.Length)
+        {
+            _controlValues[index] = value;
+        }
+    }
+
+    // Resolves a zone pointer (0 = twilight, otherwise glyph) to its zone.
+    private Zone ZoneFor(int zonePointer)
+    {
+        if (zonePointer == 0)
+        {
+            return _twilightZone ?? throw new InvalidOperationException(
+                "PrepareSize must be called before the twilight zone is used.");
+        }
+
+        return _glyphZone ?? throw new InvalidOperationException(
+            "HintGlyph must be called before the glyph zone is used.");
+    }
+
+    // ── Projection, freedom, and point movement (Stage 4) ─────────────────
+
+    // Projects a coordinate delta (26.6) onto the projection vector, returning
+    // a signed distance in 26.6.
+    private int Project(int dx, int dy)
+    {
+        return F2Dot14.Dot(dx, dy, State.ProjectionVectorX, State.ProjectionVectorY);
+    }
+
+    // Projects a coordinate delta (26.6) onto the dual projection vector, used
+    // to measure distances in original (unhinted) coordinates.
+    private int DualProject(int dx, int dy)
+    {
+        return F2Dot14.Dot(dx, dy, State.DualProjectionVectorX, State.DualProjectionVectorY);
+    }
+
+    // freedom · projection (2.14): the factor relating a projected distance to
+    // the movement required along the freedom vector.
+    private int FreedomDotProjection()
+    {
+        return F2Dot14.Dot(
+            State.FreedomVectorX, State.FreedomVectorY,
+            State.ProjectionVectorX, State.ProjectionVectorY);
+    }
+
+    // Moves a point along the freedom vector so that its projection onto the
+    // projection vector changes by `distance` (26.6), marking the point touched
+    // on each axis it moves along.
+    private void MovePoint(Zone zone, int point, int distance)
+    {
+        if (point < 0 || point >= zone.PointCount)
+        {
+            return;
+        }
+
+        int fdotp = FreedomDotProjection();
+        if (fdotp == 0)
+        {
+            return;
+        }
+
+        if (State.FreedomVectorX != 0)
+        {
+            zone.CurrentX[point] += MulDiv(distance, State.FreedomVectorX, fdotp);
+            zone.TouchedX[point] = true;
+        }
+
+        if (State.FreedomVectorY != 0)
+        {
+            zone.CurrentY[point] += MulDiv(distance, State.FreedomVectorY, fdotp);
+            zone.TouchedY[point] = true;
+        }
+    }
+
+    // (a * b) / c, rounded half away from zero, guarding divide-by-zero.
+    private static int MulDiv(int a, int b, int c)
+    {
+        if (c == 0)
+        {
+            return 0;
+        }
+
+        long numerator = (long)a * b;
+        long absNum = numerator < 0 ? -numerator : numerator;
+        long absDen = c < 0 ? -(long)c : c;
+        long magnitude = (absNum + (absDen / 2)) / absDen;
+        bool negative = (numerator < 0) ^ (c < 0);
+        return (int)(negative ? -magnitude : magnitude);
+    }
+
+    private static int Sign(int value)
+    {
+        return value > 0 ? 1 : (value < 0 ? -1 : 0);
+    }
+
+    // ── Measurement (Stage 4) ─────────────────────────────────────────────
+
+    // GC[a]: push the coordinate of a point (zp2) projected onto the projection
+    // vector (a = 0, current) or the dual projection vector (a = 1, original).
+    private void GetCoordinate(bool useDual)
+    {
+        int point = Pop();
+        Zone zone = ZoneFor(State.Zp2);
+        if (point < 0 || point >= zone.PointCount)
+        {
+            Push(0);
+            return;
+        }
+
+        int value = useDual
+            ? DualProject(zone.OriginalX[point], zone.OriginalY[point])
+            : Project(zone.CurrentX[point], zone.CurrentY[point]);
+        Push(value);
+    }
+
+    // SCFS: move a point (zp2) so its projection equals the value on the stack.
+    private void SetCoordinateFromStack()
+    {
+        int value = Pop();
+        int point = Pop();
+        Zone zone = ZoneFor(State.Zp2);
+        if (point < 0 || point >= zone.PointCount)
+        {
+            return;
+        }
+
+        int current = Project(zone.CurrentX[point], zone.CurrentY[point]);
+        MovePoint(zone, point, value - current);
+
+        // Setting a twilight point's coordinate also fixes its original.
+        if (State.Zp2 == 0)
+        {
+            zone.OriginalX[point] = zone.CurrentX[point];
+            zone.OriginalY[point] = zone.CurrentY[point];
+        }
+    }
+
+    // MD[a]: push the distance between two points, measured in current
+    // coordinates on the projection vector (a = 0) or in original coordinates
+    // on the dual projection vector (a = 1). The deeper stack argument is taken
+    // in zp0, the top argument in zp1.
+    private void MeasureDistance(bool useOriginal)
+    {
+        int top = Pop();
+        int deep = Pop();
+        Zone zone0 = ZoneFor(State.Zp0);
+        Zone zone1 = ZoneFor(State.Zp1);
+        if (deep < 0 || deep >= zone0.PointCount || top < 0 || top >= zone1.PointCount)
+        {
+            Push(0);
+            return;
+        }
+
+        int distance = useOriginal
+            ? DualProject(
+                zone0.OriginalX[deep] - zone1.OriginalX[top],
+                zone0.OriginalY[deep] - zone1.OriginalY[top])
+            : Project(
+                zone0.CurrentX[deep] - zone1.CurrentX[top],
+                zone0.CurrentY[deep] - zone1.CurrentY[top]);
+        Push(distance);
+    }
+
+    // ── Absolute movement (Stage 4) ───────────────────────────────────────
+
+    // MDAP[a]: touch a point (zp0); if a = 1, round its projection to the grid.
+    private void MoveDirectAbsolute(bool round)
+    {
+        int point = Pop();
+        Zone zone = ZoneFor(State.Zp0);
+        if (point < 0 || point >= zone.PointCount)
+        {
+            return;
+        }
+
+        int distance = 0;
+        if (round)
+        {
+            int current = Project(zone.CurrentX[point], zone.CurrentY[point]);
+            distance = Round(current, 0) - current;
+        }
+
+        MovePoint(zone, point, distance);
+        State.Rp0 = point;
+        State.Rp1 = point;
+    }
+
+    // MIAP[a]: move a point (zp0) to a Control Value Table distance from the
+    // origin; if a = 1, apply the control-value cut-in and round to the grid.
+    private void MoveIndirectAbsolute(bool round)
+    {
+        int cvtIndex = Pop();
+        int point = Pop();
+        Zone zone = ZoneFor(State.Zp0);
+        if (point < 0 || point >= zone.PointCount)
+        {
+            return;
+        }
+
+        int distance = GetControlValue(cvtIndex);
+
+        // A twilight point has no outline; MIAP defines its position directly
+        // along the projection vector.
+        if (State.Zp0 == 0)
+        {
+            zone.OriginalX[point] = F2Dot14.Mul(distance, State.ProjectionVectorX);
+            zone.OriginalY[point] = F2Dot14.Mul(distance, State.ProjectionVectorY);
+            zone.CurrentX[point] = zone.OriginalX[point];
+            zone.CurrentY[point] = zone.OriginalY[point];
+        }
+
+        int current = Project(zone.CurrentX[point], zone.CurrentY[point]);
+        if (round)
+        {
+            if (Math.Abs(distance - current) > State.ControlValueCutIn)
+            {
+                distance = current;
+            }
+
+            distance = Round(distance, 0);
+        }
+
+        MovePoint(zone, point, distance - current);
+        State.Rp0 = point;
+        State.Rp1 = point;
+    }
+
+    // ── Relative movement (Stage 4) ───────────────────────────────────────
+
+    // MDRP[abcde]: move a point (zp1) to a distance from rp0 (zp0) derived from
+    // their original distance, optionally rounded and clamped to the minimum
+    // distance. Compensation for distance type (the de bits) is treated as zero
+    // (grey rendering); the colour compensations are a later refinement.
+    private void MoveDirectRelative(byte opcode)
+    {
+        bool setRp0 = (opcode & MoveFlagSetRp0) != 0;
+        bool keepMinimum = (opcode & MoveFlagMinDistance) != 0;
+        bool round = (opcode & MoveFlagRound) != 0;
+
+        int point = Pop();
+        Zone refZone = ZoneFor(State.Zp0);
+        Zone zone = ZoneFor(State.Zp1);
+        if (!IsValidPoint(point, zone) || !IsValidPoint(State.Rp0, refZone))
+        {
+            return;
+        }
+
+        int originalDistance = DualProject(
+            zone.OriginalX[point] - refZone.OriginalX[State.Rp0],
+            zone.OriginalY[point] - refZone.OriginalY[State.Rp0]);
+
+        int distance = ApplySingleWidth(originalDistance);
+        if (round)
+        {
+            distance = Round(distance, 0);
+        }
+
+        distance = EnforceMinimumDistance(distance, originalDistance, keepMinimum);
+
+        int currentDistance = Project(
+            zone.CurrentX[point] - refZone.CurrentX[State.Rp0],
+            zone.CurrentY[point] - refZone.CurrentY[State.Rp0]);
+
+        MovePoint(zone, point, distance - currentDistance);
+
+        State.Rp1 = State.Rp0;
+        State.Rp2 = point;
+        if (setRp0)
+        {
+            State.Rp0 = point;
+        }
+    }
+
+    // MIRP[abcde]: move a point (zp1) to a Control Value Table distance from
+    // rp0 (zp0), with auto-flip against the original distance's sign, the
+    // control-value cut-in, optional rounding, and the minimum-distance clamp.
+    private void MoveIndirectRelative(byte opcode)
+    {
+        bool setRp0 = (opcode & MoveFlagSetRp0) != 0;
+        bool keepMinimum = (opcode & MoveFlagMinDistance) != 0;
+        bool round = (opcode & MoveFlagRound) != 0;
+
+        int cvtIndex = Pop();
+        int point = Pop();
+        Zone refZone = ZoneFor(State.Zp0);
+        Zone zone = ZoneFor(State.Zp1);
+        if (!IsValidPoint(point, zone) || !IsValidPoint(State.Rp0, refZone))
+        {
+            return;
+        }
+
+        int cvtDistance = ApplySingleWidth(GetControlValue(cvtIndex));
+
+        int originalDistance = DualProject(
+            zone.OriginalX[point] - refZone.OriginalX[State.Rp0],
+            zone.OriginalY[point] - refZone.OriginalY[State.Rp0]);
+
+        if (State.AutoFlip && Sign(cvtDistance) != Sign(originalDistance))
+        {
+            cvtDistance = -cvtDistance;
+        }
+
+        int distance = cvtDistance;
+        if (round)
+        {
+            // Control-value cut-in: when the CVT distance is too far from the
+            // actual original distance, use the original distance instead.
+            if (Math.Abs(cvtDistance - originalDistance) > State.ControlValueCutIn)
+            {
+                distance = originalDistance;
+            }
+
+            distance = Round(distance, 0);
+        }
+
+        distance = EnforceMinimumDistance(distance, originalDistance, keepMinimum);
+
+        int currentDistance = Project(
+            zone.CurrentX[point] - refZone.CurrentX[State.Rp0],
+            zone.CurrentY[point] - refZone.CurrentY[State.Rp0]);
+
+        MovePoint(zone, point, distance - currentDistance);
+
+        State.Rp1 = State.Rp0;
+        State.Rp2 = point;
+        if (setRp0)
+        {
+            State.Rp0 = point;
+        }
+    }
+
+    private static bool IsValidPoint(int point, Zone zone)
+    {
+        return point >= 0 && point < zone.PointCount;
+    }
+
+    // Snaps a distance to the single-width value when it lies within the
+    // single-width cut-in. With the default cut-in of zero this is a no-op;
+    // the full single-width semantics are a later refinement.
+    private int ApplySingleWidth(int distance)
+    {
+        if (State.SingleWidthCutIn <= 0)
+        {
+            return distance;
+        }
+
+        int width = State.SingleWidthValue;
+        if (distance >= 0)
+        {
+            if (Math.Abs(distance - width) < State.SingleWidthCutIn)
+            {
+                distance = width;
+            }
+        }
+        else if (Math.Abs(distance + width) < State.SingleWidthCutIn)
+        {
+            distance = -width;
+        }
+
+        return distance;
+    }
+
+    // Clamps a distance to the graphics-state minimum distance, preserving the
+    // sign of the original distance.
+    private int EnforceMinimumDistance(int distance, int originalDistance, bool keep)
+    {
+        if (!keep)
+        {
+            return distance;
+        }
+
+        if (originalDistance >= 0)
+        {
+            return distance < State.MinimumDistance ? State.MinimumDistance : distance;
+        }
+
+        return distance > -State.MinimumDistance ? -State.MinimumDistance : distance;
+    }
+
+    // ── Vector-to-line setters (Stage 4) ──────────────────────────────────
+
+    // SPVTL[a] / SFVTL[a]: set the projection (and dual) or freedom vector
+    // parallel (a = 0) or perpendicular (a = 1) to the current-coordinate line
+    // from p2 (zp2) to p1 (zp1).
+    private void SetVectorToLine(bool projection, bool perpendicular)
+    {
+        int p1 = Pop();
+        int p2 = Pop();
+        Zone zone1 = ZoneFor(State.Zp1);
+        Zone zone2 = ZoneFor(State.Zp2);
+        if (!IsValidPoint(p1, zone1) || !IsValidPoint(p2, zone2))
+        {
+            return;
+        }
+
+        int dx = zone1.CurrentX[p1] - zone2.CurrentX[p2];
+        int dy = zone1.CurrentY[p1] - zone2.CurrentY[p2];
+        (int vx, int vy) = NormalizeToVector(dx, dy, perpendicular);
+
+        if (projection)
+        {
+            SetProjection(vx, vy);
+        }
+        else
+        {
+            SetFreedom(vx, vy);
+        }
+    }
+
+    // SDPVTL[a]: set the dual projection vector from the original-coordinate
+    // line and the projection vector from the current-coordinate line, parallel
+    // (a = 0) or perpendicular (a = 1) to the line from p2 (zp2) to p1 (zp1).
+    private void SetDualVectorToLine(bool perpendicular)
+    {
+        int p1 = Pop();
+        int p2 = Pop();
+        Zone zone1 = ZoneFor(State.Zp1);
+        Zone zone2 = ZoneFor(State.Zp2);
+        if (!IsValidPoint(p1, zone1) || !IsValidPoint(p2, zone2))
+        {
+            return;
+        }
+
+        (int dvx, int dvy) = NormalizeToVector(
+            zone1.OriginalX[p1] - zone2.OriginalX[p2],
+            zone1.OriginalY[p1] - zone2.OriginalY[p2],
+            perpendicular);
+        (int pvx, int pvy) = NormalizeToVector(
+            zone1.CurrentX[p1] - zone2.CurrentX[p2],
+            zone1.CurrentY[p1] - zone2.CurrentY[p2],
+            perpendicular);
+
+        // Set both directly: SetProjection would overwrite the dual vector.
+        State.ProjectionVectorX = pvx;
+        State.ProjectionVectorY = pvy;
+        State.DualProjectionVectorX = dvx;
+        State.DualProjectionVectorY = dvy;
+    }
+
+    // Normalizes a 26.6 coordinate delta to a 2.14 unit vector, optionally
+    // rotated 90 degrees. A degenerate (zero-length) line defaults to the
+    // x axis. Uses an exact integer square root, so the result is deterministic
+    // across platforms.
+    private static (int X, int Y) NormalizeToVector(int dx, int dy, bool perpendicular)
+    {
+        if (perpendicular)
+        {
+            int swap = dx;
+            dx = -dy;
+            dy = swap;
+        }
+
+        if (dx == 0 && dy == 0)
+        {
+            return (GraphicsState.One2Dot14, 0);
+        }
+
+        long length = IntegerSqrt(((long)dx * dx) + ((long)dy * dy));
+        if (length == 0)
+        {
+            return (GraphicsState.One2Dot14, 0);
+        }
+
+        int vx = (int)(((long)dx * GraphicsState.One2Dot14) / length);
+        int vy = (int)(((long)dy * GraphicsState.One2Dot14) / length);
+        return (vx, vy);
+    }
+
+    // Exact integer floor of the square root; the double seed is corrected by
+    // integer steps so the result does not depend on floating-point precision.
+    private static long IntegerSqrt(long value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        long root = (long)Math.Sqrt(value);
+        while (root > 0 && root * root > value)
+        {
+            root--;
+        }
+
+        while ((root + 1) * (root + 1) <= value)
+        {
+            root++;
+        }
+
+        return root;
+    }
+
+    // INSTCTRL: set or clear a selector bit of the instruct-control state. The
+    // exact selector semantics are refined when hinting is wired in.
+    private void ApplyInstructControl(int selector, int value)
+    {
+        if (value != 0)
+        {
+            State.InstructControl |= selector;
+        }
+        else
+        {
+            State.InstructControl &= ~selector;
         }
     }
 
