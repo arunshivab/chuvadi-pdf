@@ -11,6 +11,44 @@ numbered A01..ANN).
 
 ---
 
+## [2.4.1] - 2026-06-04
+
+### Added
+- **TrueType bytecode hinting — Stage 2 (VM skeleton)** in
+  `Chuvadi.Pdf.Fonts.Rendering.Hinting`. Builds on the Stage 1 foundation; the
+  interpreter is internal and unwired, so render output is unchanged and
+  `RenderOptions.Hinting` remains inert
+  - New internal `HintingInterpreter`: operand stack, storage area, function
+    table, and instruction-definition table. Implements the push family
+    (NPUSHB/NPUSHW/PUSHB/PUSHW), stack manipulation
+    (DUP/POP/CLEAR/SWAP/DEPTH/CINDEX/MINDEX), and function/instruction
+    definition and calling (FDEF/ENDF/CALL/LOOPCALL/IDEF), plus
+    `RunFontProgram`. The FDEF/IDEF body scanner is instruction-length-aware,
+    so inline push data is never misread as `ENDF`; a call-depth guard bounds
+    recursion. Opcodes not yet implemented are length-aware no-ops
+  - New internal `GraphicsState` carrying the full TrueType graphics state and
+    its spec defaults (`Reset()`); most fields are consumed by later stages
+  - New internal `HintingLimits` and `RoundState`
+  - `TrueTypeLoader.GetHintingLimits()` reads the `maxp` version 1.0 maximums
+    that size the interpreter's tables, defaulting on `maxp` version 0.5
+
+### Tests
+- 19 tests over synthetic bytecode (no font file required): push family,
+  stack manipulation, FDEF/CALL/LOOPCALL/IDEF, length-aware FDEF body
+  scanning, the recursion-depth guard, table sizing from limits, and the
+  loader's version 0.5 default limits
+
+### Notes
+- Still inert: nothing in the render path calls the interpreter and the
+  `Hinting` flag has no effect
+- Stack values are raw 32-bit integers; F26Dot6/F2Dot14 fixed-point
+  interpretation begins in Stage 3 with the vector and rounding operators
+- Introduces the repository's first `InternalsVisibleTo` (a standalone
+  attribute file) so the internal interpreter can be unit-tested
+- Architecture and staging rationale: decision log A21
+
+---
+
 ## [2.4.0] - 2026-06-04
 
 ### Added

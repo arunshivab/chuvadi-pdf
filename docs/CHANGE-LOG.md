@@ -554,3 +554,41 @@ Key findings and decisions:
 `src/Chuvadi.Pdf.Rendering/RenderOptions.cs`.
 
 ---
+
+## A21 — TrueType Hinting Stage 2: VM Skeleton and First InternalsVisibleTo
+
+**Date:** 2026-06-04
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` — TrueType instruction interpreter
+**Rationale:** Stage 2 of the hinting plan (A20) builds the execution engine
+that later stages plug operators into: operand stack, storage area, function
+and instruction definitions, and the program loop. It can run the font program
+(`fpgm`) to register functions but performs no grid-fitting, so render output
+is unchanged and `RenderOptions.Hinting` stays off.
+
+Key decisions:
+
+- **Operand stack is raw `int32`.** The TrueType stack holds 32-bit values
+  interpreted either as integers or as F26Dot6 fixed point depending on the
+  operator. Stage 2 keeps them raw; the fixed-point operations (round,
+  projection, multiply/divide) and the decision on how to represent them are
+  introduced in Stage 3, where they are first needed.
+
+- **Length-aware body scanning.** FDEF and IDEF store their body by scanning to
+  `ENDF` instruction by instruction, so variable-length push data is skipped
+  rather than misread as an `ENDF` opcode. Opcodes not yet implemented are
+  length-aware no-ops while the interpreter is inert.
+
+- **First `InternalsVisibleTo` in the repository.** The interpreter is
+  `internal` (matching `Type2Interpreter`) and has no public surface until the
+  final stage, so it is unit-tested via a standalone `InternalsVisibleTo.cs`
+  attribute file granting access to `Chuvadi.Pdf.Fonts.Rendering.Tests`. Prior
+  tests exercised only public surfaces; this is the codebase's first use of IVT.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/GraphicsState.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingLimits.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/RoundState.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/InternalsVisibleTo.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`.
+
+---
