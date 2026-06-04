@@ -123,6 +123,75 @@ internal sealed class HintingInterpreter
     private const byte OpMirpLow = 0xE0;
     private const byte OpMirpHigh = 0xFF;
 
+    // Stage 5/6 — arithmetic and logical.
+    private const byte OpAdd = 0x60;
+    private const byte OpSub = 0x61;
+    private const byte OpDiv = 0x62;
+    private const byte OpMul = 0x63;
+    private const byte OpAbs = 0x64;
+    private const byte OpNeg = 0x65;
+    private const byte OpFloor = 0x66;
+    private const byte OpCeiling = 0x67;
+    private const byte OpMax = 0x8B;
+    private const byte OpMin = 0x8C;
+    private const byte OpAnd = 0x5A;
+    private const byte OpOr = 0x5B;
+    private const byte OpNot = 0x5C;
+    private const byte OpEq = 0x54;
+    private const byte OpNeq = 0x55;
+    private const byte OpGt = 0x52;
+    private const byte OpGteq = 0x53;
+    private const byte OpLt = 0x50;
+    private const byte OpLteq = 0x51;
+    private const byte OpOdd = 0x56;
+    private const byte OpEven = 0x57;
+
+    // Stage 5/6 — storage area.
+    private const byte OpRs = 0x43;
+    private const byte OpWs = 0x42;
+
+    // Stage 5/6 — rounding by stack value (ranges; engine round/no-round).
+    private const byte OpRoundLow = 0x68;
+    private const byte OpRoundHigh = 0x6B;
+    private const byte OpNroundLow = 0x6C;
+    private const byte OpNroundHigh = 0x6F;
+
+    // Stage 5/6 — flow control (handled in the execution loop, not Dispatch).
+    private const byte OpIf = 0x58;
+    private const byte OpElse = 0x1B;
+    private const byte OpEif = 0x59;
+    private const byte OpJmpr = 0x1C;
+    private const byte OpJrot = 0x78;
+    private const byte OpJrof = 0x79;
+
+    // Stage 5/6 — DELTA exceptions.
+    private const byte OpDeltaP1 = 0x5D;
+    private const byte OpDeltaP2 = 0x71;
+    private const byte OpDeltaP3 = 0x72;
+    private const byte OpDeltaC1 = 0x73;
+    private const byte OpDeltaC2 = 0x74;
+    private const byte OpDeltaC3 = 0x75;
+
+    // Stage 5/6 — shift, interpolation, and alignment.
+    private const byte OpShpRp2 = 0x32;     // SHP[0] — uses rp2 in zp1
+    private const byte OpShpRp1 = 0x33;     // SHP[1] — uses rp1 in zp0
+    private const byte OpShc0 = 0x34;       // SHC[0] — shift contour by rp2 (zp1)
+    private const byte OpShc1 = 0x35;       // SHC[1] — shift contour by rp1 (zp0)
+    private const byte OpShz0 = 0x36;       // SHZ[0] — shift zone by rp2 (zp1)
+    private const byte OpShz1 = 0x37;       // SHZ[1] — shift zone by rp1 (zp0)
+    private const byte OpShpix = 0x38;
+    private const byte OpIp = 0x39;
+    private const byte OpIsect = 0x0F;
+    private const byte OpIupX = 0x30;       // IUP[0] — x direction
+    private const byte OpIupY = 0x31;       // IUP[1] — y direction
+    private const byte OpAlignRp = 0x3C;
+    private const byte OpAlignPts = 0x27;
+    private const byte OpUtp = 0x29;
+
+    // Stage 5/6 — environment query and miscellany.
+    private const byte OpGetInfo = 0x88;
+    private const byte OpRoll = 0x8A;
+
     // Move-op flag bits (shared by MDRP and MIRP).
     private const byte MoveFlagSetRp0 = 0x10;
     private const byte MoveFlagMinDistance = 0x08;
@@ -276,6 +345,49 @@ internal sealed class HintingInterpreter
             {
                 // End of a function or instruction body.
                 return;
+            }
+
+            if (op == OpIf)
+            {
+                ip = ExecuteIf(code, ip);
+                continue;
+            }
+
+            if (op == OpElse)
+            {
+                // Reached only by falling through the taken THEN branch; skip to
+                // the matching EIF.
+                ip = SkipToMatchingEif(code, ip + 1);
+                continue;
+            }
+
+            if (op == OpEif)
+            {
+                // A balancing EIF for a taken branch: nothing to do.
+                ip += 1;
+                continue;
+            }
+
+            if (op == OpJmpr)
+            {
+                ip += Pop();
+                continue;
+            }
+
+            if (op == OpJrot)
+            {
+                int condition = Pop();
+                int offset = Pop();
+                ip = condition != 0 ? ip + offset : ip + 1;
+                continue;
+            }
+
+            if (op == OpJrof)
+            {
+                int condition = Pop();
+                int offset = Pop();
+                ip = condition == 0 ? ip + offset : ip + 1;
+                continue;
             }
 
             Dispatch(op);
@@ -494,11 +606,160 @@ internal sealed class HintingInterpreter
             case OpMiapRound:
                 MoveIndirectAbsolute(round: true);
                 break;
+
+            // ── Arithmetic and logical (Stage 5/6) ──
+            case OpAdd:
+                BinaryOp(static (a, b) => a + b);
+                break;
+            case OpSub:
+                BinaryOp(static (a, b) => a - b);
+                break;
+            case OpMul:
+                BinaryOp(static (a, b) => F26Dot6.Mul(a, b));
+                break;
+            case OpDiv:
+                BinaryOp(static (a, b) => F26Dot6.Div(a, b));
+                break;
+            case OpAbs:
+                Push(Math.Abs(Pop()));
+                break;
+            case OpNeg:
+                Push(-Pop());
+                break;
+            case OpFloor:
+                Push(F26Dot6.Floor(Pop()));
+                break;
+            case OpCeiling:
+                Push(F26Dot6.Ceiling(Pop()));
+                break;
+            case OpMax:
+                BinaryOp(Math.Max);
+                break;
+            case OpMin:
+                BinaryOp(Math.Min);
+                break;
+            case OpAnd:
+                BinaryOp(static (a, b) => (a != 0 && b != 0) ? 1 : 0);
+                break;
+            case OpOr:
+                BinaryOp(static (a, b) => (a != 0 || b != 0) ? 1 : 0);
+                break;
+            case OpNot:
+                Push(Pop() == 0 ? 1 : 0);
+                break;
+            case OpEq:
+                BinaryOp(static (a, b) => a == b ? 1 : 0);
+                break;
+            case OpNeq:
+                BinaryOp(static (a, b) => a != b ? 1 : 0);
+                break;
+            case OpGt:
+                BinaryOp(static (a, b) => a > b ? 1 : 0);
+                break;
+            case OpGteq:
+                BinaryOp(static (a, b) => a >= b ? 1 : 0);
+                break;
+            case OpLt:
+                BinaryOp(static (a, b) => a < b ? 1 : 0);
+                break;
+            case OpLteq:
+                BinaryOp(static (a, b) => a <= b ? 1 : 0);
+                break;
+            case OpOdd:
+                Push((Round(Pop(), 0) / F26Dot6.One) % 2 != 0 ? 1 : 0);
+                break;
+            case OpEven:
+                Push((Round(Pop(), 0) / F26Dot6.One) % 2 == 0 ? 1 : 0);
+                break;
+            case OpRoll:
+                Roll();
+                break;
+
+            // ── Storage area (Stage 5/6) ──
+            case OpRs:
+                Push(ReadStorage(Pop()));
+                break;
+            case OpWs:
+                {
+                    int value = Pop();
+                    int location = Pop();
+                    WriteStorage(location, value);
+                    break;
+                }
+
+            // ── DELTA exceptions (Stage 5/6) ──
+            case OpDeltaP1:
+                ApplyDeltaP(0);
+                break;
+            case OpDeltaP2:
+                ApplyDeltaP(16);
+                break;
+            case OpDeltaP3:
+                ApplyDeltaP(32);
+                break;
+            case OpDeltaC1:
+                ApplyDeltaC(0);
+                break;
+            case OpDeltaC2:
+                ApplyDeltaC(16);
+                break;
+            case OpDeltaC3:
+                ApplyDeltaC(32);
+                break;
+
+            // ── Shift, interpolation, alignment (Stage 5/6) ──
+            case OpShpRp2:
+                ShiftPoints(useRp1: false);
+                break;
+            case OpShpRp1:
+                ShiftPoints(useRp1: true);
+                break;
+            case OpShc0:
+                ShiftContour(useRp1: false);
+                break;
+            case OpShc1:
+                ShiftContour(useRp1: true);
+                break;
+            case OpShz0:
+                ShiftZone(useRp1: false);
+                break;
+            case OpShz1:
+                ShiftZone(useRp1: true);
+                break;
+            case OpShpix:
+                ShiftByPixels();
+                break;
+            case OpIp:
+                InterpolatePoints();
+                break;
+            case OpIsect:
+                Intersect();
+                break;
+            case OpIupX:
+                InterpolateUntouched(yDirection: false);
+                break;
+            case OpIupY:
+                InterpolateUntouched(yDirection: true);
+                break;
+            case OpAlignRp:
+                AlignToReferencePoint();
+                break;
+            case OpAlignPts:
+                AlignPoints();
+                break;
+            case OpUtp:
+                UntouchPoint();
+                break;
+
+            // ── Environment query (Stage 5/6) ──
+            case OpGetInfo:
+                GetInformation();
+                break;
             default:
-                // A relative-move opcode (decoded by flag bits), a custom
-                // instruction (IDEF), or an opcode not yet implemented in this
-                // stage. Unimplemented opcodes are a no-op while the interpreter
-                // is inert.
+                // A relative-move opcode, a round/no-round opcode (decoded by
+                // flag bits), a custom instruction (IDEF), or an opcode not yet
+                // implemented in this stage. Unimplemented opcodes are a no-op
+                // while the interpreter is inert.
                 if (op >= OpMdrpLow && op <= OpMdrpHigh)
                 {
                     MoveDirectRelative(op);
@@ -506,6 +767,16 @@ internal sealed class HintingInterpreter
                 else if (op >= OpMirpLow && op <= OpMirpHigh)
                 {
                     MoveIndirectRelative(op);
+                }
+                else if (op >= OpRoundLow && op <= OpRoundHigh)
+                {
+                    Push(Round(Pop(), 0));
+                }
+                else if (op >= OpNroundLow && op <= OpNroundHigh)
+                {
+                    // No-round: the spec applies engine compensation only; with
+                    // zero compensation this is the identity.
+                    Push(Pop());
                 }
                 else if (_instructionDefs.TryGetValue(op, out byte[]? body))
                 {
@@ -655,6 +926,93 @@ internal sealed class HintingInterpreter
         }
 
         return 1;
+    }
+
+    // ── Flow control (Stage 5/6) ──────────────────────────────────────────
+
+    // Handles IF: pops the condition, executes the THEN branch if true, or skips
+    // to the matching ELSE/EIF if false. Returns the next instruction pointer.
+    private int ExecuteIf(byte[] code, int ip)
+    {
+        int condition = Pop();
+        if (condition != 0)
+        {
+            return ip + 1;
+        }
+
+        return SkipToElseOrEif(code, ip + 1);
+    }
+
+    // Scans forward from a false IF to its matching ELSE (returning the position
+    // after it, so the ELSE branch runs) or matching EIF (returning the position
+    // after it). Nested IF blocks and inline push data are respected.
+    private static int SkipToElseOrEif(byte[] code, int pos)
+    {
+        int depth = 0;
+        while (pos < code.Length)
+        {
+            byte op = code[pos];
+            if (op == OpIf)
+            {
+                depth += 1;
+                pos += 1;
+                continue;
+            }
+
+            if (op == OpEif)
+            {
+                if (depth == 0)
+                {
+                    return pos + 1;
+                }
+
+                depth -= 1;
+                pos += 1;
+                continue;
+            }
+
+            if (op == OpElse && depth == 0)
+            {
+                return pos + 1;
+            }
+
+            pos += InstructionLength(code, pos);
+        }
+
+        return pos;
+    }
+
+    // Scans forward from a taken THEN branch's ELSE to the matching EIF,
+    // skipping the ELSE branch. Returns the position after the EIF.
+    private static int SkipToMatchingEif(byte[] code, int pos)
+    {
+        int depth = 0;
+        while (pos < code.Length)
+        {
+            byte op = code[pos];
+            if (op == OpIf)
+            {
+                depth += 1;
+                pos += 1;
+                continue;
+            }
+
+            if (op == OpEif)
+            {
+                if (depth == 0)
+                {
+                    return pos + 1;
+                }
+
+                depth -= 1;
+                pos += 1;
+                continue;
+            }
+
+            pos += InstructionLength(code, pos);
+        }
+
+        return pos;
     }
 
     private static byte[] Slice(byte[] code, int start, int length)
@@ -1521,6 +1879,490 @@ internal sealed class HintingInterpreter
         {
             State.InstructControl &= ~selector;
         }
+    }
+
+    // ── Arithmetic, logical, storage (Stage 5/6) ──────────────────────────
+
+    // Pops two operands (deeper = a, top = b) and pushes op(a, b).
+    private void BinaryOp(Func<int, int, int> op)
+    {
+        int b = Pop();
+        int a = Pop();
+        Push(op(a, b));
+    }
+
+    // ROLL: rotates the top three stack elements so the third moves to the top.
+    private void Roll()
+    {
+        if (_sp < 3)
+        {
+            return;
+        }
+
+        int a = _stack[_sp - 1];
+        int b = _stack[_sp - 2];
+        int c = _stack[_sp - 3];
+        _stack[_sp - 3] = b;
+        _stack[_sp - 2] = a;
+        _stack[_sp - 1] = c;
+    }
+
+    private int ReadStorage(int location)
+    {
+        return location >= 0 && location < _storage.Length ? _storage[location] : 0;
+    }
+
+    private void WriteStorage(int location, int value)
+    {
+        if (location >= 0 && location < _storage.Length)
+        {
+            _storage[location] = value;
+        }
+    }
+
+    // ── DELTA exceptions (Stage 5/6) ──────────────────────────────────────
+
+    // DELTAP1/2/3: each stack pair is (point number, argument). The argument's
+    // high nibble selects the relative ppem and the low nibble the magnitude.
+    // The exception applies only at the matching ppem. tableBase is 0/16/32 for
+    // DELTAP1/2/3.
+    private void ApplyDeltaP(int tableBase)
+    {
+        int count = Pop();
+        Zone zone = ZoneFor(State.Zp0);
+        for (int k = 0; k < count; k++)
+        {
+            int argument = Pop();
+            int point = Pop();
+            int targetPpem = State.DeltaBase + tableBase + ((argument >> 4) & 0x0F);
+            if (_ppem == targetPpem)
+            {
+                MovePoint(zone, point, DeltaMagnitude(argument & 0x0F));
+            }
+        }
+    }
+
+    // DELTAC1/2/3: like DELTAP but each pair is (CVT index, argument) and the
+    // exception adjusts a Control Value Table entry.
+    private void ApplyDeltaC(int tableBase)
+    {
+        int count = Pop();
+        for (int k = 0; k < count; k++)
+        {
+            int argument = Pop();
+            int cvtIndex = Pop();
+            int targetPpem = State.DeltaBase + tableBase + ((argument >> 4) & 0x0F);
+            if (_ppem == targetPpem)
+            {
+                SetControlValue(cvtIndex, GetControlValue(cvtIndex) + DeltaMagnitude(argument & 0x0F));
+            }
+        }
+    }
+
+    // Maps a DELTA magnitude selector (0..15) to a signed step count (skipping
+    // zero: 0..7 -> -8..-1, 8..15 -> +1..+8) scaled by the delta step size,
+    // 1/(2^DeltaShift) of a pixel.
+    private int DeltaMagnitude(int selector)
+    {
+        int steps = selector < 8 ? selector - 8 : selector - 7;
+        int stepSize = F26Dot6.One >> State.DeltaShift;
+        return steps * stepSize;
+    }
+
+    // ── Shift and alignment (Stage 5/6) ───────────────────────────────────
+
+    // Distance a reference point has moved, measured along the projection
+    // vector from its original to its current position.
+    private int ReferenceShift(Zone zone, int point)
+    {
+        if (!IsValidPoint(point, zone))
+        {
+            return 0;
+        }
+
+        return Project(
+            zone.CurrentX[point] - zone.OriginalX[point],
+            zone.CurrentY[point] - zone.OriginalY[point]);
+    }
+
+    // SHP[a]: shift Loop points in zp2 by the reference point's movement.
+    // a = 1 uses rp1 in zp0; a = 0 uses rp2 in zp1.
+    private void ShiftPoints(bool useRp1)
+    {
+        int refPoint = useRp1 ? State.Rp1 : State.Rp2;
+        Zone refZone = ZoneFor(useRp1 ? State.Zp0 : State.Zp1);
+        Zone zone = ZoneFor(State.Zp2);
+        int distance = ReferenceShift(refZone, refPoint);
+        int count = State.Loop;
+        for (int i = 0; i < count; i++)
+        {
+            MovePoint(zone, Pop(), distance);
+        }
+
+        State.Loop = 1;
+    }
+
+    // SHC[a]: shift every point of a contour (popped) in zp2 by the reference
+    // point's movement.
+    private void ShiftContour(bool useRp1)
+    {
+        int contour = Pop();
+        int refPoint = useRp1 ? State.Rp1 : State.Rp2;
+        Zone refZone = ZoneFor(useRp1 ? State.Zp0 : State.Zp1);
+        Zone zone = ZoneFor(State.Zp2);
+        int distance = ReferenceShift(refZone, refPoint);
+        if (contour < 0 || contour >= zone.ContourEnds.Length)
+        {
+            return;
+        }
+
+        int start = contour == 0 ? 0 : zone.ContourEnds[contour - 1] + 1;
+        int end = zone.ContourEnds[contour];
+        for (int p = start; p <= end && p < zone.PointCount; p++)
+        {
+            MovePoint(zone, p, distance);
+        }
+    }
+
+    // SHZ[a]: shift every point of a zone (popped) by the reference movement.
+    private void ShiftZone(bool useRp1)
+    {
+        int zoneSelector = Pop();
+        int refPoint = useRp1 ? State.Rp1 : State.Rp2;
+        Zone refZone = ZoneFor(useRp1 ? State.Zp0 : State.Zp1);
+        Zone zone = ZoneFor(zoneSelector);
+        int distance = ReferenceShift(refZone, refPoint);
+        for (int p = 0; p < zone.PointCount; p++)
+        {
+            MovePoint(zone, p, distance);
+        }
+    }
+
+    // SHPIX: shift Loop points in zp2 by a pixel amount (26.6) directly along
+    // the freedom vector.
+    private void ShiftByPixels()
+    {
+        int amount = Pop();
+        Zone zone = ZoneFor(State.Zp2);
+        int count = State.Loop;
+        for (int i = 0; i < count; i++)
+        {
+            int point = Pop();
+            if (!IsValidPoint(point, zone))
+            {
+                continue;
+            }
+
+            if (State.FreedomVectorX != 0)
+            {
+                zone.CurrentX[point] += F2Dot14.Mul(amount, State.FreedomVectorX);
+                zone.TouchedX[point] = true;
+            }
+
+            if (State.FreedomVectorY != 0)
+            {
+                zone.CurrentY[point] += F2Dot14.Mul(amount, State.FreedomVectorY);
+                zone.TouchedY[point] = true;
+            }
+        }
+
+        State.Loop = 1;
+    }
+
+    // ALIGNRP: move Loop points in zp1 onto rp0's projected position (zp0).
+    private void AlignToReferencePoint()
+    {
+        Zone refZone = ZoneFor(State.Zp0);
+        Zone zone = ZoneFor(State.Zp1);
+        int rp0 = State.Rp0;
+        int count = State.Loop;
+        for (int i = 0; i < count; i++)
+        {
+            int point = Pop();
+            if (!IsValidPoint(point, zone) || !IsValidPoint(rp0, refZone))
+            {
+                continue;
+            }
+
+            int distance = Project(
+                zone.CurrentX[point] - refZone.CurrentX[rp0],
+                zone.CurrentY[point] - refZone.CurrentY[rp0]);
+            MovePoint(zone, point, -distance);
+        }
+
+        State.Loop = 1;
+    }
+
+    // ALIGNPTS: move two points (p1 in zp1, p2 in zp0) to their midpoint along
+    // the projection vector.
+    private void AlignPoints()
+    {
+        int p2 = Pop();
+        int p1 = Pop();
+        Zone zone1 = ZoneFor(State.Zp1);
+        Zone zone0 = ZoneFor(State.Zp0);
+        if (!IsValidPoint(p1, zone1) || !IsValidPoint(p2, zone0))
+        {
+            return;
+        }
+
+        int distance = Project(
+            zone0.CurrentX[p2] - zone1.CurrentX[p1],
+            zone0.CurrentY[p2] - zone1.CurrentY[p1]);
+        int half = distance / 2;
+        MovePoint(zone1, p1, half);
+        MovePoint(zone0, p2, -half);
+    }
+
+    // UTP: clear the touch flags of a point (zp0) on the freedom-vector axes.
+    private void UntouchPoint()
+    {
+        int point = Pop();
+        Zone zone = ZoneFor(State.Zp0);
+        if (!IsValidPoint(point, zone))
+        {
+            return;
+        }
+
+        if (State.FreedomVectorX != 0)
+        {
+            zone.TouchedX[point] = false;
+        }
+
+        if (State.FreedomVectorY != 0)
+        {
+            zone.TouchedY[point] = false;
+        }
+    }
+
+    // ── Interpolation (Stage 5/6) ─────────────────────────────────────────
+
+    // IP: interpolate Loop points in zp2 between rp1 (zp0) and rp2 (zp1),
+    // preserving each point's original relative position within the current
+    // range between the reference points.
+    private void InterpolatePoints()
+    {
+        Zone zone0 = ZoneFor(State.Zp0);
+        Zone zone1 = ZoneFor(State.Zp1);
+        Zone zone = ZoneFor(State.Zp2);
+        int rp1 = State.Rp1;
+        int rp2 = State.Rp2;
+        bool refsValid = IsValidPoint(rp1, zone0) && IsValidPoint(rp2, zone1);
+
+        int originalRange = 0;
+        int currentRange = 0;
+        if (refsValid)
+        {
+            originalRange = DualProject(
+                zone1.OriginalX[rp2] - zone0.OriginalX[rp1],
+                zone1.OriginalY[rp2] - zone0.OriginalY[rp1]);
+            currentRange = Project(
+                zone1.CurrentX[rp2] - zone0.CurrentX[rp1],
+                zone1.CurrentY[rp2] - zone0.CurrentY[rp1]);
+        }
+
+        int count = State.Loop;
+        for (int i = 0; i < count; i++)
+        {
+            int point = Pop();
+            if (!refsValid || !IsValidPoint(point, zone))
+            {
+                continue;
+            }
+
+            int originalPosition = DualProject(
+                zone.OriginalX[point] - zone0.OriginalX[rp1],
+                zone.OriginalY[point] - zone0.OriginalY[rp1]);
+            int currentPosition = Project(
+                zone.CurrentX[point] - zone0.CurrentX[rp1],
+                zone.CurrentY[point] - zone0.CurrentY[rp1]);
+            int target = originalRange != 0
+                ? MulDiv(originalPosition, currentRange, originalRange)
+                : originalPosition;
+            MovePoint(zone, point, target - currentPosition);
+        }
+
+        State.Loop = 1;
+    }
+
+    // ISECT: move a point (zp2) to the intersection of line A (a0,a1 in zp1)
+    // and line B (b0,b1 in zp0). Parallel lines fall back to the four-point
+    // average. Products are kept in 26.6 by dividing by 0x40.
+    private void Intersect()
+    {
+        int b1 = Pop();
+        int b0 = Pop();
+        int a1 = Pop();
+        int a0 = Pop();
+        int point = Pop();
+        Zone aZone = ZoneFor(State.Zp1);
+        Zone bZone = ZoneFor(State.Zp0);
+        Zone pointZone = ZoneFor(State.Zp2);
+        if (!IsValidPoint(a0, aZone) || !IsValidPoint(a1, aZone) ||
+            !IsValidPoint(b0, bZone) || !IsValidPoint(b1, bZone) ||
+            !IsValidPoint(point, pointZone))
+        {
+            return;
+        }
+
+        int dax = aZone.CurrentX[a1] - aZone.CurrentX[a0];
+        int day = aZone.CurrentY[a1] - aZone.CurrentY[a0];
+        int dbx = bZone.CurrentX[b1] - bZone.CurrentX[b0];
+        int dby = bZone.CurrentY[b1] - bZone.CurrentY[b0];
+        int dx = bZone.CurrentX[b0] - aZone.CurrentX[a0];
+        int dy = bZone.CurrentY[b0] - aZone.CurrentY[a0];
+
+        int discriminant = MulDiv(dax, -dby, 0x40) + MulDiv(day, dbx, 0x40);
+        int dotProduct = MulDiv(dax, dbx, 0x40) + MulDiv(day, dby, 0x40);
+
+        if (9 * Math.Abs(discriminant) > Math.Abs(dotProduct))
+        {
+            int val = MulDiv(dx, -dby, 0x40) + MulDiv(dy, dbx, 0x40);
+            pointZone.CurrentX[point] = aZone.CurrentX[a0] + MulDiv(val, dax, discriminant);
+            pointZone.CurrentY[point] = aZone.CurrentY[a0] + MulDiv(val, day, discriminant);
+        }
+        else
+        {
+            pointZone.CurrentX[point] =
+                (aZone.CurrentX[a0] + aZone.CurrentX[a1] + bZone.CurrentX[b0] + bZone.CurrentX[b1]) / 4;
+            pointZone.CurrentY[point] =
+                (aZone.CurrentY[a0] + aZone.CurrentY[a1] + bZone.CurrentY[b0] + bZone.CurrentY[b1]) / 4;
+        }
+
+        pointZone.TouchedX[point] = true;
+        pointZone.TouchedY[point] = true;
+    }
+
+    // IUP[a]: interpolate points left untouched on the chosen axis within each
+    // contour of the glyph zone, anchored to the touched points. Writes
+    // coordinates directly and does not set touch flags. Always operates on the
+    // glyph zone, independent of the zone pointers.
+    private void InterpolateUntouched(bool yDirection)
+    {
+        Zone zone = ZoneFor(1);
+        int[] current = yDirection ? zone.CurrentY : zone.CurrentX;
+        int[] original = yDirection ? zone.OriginalY : zone.OriginalX;
+        bool[] touched = yDirection ? zone.TouchedY : zone.TouchedX;
+
+        int start = 0;
+        for (int c = 0; c < zone.ContourEnds.Length; c++)
+        {
+            int end = zone.ContourEnds[c];
+            if (end >= start && end < zone.PointCount)
+            {
+                InterpolateContour(current, original, touched, start, end);
+            }
+
+            start = end + 1;
+        }
+    }
+
+    // Interpolates one contour [start, end] (inclusive) for a single axis.
+    private static void InterpolateContour(int[] current, int[] original, bool[] touched, int start, int end)
+    {
+        List<int> anchors = new List<int>();
+        for (int i = start; i <= end; i++)
+        {
+            if (touched[i])
+            {
+                anchors.Add(i);
+            }
+        }
+
+        if (anchors.Count == 0)
+        {
+            return;
+        }
+
+        if (anchors.Count == 1)
+        {
+            int anchor = anchors[0];
+            int delta = current[anchor] - original[anchor];
+            if (delta != 0)
+            {
+                for (int i = start; i <= end; i++)
+                {
+                    if (i != anchor)
+                    {
+                        current[i] = original[i] + delta;
+                    }
+                }
+            }
+
+            return;
+        }
+
+        for (int k = 0; k < anchors.Count; k++)
+        {
+            InterpolateRun(current, original, anchors[k], anchors[(k + 1) % anchors.Count], start, end);
+        }
+    }
+
+    // Interpolates the untouched points strictly between two touched anchors,
+    // walking the contour forward (with wrap-around) from anchorA to anchorB.
+    private static void InterpolateRun(int[] current, int[] original, int anchorA, int anchorB, int start, int end)
+    {
+        int low = anchorA;
+        int high = anchorB;
+        if (original[low] > original[high])
+        {
+            (low, high) = (high, low);
+        }
+
+        int originalLow = original[low];
+        int originalHigh = original[high];
+        int currentLow = current[low];
+        int currentHigh = current[high];
+
+        int i = NextInContour(anchorA, start, end);
+        while (i != anchorB)
+        {
+            int o = original[i];
+            if (o <= originalLow)
+            {
+                current[i] = o + (currentLow - originalLow);
+            }
+            else if (o >= originalHigh)
+            {
+                current[i] = o + (currentHigh - originalHigh);
+            }
+            else
+            {
+                current[i] = originalHigh != originalLow
+                    ? currentLow + MulDiv(o - originalLow, currentHigh - currentLow, originalHigh - originalLow)
+                    : currentLow;
+            }
+
+            i = NextInContour(i, start, end);
+        }
+    }
+
+    private static int NextInContour(int index, int start, int end)
+    {
+        return index >= end ? start : index + 1;
+    }
+
+    // ── Environment query (Stage 5/6) ─────────────────────────────────────
+
+    // GETINFO: report a conservative engine profile. Returns a scaler version
+    // when requested; reports neither rotation nor stretching, consistent with
+    // grey (anti-aliased) rendering. The exact version and capability bits are
+    // refined when hinting is wired to real output.
+    private void GetInformation()
+    {
+        int selector = Pop();
+        int result = 0;
+        if ((selector & 0x01) != 0)
+        {
+            result |= 42;
+        }
+
+        if ((selector & 0x20) != 0)
+        {
+            result |= 1 << 12;
+        }
+
+        Push(result);
     }
 
     // Floors a value to the nearest lower multiple of period (toward negative
