@@ -592,3 +592,86 @@ Key decisions:
 `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`.
 
 ---
+---
+
+## A22 — TrueType Hinting Stage 3: Fixed-Point and Rounding
+
+**Date:** 2026-06-04
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` — TrueType instruction interpreter
+**Rationale:** Stage 3 of the hinting plan (A20) realises Decision A's
+fixed-point commitment and adds the rounding machinery that the movement
+operators in Stage 4 consume. It remains inert: `round()` and the new opcodes
+have no render-path consumer and `RenderOptions.Hinting` stays off.
+
+Key decisions:
+
+- **Fixed-point helpers as separate types.** `F26Dot6` (64 = 1px) and `F2Dot14`
+  (16384 = 1.0) are introduced as the two fixed-point families the spec uses —
+  26.6 for distances and coordinates, 2.14 for unit vectors. Multiply and divide
+  round half away from zero across all sign combinations and guard
+  divide-by-zero, so results are deterministic and match the spec rather than
+  drifting with IEEE rounding.
+
+- **`round()` via floor-to-multiple, not a bit mask.** The engine floors to a
+  multiple of the round period, which is correct for any period including
+  S45ROUND's non-power-of-two diagonal grid, and reduces to the bit-mask result
+  for the power-of-two standard states. SROUND/S45ROUND selector bytes are
+  decoded to period/phase/threshold per the super-round specification.
+
+- **Vector setters limited to the axis-aligned forms.** SVTCA/SPVTCA/SFVTCA set
+  the projection, dual, and freedom vectors to a coordinate axis. The
+  line-based setters (SPVTL/SFVTL/SDPVTL) and running `prep` are deferred to
+  Stage 4, where the point, zone, ppem, and CVT infrastructure they consume is
+  built.
+
+- **Versioning: internal-only stages are patch releases.** Stages that add no
+  public surface and change no output ship as patches (Stage 3 = v2.4.2); the
+  version becomes a minor only when Stage 7 wires the flag on.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/F26Dot6.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/F2Dot14.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/GraphicsState.cs`.
+
+---
+
+## A23 — TrueType Hinting Stage 4: Points, Zones, and Movement
+
+**Date:** 2026-06-04
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` — TrueType instruction interpreter
+**Rationale:** Stage 4 of the hinting plan (A20) adds the point model and the
+operators that move points: scaling to device space, the twilight and glyph
+zones, the Control Value Table, measurement, and absolute and relative movement.
+It is the largest stage and the crux of grid-fitting, but remains inert —
+`RenderOptions.Hinting` stays off and render output is unchanged.
+
+Key decisions:
+
+- **Sizing API: `PrepareSize` per size, `HintGlyph` per glyph.** `PrepareSize`
+  computes the 16.16 font-unit-to-26.6 scale, scales the CVT, allocates the
+  twilight zone, and runs `prep` once; `HintGlyph` builds the glyph zone scaled
+  to 26.6, runs the glyph program, and returns the fitted zone. The graphics
+  state resets per glyph (per the spec) while CVT modifications from `prep`
+  persist, so the interpreter stays decoupled from the loader and is unit-tested
+  with synthetic programs.
+
+- **General projection/freedom math, not axis-only.** Points move along the
+  freedom vector so their projection onto the projection vector changes by a
+  given distance, scaled by `F_dot_P` (freedom · projection in 2.14). This
+  handles SPVTL/SFVTL/SDPVTL diagonal vectors, not just the axis-aligned cases.
+
+- **Deterministic vector normalization.** SPVTL/SFVTL/SDPVTL normalize a 26.6
+  line delta to a 2.14 unit vector using an exact integer square root (a double
+  seed corrected by integer steps), honouring Decision A so the result cannot
+  diverge across platforms in the low bits.
+
+- **Simplifications deferred to the final stage.** MDRP/MIRP distance-type
+  compensation (the de flag bits) is treated as zero, correct for grey
+  (anti-aliased) rendering; single-width handling is present but a no-op at the
+  default cut-in; MPS approximates point size as ppem (exact only at 72 dpi).
+  These are revisited at Stage 7 when the interpreter is wired to real output
+  and visually confirmed.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/Zone.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/F26Dot6.cs`.

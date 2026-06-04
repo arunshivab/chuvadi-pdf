@@ -11,6 +11,74 @@ numbered A01..ANN).
 
 ---
 
+## [2.4.3] - 2026-06-04
+
+### Added
+- **TrueType bytecode hinting — Stage 4 (points, zones, and movement)** in
+  `Chuvadi.Pdf.Fonts.Rendering.Hinting`. Builds on Stage 3; the interpreter is
+  internal and unwired, so render output is unchanged and `RenderOptions.Hinting`
+  remains inert
+  - `PrepareSize(ppem, unitsPerEm, cvt, prep)` computes the 16.16 font-unit to
+    26.6 scale, scales the Control Value Table, allocates the twilight zone,
+    resets the graphics state, and runs the `prep` program once per size;
+    `HintGlyph(RawGlyph)` builds the glyph zone scaled to 26.6, runs the glyph
+    program, and returns the fitted zone
+  - New internal `Zone` type holding current and original 26.6 coordinates and
+    per-axis touch flags for the twilight and glyph zones
+  - `F26Dot6.MulFix` — 16.16 scale multiply used to scale coordinates and CVT
+    entries
+  - Opcodes: measurement (GC/SCFS/MD/MPPEM/MPS), absolute movement (MDAP/MIAP),
+    relative movement (MDRP/MIRP with auto-flip, control-value cut-in, rounding,
+    and minimum-distance clamp), vector-to-line (SPVTL/SFVTL/SDPVTL), CVT access
+    (RCVT/WCVTP/WCVTF), and the supporting state setters
+    (SRP/SZP/SLOOP/SMD/SCVTCI/SSWCI/SSW/FLIPON/FLIPOFF/SDB/SDS/SCANCTRL/SCANTYPE/INSTCTRL)
+
+### Tests
+- 14 tests over synthetic programs (no font file required): font-unit and CVT
+  scaling, CVT read/write, measurement, the four move operators, vector-to-line
+  setters, and persistence of `prep` control-value writes into the glyph program
+
+### Notes
+- Still inert: nothing in the render path calls the interpreter and the
+  `Hinting` flag has no effect
+- MDRP/MIRP distance-type compensation is treated as zero (grey rendering),
+  single-width handling is a no-op at the default cut-in, and MPS approximates
+  point size as ppem; these are revisited at Stage 7
+- Interpolation (ISECT/SHP/SHC/SHZ/SHPIX/IP/IUP), DELTA, and the
+  arithmetic/logical/storage/flow-control tail remain for Stages 5 and 6
+- Architecture and staging rationale: decision log A23
+
+## [2.4.2] - 2026-06-04
+
+### Added
+- **TrueType bytecode hinting — Stage 3 (vectors and rounding)** in
+  `Chuvadi.Pdf.Fonts.Rendering.Hinting`. Builds on Stage 2; the interpreter is
+  internal and unwired, so render output is unchanged and `RenderOptions.Hinting`
+  remains inert
+  - New internal `F26Dot6` (64 = 1px) with FromPixels/ToPixels/Floor/Ceiling/
+    Round/Mul/Div, and `F2Dot14` (16384 = 1.0) with Mul/Dot/ToDouble; multiply
+    and divide round half away from zero and guard divide-by-zero
+  - Axis-aligned vector setters SVTCA/SPVTCA/SFVTCA, and the round-state
+    operators RTG/RTHG/RTDG/RDTG/RUTG/ROFF and SROUND/S45ROUND with spec
+    selector decoding
+  - `round()` engine via floor-to-multiple, correct for any period including
+    S45ROUND's non-power-of-two grid; consumed by MDRP/MIRP in Stage 4
+  - `GraphicsState` gains the super-round period/phase/threshold fields,
+    defaulted to round-to-grid in `Reset()`
+
+### Tests
+- 23 tests over synthetic bytecode: the fixed-point helpers, the round engine
+  under every state, SROUND/S45ROUND selector decoding, and the vector setters
+
+### Notes
+- Still inert: `round()` and the new opcodes have no render-path consumer and
+  the `Hinting` flag has no effect
+- The line-based vector setters (SPVTL/SFVTL/SDPVTL) and running `prep` are
+  deferred to Stage 4 with the point/CVT infrastructure they consume
+- Architecture and rationale: decision log A22
+
+---
+
 ## [2.4.1] - 2026-06-04
 
 ### Added
