@@ -51,6 +51,29 @@ internal sealed class HintingInterpreter
     private const byte OpEndF = 0x2D;
     private const byte OpIDef = 0x89;
 
+    // Stage 3 — vector setters (axis-aligned) and round-state operators.
+    private const byte OpSvtcaY = 0x00;
+    private const byte OpSvtcaX = 0x01;
+    private const byte OpSpvtcaY = 0x02;
+    private const byte OpSpvtcaX = 0x03;
+    private const byte OpSfvtcaY = 0x04;
+    private const byte OpSfvtcaX = 0x05;
+    private const byte OpRtg = 0x18;
+    private const byte OpRthg = 0x19;
+    private const byte OpRtdg = 0x3A;
+    private const byte OpSround = 0x76;
+    private const byte OpS45Round = 0x77;
+    private const byte OpRoff = 0x7A;
+    private const byte OpRutg = 0x7C;
+    private const byte OpRdtg = 0x7D;
+
+    // Grid period bases for SROUND/S45ROUND, in F26Dot6 (64 = 1 pixel).
+    // S45ROUND rounds along the 45-degree diagonal: 1 pixel * sqrt(2)/2 ~= 45.25,
+    // taken as 45. This single constant is the one rounding value worth
+    // confirming against a reference during Stage 7 visual testing.
+    private const int SRoundGridPeriod = 64;
+    private const int S45RoundGridPeriod = 45;
+
     private readonly int[] _stack;
     private readonly int[] _storage;
     private readonly Dictionary<int, byte[]> _functions = new Dictionary<int, byte[]>();
@@ -221,6 +244,48 @@ internal sealed class HintingInterpreter
                 break;
             case OpLoopCall:
                 LoopCall();
+                break;
+            case OpSvtcaY:
+                SetFreedomAndProjection(0, GraphicsState.One2Dot14);
+                break;
+            case OpSvtcaX:
+                SetFreedomAndProjection(GraphicsState.One2Dot14, 0);
+                break;
+            case OpSpvtcaY:
+                SetProjection(0, GraphicsState.One2Dot14);
+                break;
+            case OpSpvtcaX:
+                SetProjection(GraphicsState.One2Dot14, 0);
+                break;
+            case OpSfvtcaY:
+                SetFreedom(0, GraphicsState.One2Dot14);
+                break;
+            case OpSfvtcaX:
+                SetFreedom(GraphicsState.One2Dot14, 0);
+                break;
+            case OpRtg:
+                SetRound(RoundState.ToGrid, 64, 0, 32);
+                break;
+            case OpRthg:
+                SetRound(RoundState.ToHalfGrid, 64, 32, 32);
+                break;
+            case OpRtdg:
+                SetRound(RoundState.ToDoubleGrid, 32, 0, 16);
+                break;
+            case OpRdtg:
+                SetRound(RoundState.DownToGrid, 64, 0, 0);
+                break;
+            case OpRutg:
+                SetRound(RoundState.UpToGrid, 64, 0, 63);
+                break;
+            case OpRoff:
+                SetRound(RoundState.Off, 64, 0, 32);
+                break;
+            case OpSround:
+                SetSuperRound(RoundState.Super, SRoundGridPeriod, Pop());
+                break;
+            case OpS45Round:
+                SetSuperRound(RoundState.Super45, S45RoundGridPeriod, Pop());
                 break;
             default:
                 // Either a custom instruction (IDEF) or an opcode not yet
@@ -513,5 +578,152 @@ internal sealed class HintingInterpreter
         }
 
         _stack[_sp - 1] = value;
+    }
+
+    // ── Vector setters (Stage 3) ──────────────────────────────────────────
+
+    private void SetProjection(int x, int y)
+    {
+        State.ProjectionVectorX = x;
+        State.ProjectionVectorY = y;
+
+        // SPVTCA also sets the dual projection vector to the same axis.
+        State.DualProjectionVectorX = x;
+        State.DualProjectionVectorY = y;
+    }
+
+    private void SetFreedom(int x, int y)
+    {
+        State.FreedomVectorX = x;
+        State.FreedomVectorY = y;
+    }
+
+    private void SetFreedomAndProjection(int x, int y)
+    {
+        SetProjection(x, y);
+        SetFreedom(x, y);
+    }
+
+    // ── Rounding (Stage 3) ────────────────────────────────────────────────
+
+    private void SetRound(RoundState state, int period, int phase, int threshold)
+    {
+        State.RoundState = state;
+        State.RoundPeriod = period;
+        State.RoundPhase = phase;
+        State.RoundThreshold = threshold;
+    }
+
+    // Decodes an SROUND/S45ROUND selector byte into period, phase, and
+    // threshold, following the TrueType super-round specification.
+    private void SetSuperRound(RoundState state, int gridPeriod, int selector)
+    {
+        int period;
+        switch (selector & 0xC0)
+        {
+            case 0x00:
+                period = gridPeriod / 2;
+                break;
+            case 0x80:
+                period = gridPeriod * 2;
+                break;
+            default:
+                // 0x40 (one grid period) and 0xC0 (reserved) both use the grid.
+                period = gridPeriod;
+                break;
+        }
+
+        int phase;
+        switch (selector & 0x30)
+        {
+            case 0x10:
+                phase = period / 4;
+                break;
+            case 0x20:
+                phase = period / 2;
+                break;
+            case 0x30:
+                phase = (period * 3) / 4;
+                break;
+            default:
+                phase = 0;
+                break;
+        }
+
+        int threshold;
+        if ((selector & 0x0F) == 0)
+        {
+            threshold = period - 1;
+        }
+        else
+        {
+            threshold = (((selector & 0x0F) - 4) * period) / 8;
+        }
+
+        State.RoundState = state;
+        State.RoundPeriod = period;
+        State.RoundPhase = phase;
+        State.RoundThreshold = threshold;
+    }
+
+    /// <summary>
+    /// Rounds an engine distance (F26Dot6) under the current round state,
+    /// applying the given engine compensation. Implements the TrueType
+    /// super-round formula via floor-to-multiple, which is correct for any
+    /// period (including S45ROUND's non-power-of-two grid). Used by the point
+    /// movement instructions added in a later stage.
+    /// </summary>
+    /// <param name="distance">The distance to round, in F26Dot6.</param>
+    /// <param name="compensation">The engine compensation, in F26Dot6.</param>
+    /// <returns>The rounded distance, in F26Dot6.</returns>
+    internal int Round(int distance, int compensation)
+    {
+        if (State.RoundState == RoundState.Off)
+        {
+            if (distance >= 0)
+            {
+                int raw = distance + compensation;
+                return raw < 0 ? 0 : raw;
+            }
+            else
+            {
+                int raw = distance - compensation;
+                return raw > 0 ? 0 : raw;
+            }
+        }
+
+        int period = State.RoundPeriod;
+        int phase = State.RoundPhase;
+        int threshold = State.RoundThreshold;
+
+        if (distance >= 0)
+        {
+            int val = FloorToMultiple(distance - phase + threshold + compensation, period) + phase;
+            return val < 0 ? phase : val;
+        }
+        else
+        {
+            int val = -FloorToMultiple(threshold - phase - distance + compensation, period) - phase;
+            return val > 0 ? -phase : val;
+        }
+    }
+
+    // Floors a value to the nearest lower multiple of period (toward negative
+    // infinity), valid for any positive period.
+    private static int FloorToMultiple(int value, int period)
+    {
+        if (period <= 0)
+        {
+            return value;
+        }
+
+        int quotient = value / period;
+
+        if (value % period != 0 && value < 0)
+        {
+            quotient -= 1;
+        }
+
+        return quotient * period;
     }
 }

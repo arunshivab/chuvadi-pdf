@@ -74,6 +74,15 @@ internal sealed class GraphicsState
     /// <summary>The active rounding mode.</summary>
     internal RoundState RoundState { get; set; }
 
+    /// <summary>Super-round period (F26Dot6): the grid spacing distances snap to.</summary>
+    internal int RoundPeriod { get; set; }
+
+    /// <summary>Super-round phase (F26Dot6): the offset added after snapping.</summary>
+    internal int RoundPhase { get; set; }
+
+    /// <summary>Super-round threshold (F26Dot6): the rounding cut-in point.</summary>
+    internal int RoundThreshold { get; set; }
+
     /// <summary>Control value cut-in (F26Dot6); default 17/16 pixel.</summary>
     internal int ControlValueCutIn { get; set; }
 
@@ -130,6 +139,12 @@ internal sealed class GraphicsState
 
         Loop = 1;
         RoundState = RoundState.ToGrid;
+
+        // Round-to-grid expressed as super-round parameters: snap to whole
+        // pixels (period 64 in F26Dot6), no phase, half-pixel threshold.
+        RoundPeriod = 64;
+        RoundPhase = 0;
+        RoundThreshold = 32;
 
         // 17/16 pixel in F26Dot6 = 68; 1 pixel = 64.
         ControlValueCutIn = 68;
