@@ -858,6 +858,36 @@ public sealed class TrueTypeLoader
     }
 
     /// <summary>
+    /// Reads the hinting-relevant maximums from the <c>maxp</c> table. Version 1.0
+    /// tables carry the function/storage/stack/twilight limits; version 0.5
+    /// tables (and any unreadable version) carry none, so
+    /// <see cref="HintingLimits.Default"/> is returned. Consumed by the bytecode
+    /// interpreter to size its tables.
+    /// </summary>
+    internal HintingLimits GetHintingLimits()
+    {
+        uint version = ReadUInt32(_maxpOffset);
+
+        if (version != 0x00010000u)
+        {
+            return HintingLimits.Default;
+        }
+
+        int maxTwilightPoints = ReadUInt16(_maxpOffset + 16);
+        int maxStorage = ReadUInt16(_maxpOffset + 18);
+        int maxFunctionDefs = ReadUInt16(_maxpOffset + 20);
+        int maxInstructionDefs = ReadUInt16(_maxpOffset + 22);
+        int maxStackElements = ReadUInt16(_maxpOffset + 24);
+
+        return new HintingLimits(
+            maxFunctionDefs,
+            maxInstructionDefs,
+            maxStorage,
+            maxStackElements,
+            maxTwilightPoints);
+    }
+
+    /// <summary>
     /// Parses a glyph into its raw, un-cubicized TrueType point set: on/off-curve
     /// points in font design units, contour end indices, the glyph's instruction
     /// bytecode, and four appended phantom points. This is the input the bytecode
