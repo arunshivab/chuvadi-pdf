@@ -675,3 +675,56 @@ Key decisions:
 **Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
 `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/Zone.cs`,
 `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/F26Dot6.cs`.
+
+---
+
+## A24 — TrueType Hinting Stages 5 and 6: Arithmetic, Flow Control, DELTA, and Interpolation
+
+**Date:** 2026-06-05
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` — TrueType instruction interpreter
+**Rationale:** Stages 5 and 6 of the hinting plan (A20) add the remaining
+opcode families on top of the Stage 4 point and movement model: the
+arithmetic/logical/stack tail, storage, flow control, the DELTA exceptions, and
+the shift/interpolation operators. They were delivered as one PR because the
+groups are small and interdependent (the interpolation operators lean on the
+arithmetic and flow-control primitives), and the whole set is unit-testable in
+isolation. It remains inert — `RenderOptions.Hinting` stays off and render
+output is unchanged.
+
+Key decisions:
+
+- **Flow control lives in the execution loop, not the dispatch table.** IF/ELSE/
+  EIF and JMPR/JROT/JROF move the instruction pointer, so they are handled where
+  the pointer lives. ELSE/EIF matching and forward skips scan instruction by
+  instruction using the same length-aware logic as the Stage 2 FDEF scanner, so
+  inline push data is never misread as a control opcode, and nested IFs track
+  depth.
+
+- **DELTA decode is explicit per pair.** Each (argument, index) pair splits the
+  argument byte into a relative-ppem high nibble and a magnitude-selector low
+  nibble; the exception applies only when the active ppem equals
+  `DeltaBase + tableBase + relppem`, with the three point-table opcodes carrying
+  base offsets 0/16/32. The magnitude maps through the DeltaShift step. The
+  pop order (index deeper, argument on top) is the spec reading but is **pinned
+  by tests and flagged** for confirmation against real fonts at Stage 7.
+
+- **Full IUP, not a placeholder.** IUP[x]/IUP[y] interpolate each contour's
+  untouched points between consecutive touched anchors, with a single touched
+  anchor producing a rigid shift and zero anchors leaving the contour untouched.
+  Doing it fully now keeps Stage 7 focused on wiring and visual confirmation
+  rather than algorithm work.
+
+- **GETINFO answers conservatively.** Only the scaler-version and
+  grayscale-rasterizer bits are reported; rotation/stretch/ClearType selectors
+  return zero. Real hint programs branch on GETINFO, so a deterministic minimal
+  answer keeps inert behaviour predictable until Stage 7 sets the true
+  environment.
+
+- **MSIRP deferred.** Its opcode assignment collides with RTDG in the working
+  decode table; rather than guess, it is left out of this stage and resolved
+  with the Stage 7 wiring. The operand orders for ISECT (b1, b0, a1, a0, point)
+  and JROT/JROF (condition then offset) are likewise test-pinned pending
+  real-font confirmation.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
+`tests/Chuvadi.Pdf.Fonts.Rendering.Tests/HintingArithmeticAndInterpolationTests.cs`.

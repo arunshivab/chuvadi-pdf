@@ -11,6 +11,51 @@ numbered A01..ANN).
 
 ---
 
+## [2.4.4] - 2026-06-05
+
+### Added
+- **TrueType bytecode hinting — Stages 5 and 6 (arithmetic, logic, flow
+  control, DELTA, and interpolation)** in
+  `Chuvadi.Pdf.Fonts.Rendering.Hinting`. Builds on Stage 4 and fills in the bulk
+  of the interpreter's opcode surface; still internal and unwired, so render
+  output is unchanged and `RenderOptions.Hinting` remains inert
+  - Arithmetic, logical, and stack operators: ADD/SUB/DIV/MUL/ABS/NEG/FLOOR/
+    CEILING/MAX/MIN/ROLL, AND/OR/NOT/EQ/NEQ/GT/GTEQ/LT/LTEQ/ODD/EVEN, and
+    ROUND[ab]/NROUND[ab]; DIV and MUL operate in 26.6 fixed point
+  - Storage-area access (RS/WS)
+  - Flow control handled in the execution loop with depth-aware scanning:
+    IF/ELSE/EIF and the jumps JMPR/JROT/JROF
+  - DELTA exceptions DELTAP1/2/3 (point table bases 0/16/32) and DELTAC1/2/3
+    (CVT), decoding each pair's relative-ppem nibble and magnitude selector and
+    applying only when the active ppem matches `DeltaBase + tableBase + relppem`
+  - Shift and interpolation family, loop-aware via the graphics-state loop
+    counter: SHP/SHC/SHZ/SHPIX, IP, ISECT, and full IUP[x]/IUP[y]
+    (per-contour interpolation between touched anchors, with single-anchor
+    rigid shift), plus ALIGNRP/ALIGNPTS/UTP
+  - GETINFO answers conservatively — scaler version and the grayscale-rasterizer
+    flag only
+
+### Tests
+- 25 tests over synthetic programs (no font file required): each arithmetic,
+  logical, and rounding operator; ROLL and storage; the flow-control branches
+  and jumps; DELTA at matching and non-matching ppem; and the geometry family
+  (SHPIX/IP/IUP interpolate-and-shift/ALIGNRP/ALIGNPTS/UTP/SHC/ISECT/GETINFO),
+  with expected values hand-verified in fixed point
+
+### Notes
+- Still inert: nothing in the render path calls the interpreter and the
+  `Hinting` flag has no effect
+- Operand orders that the spec underspecifies are pinned by tests and flagged
+  for confirmation against real fonts at Stage 7: DELTA pairs (point/CVT index
+  deeper, argument on top), ISECT (b1, b0, a1, a0, point), and JROT/JROF
+  (condition then offset)
+- Carries forward the Stage 4 simplifications (MDRP/MIRP distance-type
+  compensation zero, single-width no-op at default cut-in, MPS as ppem) and
+  GETINFO's conservative answer, all revisited at Stage 7
+- MSIRP is deferred: its opcode assignment collides with RTDG in the working
+  decode table and is resolved alongside the Stage 7 wiring
+- Architecture and rationale: decision log A24
+
 ## [2.4.3] - 2026-06-04
 
 ### Added
