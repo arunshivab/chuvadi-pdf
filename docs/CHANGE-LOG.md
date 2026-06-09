@@ -728,3 +728,56 @@ Key decisions:
 
 **Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
 `tests/Chuvadi.Pdf.Fonts.Rendering.Tests/HintingArithmeticAndInterpolationTests.cs`.
+
+---
+
+## A25 - TrueType Hinting Stage 7: Wiring into the Raster Path, MSIRP/RTDG Fix, and HintingMode.Light Default
+
+**Date:** 2026-06-09
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (interpreter, loader), `Chuvadi.Pdf.Rendering` (options, rasterizer), `Chuvadi.Pdf.Rendering.DisplayList` (raster builder)
+**Rationale:** Stage 7 connects the interpreter built across Stages 1-6 (A20, A24) to real raster output and turns hinting on by default. Doing so against a real embedded-TrueType document (a nine-page Word-generated CV, Identity-H, unitsPerEm 2048) surfaced several latent interpreter faults that inert unit tests could not - most importantly the MSIRP/RTDG collision deferred in A24. Delivered as one PR because the wiring and the fixes it exposes are inseparable: the pipeline cannot be validated without correct opcodes, and the opcode faults are only observable once the pipeline renders.
+
+Key decisions:
+
+- **MSIRP implemented; RTDG moved to its correct opcode.** A24 left MSIRP out because `0x3A` was mapped to RTDG in the working decode table. The correct TrueType assignment is `0x3A`/`0x3B` = MSIRP[0]/MSIRP[1] and `0x3D` = RTDG. Because MSIRP was decoded as a round-state op (which pops nothing), every MSIRP a glyph program issued stranded its two operands on the stack, cascading into corrupted reference points (rp0/rp1/rp2) and visibly broken glyphs - the capital W lost the lower halves of its diagonal strokes. MSIRP now moves a point so its projected distance from rp0 equals a stack-supplied distance, setting rp1 = rp0, rp2 = point, and rp0 = point for the [1] form. RTDG is relabelled `0x3D`. The Stage-3 rounding test that pinned RTDG to `0x3A` was corrected to `0x3D`, and an MSIRP movement test was added.
+
+- **`fpgm` runs before `prep`.** Preparing a size must execute the font program before the control-value program, since `prep` calls functions that `fpgm` defines. Earlier the size-prep path ran only `prep`.
+
+- **IP shifts out-of-range points.** Interpolate-points now brackets each point by the two reference points' original positions: points inside are interpolated proportionally; points outside the span are shifted by the nearer reference's delta, per the specification. Previously all points were scaled proportionally, which pulled out-of-range points inward.
+
+- **Outlines re-cubicized in fractional 26.6.** The hinted contour is converted back to a path in fixed point rather than rounded to whole pixels first, so small glyphs retain their shape. The device-ppem grid fit is reconstructed exactly by the painter: the loader hints at the true device ppem (`round(pointSize * dpi / 72)`) and divides the fitted outline by that scale before placement.
+
+- **FLIP and vector opcodes implemented.** FLIPPT/FLIPRGON/FLIPRGOFF (`0x80`-`0x82`) and SPVFS/SFVFS/GPV/GFV/SFVTPV (`0x0A`-`0x0E`) were silent no-ops that drifted the stack; they are now handled.
+
+- **HintingMode.Light is the default.** The three-way `HintingMode { Off, Light, Full }` replaces the inert boolean intent. `Light` grid-fits the Y axis only (`OriginalX` preserved, `CurrentY` fitted); `Full` fits both axes. Light is the default because, on a grayscale (anti-aliased) rasterizer, Y-only fitting gives crisp baselines and stem heights without the horizontal stem snapping that reads heavy - the same reasoning behind the A-series grey-rendering simplifications. The gate for turning hinting on was "no glyph worse than the unhinted baseline," which Light meets.
+
+- **Project-reference direction kept intact.** `RenderOptions` lives in `Chuvadi.Pdf.Rendering`, which references `Chuvadi.Pdf.Rendering.DisplayList`; the raster `DisplayListBuilder` therefore takes plain primitives (a hinting scale and a light/full flag), not `RenderOptions`, and `PageRasterizer` maps the mode to those. This avoids inverting the existing dependency.
+
+- **Full-mode parallel-stem squeeze deferred.** `Full` mode visibly over-tightens the horizontal distance between the two vertical stems of n/u/m/h, collapsing the counter. This is an X-axis minimum-distance/single-width refinement and is left for a follow-up; Light (the default) does not exhibit it because it does not fit X. The MDRP/MIRP distance-type-compensation-zero, single-width-no-op, and MPS-as-ppem simplifications carried since A-series are revisited with that work.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/FontRenderer.cs`,
+`src/Chuvadi.Pdf.Rendering/RenderOptions.cs`,
+`src/Chuvadi.Pdf.Rendering/PageRasterizer.cs`,
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`,
+`examples/Chuvadi.Examples.Render/Program.cs`,
+`tests/Chuvadi.Pdf.Fonts.Rendering.Tests/HintingStateOpsTests.cs`,
+`tests/Chuvadi.Pdf.Fonts.Rendering.Tests/HintingMovementTests.cs`.
+
+---
+
+## A26 - Full-Mode Hinted Advance Width
+
+**Date:** 2026-06-09
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (loader), `Chuvadi.Pdf.Rendering.DisplayList` (raster builder)
+**Rationale:** After A25 shipped, `Full` mode left an extra gap to the right of each glyph. The glyph program grid-fits the horizontal advance phantom (pp2), but the renderer ignored that and advanced the pen by the scaled static `hmtx` value, so the cell was wider than the grid-fitted ink. (This entry also restores the A25 record, which was inadvertently omitted from the v2.5.0 commit and is included here alongside the fix.)
+
+Key decisions:
+
+- **Read the hinted advance from the phantom in Full mode.** `GetHintedGlyphOutline` now computes the advance from the hinted horizontal phantom points (`pp2 - pp1`, in 26.6 device units, rounded to whole device pixels) instead of `round(hmtx * scale)`. `ShowText` and `ShowTextComposite` use that hinted advance (converted to user space by `1 / hintingScale`) when a glyph was hinted in Full mode.
+
+- **Light and unhinted paths unchanged.** They keep using `GlyphMetrics.AdvanceWidthAt`, the scaled `hmtx` advance. Light does not grid-fit the horizontal axis, so its ink stays at scaled positions and a grid-fitted advance would mismatch it.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.
