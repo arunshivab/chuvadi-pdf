@@ -973,8 +973,17 @@ public sealed class TrueTypeLoader
 
             double scale = (double)ppem / _unitsPerEm;
             GlyphMetrics fontMetrics = GetGlyphMetrics(glyphId);
+
+            // Advance from the hinted horizontal phantom points (pp2 - pp1),
+            // in 26.6 device units, rounded to whole device pixels. The glyph
+            // program grid-fits the advance phantom, so the hinted advance can
+            // differ from the merely scaled hmtx value; using it keeps the
+            // advance consistent with grid-fitted ink (full hinting).
+            int originPhantomX = zone.CurrentX[raw.RealPointCount + 0];
+            int advancePhantomX = zone.CurrentX[raw.RealPointCount + 1];
+            int hintedAdvancePx = (int)Math.Round((advancePhantomX - originPhantomX) / 64.0);
             GlyphMetrics deviceMetrics = new GlyphMetrics(
-                advanceWidth: (int)Math.Round(fontMetrics.AdvanceWidth * scale),
+                advanceWidth: hintedAdvancePx,
                 leftSideBearing: (int)Math.Round(fontMetrics.LeftSideBearing * scale),
                 unitsPerEm: 1,
                 bounds: new RectangleF(

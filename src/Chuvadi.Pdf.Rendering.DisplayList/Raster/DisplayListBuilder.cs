@@ -1077,8 +1077,8 @@ public static class DisplayListBuilder
                 else
                 {
                     GlyphOutline glyph = renderer.GetGlyphOutlineForChar(c);
-                    GlyphOutline scaled =
-                        TryHint(renderer, renderer.GetGlyphIndex(c)) ?? glyph.Scale(_state.FontSize);
+                    GlyphOutline? hintedGlyph = TryHint(renderer, renderer.GetGlyphIndex(c));
+                    GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
                     {
@@ -1099,7 +1099,9 @@ public static class DisplayListBuilder
                         _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
                     }
 
-                    advance = glyph.Metrics.AdvanceWidthAt(_state.FontSize);
+                    advance = hintedGlyph is not null && !_lightHinting
+                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
+                        : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
                 }
 
                 // Per Â§9.4.4: tx = (w + Tc + TwÂ·(c==space ? 1 : 0)) Â· Th/100
@@ -1142,8 +1144,8 @@ public static class DisplayListBuilder
                 else
                 {
                     GlyphOutline glyph = renderer.GetGlyphOutline(code);
-                    GlyphOutline scaled =
-                        TryHint(renderer, code) ?? glyph.Scale(_state.FontSize);
+                    GlyphOutline? hintedGlyph = TryHint(renderer, code);
+                    GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
                     {
@@ -1159,7 +1161,9 @@ public static class DisplayListBuilder
                         _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
                     }
 
-                    advance = glyph.Metrics.AdvanceWidthAt(_state.FontSize);
+                    advance = hintedGlyph is not null && !_lightHinting
+                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
+                        : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
                 }
 
                 double tx = (advance + _state.CharacterSpacing) * (_state.HorizontalScaling / 100.0);

@@ -11,6 +11,82 @@ numbered A01..ANN).
 
 ---
 
+## [2.5.1] - 2026-06-09
+
+### Fixed
+- **Full-mode hinting now uses the hinted advance width.** In
+  `HintingMode.Full`, the pen advance is taken from the hinted horizontal
+  phantom points (pp2 - pp1) rather than the scaled static `hmtx` advance.
+  The glyph program grid-fits the advance phantom, so the hinted advance can
+  differ from the merely scaled value; using it keeps the advance consistent
+  with the grid-fitted ink and removes the extra right-side gap that appeared
+  after each glyph. `Light` (the default) and the unhinted path are unchanged -
+  they continue to use the scaled `hmtx` advance, since `Light` does not
+  grid-fit the horizontal axis
+
+## [2.5.0] - 2026-06-09
+
+### Added
+- **TrueType bytecode hinting is now wired into the raster render path
+  (Stage 7), and on by default.** The completed interpreter
+  (`Chuvadi.Pdf.Fonts.Rendering.Hinting`) is now executed during
+  rasterization for embedded TrueType glyphs, replacing the inert flag of
+  earlier releases
+  - New `RenderOptions.Hinting` mode enum `HintingMode { Off, Light, Full }`.
+    **`Light` is the new default** - it grid-fits the vertical (Y) axis only,
+    keeping baselines and stem heights crisp without the horizontal stem
+    snapping that reads heavy under grayscale anti-aliasing
+  - `Full` executes the complete interpreter on both axes (best for
+    black-and-white or very low-resolution output); `Off` restores the previous
+    unhinted behaviour
+  - Glyph hinting runs per device-ppem with a fractional 26.6 outline that the
+    painter scales back exactly, so the grid fit lands on real device pixels
+  - The example renderer accepts `--hint-light` (default) and `--hint-full`
+
+### Fixed
+- **MSIRP (opcodes 0x3A/0x3B) was mislabelled as RTDG and silently dropped its
+  two stack operands.** This was the decision deferred in 2.4.4 (A24): the
+  working decode table mapped `0x3A` to RTDG, so every MSIRP a glyph program
+  issued left two values stranded on the operand stack, corrupting all
+  downstream reference points and producing visibly broken glyphs (the capital
+  W in the test CV lost half its strokes). MSIRP is now implemented (move a
+  point to a stack-supplied distance from rp0, setting rp1/rp2 and, for the
+  [1] form, rp0), and **RTDG is moved to its correct opcode 0x3D**
+- **`fpgm` now runs before `prep`** when preparing a size, so functions the
+  control-value program calls are defined when it executes
+- **IP (interpolate points) handles out-of-range points by shifting**, not
+  proportional scaling: points whose original position lies outside the
+  [rp1, rp2] reference span are shifted by the nearer reference's movement, per
+  the TrueType specification, fixing points that previously collapsed inward
+- **Glyph outlines are re-cubicized in fractional 26.6**, not rounded to whole
+  pixels first, so small glyphs keep their shape instead of degenerating
+- Implemented the FLIP opcodes FLIPPT/FLIPRGON/FLIPRGOFF (0x80-0x82) and the
+  vector opcodes SPVFS/SFVFS/GPV/GFV/SFVTPV (0x0A-0x0E), which were previously
+  silent no-ops that drifted the stack
+
+### Changed
+- Default render output now differs from 2.4.x for documents with embedded
+  TrueType fonts: glyphs are hinted with `HintingMode.Light`. Pass
+  `RenderOptions { Hinting = HintingMode.Off }` to restore the previous output
+
+### Tests
+- Corrected the RTDG rounding test to use the proper opcode (0x3D); added an
+  MSIRP movement test; the full suite passes (no glyph renders worse than the
+  unhinted baseline at the gate)
+
+### Notes
+- **Known limitation - `Full` mode over-tightens parallel-stem letters.** On
+  letters with two vertical stems (n, u, m, h), `Full` mode pulls the stems too
+  close horizontally, narrowing the counter. This is an X-axis
+  minimum-distance/stem-width refinement tracked for a follow-up; **`Light`
+  (the default) is unaffected** and renders these correctly
+- Composite (component) glyphs still fall back to unhinted outlines
+- Carries forward the documented MDRP/MIRP simplifications (distance-type
+  compensation zero - correct for grayscale, single-width no-op at the default
+  cut-in, MPS approximated as ppem) revisited alongside the `Full`-mode stem
+  work
+- Architecture and rationale: decision log A25
+
 ## [2.4.4] - 2026-06-05
 
 ### Added
