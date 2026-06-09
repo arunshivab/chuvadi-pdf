@@ -51,6 +51,8 @@ public static class DisplayListBuilder
     /// </summary>
     /// <param name="page">The PDF page to interpret.</param>
     /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting (raster path only).</param>
+    /// <param name="lightHinting">When true, grid-fit the Y axis only (lighter, grayscale-friendly).</param>
     /// <returns>
     /// An immutable display list. Empty if the page has no content
     /// stream. CTM-baked geometry; per-op clip snapshots. Page rotation
@@ -59,12 +61,12 @@ public static class DisplayListBuilder
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="page"/> or <paramref name="objects"/> is null.
     /// </exception>
-    public static PageDisplayList Build(PdfPage page, PdfObjectStore objects)
+    public static PageDisplayList Build(PdfPage page, PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false)
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(objects);
 
-        Worker worker = new Worker(objects);
+        Worker worker = new Worker(objects, hintingScale, lightHinting);
         byte[] content = worker.LoadContentBytes(page.Contents);
         return worker.BuildFromBytes(content, page.Resources, page.Width, page.Height);
     }
@@ -89,6 +91,8 @@ public static class DisplayListBuilder
     /// <param name="objects">The object store for resolving indirect references.</param>
     /// <param name="pageWidth">The MediaBox width for the resulting display list.</param>
     /// <param name="pageHeight">The MediaBox height for the resulting display list.</param>
+    /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting (raster path only).</param>
+    /// <param name="lightHinting">When true, grid-fit the Y axis only (lighter, grayscale-friendly).</param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="content"/> or <paramref name="objects"/> is null.
     /// </exception>
@@ -100,12 +104,14 @@ public static class DisplayListBuilder
         PdfDictionary? resources,
         PdfObjectStore objects,
         double pageWidth,
-        double pageHeight)
+        double pageHeight,
+        double hintingScale = 0.0,
+        bool lightHinting = false)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(objects);
 
-        Worker worker = new Worker(objects);
+        Worker worker = new Worker(objects, hintingScale, lightHinting);
         return worker.BuildFromBytes(content, resources, pageWidth, pageHeight);
     }
 
@@ -116,6 +122,8 @@ public static class DisplayListBuilder
     private sealed class Worker
     {
         private readonly PdfObjectStore _objects;
+        private readonly double _hintingScale;
+        private readonly bool _lightHinting;
         private readonly FilterPipeline _pipeline;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
@@ -138,9 +146,11 @@ public static class DisplayListBuilder
         private bool _clipPending;
         private FillRule _clipRule;
 
-        public Worker(PdfObjectStore objects)
+        public Worker(PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false)
         {
             _objects = objects;
+            _hintingScale = hintingScale;
+            _lightHinting = lightHinting;
             _pipeline = FilterRegistry.CreateDefaultPipeline();
             _fontCache = new Dictionary<string, FontRenderer?>();
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
@@ -1067,7 +1077,8 @@ public static class DisplayListBuilder
                 else
                 {
                     GlyphOutline glyph = renderer.GetGlyphOutlineForChar(c);
-                    GlyphOutline scaled = glyph.Scale(_state.FontSize);
+                    GlyphOutline scaled =
+                        TryHint(renderer, renderer.GetGlyphIndex(c)) ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
                     {
@@ -1131,7 +1142,8 @@ public static class DisplayListBuilder
                 else
                 {
                     GlyphOutline glyph = renderer.GetGlyphOutline(code);
-                    GlyphOutline scaled = glyph.Scale(_state.FontSize);
+                    GlyphOutline scaled =
+                        TryHint(renderer, code) ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
                     {
@@ -1157,6 +1169,43 @@ public static class DisplayListBuilder
         }
 
         // â”€â”€ Font resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+        // Returns a grid-fitted, device-space outline when hinting is enabled
+        // and the glyph can be hinted; otherwise null so the caller falls back
+        // to the scaled unhinted outline. Device ppem equals the device-space
+        // font size (the text/CTM scale is already folded into _state.FontSize).
+        // Grid-fits a glyph at the true device ppem (PDF size x device scale),
+        // then expresses the device-space fitted outline back in PDF user
+        // space by dividing by the device scale. The painter re-applies the
+        // same scale, exactly reconstructing the grid-fitted pixel positions.
+        // Returns null when hinting is off or the glyph cannot be hinted.
+        private GlyphOutline? TryHint(FontRenderer renderer, int glyphId)
+        {
+            if (_hintingScale <= 0.0)
+            {
+                return null;
+            }
+
+            int ppem = (int)Math.Round(_state.FontSize * _hintingScale);
+
+            if (ppem <= 0)
+            {
+                return null;
+            }
+
+            GlyphOutline? hinted = renderer.GetHintedGlyphOutline(glyphId, ppem, _lightHinting);
+
+            if (hinted is null)
+            {
+                return null;
+            }
+
+            // Device pixels -> PDF user space, so the painter's device scale
+            // restores the fitted positions instead of compounding them.
+            Transform toUserSpace = Transform.CreateScale(1.0 / _hintingScale);
+            Path userSpace = TransformPath(hinted.Outline, toUserSpace);
+            return new GlyphOutline(userSpace, hinted.Metrics);
+        }
 
         private FontRenderer? GetFontRenderer()
         {
@@ -1506,7 +1555,7 @@ public static class DisplayListBuilder
 
             // Build the sub-display-list in form-local space with a fresh
             // worker (identity CTM, fresh path/text state, fresh stack).
-            Worker sub = new Worker(_objects);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting);
 
             byte[] formContent;
 

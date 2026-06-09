@@ -23,6 +23,7 @@ public sealed class HintingMovementTests
     private static readonly byte[] MdapRoundPoint0 = [0xB0, 0x00, 0x2F];                   // PUSHB 0; MDAP[1]
     private static readonly byte[] Srp0ThenMdrpPoint1 = [0xB0, 0x00, 0x10, 0xB0, 0x01, 0xC4]; // PUSHB 0; SRP0; PUSHB 1; MDRP[round]
     private static readonly byte[] Srp0ThenMirpPoint1 = [0xB0, 0x00, 0x10, 0xB1, 0x01, 0x00, 0xE4]; // PUSHB 0; SRP0; PUSHB 1,0; MIRP[round]
+    private static readonly byte[] Srp0ThenMsirpPoint1 = [0xB0, 0x00, 0x10, 0xB0, 0x01, 0xB0, 0x80, 0x3A]; // PUSHB 0; SRP0; PUSHB 1; PUSHB 128; MSIRP[0]
     private static readonly byte[] SpvtlParallel = [0xB1, 0x00, 0x01, 0x06];               // PUSHB 0,1; SPVTL[0]
     private static readonly byte[] SpvtlPerpendicular = [0xB1, 0x00, 0x01, 0x07];          // PUSHB 0,1; SPVTL[1]
     private static readonly byte[] WriteCvt0To70 = [0xB1, 0x00, 0x46, 0x44];               // PUSHB 0,70; WCVTP
@@ -172,6 +173,26 @@ public sealed class HintingMovementTests
 
         // The CVT distance (110), not the original (70), is used and rounded to 128.
         zone.CurrentX[1].Should().Be(128);
+    }
+
+    [Fact]
+    public void Msirp_MovesPointToStackDistanceFromRp0AndSetsReferencePoints()
+    {
+        HintingInterpreter interp = NewInterpreter();
+        interp.PrepareSize(64, UnitsPerEm, null, null);           // 35 -> 70; rp0 (point 0) at 0
+        Zone zone = interp.HintGlyph(Glyph([0, 35], [0, 0], Srp0ThenMsirpPoint1));
+
+        // MSIRP takes the distance straight off the stack in 26.6 pixels (128 == 2px),
+        // so point 1 lands exactly that far from rp0 along the projection, with no
+        // rounding (unlike MDRP/MIRP). This is the opcode (0x3A) that was previously
+        // mis-decoded as RTDG and silently dropped its two stack operands.
+        zone.CurrentX[1].Should().Be(128);
+        zone.TouchedX[1].Should().BeTrue();
+
+        // MSIRP[0] sets rp1 = rp0 and rp2 = the moved point, leaving rp0 unchanged.
+        interp.State.Rp1.Should().Be(0);
+        interp.State.Rp2.Should().Be(1);
+        interp.State.Rp0.Should().Be(0);
     }
 
     [Fact]

@@ -60,7 +60,7 @@ internal sealed class HintingInterpreter
     private const byte OpSfvtcaX = 0x05;
     private const byte OpRtg = 0x18;
     private const byte OpRthg = 0x19;
-    private const byte OpRtdg = 0x3A;
+    private const byte OpRtdg = 0x3D;
     private const byte OpSround = 0x76;
     private const byte OpS45Round = 0x77;
     private const byte OpRoff = 0x7A;
@@ -72,6 +72,11 @@ internal sealed class HintingInterpreter
     private const byte OpSpvtlPerp = 0x07;
     private const byte OpSfvtlParallel = 0x08;
     private const byte OpSfvtlPerp = 0x09;
+    private const byte OpSpvfs = 0x0A;
+    private const byte OpSfvfs = 0x0B;
+    private const byte OpGpv = 0x0C;
+    private const byte OpGfv = 0x0D;
+    private const byte OpSfvtpv = 0x0E;
     private const byte OpSdpvtlParallel = 0x86;
     private const byte OpSdpvtlPerp = 0x87;
 
@@ -163,6 +168,9 @@ internal sealed class HintingInterpreter
     private const byte OpJmpr = 0x1C;
     private const byte OpJrot = 0x78;
     private const byte OpJrof = 0x79;
+    private const byte OpFlipPt = 0x80;
+    private const byte OpFlipRgOn = 0x81;
+    private const byte OpFlipRgOff = 0x82;
 
     // Stage 5/6 — DELTA exceptions.
     private const byte OpDeltaP1 = 0x5D;
@@ -181,6 +189,8 @@ internal sealed class HintingInterpreter
     private const byte OpShz1 = 0x37;       // SHZ[1] — shift zone by rp1 (zp0)
     private const byte OpShpix = 0x38;
     private const byte OpIp = 0x39;
+    private const byte OpMsirp0 = 0x3A;
+    private const byte OpMsirp1 = 0x3B;
     private const byte OpIsect = 0x0F;
     private const byte OpIupX = 0x30;       // IUP[0] — x direction
     private const byte OpIupY = 0x31;       // IUP[1] — y direction
@@ -477,6 +487,23 @@ internal sealed class HintingInterpreter
             case OpSfvtlParallel:
                 SetVectorToLine(projection: false, perpendicular: false);
                 break;
+            case OpSpvfs:
+                SetProjectionFromStack();
+                break;
+            case OpSfvfs:
+                SetFreedomFromStack();
+                break;
+            case OpGpv:
+                Push(State.ProjectionVectorX);
+                Push(State.ProjectionVectorY);
+                break;
+            case OpGfv:
+                Push(State.FreedomVectorX);
+                Push(State.FreedomVectorY);
+                break;
+            case OpSfvtpv:
+                SetFreedom(State.ProjectionVectorX, State.ProjectionVectorY);
+                break;
             case OpSfvtlPerp:
                 SetVectorToLine(projection: false, perpendicular: true);
                 break;
@@ -741,6 +768,12 @@ internal sealed class HintingInterpreter
             case OpIupY:
                 InterpolateUntouched(yDirection: true);
                 break;
+            case OpMsirp0:
+                MoveStackIndirectRelative(setRp0: false);
+                break;
+            case OpMsirp1:
+                MoveStackIndirectRelative(setRp0: true);
+                break;
             case OpAlignRp:
                 AlignToReferencePoint();
                 break;
@@ -749,6 +782,15 @@ internal sealed class HintingInterpreter
                 break;
             case OpUtp:
                 UntouchPoint();
+                break;
+            case OpFlipPt:
+                FlipPoint();
+                break;
+            case OpFlipRgOn:
+                FlipRange(onCurve: true);
+                break;
+            case OpFlipRgOff:
+                FlipRange(onCurve: false);
                 break;
 
             // ── Environment query (Stage 5/6) ──
@@ -1155,6 +1197,20 @@ internal sealed class HintingInterpreter
     }
 
     // ── Vector setters (Stage 3) ──────────────────────────────────────────
+
+    private void SetProjectionFromStack()
+    {
+        int y = Pop();
+        int x = Pop();
+        SetProjection(x, y);
+    }
+
+    private void SetFreedomFromStack()
+    {
+        int y = Pop();
+        int x = Pop();
+        SetFreedom(x, y);
+    }
 
     private void SetProjection(int x, int y)
     {
@@ -1609,6 +1665,34 @@ internal sealed class HintingInterpreter
     // their original distance, optionally rounded and clamped to the minimum
     // distance. Compensation for distance type (the de bits) is treated as zero
     // (grey rendering); the colour compensations are a later refinement.
+    // MSIRP[a]: move a point (zp1) so its distance from rp0 (zp0) along the
+    // projection equals a distance popped from the stack (F26Dot6). Sets
+    // rp1 = rp0 and rp2 = point; when a = 1, also sets rp0 = point.
+    private void MoveStackIndirectRelative(bool setRp0)
+    {
+        int distance = Pop();
+        int point = Pop();
+        Zone refZone = ZoneFor(State.Zp0);
+        Zone zone = ZoneFor(State.Zp1);
+        if (!IsValidPoint(point, zone) || !IsValidPoint(State.Rp0, refZone))
+        {
+            return;
+        }
+
+        int currentDistance = Project(
+            zone.CurrentX[point] - refZone.CurrentX[State.Rp0],
+            zone.CurrentY[point] - refZone.CurrentY[State.Rp0]);
+
+        MovePoint(zone, point, distance - currentDistance);
+
+        State.Rp1 = State.Rp0;
+        State.Rp2 = point;
+        if (setRp0)
+        {
+            State.Rp0 = point;
+        }
+    }
+
     private void MoveDirectRelative(byte opcode)
     {
         bool setRp0 = (opcode & MoveFlagSetRp0) != 0;
@@ -1987,6 +2071,36 @@ internal sealed class HintingInterpreter
 
     // SHP[a]: shift Loop points in zp2 by the reference point's movement.
     // a = 1 uses rp1 in zp0; a = 0 uses rp2 in zp1.
+    private void FlipPoint()
+    {
+        Zone zone = ZoneFor(State.Zp0);
+        int count = State.Loop;
+        for (int i = 0; i < count; i++)
+        {
+            int point = Pop();
+            if (point >= 0 && point < zone.OnCurve.Length)
+            {
+                zone.OnCurve[point] = !zone.OnCurve[point];
+            }
+        }
+
+        State.Loop = 1;
+    }
+
+    private void FlipRange(bool onCurve)
+    {
+        int highPoint = Pop();
+        int lowPoint = Pop();
+        Zone zone = ZoneFor(State.Zp0);
+        for (int point = lowPoint; point <= highPoint; point++)
+        {
+            if (point >= 0 && point < zone.OnCurve.Length)
+            {
+                zone.OnCurve[point] = onCurve;
+            }
+        }
+    }
+
     private void ShiftPoints(bool useRp1)
     {
         int refPoint = useRp1 ? State.Rp1 : State.Rp2;
@@ -2149,17 +2263,27 @@ internal sealed class HintingInterpreter
         int rp2 = State.Rp2;
         bool refsValid = IsValidPoint(rp1, zone0) && IsValidPoint(rp2, zone1);
 
-        int originalRange = 0;
-        int currentRange = 0;
+        int origRef1 = 0;
+        int origRef2 = 0;
+        int curRef1 = 0;
+        int curRef2 = 0;
         if (refsValid)
         {
-            originalRange = DualProject(
-                zone1.OriginalX[rp2] - zone0.OriginalX[rp1],
-                zone1.OriginalY[rp2] - zone0.OriginalY[rp1]);
-            currentRange = Project(
-                zone1.CurrentX[rp2] - zone0.CurrentX[rp1],
-                zone1.CurrentY[rp2] - zone0.CurrentY[rp1]);
+            origRef1 = DualProject(zone0.OriginalX[rp1], zone0.OriginalY[rp1]);
+            origRef2 = DualProject(zone1.OriginalX[rp2], zone1.OriginalY[rp2]);
+            curRef1 = Project(zone0.CurrentX[rp1], zone0.CurrentY[rp1]);
+            curRef2 = Project(zone1.CurrentX[rp2], zone1.CurrentY[rp2]);
         }
+
+        bool ref1IsLow = origRef1 <= origRef2;
+        int origLow = ref1IsLow ? origRef1 : origRef2;
+        int origHigh = ref1IsLow ? origRef2 : origRef1;
+        int curLow = ref1IsLow ? curRef1 : curRef2;
+        int curHigh = ref1IsLow ? curRef2 : curRef1;
+        int shiftLow = curLow - origLow;
+        int shiftHigh = curHigh - origHigh;
+        int origSpan = origHigh - origLow;
+        int curSpan = curHigh - curLow;
 
         int count = State.Loop;
         for (int i = 0; i < count; i++)
@@ -2170,15 +2294,27 @@ internal sealed class HintingInterpreter
                 continue;
             }
 
-            int originalPosition = DualProject(
-                zone.OriginalX[point] - zone0.OriginalX[rp1],
-                zone.OriginalY[point] - zone0.OriginalY[rp1]);
-            int currentPosition = Project(
-                zone.CurrentX[point] - zone0.CurrentX[rp1],
-                zone.CurrentY[point] - zone0.CurrentY[rp1]);
-            int target = originalRange != 0
-                ? MulDiv(originalPosition, currentRange, originalRange)
-                : originalPosition;
+            int originalPosition = DualProject(zone.OriginalX[point], zone.OriginalY[point]);
+            int currentPosition = Project(zone.CurrentX[point], zone.CurrentY[point]);
+
+            int target;
+            if (originalPosition <= origLow)
+            {
+                target = originalPosition + shiftLow;
+            }
+            else if (originalPosition >= origHigh)
+            {
+                target = originalPosition + shiftHigh;
+            }
+            else if (origSpan != 0)
+            {
+                target = curLow + MulDiv(originalPosition - origLow, curSpan, origSpan);
+            }
+            else
+            {
+                target = originalPosition + shiftLow;
+            }
+
             MovePoint(zone, point, target - currentPosition);
         }
 

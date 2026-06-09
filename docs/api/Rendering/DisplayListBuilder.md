@@ -23,7 +23,7 @@ The builder is renderer-neutral. It walks the PDF operator stream once, maintain
 __static__
 
 ```csharp
-static PageDisplayList Build(PdfPage page, PdfObjectStore objects)
+static PageDisplayList Build(PdfPage page, PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false)
 ```
 
 Builds a display list for the page's content stream.
@@ -32,6 +32,8 @@ Builds a display list for the page's content stream.
 
 - `page` — The PDF page to interpret.
 - `objects` — The object store for resolving indirect references.
+- `hintingScale` — Device scale (DPI/72) for grid-fitting; 0 disables hinting (raster path only).
+- `lightHinting` — When true, grid-fit the Y axis only (lighter, grayscale-friendly).
 
 **Returns:** An immutable display list. Empty if the page has no content stream. CTM-baked geometry; per-op clip snapshots. Page rotation is not applied here; that is a consumer concern. <exception cref="ArgumentNullException"> Thrown when `page` or `objects` is null. </exception>
 

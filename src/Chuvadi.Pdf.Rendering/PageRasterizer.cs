@@ -98,6 +98,7 @@ public sealed class PageRasterizer
             Background = _options.Background,
             FlatnessTolerance = _options.FlatnessTolerance,
             SuperSample = 1,
+            Hinting = _options.Hinting,
         };
 
         PixelBuffer big = RasterizeInternal(page, hi);
@@ -114,7 +115,9 @@ public sealed class PageRasterizer
         PixelBuffer buffer = new PixelBuffer(pixW, pixH);
         buffer.Clear(options.Background);
 
-        PageDisplayList list = DisplayListBuilder.Build(page, _objects);
+        double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
+        bool lightHint = options.Hinting == HintingMode.Light;
+        PageDisplayList list = DisplayListBuilder.Build(page, _objects, hintScale, lightHint);
 
         if (list.Ops.Count == 0)
         {

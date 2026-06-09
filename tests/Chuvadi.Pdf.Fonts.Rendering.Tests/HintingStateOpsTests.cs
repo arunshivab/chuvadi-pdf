@@ -13,7 +13,7 @@ public sealed class HintingRoundingTests
 {
     private static readonly byte[] Rtg = [0x18];
     private static readonly byte[] Rthg = [0x19];
-    private static readonly byte[] Rtdg = [0x3A];
+    private static readonly byte[] Rtdg = [0x3D];
     private static readonly byte[] Rdtg = [0x7D];
     private static readonly byte[] Rutg = [0x7C];
     private static readonly byte[] Roff = [0x7A];
