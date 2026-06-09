@@ -24,7 +24,7 @@ __static__
 static RenderOptions Default
 ```
 
-Default options: 150 DPI, opaque white background.
+Default options: 150 DPI, opaque white background, light hinting.
 
 ### `Dpi`
 
@@ -56,7 +56,7 @@ Gets or initialises the flatness tolerance for Bezier curve flattening in device
 int SuperSample
 ```
 
-Computes the scale factor from PDF points to device pixels for this DPI. Gets or initialises the supersampling factor for anti-aliasing. The page is rendered at this multiple of the target resolution and box-filtered down, smoothing glyph and path edges. 1 disables supersampling (pixel-identical to the single-sample rasterizer). Typical quality value: 3 or 4. Default: 1.
+Gets or initialises the supersampling factor for anti-aliasing. The page is rendered at this multiple of the target resolution and box-filtered down, smoothing glyph and path edges. 1 disables supersampling (pixel-identical to the single-sample rasterizer). Typical quality value: 3 or 4. Default: 1.
 
 ### `AntiAlias`
 
@@ -77,10 +77,10 @@ Gets or initialises whether anti-aliased fills blend colour channels in linear l
 ### `Hinting`
 
 ```csharp
-bool Hinting
+HintingMode Hinting
 ```
 
-Gets or initialises whether embedded TrueType fonts are grid-fitted using their bytecode hinting instructions before rasterization. When false, glyph outlines are scaled directly with no hinting (the current behaviour). Default: false.
+Gets or initialises the glyph hinting mode. Default: `HintingMode.Light`.
 
 ### `Scale`
 

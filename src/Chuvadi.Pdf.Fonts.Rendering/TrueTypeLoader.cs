@@ -531,6 +531,28 @@ public sealed class TrueTypeLoader
     private static Path ConvertContoursToPath(
         int[] endPts, byte[] flags, int[] xCoords, int[] yCoords)
     {
+        double[] dx = new double[xCoords.Length];
+        double[] dy = new double[yCoords.Length];
+        for (int i = 0; i < xCoords.Length; i++)
+        {
+            dx[i] = xCoords[i];
+        }
+
+        for (int i = 0; i < yCoords.Length; i++)
+        {
+            dy[i] = yCoords[i];
+        }
+
+        return ConvertContoursToPath(endPts, flags, dx, dy);
+    }
+
+    // Core contour->cubic converter operating on fractional (double)
+    // coordinates. The int[] overload above widens font-unit coords to
+    // this; the hinted path passes fractional device pixels so that
+    // grid-fitted glyphs are not destroyed by premature integer rounding.
+    private static Path ConvertContoursToPath(
+        int[] endPts, byte[] flags, double[] xCoords, double[] yCoords)
+    {
         Path path = new Path();
         int startIdx = 0;
 
@@ -885,6 +907,119 @@ public sealed class TrueTypeLoader
             maxStorage,
             maxStackElements,
             maxTwilightPoints);
+    }
+
+    // ── Hinted outline path (Stage 7) ─────────────────────────────────────
+    //
+    // Grid-fits a glyph with the TrueType bytecode interpreter at a given ppem
+    // and returns a device-space cubic outline. Reuses the same quadratic-to-
+    // cubic converter as the unhinted path, but feeds it fractional device
+    // pixels (not integer-rounded), so grid-fitted shapes keep their precision.
+    // Returns null when the glyph cannot be hinted (composite glyph, or the font
+    // carries no instructions) and on any interpreter fault, so callers fall
+    // back to the scaled unhinted outline — the FreeType policy.
+
+    private HintingInterpreter? _hintInterp;
+    private int _hintInterpPpem = -1;
+
+    /// <summary>
+    /// Returns the glyph outline grid-fitted at the given pixels-per-em, in
+    /// device space (Y up, one unit = one pixel), or <c>null</c> when the glyph
+    /// cannot be hinted or an interpreter fault occurs.
+    /// </summary>
+    /// <param name="glyphId">Zero-based glyph index.</param>
+    /// <param name="ppem">Target size in pixels per em; must be positive.</param>
+    /// <param name="light">When true, grid-fit the Y axis only (horizontal positions stay naturally scaled).</param>
+    public GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light)
+    {
+        if (ppem <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ppem), "Pixels-per-em must be positive.");
+        }
+
+        RawGlyph? raw = BuildRawGlyph(glyphId);
+
+        if (raw is null)
+        {
+            return null;
+        }
+
+        if (raw.Instructions.Length == 0 && raw.ContourCount > 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (_hintInterp is null || _hintInterpPpem != ppem)
+            {
+                HintingInterpreter interp = new HintingInterpreter(GetHintingLimits());
+
+                byte[]? fontProgram = GetFontProgram();
+
+                if (fontProgram is { Length: > 0 })
+                {
+                    interp.RunProgram(fontProgram);
+                }
+
+                interp.PrepareSize(ppem, _unitsPerEm, GetControlValueTable(), GetControlValueProgram());
+                _hintInterp = interp;
+                _hintInterpPpem = ppem;
+            }
+
+            Zone zone = _hintInterp.HintGlyph(raw);
+
+            Path outline = BuildHintedPath(raw, zone, light);
+
+            double scale = (double)ppem / _unitsPerEm;
+            GlyphMetrics fontMetrics = GetGlyphMetrics(glyphId);
+            GlyphMetrics deviceMetrics = new GlyphMetrics(
+                advanceWidth: (int)Math.Round(fontMetrics.AdvanceWidth * scale),
+                leftSideBearing: (int)Math.Round(fontMetrics.LeftSideBearing * scale),
+                unitsPerEm: 1,
+                bounds: new RectangleF(
+                    (float)(fontMetrics.Bounds.X * scale),
+                    (float)(fontMetrics.Bounds.Y * scale),
+                    (float)(fontMetrics.Bounds.Width * scale),
+                    (float)(fontMetrics.Bounds.Height * scale)));
+
+            return new GlyphOutline(outline, deviceMetrics);
+        }
+        catch (FontRenderingException)
+        {
+            _hintInterp = null;
+            _hintInterpPpem = -1;
+            return null;
+        }
+    }
+
+    // Re-cubicizes the fitted zone's real (non-phantom) points into a device-
+    // space Path. Coordinates are the zone's 26.6 fixed-point values converted
+    // to FRACTIONAL pixels (value / 64.0) — never integer-rounded — so the
+    // cubicizer receives the same precision the unhinted path enjoys.
+    private static Path BuildHintedPath(RawGlyph raw, Zone zone, bool light)
+    {
+        int realPoints = raw.RealPointCount;
+
+        if (realPoints <= 0 || raw.ContourCount == 0)
+        {
+            return new Path();
+        }
+
+        double[] xs = new double[realPoints];
+        double[] ys = new double[realPoints];
+        byte[] flags = new byte[realPoints];
+
+        for (int i = 0; i < realPoints; i++)
+        {
+            // Light mode: keep the naturally scaled X (no horizontal grid-fit),
+            // take only the grid-fitted Y. Full mode: both axes grid-fitted.
+            xs[i] = (light ? zone.OriginalX[i] : zone.CurrentX[i]) / 64.0;
+            ys[i] = zone.CurrentY[i] / 64.0;
+            flags[i] = zone.OnCurve[i] ? (byte)0x01 : (byte)0x00;
+        }
+
+        return ConvertContoursToPath(raw.ContourEnds, flags, xs, ys);
     }
 
     /// <summary>

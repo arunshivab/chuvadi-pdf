@@ -269,7 +269,6 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
-| [Class1](Graphics/Class1.md) | class | — |
 | [ColorF](Graphics/ColorF.md) | struct | An immutable colour value, with support for DeviceGray, DeviceRGB, and DeviceCMYK colour spaces. |
 | [ColorSpace](Graphics/ColorSpace.md) | enum | The colour space of a `ColorF` value. |
 | [FillRule](Graphics/FillRule.md) | enum | Determines how the interior of a path is defined when the path self-intersects or has nested sub-paths. |
@@ -398,6 +397,7 @@ python tools/gen_api_docs.py
 | [FillPathOp](Rendering/FillPathOp.md) | class | Fills a path with a flat colour, applying the configured fill rule. |
 | [FillRule](Rendering/FillRule.md) | enum | Fill rule for a path or clip region. |
 | [GlyphPosition](Rendering/GlyphPosition.md) | record struct | The position of a single glyph in a `TextRun`. |
+| [HintingMode](Rendering/HintingMode.md) | enum | Controls how strongly the TrueType bytecode hinting interpreter adjusts glyph outlines before rasterization. |
 | [ImageFormat](Rendering/ImageFormat.md) | enum | Raster format of image pixel data. |
 | [ImageOp](Rendering/ImageOp.md) | class | Renders a raster image. |
 | [LineCap](Rendering/LineCap.md) | enum | Line cap style (PDF §8.4.3.3). |

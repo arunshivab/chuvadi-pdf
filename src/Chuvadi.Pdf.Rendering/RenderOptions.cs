@@ -9,11 +9,36 @@ using Chuvadi.Pdf.Graphics;
 namespace Chuvadi.Pdf.Rendering;
 
 /// <summary>
+/// Controls how strongly the TrueType bytecode hinting interpreter adjusts
+/// glyph outlines before rasterization.
+/// </summary>
+public enum HintingMode
+{
+    /// <summary>No hinting: outlines are scaled and rendered as-is.</summary>
+    Off = 0,
+
+    /// <summary>
+    /// Light hinting: grid-fit the vertical (Y) axis only, leaving horizontal
+    /// positions at their naturally scaled values. This keeps baselines and
+    /// stem heights crisp without the horizontal stem snapping that can look
+    /// heavy under grayscale anti-aliasing. Recommended for anti-aliased
+    /// output.
+    /// </summary>
+    Light = 1,
+
+    /// <summary>
+    /// Full classic hinting: execute the complete bytecode interpreter on both
+    /// axes. Best for black-and-white or very low-resolution output.
+    /// </summary>
+    Full = 2,
+}
+
+/// <summary>
 /// Options that control how a PDF page is rasterized.
 /// </summary>
 public sealed class RenderOptions
 {
-    /// <summary>Default options: 150 DPI, opaque white background.</summary>
+    /// <summary>Default options: 150 DPI, opaque white background, light hinting.</summary>
     public static RenderOptions Default { get; } = new RenderOptions();
 
     /// <summary>Initialises <see cref="RenderOptions"/> with default values.</summary>
@@ -25,7 +50,7 @@ public sealed class RenderOptions
         SuperSample = 1;
         AntiAlias = true;
         GammaCorrect = true;
-        Hinting = false;
+        Hinting = HintingMode.Light;
     }
 
     /// <summary>
@@ -71,9 +96,6 @@ public sealed class RenderOptions
     }
 
     /// <summary>
-    /// Computes the scale factor from PDF points to device pixels for this DPI.
-    /// </summary>
-    /// <summary>
     /// Gets or initialises the supersampling factor for anti-aliasing.
     /// The page is rendered at this multiple of the target resolution and
     /// box-filtered down, smoothing glyph and path edges. 1 disables
@@ -99,12 +121,9 @@ public sealed class RenderOptions
     public bool GammaCorrect { get; init; }
 
     /// <summary>
-    /// Gets or initialises whether embedded TrueType fonts are grid-fitted using
-    /// their bytecode hinting instructions before rasterization. When false,
-    /// glyph outlines are scaled directly with no hinting (the current
-    /// behaviour). Default: false.
+    /// Gets or initialises the glyph hinting mode. Default: <see cref="HintingMode.Light"/>.
     /// </summary>
-    public bool Hinting { get; init; }
+    public HintingMode Hinting { get; init; }
 
     /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.

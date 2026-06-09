@@ -28,6 +28,7 @@ public sealed class FontRenderer
 {
     private readonly TrueTypeLoader _loader;
     private readonly Dictionary<int, GlyphOutline> _cache;
+    private readonly Dictionary<long, GlyphOutline?> _hintedCache;
 
     /// <summary>
     /// Initialises a <see cref="FontRenderer"/> from raw font bytes.
@@ -48,6 +49,7 @@ public sealed class FontRenderer
 
         _loader = new TrueTypeLoader(fontData);
         _cache = new Dictionary<int, GlyphOutline>();
+        _hintedCache = new Dictionary<long, GlyphOutline?>();
     }
 
     /// <summary>Gets the number of font design units per em square.</summary>
@@ -80,6 +82,35 @@ public sealed class FontRenderer
 
         GlyphOutline outline = _loader.GetGlyphOutline(glyphId);
         _cache[glyphId] = outline;
+        return outline;
+    }
+
+    /// <summary>
+    /// Gets the glyph outline grid-fitted (hinted) at the given pixels-per-em,
+    /// in device space, or <c>null</c> when the glyph cannot be hinted (for
+    /// example a composite glyph or a font without instructions). Callers should
+    /// fall back to <see cref="GetGlyphOutline(int)"/> scaled to the same size.
+    /// Results are cached per (glyph, ppem).
+    /// </summary>
+    /// <param name="glyphId">Zero-based glyph index.</param>
+    /// <param name="ppem">Target size in pixels per em; must be positive.</param>
+    /// <param name="light">When true, grid-fit the Y axis only.</param>
+    public GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light)
+    {
+        if (ppem <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ppem), "Pixels-per-em must be positive.");
+        }
+
+        long key = ((long)ppem << 33) | ((long)(light ? 1 : 0) << 32) | (uint)glyphId;
+
+        if (_hintedCache.TryGetValue(key, out GlyphOutline? cached))
+        {
+            return cached;
+        }
+
+        GlyphOutline? outline = _loader.GetHintedGlyphOutline(glyphId, ppem, light);
+        _hintedCache[key] = outline;
         return outline;
     }
 
