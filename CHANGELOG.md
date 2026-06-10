@@ -11,6 +11,38 @@ numbered A01..ANN).
 
 ---
 
+## [2.6.0] - 2026-06-10
+
+### Added
+- **Composite glyph hinting (Light and Full).** Composite glyphs - accented
+  letters and other glyphs assembled from components - are now grid-fitted
+  instead of falling back to the unhinted outline. Each component is hinted as
+  its own glyph, translated by its component offset (rounded to the grid when
+  the component sets `ROUND_XY_TO_GRID`), and merged into one point set; the
+  composite's four phantom points are appended, and the composite's own
+  instruction stream (when `WE_HAVE_INSTRUCTIONS` is set) is then executed
+  over the assembled points. Light keeps its unfitted X and grid-fitted Y for
+  composites exactly as for simple glyphs.
+
+### Fixed
+- **SHC / SHZ no longer move the reference point a second time.** The shift
+  applied by `SHC` (shift contour) and `SHZ` (shift zone) now skips the
+  reference point itself, which has already moved. Previously, when the
+  reference point's displacement was non-zero, it received that displacement
+  twice. The defect was masked for simple glyphs (their programs begin with
+  current equal to original positions) and surfaced only with composite
+  instruction streams.
+
+### Notes
+- **Composite hinting scope.** Components placed by XY offset - the common case,
+  including every composite in the standard text fonts tested - are fully
+  hinted. Composites that use scaled components, a 2x2 transform, or
+  anchor-point (point-matching) placement fall back to the unhinted outline, as
+  does nesting deeper than three levels. This matches or exceeds the coverage of
+  the existing unhinted composite path, so no glyph renders worse than before.
+
+---
+
 ## [2.5.1] - 2026-06-09
 
 ### Fixed

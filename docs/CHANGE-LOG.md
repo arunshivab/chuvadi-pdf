@@ -781,3 +781,24 @@ Key decisions:
 
 **Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
 `src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.
+
+---
+
+## A27 - Composite Glyph Hinting
+
+**Date:** 2026-06-10
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (loader, hinting interpreter)
+**Rationale:** Composite glyphs (accented letters and other component-built glyphs) previously returned `null` from `BuildRawGlyph` and fell back to the scaled unhinted outline, so in a hinted render they carried different weight and vertical alignment than their simple-glyph neighbours. This adds a hinted assembly path for the common composite form.
+
+Key decisions:
+
+- **Per-component hinting, then assemble.** `BuildHintedComposite` hints each component as its own glyph (recursing for nested composites, depth-capped at 3), translates its points by the component offset, and merges them into one zone with re-based contour ends. The component offset is scaled to device 26.6 and rounded to the grid when the component's `ROUND_XY_TO_GRID` flag is set - the rounding that aligns an accent to the pixel grid above its base. The composite's four phantom points are appended (scaled), and a carrier `RawGlyph` supplies the contour structure to the existing `BuildHintedPath`; coordinates come from the assembled zone.
+
+- **Composite programs see the assembly as their originals (org <- cur).** Before running a composite's own instruction stream, the assembled (component-hinted) current coordinates are copied into the zone's original coordinates, and the natural originals are restored afterwards. This matches the reference interpreter: control-value cut-ins and the displacement that `SHC` / `IP` measure must be taken from the assembled positions the program was authored against, not from the unhinted design. Without it, a point whose current already differed from its original at program start (always true in a composite) picked up that stale difference as a phantom shift. Diagnosed on the dotted glyph (base + `dotaccent` with a 20-byte MIAP/SHC program): the dot landed ~1.2 px too high until `org <- cur` was applied, after which the output matched the classic-spec reference (FreeType interpreter v35) dot levels at 36/14/10 pt. The v40 "minimal" interpreter intentionally deviates from classic full hinting and is not the conformance target.
+
+- **SHC / SHZ reference-point guard.** The same investigation showed `SHC` / `SHZ` shifted every point of the contour/zone including the reference point, double-displacing it. Fixed to skip the reference point per spec. Latent for simple glyphs (masked by org == cur at program start); corrected here because these ops appear almost exclusively in composite programs.
+
+- **Scope deliberately narrow.** Scaled components, 2x2 transforms, and anchor-point placement fall back to the unhinted outline, as does nesting beyond depth 3. The hinted path therefore matches or exceeds the existing unhinted composite coverage and never renders a glyph worse than the prior baseline. Composites without their own instruction stream are still returned hinted, because their components carry the hinting.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`.
