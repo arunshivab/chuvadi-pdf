@@ -677,6 +677,330 @@ public sealed class TrueTypeLoader
             new PointF(p2x, p2y));
     }
 
+    // ── Hinted composite glyphs ───────────────────────────────────────────
+
+    // Prepares (or reuses) the cached hinting interpreter for a device size:
+    // runs fpgm once, then prep for the size. Shared by the simple-glyph and
+    // composite-glyph hinted paths.
+    private HintingInterpreter EnsureHintingInterpreter(int ppem)
+    {
+        if (_hintInterp is null || _hintInterpPpem != ppem)
+        {
+            HintingInterpreter interp = new HintingInterpreter(GetHintingLimits());
+
+            byte[]? fontProgram = GetFontProgram();
+
+            if (fontProgram is { Length: > 0 })
+            {
+                interp.RunProgram(fontProgram);
+            }
+
+            interp.PrepareSize(ppem, _unitsPerEm, GetControlValueTable(), GetControlValueProgram());
+            _hintInterp = interp;
+            _hintInterpPpem = ppem;
+            return interp;
+        }
+
+        return _hintInterp;
+    }
+
+    // One parsed composite component for the hinted path: the child glyph and
+    // its XY offset in font design units, plus whether the offset rounds to
+    // the device grid (ROUND_XY_TO_GRID).
+    private readonly struct HintedComponent
+    {
+        internal HintedComponent(int glyphId, int dx, int dy, bool roundToGrid)
+        {
+            GlyphId = glyphId;
+            Dx = dx;
+            Dy = dy;
+            RoundToGrid = roundToGrid;
+        }
+
+        internal int GlyphId { get; }
+
+        internal int Dx { get; }
+
+        internal int Dy { get; }
+
+        internal bool RoundToGrid { get; }
+    }
+
+    // Parses a composite glyph's component records for the hinted path, and
+    // its trailing instruction stream when WE_HAVE_INSTRUCTIONS is set.
+    // Returns null - so the caller falls back to the unhinted outline - when
+    // the composite uses features outside the hinted scope: scaled components
+    // or anchor-point (point-matching) placement.
+    private List<HintedComponent>? ParseHintedComponents(uint offset, out byte[] instructions)
+    {
+        instructions = Array.Empty<byte>();
+        List<HintedComponent> components = new List<HintedComponent>();
+        uint pos = offset + 10;
+        bool haveInstructions = false;
+
+        while (true)
+        {
+            int flags = ReadUInt16(pos);
+            int componentGlyphId = ReadUInt16(pos + 2);
+            pos += 4;
+
+            bool argsAreWords = (flags & 0x0001) != 0;
+            bool argsAreXY = (flags & 0x0002) != 0;
+            bool roundToGrid = (flags & 0x0004) != 0;
+            bool hasScale = (flags & 0x0008) != 0;
+            bool moreComponents = (flags & 0x0020) != 0;
+            bool hasXYScale = (flags & 0x0040) != 0;
+            bool has2x2 = (flags & 0x0080) != 0;
+            haveInstructions = haveInstructions || (flags & 0x0100) != 0;
+
+            if (!argsAreXY || hasScale || hasXYScale || has2x2)
+            {
+                return null;
+            }
+
+            int dx;
+            int dy;
+            if (argsAreWords)
+            {
+                dx = ReadInt16(pos);
+                dy = ReadInt16(pos + 2);
+                pos += 4;
+            }
+            else
+            {
+                dx = (sbyte)ReadByte(pos);
+                dy = (sbyte)ReadByte(pos + 1);
+                pos += 2;
+            }
+
+            if (componentGlyphId >= 0 && componentGlyphId < _numGlyphs)
+            {
+                components.Add(new HintedComponent(componentGlyphId, dx, dy, roundToGrid));
+            }
+
+            if (!moreComponents)
+            {
+                break;
+            }
+        }
+
+        if (haveInstructions)
+        {
+            int count = ReadUInt16(pos);
+            instructions = ReadBytes(pos + 2, count);
+        }
+
+        return components;
+    }
+
+    // Assembles a composite glyph for hinting: each component is hinted as its
+    // own glyph, translated by its (optionally grid-rounded) device offset, and
+    // merged into one zone; the composite's phantom points are appended; the
+    // composite's own instruction stream (if any) then runs over the assembly.
+    // Returns null when the composite is outside the hinted scope or any
+    // component cannot be hinted.
+    private RawGlyph? BuildHintedComposite(int glyphId, int depth, out Zone? zone)
+    {
+        zone = null;
+
+        HintingInterpreter? interp = _hintInterp;
+
+        if (depth > 3 || interp is null)
+        {
+            return null;
+        }
+
+        uint offset = GetGlyfOffset(glyphId);
+        if (offset == 0)
+        {
+            return null;
+        }
+
+        int numberOfContours = ReadInt16(offset);
+        if (numberOfContours >= 0)
+        {
+            return null;
+        }
+
+        List<HintedComponent>? components = ParseHintedComponents(offset, out byte[] compositeInstructions);
+        if (components is null || components.Count == 0)
+        {
+            return null;
+        }
+
+        List<int> xs = new List<int>();
+        List<int> ys = new List<int>();
+        List<bool> onCurve = new List<bool>();
+        List<int> contourEnds = new List<int>();
+        List<int> currentX = new List<int>();
+        List<int> currentY = new List<int>();
+        List<int> originalX = new List<int>();
+        List<int> originalY = new List<int>();
+        List<bool> touchedX = new List<bool>();
+        List<bool> touchedY = new List<bool>();
+
+        foreach (HintedComponent component in components)
+        {
+            RawGlyph? childRaw = BuildRawGlyph(component.GlyphId);
+            Zone? childZone;
+
+            if (childRaw is not null)
+            {
+                childZone = interp.HintGlyph(childRaw);
+            }
+            else
+            {
+                childRaw = BuildHintedComposite(component.GlyphId, depth + 1, out childZone);
+            }
+
+            if (childRaw is null || childZone is null)
+            {
+                return null;
+            }
+
+            int dxDevice = interp.ScaleToDevice(component.Dx);
+            int dyDevice = interp.ScaleToDevice(component.Dy);
+            int dxCurrent = component.RoundToGrid ? RoundToGrid26(dxDevice) : dxDevice;
+            int dyCurrent = component.RoundToGrid ? RoundToGrid26(dyDevice) : dyDevice;
+
+            int pointBase = xs.Count;
+            int childRealCount = childRaw.RealPointCount;
+
+            for (int i = 0; i < childRealCount; i++)
+            {
+                xs.Add(childRaw.X[i] + component.Dx);
+                ys.Add(childRaw.Y[i] + component.Dy);
+                onCurve.Add(childRaw.OnCurve[i]);
+                currentX.Add(childZone.CurrentX[i] + dxCurrent);
+                currentY.Add(childZone.CurrentY[i] + dyCurrent);
+                originalX.Add(childZone.OriginalX[i] + dxDevice);
+                originalY.Add(childZone.OriginalY[i] + dyDevice);
+                touchedX.Add(childZone.TouchedX[i]);
+                touchedY.Add(childZone.TouchedY[i]);
+            }
+
+            foreach (int end in childRaw.ContourEnds)
+            {
+                contourEnds.Add(end + pointBase);
+            }
+        }
+
+        int realCount = xs.Count;
+        int total = realCount + 4;
+        int[] xArr = new int[total];
+        int[] yArr = new int[total];
+        bool[] onCurveArr = new bool[total];
+
+        for (int i = 0; i < realCount; i++)
+        {
+            xArr[i] = xs[i];
+            yArr[i] = ys[i];
+            onCurveArr[i] = onCurve[i];
+        }
+
+        AppendPhantomPoints(glyphId, xArr, yArr, onCurveArr, realCount);
+
+        Zone assembled = new Zone(total, contourEnds.ToArray(), onCurveArr);
+        for (int i = 0; i < realCount; i++)
+        {
+            assembled.CurrentX[i] = currentX[i];
+            assembled.CurrentY[i] = currentY[i];
+            assembled.OriginalX[i] = originalX[i];
+            assembled.OriginalY[i] = originalY[i];
+            assembled.TouchedX[i] = touchedX[i];
+            assembled.TouchedY[i] = touchedY[i];
+        }
+
+        for (int i = realCount; i < total; i++)
+        {
+            int px = interp.ScaleToDevice(xArr[i]);
+            int py = interp.ScaleToDevice(yArr[i]);
+            assembled.CurrentX[i] = px;
+            assembled.OriginalX[i] = px;
+            assembled.CurrentY[i] = py;
+            assembled.OriginalY[i] = py;
+        }
+
+        RawGlyph carrier = new RawGlyph(
+            xArr,
+            yArr,
+            onCurveArr,
+            contourEnds.ToArray(),
+            compositeInstructions,
+            realCount);
+
+        if (compositeInstructions.Length > 0)
+        {
+            // Reference-interpreter semantics: a composite's instruction
+            // stream sees the assembled, component-hinted positions as its
+            // original coordinates (org <- cur), so cut-ins and shift/
+            // interpolation displacements measure from the assembly rather
+            // than the unhinted design. The natural originals are restored
+            // afterwards so Light mode can still extract the unfitted X.
+            int[] savedOriginalX = (int[])assembled.OriginalX.Clone();
+            int[] savedOriginalY = (int[])assembled.OriginalY.Clone();
+            Array.Copy(assembled.CurrentX, assembled.OriginalX, total);
+            Array.Copy(assembled.CurrentY, assembled.OriginalY, total);
+
+            interp.RunCompositeProgram(assembled, compositeInstructions);
+
+            Array.Copy(savedOriginalX, assembled.OriginalX, total);
+            Array.Copy(savedOriginalY, assembled.OriginalY, total);
+        }
+
+        zone = assembled;
+        return carrier;
+    }
+
+    // Rounds a 26.6 device coordinate to the nearest whole pixel.
+    private static int RoundToGrid26(int value)
+    {
+        return (value + 32) & ~63;
+    }
+
+    // Hinted-outline entry point for composite glyphs: mirrors
+    // GetHintedGlyphOutline, but assembles the zone from hinted components.
+    // Unlike simple glyphs, a composite with no instruction stream of its own
+    // is still returned hinted, because its components carry the hinting.
+    private GlyphOutline? GetHintedCompositeOutline(int glyphId, int ppem, bool light)
+    {
+        try
+        {
+            _ = EnsureHintingInterpreter(ppem);
+
+            RawGlyph? carrier = BuildHintedComposite(glyphId, depth: 1, out Zone? zone);
+            if (carrier is null || zone is null)
+            {
+                return null;
+            }
+
+            Path outline = BuildHintedPath(carrier, zone, light);
+
+            double scale = (double)ppem / _unitsPerEm;
+            GlyphMetrics fontMetrics = GetGlyphMetrics(glyphId);
+
+            int originPhantomX = zone.CurrentX[carrier.RealPointCount + 0];
+            int advancePhantomX = zone.CurrentX[carrier.RealPointCount + 1];
+            int hintedAdvancePx = (int)Math.Round((advancePhantomX - originPhantomX) / 64.0);
+            GlyphMetrics deviceMetrics = new GlyphMetrics(
+                advanceWidth: hintedAdvancePx,
+                leftSideBearing: (int)Math.Round(fontMetrics.LeftSideBearing * scale),
+                unitsPerEm: 1,
+                bounds: new RectangleF(
+                    (float)(fontMetrics.Bounds.X * scale),
+                    (float)(fontMetrics.Bounds.Y * scale),
+                    (float)(fontMetrics.Bounds.Width * scale),
+                    (float)(fontMetrics.Bounds.Height * scale)));
+
+            return new GlyphOutline(outline, deviceMetrics);
+        }
+        catch (FontRenderingException)
+        {
+            _hintInterp = null;
+            _hintInterpPpem = -1;
+            return null;
+        }
+    }
     // ── Composite glyph ───────────────────────────────────────────────────
 
     private Path BuildCompositeGlyph(uint offset)
@@ -941,7 +1265,8 @@ public sealed class TrueTypeLoader
 
         if (raw is null)
         {
-            return null;
+            // Composite glyph: assemble from hinted components.
+            return GetHintedCompositeOutline(glyphId, ppem, light);
         }
 
         if (raw.Instructions.Length == 0 && raw.ContourCount > 0)
@@ -951,23 +1276,9 @@ public sealed class TrueTypeLoader
 
         try
         {
-            if (_hintInterp is null || _hintInterpPpem != ppem)
-            {
-                HintingInterpreter interp = new HintingInterpreter(GetHintingLimits());
+            HintingInterpreter hintInterp = EnsureHintingInterpreter(ppem);
 
-                byte[]? fontProgram = GetFontProgram();
-
-                if (fontProgram is { Length: > 0 })
-                {
-                    interp.RunProgram(fontProgram);
-                }
-
-                interp.PrepareSize(ppem, _unitsPerEm, GetControlValueTable(), GetControlValueProgram());
-                _hintInterp = interp;
-                _hintInterpPpem = ppem;
-            }
-
-            Zone zone = _hintInterp.HintGlyph(raw);
+            Zone zone = hintInterp.HintGlyph(raw);
 
             Path outline = BuildHintedPath(raw, zone, light);
 

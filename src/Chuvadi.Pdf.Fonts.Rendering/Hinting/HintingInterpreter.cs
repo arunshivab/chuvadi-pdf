@@ -1407,6 +1407,40 @@ internal sealed class HintingInterpreter
         return zone;
     }
 
+    /// <summary>
+    /// Scales a font-design-unit value to 26.6 device pixels at the prepared
+    /// size. Used by the composite-glyph assembly to scale component offsets
+    /// and phantom points consistently with <see cref="HintGlyph"/>.
+    /// </summary>
+    /// <param name="designUnits">The value in font design units.</param>
+    /// <returns>The value in 26.6 fixed-point device pixels.</returns>
+    internal int ScaleToDevice(int designUnits)
+    {
+        return F26Dot6.MulFix(designUnits, _scale);
+    }
+
+    /// <summary>
+    /// Runs a composite glyph's instruction stream over an externally
+    /// assembled glyph zone. The zone must already contain the merged,
+    /// component-hinted points (scaled 26.6 device coordinates) with the
+    /// composite's four phantom points appended. The graphics state resets to
+    /// its defaults first, exactly as for a simple glyph program.
+    /// </summary>
+    /// <param name="zone">The assembled composite glyph zone.</param>
+    /// <param name="instructions">The composite's instruction bytecode (may be empty).</param>
+    internal void RunCompositeProgram(Zone zone, byte[] instructions)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        ArgumentNullException.ThrowIfNull(instructions);
+
+        _glyphZone = zone;
+        State.Reset();
+
+        if (instructions.Length > 0)
+        {
+            RunProgram(instructions);
+        }
+    }
     // Parses big-endian int16 CVT entries (font units) and scales them to 26.6.
     private int[] ScaleControlValueTable(byte[]? table)
     {
@@ -2134,6 +2168,12 @@ internal sealed class HintingInterpreter
         int end = zone.ContourEnds[contour];
         for (int p = start; p <= end && p < zone.PointCount; p++)
         {
+            // The reference point itself is not shifted again.
+            if (zone == refZone && p == refPoint)
+            {
+                continue;
+            }
+
             MovePoint(zone, p, distance);
         }
     }
@@ -2148,6 +2188,12 @@ internal sealed class HintingInterpreter
         int distance = ReferenceShift(refZone, refPoint);
         for (int p = 0; p < zone.PointCount; p++)
         {
+            // The reference point itself is not shifted again.
+            if (zone == refZone && p == refPoint)
+            {
+                continue;
+            }
+
             MovePoint(zone, p, distance);
         }
     }
