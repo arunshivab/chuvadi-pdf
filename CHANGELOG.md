@@ -23,7 +23,11 @@ numbered A01..ANN).
   instruction stream (when `WE_HAVE_INSTRUCTIONS` is set) is then executed
   over the assembled points. Light keeps its unfitted X and grid-fitted Y for
   composites exactly as for simple glyphs.
-
+- **Composite hinting test coverage.** A synthetic in-memory font with a base
+  glyph and a composite that references it (grid-rounded offset plus an
+  instruction stream) exercises the hinted assembly end to end, including a
+  regression lock on the composite-program org-from-current baseline and the
+  scaled-component fallback.
 ### Fixed
 - **SHC / SHZ no longer move the reference point a second time.** The shift
   applied by `SHC` (shift contour) and `SHZ` (shift zone) now skips the
