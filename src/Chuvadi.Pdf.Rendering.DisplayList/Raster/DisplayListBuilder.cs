@@ -5,8 +5,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Fonts.Rendering;
@@ -14,6 +12,7 @@ using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
+using Chuvadi.Pdf.Rendering.Walking;
 using Path = Chuvadi.Pdf.Graphics.Path;
 
 namespace Chuvadi.Pdf.Rendering.Raster;
@@ -68,7 +67,7 @@ public static class DisplayListBuilder
         ArgumentNullException.ThrowIfNull(objects);
 
         Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback);
-        byte[] content = worker.LoadContentBytes(page.Contents);
+        byte[] content = ContentStreamLoader.Load(page.Contents, objects);
         return worker.BuildFromBytes(content, page.Resources, page.Width, page.Height);
     }
 
@@ -122,13 +121,12 @@ public static class DisplayListBuilder
     /// Internal worker that owns mutable interpretation state. A new
     /// instance is created per Build call so the public API is stateless.
     /// </summary>
-    private sealed class Worker
+    private sealed class Worker : IContentOperatorSink
     {
         private readonly PdfObjectStore _objects;
         private readonly double _hintingScale;
         private readonly bool _lightHinting;
         private readonly bool _autohintFallback;
-        private readonly FilterPipeline _pipeline;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
 
@@ -150,13 +148,15 @@ public static class DisplayListBuilder
         private bool _clipPending;
         private FillRule _clipRule;
 
+        // Resources of the stream being walked (page or form XObject)
+        private PdfDictionary? _resources;
+
         public Worker(PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
         {
             _objects = objects;
             _hintingScale = hintingScale;
             _lightHinting = lightHinting;
             _autohintFallback = autohintFallback;
-            _pipeline = FilterRegistry.CreateDefaultPipeline();
             _fontCache = new Dictionary<string, FontRenderer?>();
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
             _ops = new List<RenderOp>();
@@ -175,249 +175,22 @@ public static class DisplayListBuilder
             double pageWidth,
             double pageHeight)
         {
-            if (content.Length > 0)
-            {
-                Interpret(content, resources);
-            }
+            _resources = resources;
+            ContentStreamWalker.Walk(content, this);
 
             return new PageDisplayList(_ops, pageWidth, pageHeight);
         }
 
-        // â”€â”€ Content stream loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-        public byte[] LoadContentBytes(PdfPrimitive? contents)
-        {
-            if (contents is null || contents is PdfNull)
-            {
-                return Array.Empty<byte>();
-            }
-
-            PdfPrimitive resolved = _objects.Resolve(contents);
-
-            if (resolved is PdfStream single)
-            {
-                return DecodeStream(single);
-            }
-
-            if (resolved is PdfArray array)
-            {
-                using (MemoryStream ms = new MemoryStream())
-                {
-                    for (int i = 0; i < array.Count; i++)
-                    {
-                        PdfPrimitive item = _objects.Resolve(array[i]);
-
-                        if (item is PdfStream s)
-                        {
-                            byte[] decoded = DecodeStream(s);
-                            ms.Write(decoded, 0, decoded.Length);
-
-                            if (i < array.Count - 1)
-                            {
-                                ms.WriteByte(32);
-                            }
-                        }
-                    }
-
-                    return ms.ToArray();
-                }
-            }
-
-            return Array.Empty<byte>();
-        }
-
-        private byte[] DecodeStream(PdfStream stream)
-        {
-            if (!stream.IsFiltered)
-            {
-                return stream.RawBytes;
-            }
-
-            PdfPrimitive? filter = stream.Filter;
-
-            if (filter is PdfName filterName)
-            {
-                string resolved = FilterRegistry.ResolveAlias(filterName.Value);
-                return _pipeline.Decode(resolved, stream.RawBytes, null);
-            }
-
-            if (filter is PdfArray filterArray)
-            {
-                byte[] data = stream.RawBytes;
-
-                for (int i = 0; i < filterArray.Count; i++)
-                {
-                    PdfName? fn = filterArray.GetAs<PdfName>(i);
-
-                    if (fn is null)
-                    {
-                        continue;
-                    }
-
-                    string resolved = FilterRegistry.ResolveAlias(fn.Value);
-                    data = _pipeline.Decode(resolved, data, null);
-                }
-
-                return data;
-            }
-
-            return stream.RawBytes;
-        }
-
-        // â”€â”€ Interpreter loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-        private void Interpret(byte[] content, PdfDictionary? resources)
-        {
-            using (MemoryStream ms = new MemoryStream(content))
-            using (PdfTokenizer tokenizer = new PdfTokenizer(ms))
-            {
-                List<PdfToken> operands = new List<PdfToken>();
-
-                while (true)
-                {
-                    PdfToken token = tokenizer.Read();
-
-                    if (token.IsEndOfStream)
-                    {
-                        break;
-                    }
-
-                    if (token.Type == PdfTokenType.ArrayStart)
-                    {
-                        // Collect array inline for TJ
-                        List<PdfToken> arrTokens = new List<PdfToken>();
-
-                        while (true)
-                        {
-                            PdfToken inner = tokenizer.Read();
-
-                            if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
-                            {
-                                break;
-                            }
-
-                            arrTokens.Add(inner);
-                        }
-
-                        operands.Add(new PdfToken(PdfTokenType.ArrayStart, Array.Empty<byte>(), 0));
-                        operands.AddRange(arrTokens);
-                        operands.Add(new PdfToken(PdfTokenType.ArrayEnd, Array.Empty<byte>(), 0));
-                        continue;
-                    }
-
-                    if (token.Type != PdfTokenType.Keyword)
-                    {
-                        operands.Add(token);
-                        continue;
-                    }
-
-                    Execute(token.RawText, operands, resources);
-                    operands.Clear();
-                }
-            }
-        }
-
-        // â”€â”€ Operator dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-        private void Execute(string op, List<PdfToken> operands, PdfDictionary? resources)
-        {
-            switch (op)
-            {
-                // Graphics state
-                case "q": OpQ(); break;
-                case "Q": OpQUpper(); break;
-                case "cm": OpCm(operands); break;
-
-                // Stroke state parameters
-                case "w": if (operands.Count > 0) { _state.LineWidth = ParseDouble(operands[0]); } break;
-                case "J": if (operands.Count > 0) { _state.LineCap = (LineCap)ParseInt(operands[0]); } break;
-                case "j": if (operands.Count > 0) { _state.LineJoin = (LineJoin)ParseInt(operands[0]); } break;
-                case "M": if (operands.Count > 0) { _state.MiterLimit = ParseDouble(operands[0]); } break;
-                case "d": OpDashPattern(operands); break;
-                case "i": break; // Flatness â€” visual hint, ignored
-                case "ri": break; // Rendering intent â€” ignored at builder level
-                case "gs": break; // ExtGState â€” deferred to v2.1+
-
-                // Colour operators
-                case "g": OpFillGray(operands); break;
-                case "G": OpStrokeGray(operands); break;
-                case "rg": OpFillRgb(operands); break;
-                case "RG": OpStrokeRgb(operands); break;
-                case "k": OpFillCmyk(operands); break;
-                case "K": OpStrokeCmyk(operands); break;
-                case "cs": OpColorSpace(operands, stroke: false); break;
-                case "CS": OpColorSpace(operands, stroke: true); break;
-                case "sc": case "scn": OpScColor(operands, stroke: false); break;
-                case "SC": case "SCN": OpScColor(operands, stroke: true); break;
-
-                // Path construction
-                case "m": if (operands.Count >= 2) { _currentPath.MoveTo(ParseDouble(operands[0]), ParseDouble(operands[1])); } break;
-                case "l": OpL(operands); break;
-                case "c": OpC(operands); break;
-                case "v": OpV(operands); break;
-                case "y": OpY(operands); break;
-                case "h": _currentPath.ClosePath(); break;
-                case "re": OpRe(operands); break;
-
-                // Path painting
-                case "f": case "F": OpFill(FillRule.NonZeroWinding); break;
-                case "f*": OpFill(FillRule.EvenOdd); break;
-                case "S": OpStroke(closeFirst: false); break;
-                case "s": OpStroke(closeFirst: true); break;
-                case "B": OpFillStroke(FillRule.NonZeroWinding, closeFirst: false); break;
-                case "B*": OpFillStroke(FillRule.EvenOdd, closeFirst: false); break;
-                case "b": OpFillStroke(FillRule.NonZeroWinding, closeFirst: true); break;
-                case "b*": OpFillStroke(FillRule.EvenOdd, closeFirst: true); break;
-                case "n": OpEndPath(); break;
-
-                // Clipping
-                case "W": _clipPending = true; _clipRule = FillRule.NonZeroWinding; break;
-                case "W*": _clipPending = true; _clipRule = FillRule.EvenOdd; break;
-
-                // Text object delimiters
-                case "BT": _textMatrix = Transform.Identity; _textLineMatrix = Transform.Identity; break;
-                case "ET": break;
-
-                // Text state
-                case "Tc": if (operands.Count > 0) { _state.CharacterSpacing = ParseDouble(operands[0]); } break;
-                case "Tw": if (operands.Count > 0) { _state.WordSpacing = ParseDouble(operands[0]); } break;
-                case "Tz": if (operands.Count > 0) { _state.HorizontalScaling = ParseDouble(operands[0]); } break;
-                case "TL": if (operands.Count > 0) { _state.TextLeading = ParseDouble(operands[0]); } break;
-                case "Ts": if (operands.Count > 0) { _state.TextRise = ParseDouble(operands[0]); } break;
-                case "Tr": if (operands.Count > 0) { _state.TextRenderingMode = (int)ParseInt(operands[0]); } break;
-                case "Tf": OpTf(operands, resources); break;
-
-                // Text positioning
-                case "Td": OpTd(operands); break;
-                case "TD": OpTD(operands); break;
-                case "Tm": OpTm(operands); break;
-                case "T*": OpTStar(); break;
-
-                // Text showing
-                case "Tj": if (operands.Count > 0) { if (_state.FontIsComposite) { ShowTextComposite(ExtractStringBytes(operands[0])); } else { ShowText(ExtractString(operands[0])); } } break;
-                case "TJ": OpTJ(operands); break;
-                case "'": OpQuote(operands); break;
-                case "\"": OpDoubleQuote(operands); break;
-
-                // XObjects
-                case "Do": OpDo(operands, resources); break;
-
-                // Marked content / compatibility â€” parsed, operands consumed, no emission
-                case "BMC": case "BDC": case "EMC": case "MP": case "DP": case "BX": case "EX": break;
-
-                // Unrecognised operator â€” silently ignored, operands cleared by caller
-                default: break;
-            }
-        }
-
         // â”€â”€ Graphics state operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void OpQ()
+        /// <inheritdoc />
+        public void SaveState()
         {
             _stateStack.Push(_state.Clone());
         }
 
-        private void OpQUpper()
+        /// <inheritdoc />
+        public void RestoreState()
         {
             if (_stateStack.Count > 0)
             {
@@ -425,147 +198,97 @@ public static class DisplayListBuilder
             }
         }
 
-        private void OpCm(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void ConcatMatrix(double a, double b, double c, double d, double e, double f)
         {
-            if (operands.Count < 6)
-            {
-                return;
-            }
-
-            Transform local = new Transform(
-                ParseDouble(operands[0]), ParseDouble(operands[1]),
-                ParseDouble(operands[2]), ParseDouble(operands[3]),
-                ParseDouble(operands[4]), ParseDouble(operands[5]));
+            Transform local = new Transform(a, b, c, d, e, f);
 
             // PDF row-vector convention: local cm pre-multiplies the CTM
             _state.Ctm = local.Multiply(_state.Ctm);
         }
 
-        private void OpDashPattern(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetLineWidth(double width)
         {
-            // d [dashArray] phase
-            if (operands.Count < 1)
-            {
-                return;
-            }
+            _state.LineWidth = width;
+        }
 
-            int phaseIdx = operands.Count - 1;
-            double phase = ParseDouble(operands[phaseIdx]);
+        /// <inheritdoc />
+        public void SetLineCap(int cap)
+        {
+            _state.LineCap = (LineCap)cap;
+        }
 
-            // Skip leading ArrayStart and trailing ArrayEnd tokens if present
-            int start = 0;
-            int end = phaseIdx;
+        /// <inheritdoc />
+        public void SetLineJoin(int join)
+        {
+            _state.LineJoin = (LineJoin)join;
+        }
 
-            while (start < end && operands[start].Type == PdfTokenType.ArrayStart)
-            {
-                start++;
-            }
+        /// <inheritdoc />
+        public void SetMiterLimit(double limit)
+        {
+            _state.MiterLimit = limit;
+        }
 
-            while (end > start && operands[end - 1].Type == PdfTokenType.ArrayEnd)
-            {
-                end--;
-            }
-
-            int len = end - start;
-            double[] dashes = new double[len];
-
-            for (int i = 0; i < len; i++)
-            {
-                dashes[i] = ParseDouble(operands[start + i]);
-            }
-
+        /// <inheritdoc />
+        public void SetDashPattern(double[] dashes, double phase)
+        {
             _state.DashPattern = dashes;
             _state.DashOffset = phase;
         }
 
         // â”€â”€ Colour operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void OpFillGray(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetFillGray(double gray)
         {
-            if (operands.Count < 1)
-            {
-                return;
-            }
-            _state.FillColor = ColorF.FromGray((float)ParseDouble(operands[0]));
+            _state.FillColor = ColorF.FromGray((float)gray);
             _state.FillValid = true;
         }
 
-        private void OpStrokeGray(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetStrokeGray(double gray)
         {
-            if (operands.Count < 1)
-            {
-                return;
-            }
-            _state.StrokeColor = ColorF.FromGray((float)ParseDouble(operands[0]));
+            _state.StrokeColor = ColorF.FromGray((float)gray);
             _state.StrokeValid = true;
         }
 
-        private void OpFillRgb(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetFillRgb(double r, double g, double b)
         {
-            if (operands.Count < 3)
-            {
-                return;
-            }
-            _state.FillColor = ColorF.FromRgb(
-                (float)ParseDouble(operands[0]),
-                (float)ParseDouble(operands[1]),
-                (float)ParseDouble(operands[2]));
+            _state.FillColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.FillValid = true;
         }
 
-        private void OpStrokeRgb(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetStrokeRgb(double r, double g, double b)
         {
-            if (operands.Count < 3)
-            {
-                return;
-            }
-            _state.StrokeColor = ColorF.FromRgb(
-                (float)ParseDouble(operands[0]),
-                (float)ParseDouble(operands[1]),
-                (float)ParseDouble(operands[2]));
+            _state.StrokeColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.StrokeValid = true;
         }
 
-        private void OpFillCmyk(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetFillCmyk(double c, double m, double y, double k)
         {
-            if (operands.Count < 4)
-            {
-                return;
-            }
-            _state.FillColor = ColorF.FromCmyk(
-                (float)ParseDouble(operands[0]),
-                (float)ParseDouble(operands[1]),
-                (float)ParseDouble(operands[2]),
-                (float)ParseDouble(operands[3]));
+            _state.FillColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.FillValid = true;
         }
 
-        private void OpStrokeCmyk(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetStrokeCmyk(double c, double m, double y, double k)
         {
-            if (operands.Count < 4)
-            {
-                return;
-            }
-            _state.StrokeColor = ColorF.FromCmyk(
-                (float)ParseDouble(operands[0]),
-                (float)ParseDouble(operands[1]),
-                (float)ParseDouble(operands[2]),
-                (float)ParseDouble(operands[3]));
+            _state.StrokeColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.StrokeValid = true;
         }
 
-        private void OpColorSpace(List<PdfToken> operands, bool stroke)
+        /// <inheritdoc />
+        public void SetColorSpace(string name, bool stroke)
         {
             // cs / CS sets the active colour space. We track validity:
             // device colour spaces remain valid; Pattern marks invalid so
             // subsequent paints get suppressed until a representable
             // colour is set via rg/g/k.
-            if (operands.Count < 1)
-            {
-                return;
-            }
-
-            string name = ExtractName(operands[0]);
             bool isDevice = name == "DeviceGray" || name == "DeviceRGB" || name == "DeviceCMYK"
                          || name == "G" || name == "RGB" || name == "CMYK";
 
@@ -579,26 +302,12 @@ public static class DisplayListBuilder
             }
         }
 
-        private void OpScColor(List<PdfToken> operands, bool stroke)
+        /// <inheritdoc />
+        public void SetColorN(double[] components, bool hasName, bool stroke)
         {
             // sc / scn / SC / SCN â€” set colour in current colour space.
             // We support 1, 3, or 4 numeric operands (DeviceGray/RGB/CMYK).
             // A trailing name operand (Pattern) suppresses validity.
-            int numericCount = 0;
-            bool hasName = false;
-
-            foreach (PdfToken t in operands)
-            {
-                if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
-                {
-                    numericCount++;
-                }
-                else if (t.Type == PdfTokenType.Name)
-                {
-                    hasName = true;
-                }
-            }
-
             if (hasName)
             {
                 if (stroke) { _state.StrokeValid = false; } else { _state.FillValid = false; }
@@ -607,23 +316,23 @@ public static class DisplayListBuilder
 
             ColorF c;
 
-            switch (numericCount)
+            switch (components.Length)
             {
                 case 1:
-                    c = ColorF.FromGray((float)ParseDouble(operands[0]));
+                    c = ColorF.FromGray((float)components[0]);
                     break;
                 case 3:
                     c = ColorF.FromRgb(
-                        (float)ParseDouble(operands[0]),
-                        (float)ParseDouble(operands[1]),
-                        (float)ParseDouble(operands[2]));
+                        (float)components[0],
+                        (float)components[1],
+                        (float)components[2]);
                     break;
                 case 4:
                     c = ColorF.FromCmyk(
-                        (float)ParseDouble(operands[0]),
-                        (float)ParseDouble(operands[1]),
-                        (float)ParseDouble(operands[2]),
-                        (float)ParseDouble(operands[3]));
+                        (float)components[0],
+                        (float)components[1],
+                        (float)components[2],
+                        (float)components[3]);
                     break;
                 default:
                     return;
@@ -643,50 +352,50 @@ public static class DisplayListBuilder
 
         // â”€â”€ Path construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void OpL(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void MoveTo(double x, double y)
         {
-            if (operands.Count < 2)
-            {
-                return;
-            }
+            _currentPath.MoveTo(x, y);
+        }
 
+        /// <inheritdoc />
+        public void LineTo(double x, double y)
+        {
             // LineTo on an empty path is illegal in the Path API (it
             // requires a current point). Defend against malformed streams.
             if (_currentPath.IsEmpty)
             {
-                _currentPath.MoveTo(ParseDouble(operands[0]), ParseDouble(operands[1]));
+                _currentPath.MoveTo(x, y);
                 return;
             }
 
-            _currentPath.LineTo(ParseDouble(operands[0]), ParseDouble(operands[1]));
+            _currentPath.LineTo(x, y);
         }
 
-        private void OpC(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void ClosePath()
         {
-            if (operands.Count < 6)
-            {
-                return;
-            }
+            _currentPath.ClosePath();
+        }
 
+        /// <inheritdoc />
+        public void CurveTo(double x1, double y1, double x2, double y2, double x3, double y3)
+        {
             if (_currentPath.IsEmpty)
             {
                 return; // Malformed â€” c requires a current point
             }
 
             _currentPath.CubicBezierTo(
-                ParsePoint(operands, 0),
-                ParsePoint(operands, 2),
-                ParsePoint(operands, 4));
+                new PointF(x1, y1),
+                new PointF(x2, y2),
+                new PointF(x3, y3));
         }
 
-        private void OpV(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void CurveToV(double x2, double y2, double x3, double y3)
         {
             // v x2 y2 x3 y3 â€” Bezier with initial point as first control
-            if (operands.Count < 4)
-            {
-                return;
-            }
-
             if (_currentPath.IsEmpty)
             {
                 return;
@@ -705,42 +414,29 @@ public static class DisplayListBuilder
 
             _currentPath.CubicBezierTo(
                 current,
-                ParsePoint(operands, 0),
-                ParsePoint(operands, 2));
+                new PointF(x2, y2),
+                new PointF(x3, y3));
         }
 
-        private void OpY(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void CurveToY(double x1, double y1, double x3, double y3)
         {
             // y x1 y1 x3 y3 â€” Bezier with final point as second control
-            if (operands.Count < 4)
-            {
-                return;
-            }
-
             if (_currentPath.IsEmpty)
             {
                 return;
             }
 
-            PointF endPt = ParsePoint(operands, 2);
+            PointF endPt = new PointF(x3, y3);
             _currentPath.CubicBezierTo(
-                ParsePoint(operands, 0),
+                new PointF(x1, y1),
                 endPt,
                 endPt);
         }
 
-        private void OpRe(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void AppendRectangle(double x, double y, double w, double h)
         {
-            if (operands.Count < 4)
-            {
-                return;
-            }
-
-            double x = ParseDouble(operands[0]);
-            double y = ParseDouble(operands[1]);
-            double w = ParseDouble(operands[2]);
-            double h = ParseDouble(operands[3]);
-
             _currentPath.MoveTo(x, y);
             _currentPath.LineTo(x + w, y);
             _currentPath.LineTo(x + w, y + h);
@@ -749,6 +445,25 @@ public static class DisplayListBuilder
         }
 
         // â”€â”€ Path painting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+        /// <inheritdoc />
+        public void FillPath(bool evenOdd)
+        {
+            OpFill(evenOdd ? FillRule.EvenOdd : FillRule.NonZeroWinding);
+        }
+
+        /// <inheritdoc />
+        public void FillAndStrokePath(bool evenOdd, bool closeFirst)
+        {
+            OpFillStroke(evenOdd ? FillRule.EvenOdd : FillRule.NonZeroWinding, closeFirst);
+        }
+
+        /// <inheritdoc />
+        public void SetClip(bool evenOdd)
+        {
+            _clipPending = true;
+            _clipRule = evenOdd ? FillRule.EvenOdd : FillRule.NonZeroWinding;
+        }
 
         private void OpFill(FillRule rule)
         {
@@ -762,7 +477,8 @@ public static class DisplayListBuilder
             _currentPath = new Path();
         }
 
-        private void OpStroke(bool closeFirst)
+        /// <inheritdoc />
+        public void StrokePath(bool closeFirst)
         {
             if (closeFirst && !_currentPath.IsEmpty)
             {
@@ -808,7 +524,8 @@ public static class DisplayListBuilder
             _currentPath = new Path();
         }
 
-        private void OpEndPath()
+        /// <inheritdoc />
+        public void EndPath()
         {
             // n â€” no painting, but a pending clip still applies
             ApplyDeferredClip();
@@ -891,17 +608,61 @@ public static class DisplayListBuilder
 
         // â”€â”€ Text operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void OpTf(List<PdfToken> operands, PdfDictionary? resources)
+        /// <inheritdoc />
+        public void BeginText()
         {
-            if (operands.Count < 2)
-            {
-                return;
-            }
+            _textMatrix = Transform.Identity;
+            _textLineMatrix = Transform.Identity;
+        }
 
-            _state.FontName = ExtractName(operands[0]);
-            _state.FontSize = ParseDouble(operands[1]);
-            _state.FontResources = resources;
-            _state.FontIsComposite = DetermineComposite(resources, _state.FontName);
+        /// <inheritdoc />
+        public void EndText()
+        {
+        }
+
+        /// <inheritdoc />
+        public void SetCharSpacing(double spacing)
+        {
+            _state.CharacterSpacing = spacing;
+        }
+
+        /// <inheritdoc />
+        public void SetWordSpacing(double spacing)
+        {
+            _state.WordSpacing = spacing;
+        }
+
+        /// <inheritdoc />
+        public void SetHorizontalScaling(double scale)
+        {
+            _state.HorizontalScaling = scale;
+        }
+
+        /// <inheritdoc />
+        public void SetLeading(double leading)
+        {
+            _state.TextLeading = leading;
+        }
+
+        /// <inheritdoc />
+        public void SetTextRenderingMode(int mode)
+        {
+            _state.TextRenderingMode = mode;
+        }
+
+        /// <inheritdoc />
+        public void SetTextRise(double rise)
+        {
+            _state.TextRise = rise;
+        }
+
+        /// <inheritdoc />
+        public void SetFont(string name, double size)
+        {
+            _state.FontName = name;
+            _state.FontSize = size;
+            _state.FontResources = _resources;
+            _state.FontIsComposite = DetermineComposite(_resources, name);
         }
 
         // Returns true when the named font resource is a Type0 (composite) font.
@@ -929,30 +690,17 @@ public static class DisplayListBuilder
             return subtype is not null && subtype.Value == "Type0";
         }
 
-        private void OpTd(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void TextMove(double tx, double ty)
         {
-            if (operands.Count < 2)
-            {
-                return;
-            }
-
-            double tx = ParseDouble(operands[0]);
-            double ty = ParseDouble(operands[1]);
-
             Transform t = new Transform(1, 0, 0, 1, tx, ty);
             _textLineMatrix = t.Multiply(_textLineMatrix);
             _textMatrix = _textLineMatrix;
         }
 
-        private void OpTD(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void TextMoveWithLeading(double tx, double ty)
         {
-            if (operands.Count < 2)
-            {
-                return;
-            }
-
-            double tx = ParseDouble(operands[0]);
-            double ty = ParseDouble(operands[1]);
             _state.TextLeading = -ty;
 
             Transform t = new Transform(1, 0, 0, 1, tx, ty);
@@ -960,23 +708,17 @@ public static class DisplayListBuilder
             _textMatrix = _textLineMatrix;
         }
 
-        private void OpTm(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetTextMatrix(double a, double b, double c, double d, double e, double f)
         {
-            if (operands.Count < 6)
-            {
-                return;
-            }
-
-            Transform t = new Transform(
-                ParseDouble(operands[0]), ParseDouble(operands[1]),
-                ParseDouble(operands[2]), ParseDouble(operands[3]),
-                ParseDouble(operands[4]), ParseDouble(operands[5]));
+            Transform t = new Transform(a, b, c, d, e, f);
 
             _textMatrix = t;
             _textLineMatrix = t;
         }
 
-        private void OpTStar()
+        /// <inheritdoc />
+        public void TextNextLine()
         {
             // T* â€” move to start of next line: 0 -leading Td
             Transform t = new Transform(1, 0, 0, 1, 0, -_state.TextLeading);
@@ -984,46 +726,21 @@ public static class DisplayListBuilder
             _textMatrix = _textLineMatrix;
         }
 
-        private void OpTJ(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void ShowTextArray(IReadOnlyList<TextArrayElement> elements)
         {
             // [( str ) num ( str ) num ...] TJ
-            bool inArray = false;
-
-            foreach (PdfToken t in operands)
+            foreach (TextArrayElement element in elements)
             {
-                if (t.Type == PdfTokenType.ArrayStart)
+                if (element.IsText)
                 {
-                    inArray = true;
-                    continue;
+                    RouteShowText(element.Text!);
                 }
-
-                if (t.Type == PdfTokenType.ArrayEnd)
-                {
-                    inArray = false;
-                    continue;
-                }
-
-                if (!inArray)
-                {
-                    continue;
-                }
-
-                if (t.Type == PdfTokenType.LiteralString || t.Type == PdfTokenType.HexString)
-                {
-                    if (_state.FontIsComposite)
-                    {
-                        ShowTextComposite(ExtractStringBytes(t));
-                    }
-                    else
-                    {
-                        ShowText(ExtractString(t));
-                    }
-                }
-                else if (t.Type == PdfTokenType.Integer || t.Type == PdfTokenType.Real)
+                else
                 {
                     // Positive displacement = move BACK in text direction.
                     // Per Â§9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
-                    double disp = ParseDouble(t);
+                    double disp = element.Adjustment;
                     double tx = -disp / 1000.0 * _state.FontSize * (_state.HorizontalScaling / 100.0);
                     Transform tr = new Transform(1, 0, 0, 1, tx, 0);
                     _textMatrix = tr.Multiply(_textMatrix);
@@ -1031,34 +748,49 @@ public static class DisplayListBuilder
             }
         }
 
-        private void OpQuote(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void MoveNextLineShowText(byte[] text)
         {
             // ' â€” move to next line and show text
-            OpTStar();
-
-            if (operands.Count > 0)
-            {
-                ShowText(ExtractString(operands[0]));
-            }
+            TextNextLine();
+            ShowTextSimple(DecodeSimpleText(text));
         }
 
-        private void OpDoubleQuote(List<PdfToken> operands)
+        /// <inheritdoc />
+        public void SetSpacingMoveNextLineShowText(double wordSpacing, double charSpacing, byte[] text)
         {
             // " â€” aw ac string â€” set word/char spacing, move to next line, show
-            if (operands.Count < 3)
-            {
-                return;
-            }
-
-            _state.WordSpacing = ParseDouble(operands[0]);
-            _state.CharacterSpacing = ParseDouble(operands[1]);
-            OpTStar();
-            ShowText(ExtractString(operands[2]));
+            _state.WordSpacing = wordSpacing;
+            _state.CharacterSpacing = charSpacing;
+            TextNextLine();
+            ShowTextSimple(DecodeSimpleText(text));
         }
 
         // â”€â”€ Text showing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void ShowText(string text)
+        /// <inheritdoc />
+        public void ShowText(byte[] text)
+        {
+            RouteShowText(text);
+        }
+
+        // Routes a raw show-text string to the composite or simple path,
+        // matching the pre-consolidation Tj/TJ dispatch. The ' and "
+        // operators bypass this and use the simple path directly, exactly
+        // as before consolidation (recorded follow-up: route those too).
+        private void RouteShowText(byte[] raw)
+        {
+            if (_state.FontIsComposite)
+            {
+                ShowTextComposite(raw);
+            }
+            else
+            {
+                ShowTextSimple(DecodeSimpleText(raw));
+            }
+        }
+
+        private void ShowTextSimple(string text)
         {
             if (string.IsNullOrEmpty(text) || _state.FontSize <= 0)
             {
@@ -1391,7 +1123,7 @@ public static class DisplayListBuilder
 
                 if (fontStream is not null)
                 {
-                    return DecodeStream(fontStream);
+                    return ContentStreamLoader.Decode(fontStream);
                 }
             }
 
@@ -1400,21 +1132,15 @@ public static class DisplayListBuilder
 
         // â”€â”€ XObject Do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private void OpDo(List<PdfToken> operands, PdfDictionary? resources)
+        /// <inheritdoc />
+        public void InvokeXObject(string name)
         {
-            if (operands.Count < 1 || resources is null)
+            if (_resources is null)
             {
                 return;
             }
 
-            string name = ExtractName(operands[0]);
-
-            if (string.IsNullOrEmpty(name))
-            {
-                return;
-            }
-
-            if (!resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xobjDictRef))
+            if (!_resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xobjDictRef))
             {
                 return;
             }
@@ -1454,7 +1180,7 @@ public static class DisplayListBuilder
             }
             else if (subtype.Value == "Form")
             {
-                EmitFormXObject(xobjStream, resources);
+                EmitFormXObject(xobjStream, _resources);
             }
         }
 
@@ -1496,7 +1222,7 @@ public static class DisplayListBuilder
 
             try
             {
-                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : DecodeStream(xobjStream);
+                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream);
             }
             catch (Exception)
             {
@@ -1570,7 +1296,7 @@ public static class DisplayListBuilder
 
             try
             {
-                formContent = sub.DecodeStream(xobjStream);
+                formContent = ContentStreamLoader.Decode(xobjStream);
             }
             catch (Exception)
             {
@@ -1581,7 +1307,8 @@ public static class DisplayListBuilder
 
             if (formContent.Length > 0)
             {
-                sub.Interpret(formContent, formResources);
+                sub._resources = formResources;
+                ContentStreamWalker.Walk(formContent, sub);
             }
 
             inner = new PageDisplayList(sub._ops, 0, 0);
@@ -1602,44 +1329,9 @@ public static class DisplayListBuilder
             };
         }
 
-        // â”€â”€ Token parsing helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        private static double ParseDouble(PdfToken token)
+        private string DecodeSimpleText(byte[] raw)
         {
-            if (double.TryParse(token.RawText,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out double v))
-            {
-                return v;
-            }
-
-            return 0.0;
-        }
-
-        private static long ParseInt(PdfToken token)
-        {
-            if (long.TryParse(token.RawText,
-                NumberStyles.Integer,
-                CultureInfo.InvariantCulture,
-                out long v))
-            {
-                return v;
-            }
-
-            return 0;
-        }
-
-        private static PointF ParsePoint(List<PdfToken> operands, int startIndex)
-        {
-            return new PointF(
-                ParseDouble(operands[startIndex]),
-                ParseDouble(operands[startIndex + 1]));
-        }
-
-        private string ExtractString(PdfToken token)
-        {
-            byte[] raw = ExtractStringBytes(token);
             Chuvadi.Pdf.Fonts.PdfFont? font = GetPdfFont();
 
 
@@ -1665,125 +1357,6 @@ public static class DisplayListBuilder
                 sb.Append(u.Length > 0 ? u[0] : (char)code);
             }
             return sb.ToString();
-        }
-
-        private static byte[] ExtractStringBytes(PdfToken token)
-        {
-            // Literal string and hex string both deliver bytes; we treat
-            // bytes as Latin-1 for now (the rasterizer does the same).
-            // Proper Unicode mapping via ToUnicode CMaps is future work.
-            byte[] bytes = token.RawBytes;
-
-            if (token.Type == PdfTokenType.HexString)
-            {
-                return DecodeHexString(bytes);
-            }
-
-            // Literal string: strip wrapping ( ) delimiters if present, then handle escapes
-            if (bytes.Length >= 2 && bytes[0] == (byte)'(' && bytes[bytes.Length - 1] == (byte)')')
-            {
-                byte[] inner = new byte[bytes.Length - 2];
-                System.Array.Copy(bytes, 1, inner, 0, bytes.Length - 2);
-                bytes = inner;
-            }
-            return DecodeLiteralString(bytes);
-        }
-
-        private static byte[] DecodeLiteralString(byte[] bytes)
-        {
-            // Bytes from a literal string token may contain backslash
-            // escapes per Â§7.3.4.2. We decode common ones.
-            System.Collections.Generic.List<byte> sb = new System.Collections.Generic.List<byte>(bytes.Length);
-
-            for (int i = 0; i < bytes.Length; i++)
-            {
-                byte b = bytes[i];
-
-                if (b == (byte)'\\' && i + 1 < bytes.Length)
-                {
-                    byte next = bytes[i + 1];
-
-                    switch (next)
-                    {
-                        case (byte)'n': sb.Add((byte)'\n'); i++; continue;
-                        case (byte)'r': sb.Add((byte)'\r'); i++; continue;
-                        case (byte)'t': sb.Add((byte)'\t'); i++; continue;
-                        case (byte)'b': sb.Add((byte)'\b'); i++; continue;
-                        case (byte)'f': sb.Add((byte)'\f'); i++; continue;
-                        case (byte)'(': sb.Add((byte)'('); i++; continue;
-                        case (byte)')': sb.Add((byte)')'); i++; continue;
-                        case (byte)'\\': sb.Add((byte)'\\'); i++; continue;
-                    }
-                }
-
-                sb.Add(b);
-            }
-
-            return sb.ToArray();
-        }
-
-        // Decodes a hex string token (e.g. <0039>) into its raw bytes.
-        // Angle-bracket delimiters and interior whitespace are ignored; an
-        // odd final hex digit is padded with 0 per PDF 32000-1 §7.3.4.3.
-        private static byte[] DecodeHexString(byte[] bytes)
-        {
-            System.Collections.Generic.List<int> digits = new System.Collections.Generic.List<int>(bytes.Length);
-
-            foreach (byte b in bytes)
-            {
-                int v;
-
-                if (b >= (byte)'0' && b <= (byte)'9')
-                {
-                    v = b - (byte)'0';
-                }
-                else if (b >= (byte)'A' && b <= (byte)'F')
-                {
-                    v = b - (byte)'A' + 10;
-                }
-                else if (b >= (byte)'a' && b <= (byte)'f')
-                {
-                    v = b - (byte)'a' + 10;
-                }
-                else
-                {
-                    continue;
-                }
-
-                digits.Add(v);
-            }
-
-            if ((digits.Count & 1) == 1)
-            {
-                digits.Add(0);
-            }
-
-            byte[] result = new byte[digits.Count / 2];
-
-            for (int i = 0; i < result.Length; i++)
-            {
-                result[i] = (byte)((digits[i * 2] << 4) | digits[(i * 2) + 1]);
-            }
-
-            return result;
-        }
-
-        private static string ExtractName(PdfToken token)
-        {
-            if (token.Type != PdfTokenType.Name)
-            {
-                return string.Empty;
-            }
-
-            byte[] bytes = token.RawBytes;
-            char[] chars = new char[bytes.Length];
-
-            for (int i = 0; i < bytes.Length; i++)
-            {
-                chars[i] = (char)bytes[i];
-            }
-
-            return new string(chars);
         }
     }
 }

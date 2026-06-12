@@ -11,6 +11,29 @@ numbered A01..ANN).
 
 ---
 
+## [2.7.1] - 2026-06-12
+
+### Fixed
+- **Octal string escapes on the raster path.** The rasterizer's content-stream
+  string decoder did not handle `\nnn` octal escapes (PDF 32000-1 §7.3.4.2),
+  so literal strings written with octal-escaped bytes — including the WinAnsi
+  bullets and ellipses Chuvadi's own ReportBuilder emits — rendered the escape
+  characters verbatim when rasterized. Octal escapes now decode correctly.
+- **Multi-element dash patterns in SVG output.** The SVG display-list parser
+  kept only the first dash length and treated later array entries as the
+  phase, so patterns like `[3 2] 0 d` rendered with the wrong gap lengths.
+  The full dash array is now honoured.
+
+### Changed
+- **DisplayList consolidation (internal).** The two content-stream
+  interpreters behind the SVG/Reader display list and the raster display list
+  now share one walker (tokenisation, operand parsing, operator dispatch) with
+  the two builders as event sinks. No public API changed. Malformed numeric
+  operands on the SVG path are now read as 0 instead of aborting the page
+  build, matching the raster path's tolerance.
+
+---
+
 ## [2.7.0] - 2026-06-12
 
 ### Added
