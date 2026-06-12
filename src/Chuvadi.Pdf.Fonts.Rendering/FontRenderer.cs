@@ -95,21 +95,29 @@ public sealed class FontRenderer
     /// <param name="glyphId">Zero-based glyph index.</param>
     /// <param name="ppem">Target size in pixels per em; must be positive.</param>
     /// <param name="light">When true, grid-fit the Y axis only.</param>
-    public GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light)
+    /// <param name="autohintFallback">
+    /// When true (the default), glyphs of fonts with no hinting programs are
+    /// grid-fitted by the geometric autohinter instead of returning null.
+    /// </param>
+    public GlyphOutline? GetHintedGlyphOutline(
+        int glyphId, int ppem, bool light, bool autohintFallback = true)
     {
         if (ppem <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(ppem), "Pixels-per-em must be positive.");
         }
 
-        long key = ((long)ppem << 33) | ((long)(light ? 1 : 0) << 32) | (uint)glyphId;
+        long key = ((long)ppem << 34)
+            | ((long)(autohintFallback ? 1 : 0) << 33)
+            | ((long)(light ? 1 : 0) << 32)
+            | (uint)glyphId;
 
         if (_hintedCache.TryGetValue(key, out GlyphOutline? cached))
         {
             return cached;
         }
 
-        GlyphOutline? outline = _loader.GetHintedGlyphOutline(glyphId, ppem, light);
+        GlyphOutline? outline = _loader.GetHintedGlyphOutline(glyphId, ppem, light, autohintFallback);
         _hintedCache[key] = outline;
         return outline;
     }

@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Chuvadi.Pdf.Fonts.Rendering.Hinting;
+using Chuvadi.Pdf.Fonts.Rendering.Hinting.Autohint;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Fonts.Rendering;
@@ -1254,7 +1255,13 @@ public sealed class TrueTypeLoader
     /// <param name="glyphId">Zero-based glyph index.</param>
     /// <param name="ppem">Target size in pixels per em; must be positive.</param>
     /// <param name="light">When true, grid-fit the Y axis only (horizontal positions stay naturally scaled).</param>
-    public GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light)
+    /// <param name="autohintFallback">
+    /// When true (the default), glyphs of fonts that carry no hinting programs
+    /// at all are grid-fitted by the geometric autohinter (Y axis only)
+    /// instead of falling back to the unhinted outline.
+    /// </param>
+    public GlyphOutline? GetHintedGlyphOutline(
+        int glyphId, int ppem, bool light, bool autohintFallback = true)
     {
         if (ppem <= 0)
         {
@@ -1271,6 +1278,14 @@ public sealed class TrueTypeLoader
 
         if (raw.Instructions.Length == 0 && raw.ContourCount > 0)
         {
+            // No glyph program. For fonts with no hinting machinery at all,
+            // the geometric autohinter supplies Y-axis grid fitting; fonts
+            // that do carry programs fall back to the unhinted outline so a
+            // mixed render keeps consistent weights.
+            if (autohintFallback && !HasHintingPrograms)
+            {
+                return BuildAutohintedOutline(raw, glyphId, ppem);
+            }
             return null;
         }
 
@@ -1340,6 +1355,86 @@ public sealed class TrueTypeLoader
         }
 
         return ConvertContoursToPath(raw.ContourEnds, flags, xs, ys);
+    }
+
+    // ── Geometric autohinter fallback ─────────────────────────────────────
+
+    // Blue zones for the autohinter, built lazily from reference glyphs.
+    private BlueZoneTable? _autohintZones;
+
+    // Reference characters whose extremes define the font's blue zones:
+    // capital tops/bottoms, x-height, ascenders, and descenders — the
+    // classic latin-autohinter set.
+    private const string AutohintReferenceChars = "THEZOCQSxzroescbdfhklpqgjy";
+
+    /// <summary>True when the font carries any hinting machinery (a fpgm or prep program).</summary>
+    internal bool HasHintingPrograms => _fpgmLength > 0 || _prepLength > 0;
+
+    // Grid-fits an instruction-less glyph with the geometric autohinter:
+    // Y-axis only (blue-zone anchoring, stroke fitting, interpolation),
+    // X positions naturally scaled — the Light philosophy. Returns null on
+    // degenerate input so callers fall back to the unhinted outline.
+    private GlyphOutline? BuildAutohintedOutline(RawGlyph raw, int glyphId, int ppem)
+    {
+        int realPoints = raw.RealPointCount;
+        if (realPoints <= 0 || raw.ContourCount == 0)
+        {
+            return null;
+        }
+
+        double scale = (double)ppem / _unitsPerEm;
+        BlueZoneTable zones = EnsureAutohintZones();
+        double[] fittedY = Autohinter.FitY(raw, zones, scale, _unitsPerEm);
+
+        double[] xs = new double[realPoints];
+        byte[] flags = new byte[realPoints];
+        for (int i = 0; i < realPoints; i++)
+        {
+            xs[i] = raw.X[i] * scale;
+            flags[i] = raw.OnCurve[i] ? (byte)0x01 : (byte)0x00;
+        }
+
+        Path outline = ConvertContoursToPath(raw.ContourEnds, flags, xs, fittedY);
+
+        GlyphMetrics fontMetrics = GetGlyphMetrics(glyphId);
+        GlyphMetrics deviceMetrics = new GlyphMetrics(
+            advanceWidth: (int)Math.Round(fontMetrics.AdvanceWidth * scale),
+            leftSideBearing: (int)Math.Round(fontMetrics.LeftSideBearing * scale),
+            unitsPerEm: 1,
+            bounds: new RectangleF(
+                (float)(fontMetrics.Bounds.X * scale),
+                (float)(fontMetrics.Bounds.Y * scale),
+                (float)(fontMetrics.Bounds.Width * scale),
+                (float)(fontMetrics.Bounds.Height * scale)));
+
+        return new GlyphOutline(outline, deviceMetrics);
+    }
+
+    private BlueZoneTable EnsureAutohintZones()
+    {
+        if (_autohintZones is not null)
+        {
+            return _autohintZones;
+        }
+
+        List<RawGlyph> referenceGlyphs = new List<RawGlyph>();
+        foreach (char ch in AutohintReferenceChars)
+        {
+            int gid = GetGlyphIndex(ch);
+            if (gid == 0)
+            {
+                continue;
+            }
+
+            RawGlyph? reference = BuildRawGlyph(gid);
+            if (reference is not null && reference.ContourCount > 0)
+            {
+                referenceGlyphs.Add(reference);
+            }
+        }
+
+        _autohintZones = BlueZoneBuilder.Build(referenceGlyphs, _unitsPerEm);
+        return _autohintZones;
     }
 
     /// <summary>
