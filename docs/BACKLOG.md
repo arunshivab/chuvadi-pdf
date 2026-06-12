@@ -28,12 +28,12 @@ shipped; they are kept for traceability:
 ## Active / Next
 
 ### N.1 DisplayList consolidation
-**Status:** Next PR after v2.7.0.
-Two DisplayList implementations exist: `src/Chuvadi.Pdf.Rendering.DisplayList/`
-(the target, used by SvgRenderer and the raster path) and
-`src/Chuvadi.Pdf.Rendering/DisplayList/` (used by Examples.Render and
-Rendering.Tests). Consolidate onto the former; the latter must not grow
-new features in the meantime.
+**Status:** SHIPPED in v2.7.1 (CHANGE-LOG A32). One shared content-stream
+walker now feeds both display-list builders as sinks; the duplicated
+tokenise/parse/dispatch machinery is single-sourced. Recorded follow-ups:
+SVG sink ignores cs/scn colour operators (raster implements them); raster
+quote operators bypass composite-font routing; SVG sink does not recurse
+into form XObjects.
 
 ### N.2 Autohinter follow-ups
 **Status:** v2.7.0 ships Y-only fitting for simple glyphs.

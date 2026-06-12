@@ -901,3 +901,35 @@ Key decisions:
 - **MIRP hardening from the reference.** (a) The control-value cut-in test applies only when gep0 == gep1 (undocumented; in FreeType with an explicit comment). (b) When zp1 is the twilight zone, the point's original and current positions are seeded from rp0 plus the CVT distance along the freedom vector before distances are measured (undocumented MS-rasterizer behaviour, confirmed by Greg Hitchcock per the FreeType source). Both matter for fonts that hint through twilight anchors.
 
 **Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`.
+
+---
+
+## A32 - DisplayList Consolidation: One Walker, Two Sinks
+
+**Date:** 2026-06-12
+**Scope:** `Chuvadi.Pdf.Rendering.DisplayList` (new internal `Walking` layer; both display-list builders converted)
+**Rationale:** Backlog item N.1. The project carried two complete content-stream interpreters - the SVG/Reader display-list builder (`Chuvadi.Pdf.Rendering.DisplayList` namespace, consumed by SvgRenderer, the public IPdfReader surface, WpfRenderer) and the raster builder (`Chuvadi.Pdf.Rendering.Raster`, consumed by PageRasterizer). Each owned its own tokenizer loop, operand parsing, string/name decoding, stream loading, and a ~60-case operator dispatch switch - roughly 500 lines of drifting duplication.
+
+Key decisions:
+
+- **Direction A: one walker, two sinks.** A new internal `Walking` layer owns everything that was mechanically duplicated: `ContentStreamLoader` (resolves /Contents, runs filter chains), `ContentStrings` (literal/hex string and name decoding), and `ContentStreamWalker` (tokenisation, inline-array capture for TJ and d, tolerant operand parsing, and a typed-event dispatch). `IContentOperatorSink` is the contract: ~45 operator events with no-op defaults.
+
+- **All interpretation state stays sink-side.** The walker holds no graphics state. CTM handling, paths, text matrices, font resolution, glyph advances, gap tracking, clipping, and emission remain in each builder exactly as before - the split was chosen so both sides' numerics stay bit-identical through the refactor. Both public Build surfaces are unchanged; no public API was touched (api-docs regeneration produced no diff).
+
+- **Form recursion stays sink-side.** The raster sink resolves form XObjects and calls the walker again on the form bytes with a sub-sink; the SVG sink keeps its image-only XObject handling (it never recursed into forms, and still does not - recorded follow-up).
+
+- **Two genuine fixes fell out of unification:**
+  (1) *Raster octal escapes.* The raster string decoder did not handle `\nnn` octal escapes (PDF 32000-1 7.3.4.2), so literal strings written with octal-escaped bytes - including the WinAnsi bullets and ellipses Chuvadi's own ReportBuilder emits - rendered the escape characters verbatim through the raster path. The unified decoder is octal-correct on both paths.
+  (2) *SVG dash arrays.* The old dash parser kept only the first dash length and treated every later array element as the phase, so multi-element patterns (`[3 2] 0 d`) rendered wrong on the SVG path. The walker parses the full array.
+
+- **Tolerant numerics on the SVG path.** The old builder used throwing `double.Parse`, so a malformed numeric operand aborted the whole page build; the raster builder already read malformed numbers as 0. The walker unifies on the tolerant form.
+
+- **Behavioural asymmetries deliberately preserved:** the SVG sink continues to ignore cs/CS/sc/scn/SCN (the raster sink implements them); the raster quote operators (' and ") still bypass composite-font routing exactly as before. Both are recorded follow-ups, out of scope for a behaviour-neutral consolidation.
+
+**Files affected:**
+`src/Chuvadi.Pdf.Rendering.DisplayList/Walking/IContentOperatorSink.cs` (new),
+`src/Chuvadi.Pdf.Rendering.DisplayList/Walking/ContentStreamWalker.cs` (new),
+`src/Chuvadi.Pdf.Rendering.DisplayList/Walking/ContentStrings.cs` (new),
+`src/Chuvadi.Pdf.Rendering.DisplayList/Walking/ContentStreamLoader.cs` (new),
+`src/Chuvadi.Pdf.Rendering.DisplayList/DisplayListBuilder.cs`,
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.
