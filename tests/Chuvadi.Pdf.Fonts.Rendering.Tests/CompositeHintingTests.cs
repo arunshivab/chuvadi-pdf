@@ -125,15 +125,18 @@ public sealed class CompositeHintingTests
     [Fact]
     public void SimpleComponentGlyph_WithoutInstructions_ReturnsNullFromHintedPath()
     {
-        // The base box carries no instruction stream. A simple glyph with no
-        // program returns null from the hinted path (the caller then uses the
-        // scaled unhinted outline). This is the precondition that makes composite
-        // hinting non-trivial: the component is unhinted on its own, yet the
-        // composite assembles and hints around it.
+        // The base box carries no instruction stream. With the geometric
+        // autohinter opted out, a simple glyph with no program returns null
+        // from the hinted path (the caller then uses the scaled unhinted
+        // outline). This is the precondition that makes composite hinting
+        // non-trivial: the component is unhinted on its own, yet the
+        // composite assembles and hints around it. (Since v2.7.0 the default
+        // autohintFallback grid-fits such glyphs in unhinted fonts instead.)
         byte[] font = BuildCompositeTtf(scaledComponent: false);
         TrueTypeLoader loader = new TrueTypeLoader(font);
 
-        GlyphOutline? hinted = loader.GetHintedGlyphOutline(BaseGlyphId, TestPpem, light: true);
+        GlyphOutline? hinted = loader.GetHintedGlyphOutline(
+            BaseGlyphId, TestPpem, light: true, autohintFallback: false);
 
         hinted.Should().BeNull();
     }

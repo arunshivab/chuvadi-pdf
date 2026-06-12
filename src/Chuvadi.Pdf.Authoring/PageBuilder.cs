@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Images;
 
 namespace Chuvadi.Pdf.Authoring;
 
@@ -167,14 +168,31 @@ public sealed class PageBuilder
 
     /// <summary>
     /// Embeds an image and draws it at the given top-left rectangle.
-    /// Supports PNG and JPEG.
+    /// Supports JPEG, PNG, TIFF, and BMP; images with an alpha channel are
+    /// embedded with a soft mask so transparency is preserved.
     /// </summary>
     public PageBuilder DrawImage(
         byte[] imageBytes, double x, double y, double width, double height)
     {
         ArgumentNullException.ThrowIfNull(imageBytes);
         string key = $"Img{Images.Count}";
-        Images.Add(new ImageRef(key, imageBytes));
+        Images.Add(new ImageRef(key, imageBytes, null));
+        _w.DrawImage(key, x, y, width, height);
+        return this;
+    }
+
+    /// <summary>
+    /// Embeds an already-decoded image frame and draws it at the given
+    /// top-left rectangle. Useful for frames produced by the
+    /// <c>Chuvadi.Pdf.Images</c> decoders — for example one page of a
+    /// multi-frame TIFF.
+    /// </summary>
+    public PageBuilder DrawImage(
+        ImageFrame image, double x, double y, double width, double height)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        string key = $"Img{Images.Count}";
+        Images.Add(new ImageRef(key, null, image));
         _w.DrawImage(key, x, y, width, height);
         return this;
     }
@@ -227,5 +245,8 @@ public sealed class PageBuilder
     }
 }
 
-/// <summary>Internal: an image referenced from a page's content stream.</summary>
-internal sealed record ImageRef(string Key, byte[] Bytes);
+/// <summary>
+/// Internal: an image referenced from a page's content stream — either raw
+/// encoded bytes or an already-decoded frame (exactly one is non-null).
+/// </summary>
+internal sealed record ImageRef(string Key, byte[]? Bytes, ImageFrame? Frame);

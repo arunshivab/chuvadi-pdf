@@ -25,7 +25,7 @@ production code; you need nothing else.
 ## Clone and build
 
 ```bash
-git clone https://github.com/arunshivab/chuvadi.git
+git clone https://github.com/arunshivab/chuvadi-pdf.git
 cd chuvadi
 dotnet build
 dotnet test

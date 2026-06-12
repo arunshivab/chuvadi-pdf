@@ -142,13 +142,24 @@ public sealed class PdfDocumentBuilder
                 fontDict.Set(PdfName.Intern(PageBuilder.FontKey(fontName)), new PdfReference(fontId));
             }
 
-            // XObject dictionary for images.
+            // XObject dictionary for images. Alpha channels emit a second
+            // DeviceGray soft-mask object referenced from the image's /SMask.
             PdfDictionary xobjectDict = new();
             foreach (ImageRef img in p.Images)
             {
+                EmbeddedImage built = img.Frame is not null
+                    ? ImageEmbedder.BuildFromFrame(img.Frame)
+                    : ImageEmbedder.Build(img.Bytes!);
                 PdfObjectId imgId = new(nextId++, 0);
-                PdfStream imgStream = BuildImageStream(img.Bytes);
-                objects.Add(new PdfIndirectObject(imgId, imgStream));
+                if (built.MaskDictionary is not null)
+                {
+                    PdfObjectId maskId = new(nextId++, 0);
+                    objects.Add(new PdfIndirectObject(
+                        maskId, new PdfStream(built.MaskDictionary, built.MaskData)));
+                    built.ImageDictionary.Set(PdfName.Intern("SMask"), new PdfReference(maskId));
+                }
+                objects.Add(new PdfIndirectObject(
+                    imgId, new PdfStream(built.ImageDictionary, built.ImageData)));
                 xobjectDict.Set(PdfName.Intern(img.Key), new PdfReference(imgId));
             }
 
@@ -243,105 +254,5 @@ public sealed class PdfDocumentBuilder
         MemoryStream ms = new();
         PdfWriter.Write(ms, objects, trailer);
         return ms.ToArray();
-    }
-
-    private static PdfStream BuildImageStream(byte[] imageBytes)
-    {
-        // Sniff JPEG vs PNG by magic bytes.
-        if (imageBytes.Length >= 3 &&
-            imageBytes[0] == 0xFF && imageBytes[1] == 0xD8 && imageBytes[2] == 0xFF)
-        {
-            return BuildJpegStream(imageBytes);
-        }
-        if (imageBytes.Length >= 8 &&
-            imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
-        {
-            return BuildPngStream(imageBytes);
-        }
-        throw new ArgumentException("Image must be JPEG or PNG.", nameof(imageBytes));
-    }
-
-    private static PdfStream BuildJpegStream(byte[] jpegBytes)
-    {
-        // Parse JPEG SOF marker for dimensions.
-        (int w, int h) = JpegSize(jpegBytes);
-        PdfDictionary dict = new();
-        dict.Set(PdfName.Type, PdfName.Intern("XObject"));
-        dict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Image"));
-        dict.Set(PdfName.Intern("Width"), (PdfPrimitive)new PdfInteger(w));
-        dict.Set(PdfName.Intern("Height"), (PdfPrimitive)new PdfInteger(h));
-        dict.Set(PdfName.Intern("ColorSpace"), PdfName.Intern("DeviceRGB"));
-        dict.Set(PdfName.Intern("BitsPerComponent"), (PdfPrimitive)new PdfInteger(8));
-        dict.Set(PdfName.Intern("Filter"), PdfName.Intern("DCTDecode"));
-        dict.Set(PdfName.Length, jpegBytes.Length);
-        return new PdfStream(dict, jpegBytes);
-    }
-
-    private static PdfStream BuildPngStream(byte[] pngBytes)
-    {
-        // Parse PNG IHDR for dimensions, extract IDAT to embed.
-        (int w, int h, byte[] data, bool hasAlpha) = PngExtract(pngBytes);
-        PdfDictionary dict = new();
-        dict.Set(PdfName.Type, PdfName.Intern("XObject"));
-        dict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Image"));
-        dict.Set(PdfName.Intern("Width"), (PdfPrimitive)new PdfInteger(w));
-        dict.Set(PdfName.Intern("Height"), (PdfPrimitive)new PdfInteger(h));
-        dict.Set(PdfName.Intern("ColorSpace"), PdfName.Intern(hasAlpha ? "DeviceRGB" : "DeviceRGB"));
-        dict.Set(PdfName.Intern("BitsPerComponent"), (PdfPrimitive)new PdfInteger(8));
-        dict.Set(PdfName.Intern("Filter"), PdfName.Intern("FlateDecode"));
-        PdfDictionary decodeParms = new();
-        decodeParms.Set(PdfName.Intern("Predictor"), (PdfPrimitive)new PdfInteger(15));
-        decodeParms.Set(PdfName.Intern("Colors"), (PdfPrimitive)new PdfInteger(hasAlpha ? 4 : 3));
-        decodeParms.Set(PdfName.Intern("BitsPerComponent"), (PdfPrimitive)new PdfInteger(8));
-        decodeParms.Set(PdfName.Intern("Columns"), (PdfPrimitive)new PdfInteger(w));
-        dict.Set(PdfName.Intern("DecodeParms"), decodeParms);
-        dict.Set(PdfName.Length, data.Length);
-        return new PdfStream(dict, data);
-    }
-
-    private static (int W, int H) JpegSize(byte[] bytes)
-    {
-        int i = 2;
-        while (i < bytes.Length - 1)
-        {
-            if (bytes[i] != 0xFF) { i++; continue; }
-            byte marker = bytes[i + 1];
-            i += 2;
-            // SOF0, SOF2, etc. — read height + width.
-            if (marker >= 0xC0 && marker <= 0xC3)
-            {
-                int h = (bytes[i + 3] << 8) | bytes[i + 4];
-                int w = (bytes[i + 5] << 8) | bytes[i + 6];
-                return (w, h);
-            }
-            if (marker == 0xD8 || marker == 0xD9) { continue; }
-            int len = (bytes[i] << 8) | bytes[i + 1];
-            i += len;
-        }
-        throw new InvalidDataException("JPEG SOF marker not found.");
-    }
-
-    private static (int W, int H, byte[] Data, bool HasAlpha) PngExtract(byte[] bytes)
-    {
-        // PNG signature: 8 bytes. IHDR chunk starts at offset 8.
-        int w = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
-        int h = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
-        byte colorType = bytes[25];
-        bool hasAlpha = colorType == 6;
-        // Walk chunks; concatenate IDAT payloads.
-        int p = 8;
-        using MemoryStream idat = new();
-        while (p < bytes.Length)
-        {
-            int len = (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
-            string type = System.Text.Encoding.ASCII.GetString(bytes, p + 4, 4);
-            if (type == "IDAT")
-            {
-                idat.Write(bytes, p + 8, len);
-            }
-            else if (type == "IEND") { break; }
-            p += 12 + len;
-        }
-        return (w, h, idat.ToArray(), hasAlpha);
     }
 }

@@ -70,20 +70,6 @@ GlyphMetrics GetGlyphMetrics(int glyphId)
 
 Returns the typographic metrics for a glyph without building its path. Useful for text advance width calculations.
 
-### `GetHintedGlyphOutline`
-
-```csharp
-GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light)
-```
-
-Returns the glyph outline grid-fitted at the given pixels-per-em, in device space (Y up, one unit = one pixel), or `null` when the glyph cannot be hinted or an interpreter fault occurs.
-
-**Parameters**
-
-- `glyphId` — Zero-based glyph index.
-- `ppem` — Target size in pixels per em; must be positive.
-- `light` — When true, grid-fit the Y axis only (horizontal positions stay naturally scaled).
-
 ---
 
 _Source: [`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs)_

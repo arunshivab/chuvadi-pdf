@@ -11,6 +11,66 @@ numbered A01..ANN).
 
 ---
 
+## [2.7.0] - 2026-06-12
+
+### Added
+- **Image → PDF conversion.** New `ImagePdfConverter` turns JPEG, PNG, TIFF,
+  and BMP images into PDF documents in one call: page sized to the image at a
+  chosen DPI or fitted to a paper size with margins and centring, multi-image
+  → multi-page, multi-frame TIFF → one page per frame (optional), and document
+  metadata. New `BmpDecoder` (headers 12/40–124; depths 1/4/8/16/24/32;
+  BI_RGB, RLE8, RLE4, BI_BITFIELDS; top-down and bottom-up) completes the
+  decoder set.
+- **Image embedding rework.** `PageBuilder.DrawImage` now accepts JPEG, PNG,
+  TIFF, and BMP (plus a decoded `ImageFrame` overload). Alpha channels are
+  preserved via PDF soft masks (`/SMask`); grayscale sources embed as
+  DeviceGray. Baseline JPEG and 8-bit truecolour PNG still embed without
+  recompression; palette / grayscale / alpha / 16-bit PNG, TIFF, and BMP
+  decode and re-embed as Flate-compressed samples. Fixes the previous
+  RGBA-PNG embedding (4-component data declared as DeviceRGB).
+- **Report layout.** New `ReportBuilder`: flowing multi-page composition with
+  headings, paragraphs (alignment incl. justification, indents, spacing),
+  bulleted and numbered lists (Arabic / Roman / letter numbering), span-aware
+  tables (fixed / fractional / auto column widths, col- and row-spans,
+  per-cell style overrides, alternating row fills, wrap / truncate / ellipsis
+  overflow, images in cells, repeating headers across pages, five border
+  modes), images, rules, spacers, page breaks, styled headers/footers with
+  `{page}` / `{total}` / `{title}` / `{date}` tokens, and page numbers in
+  Arabic, Roman, or letter form.
+- **Geometric autohinter fallback.** Fonts that carry no hinting programs are
+  now grid-fitted on the Y axis by a geometric autohinter (blue-zone
+  anchoring with classic overshoot suppression, horizontal-stroke weight
+  fitting, untouched-point interpolation). On by default; opt out with
+  `RenderOptions.AutohintUnhintedFonts = false` (plumbed through
+  `DisplayListBuilder` and `FontRenderer.GetHintedGlyphOutline`).
+
+### Fixed
+- **SSW interprets FUnits.** The Set Single Width instruction now converts
+  its argument from font units to pixels via the current scale (matching
+  WCVTF and the FreeType v35 reference); previously the raw value was stored.
+- **MIRP twilight originals.** When zp1 is the twilight zone, MIRP now seeds
+  the point's original (and current) position from rp0 plus the CVT distance
+  along the freedom vector — the undocumented MS-rasterizer behaviour the
+  conformance reference implements.
+- **MIRP cut-in zone gating.** The control-value cut-in test now applies only
+  when both zone pointers reference the same zone, per the reference.
+
+### Changed
+- **Engine compensation plumbed.** ROUND/NROUND and MDRP/MIRP now key engine
+  compensation off the opcode's distance-type bits, applying it in both the
+  rounded and unrounded (Round_None) branches. All four compensation values
+  default to zero — the conformance reference's behaviour — and are settable
+  via `HintingInterpreter.SetEngineCompensation`.
+- **Single-width per-instruction forms.** MDRP and MIRP now use their own
+  single-width snap forms (window around the single-width value for MDRP;
+  CVT-distance proximity for MIRP), replacing the previous shared
+  approximation.
+- **MPS point-size option.** MPS keeps pushing the ppem by default (FreeType
+  v35 classic behaviour); embedders can supply the spec-true point size via
+  `HintingInterpreter.MeasuredPointSize`.
+
+---
+
 ## [2.6.0] - 2026-06-10
 
 ### Added

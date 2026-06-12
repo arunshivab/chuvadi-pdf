@@ -82,6 +82,14 @@ HintingMode Hinting
 
 Gets or initialises the glyph hinting mode. Default: `HintingMode.Light`.
 
+### `AutohintUnhintedFonts`
+
+```csharp
+bool AutohintUnhintedFonts
+```
+
+Gets or initialises whether fonts that carry no hinting programs are grid-fitted by the geometric autohinter (Y axis only) when hinting is enabled. Fonts with their own bytecode are unaffected. Default: true.
+
 ### `Scale`
 
 ```csharp

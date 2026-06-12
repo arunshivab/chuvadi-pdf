@@ -802,3 +802,102 @@ Key decisions:
 
 **Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
 `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`.
+
+---
+
+## A28 - Image -> PDF: Decoder-Backed Embedding and the Converter
+
+**Date:** 2026-06-12
+**Scope:** `Chuvadi.Pdf.Images` (new BmpDecoder), `Chuvadi.Pdf.Authoring` (ImageEmbedder, ImagePdfConverter, PageBuilder/PdfDocumentBuilder)
+**Rationale:** The authoring image path supported only JPEG and PNG passthrough, and its RGBA-PNG branch emitted 4-component Flate data declared as DeviceRGB - structurally wrong. Image-to-PDF is also a first-class library use case (scans, photos, multi-page TIFF archives) deserving a one-call API.
+
+Key decisions:
+
+- **Passthrough where provably safe, decode everywhere else.** Baseline JPEG with 1 or 3 components embeds as-is under DCTDecode (DeviceGray/DeviceRGB from the SOF component count); 8-bit truecolour non-interlaced PNG embeds its raw IDAT zlib stream under FlateDecode with PNG Predictor 15. Every other variant - palette, grayscale, alpha, 16-bit PNG, TIFF, BMP, multi-component JPEG - decodes through the Chuvadi.Pdf.Images codecs and re-embeds as Flate-compressed raw samples. Correctness first; the fast paths are kept only where the bytes are exactly the PDF filter's input.
+
+- **Alpha becomes a soft mask.** Decoded frames with any transparent pixel emit an RGB image plus a DeviceGray /SMask image object. Grayscale sources without alpha emit single-channel DeviceGray.
+
+- **BmpDecoder completes the set.** Headers 12 and 40-124, depths 1/4/8/16/24/32, BI_RGB / BI_RLE8 / BI_RLE4 / BI_BITFIELDS (including V4+ alpha masks), top-down and bottom-up rows. It is the inverse companion of the existing BmpEncoder.
+
+- **Converter is a thin layer over the builder.** `ImagePdfConverter` adds page sizing (SizeToImage at a DPI, or FitToPage with margins/centring/upscale control), multi-image to multi-page, optional TIFF frame expansion, and metadata - nothing it does is unavailable through PdfDocumentBuilder directly.
+
+**Files affected:** `src/Chuvadi.Pdf.Images/BmpDecoder.cs` (new),
+`src/Chuvadi.Pdf.Authoring/ImageEmbedder.cs` (new),
+`src/Chuvadi.Pdf.Authoring/ImagePdfConverter.cs` (new),
+`src/Chuvadi.Pdf.Authoring/PdfDocumentBuilder.cs`,
+`src/Chuvadi.Pdf.Authoring/PageBuilder.cs`.
+
+---
+
+## A29 - Report Layout Layer
+
+**Date:** 2026-06-12
+**Scope:** `Chuvadi.Pdf.Authoring` (ReportBuilder, ReportLayoutEngine, ReportStyles, ReportTable)
+**Rationale:** PdfDocumentBuilder draws at explicit coordinates; producing a real report (hospital discharge summaries, audit listings) means hand-managing pagination, repeated table headers, and page numbers. The library should own that layout.
+
+Key decisions:
+
+- **Block model over a flowing engine.** ReportBuilder records content blocks (headings, paragraphs, lists, tables, images, rules, spacers, page breaks); an internal ReportLayoutEngine walks them with a vertical cursor, starting pages as content reaches the bottom margin. The engine builds on the existing PageBuilder primitives - no new content-stream machinery.
+
+- **Tables are a span-aware grid.** Rows list cells HTML-style (spanned-over positions are skipped); placement runs an occupancy grid that validates col/row spans and throws on overlap. Column widths resolve as fixed points, fractions of the content width, and equal-share autos. Row heights are content-driven (wrapped text or image aspect) with row-span deficits expanding the last spanned row. Rows welded by row spans paginate as a unit; a group taller than a fresh page splits at row boundaries with span cells clamped to the page bottom (degraded but bounded). Headers repeat per page by default. Border modes: None, Grid, Outline, HorizontalOnly (span-aware row boundaries), HeaderUnderlineOnly.
+
+- **WinAnsi typographic mapping.** All report text passes through a mapper translating bullets, dashes, smart quotes, the ellipsis, the euro sign, and the trademark sign to their WinAnsi code points, because the content-stream writer emits `ch & 0xFF` octal escapes for non-ASCII and the Standard-14 fonts are declared WinAnsiEncoding.
+
+- **Page numbers as a formatter.** `PageNumberFormatter` (Arabic, upper/lower Roman, Excel-style bijective letters) backs both header/footer `{page}`/`{total}` tokens and ordered-list markers.
+
+- **Justification is word-by-word.** Full lines distribute the leftover width across word gaps; the last line of a paragraph stays left-aligned, per convention.
+
+**Files affected:** `src/Chuvadi.Pdf.Authoring/ReportBuilder.cs` (new),
+`src/Chuvadi.Pdf.Authoring/ReportLayoutEngine.cs` (new),
+`src/Chuvadi.Pdf.Authoring/ReportStyles.cs` (new),
+`src/Chuvadi.Pdf.Authoring/ReportTable.cs` (new).
+
+---
+
+## A30 - Geometric Autohinter: Y-Fitting Fallback for Unhinted Fonts
+
+**Date:** 2026-06-12
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (Autohint components 3-5, loader hook), `Chuvadi.Pdf.Rendering` / `Chuvadi.Pdf.Rendering.DisplayList` (plumbing)
+**Rationale:** Fonts without TrueType bytecode previously rendered from naturally scaled outlines - blurry baselines and x-heights at text sizes while hinted fonts on the same page rendered crisp. Components 1-2 (stem detection, blue zones) existed without a consumer; this wires them into a Y-fitting pass.
+
+Key decisions:
+
+- **Y axis only, matching Light.** The autohinter detects horizontal edges (flat runs of on-curve points, grouped across contours by Y and ink direction), anchors edges in blue zones (rounding the zone reference; classic overshoot suppression when the zone height scales below 3/4 px, whole-pixel overshoots above), fits opposing-edge pairs as horizontal strokes (whole-pixel weights, nearest-gap-first pairing), rounds remaining edges to the grid, and interpolates untouched points per contour with IUP-style rules (between anchors: linear in fitted space; outside: rigid with the nearer anchor). X positions stay naturally scaled in both Light and Full - the library's grayscale philosophy; X stem fitting via the existing vertical-stem detector is a recorded follow-up.
+
+- **Font-level gate, not glyph-level.** The fallback applies only when the font carries no fpgm and no prep. In a hinted font, an instruction-less glyph keeps returning null (unhinted outline) so mixed renders keep consistent weights. Composite glyphs are not autohinted in this iteration and fall back to the unhinted outline; component-wise fitting is a recorded follow-up.
+
+- **Blue zones from reference glyphs.** Per font, lazily, from the classic latin reference set (cap tops/bottoms, x-height, ascenders, descenders) via cmap lookups; missing characters are skipped and an empty table degrades to plain grid rounding.
+
+- **On by default, opt-out exposed.** `RenderOptions.AutohintUnhintedFonts` (default true) flows through PageRasterizer -> DisplayListBuilder -> FontRenderer.GetHintedGlyphOutline -> TrueTypeLoader as a defaulted parameter, so existing call sites keep compiling and SvgRenderer picks the behaviour up automatically. The FontRenderer hinted-outline cache key gained an autohint bit.
+
+- **Advance stays linear.** Autohinted outlines carry `round(hmtx x scale)` as their device advance; the raster path already uses the scaled hmtx advance in Light mode, and Full mode reads the outline's metrics - both consistent with un-grid-fitted X ink.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/Autohint/HorizontalEdges.cs` (new),
+`src/Chuvadi.Pdf.Fonts.Rendering/Hinting/Autohint/Autohinter.cs` (new),
+`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/FontRenderer.cs`,
+`src/Chuvadi.Pdf.Rendering/RenderOptions.cs`,
+`src/Chuvadi.Pdf.Rendering/PageRasterizer.cs`,
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.
+
+---
+
+## A31 - Interpreter Spec Fixes: SSW, Engine Compensation, MPS, MIRP Hardening
+
+**Date:** 2026-06-12
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (hinting interpreter)
+**Rationale:** Three recorded simplifications plus two reference-verified MIRP behaviours, each checked line-by-line against the conformance reference (FreeType interpreter v35, ttinterp.c).
+
+Key decisions:
+
+- **SSW scales FUnits (bug fix).** `SSW` stored its popped argument raw; the value is in font units and must convert to pixels through the current scale, exactly as WCVTF treats its argument (`FT_MulFix(args[0], scale)` in Ins_SSW). This was the one genuine deviation among the three recorded items.
+
+- **Engine compensation: plumbing with zero defaults.** The reference keys compensation off `opcode & 3` at exactly four sites - ROUND, NROUND, MDRP, MIRP - and applies it in the unrounded branch too (Round_None: add/subtract without crossing zero). FreeType sets all four values to zero, so the conformant default is zero; the table now exists (`SetEngineCompensation`) so the semantics are spec-shaped and embedders can model MS-rasterizer black/white compensation. At defaults, behaviour is bit-identical to before.
+
+- **MPS stays ppem by default.** The classic v35 interpreter pushes the ppem from MPS (the GDI interpreter historically returned 12); the spec-true point size needs the rendering DPI, which the interpreter does not know. `MeasuredPointSize` lets an embedder supply it; the pipeline default remains the conformance behaviour.
+
+- **Single-width forms split per instruction.** The shared snap helper approximated both. MDRP snaps when the original distance falls inside the window around +single-width (sign of the result follows the original distance); MIRP snaps when |cvt - single-width| is inside the cut-in (sign follows the CVT distance). Both now mirror Ins_MDRP / Ins_MIRP exactly.
+
+- **MIRP hardening from the reference.** (a) The control-value cut-in test applies only when gep0 == gep1 (undocumented; in FreeType with an explicit comment). (b) When zp1 is the twilight zone, the point's original and current positions are seeded from rp0 plus the CVT distance along the freedom vector before distances are measured (undocumented MS-rasterizer behaviour, confirmed by Greg Hitchcock per the FreeType source). Both matter for fonts that hint through twilight anchors.
+
+**Files affected:** `src/Chuvadi.Pdf.Fonts.Rendering/Hinting/HintingInterpreter.cs`.

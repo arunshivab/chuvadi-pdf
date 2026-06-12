@@ -53,6 +53,7 @@ public static class DisplayListBuilder
     /// <param name="objects">The object store for resolving indirect references.</param>
     /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting (raster path only).</param>
     /// <param name="lightHinting">When true, grid-fit the Y axis only (lighter, grayscale-friendly).</param>
+    /// <param name="autohintFallback">When true (the default), glyphs of fonts with no hinting programs are grid-fitted by the geometric autohinter.</param>
     /// <returns>
     /// An immutable display list. Empty if the page has no content
     /// stream. CTM-baked geometry; per-op clip snapshots. Page rotation
@@ -61,12 +62,12 @@ public static class DisplayListBuilder
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="page"/> or <paramref name="objects"/> is null.
     /// </exception>
-    public static PageDisplayList Build(PdfPage page, PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false)
+    public static PageDisplayList Build(PdfPage page, PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(objects);
 
-        Worker worker = new Worker(objects, hintingScale, lightHinting);
+        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback);
         byte[] content = worker.LoadContentBytes(page.Contents);
         return worker.BuildFromBytes(content, page.Resources, page.Width, page.Height);
     }
@@ -93,6 +94,7 @@ public static class DisplayListBuilder
     /// <param name="pageHeight">The MediaBox height for the resulting display list.</param>
     /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting (raster path only).</param>
     /// <param name="lightHinting">When true, grid-fit the Y axis only (lighter, grayscale-friendly).</param>
+    /// <param name="autohintFallback">When true (the default), glyphs of fonts with no hinting programs are grid-fitted by the geometric autohinter.</param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="content"/> or <paramref name="objects"/> is null.
     /// </exception>
@@ -106,12 +108,13 @@ public static class DisplayListBuilder
         double pageWidth,
         double pageHeight,
         double hintingScale = 0.0,
-        bool lightHinting = false)
+        bool lightHinting = false,
+        bool autohintFallback = true)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(objects);
 
-        Worker worker = new Worker(objects, hintingScale, lightHinting);
+        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback);
         return worker.BuildFromBytes(content, resources, pageWidth, pageHeight);
     }
 
@@ -124,6 +127,7 @@ public static class DisplayListBuilder
         private readonly PdfObjectStore _objects;
         private readonly double _hintingScale;
         private readonly bool _lightHinting;
+        private readonly bool _autohintFallback;
         private readonly FilterPipeline _pipeline;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
@@ -146,11 +150,12 @@ public static class DisplayListBuilder
         private bool _clipPending;
         private FillRule _clipRule;
 
-        public Worker(PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false)
+        public Worker(PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
         {
             _objects = objects;
             _hintingScale = hintingScale;
             _lightHinting = lightHinting;
+            _autohintFallback = autohintFallback;
             _pipeline = FilterRegistry.CreateDefaultPipeline();
             _fontCache = new Dictionary<string, FontRenderer?>();
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
@@ -1197,7 +1202,7 @@ public static class DisplayListBuilder
                 return null;
             }
 
-            GlyphOutline? hinted = renderer.GetHintedGlyphOutline(glyphId, ppem, _lightHinting);
+            GlyphOutline? hinted = renderer.GetHintedGlyphOutline(glyphId, ppem, _lightHinting, _autohintFallback);
 
             if (hinted is null)
             {
@@ -1559,7 +1564,7 @@ public static class DisplayListBuilder
 
             // Build the sub-display-list in form-local space with a fresh
             // worker (identity CTM, fresh path/text state, fresh stack).
-            Worker sub = new Worker(_objects, _hintingScale, _lightHinting);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
 
             byte[] formContent;
 

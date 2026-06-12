@@ -51,6 +51,7 @@ public sealed class RenderOptions
         AntiAlias = true;
         GammaCorrect = true;
         Hinting = HintingMode.Light;
+        AutohintUnhintedFonts = true;
     }
 
     /// <summary>
@@ -124,6 +125,13 @@ public sealed class RenderOptions
     /// Gets or initialises the glyph hinting mode. Default: <see cref="HintingMode.Light"/>.
     /// </summary>
     public HintingMode Hinting { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether fonts that carry no hinting programs are
+    /// grid-fitted by the geometric autohinter (Y axis only) when hinting is
+    /// enabled. Fonts with their own bytecode are unaffected. Default: true.
+    /// </summary>
+    public bool AutohintUnhintedFonts { get; init; }
 
     /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.

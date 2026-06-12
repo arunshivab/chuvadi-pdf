@@ -38,14 +38,34 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [BorderStyle](Authoring/BorderStyle.md) | enum | Border style for tables and rectangles. |
+| [CellOverflow](Authoring/CellOverflow.md) | enum | How cell text that exceeds the cell width is handled. |
 | [Color](Authoring/Color.md) | record struct | An RGB color in [0, 1] floating-point space. |
 | [Colors](Authoring/Colors.md) | class | Common named colors. |
+| [ColumnWidthMode](Authoring/ColumnWidthMode.md) | enum | How a column's width is specified. |
+| [HeaderFooterStyle](Authoring/HeaderFooterStyle.md) | class | Header / footer band styling. |
+| [ImagePageSizing](Authoring/ImagePageSizing.md) | enum | How `ImagePdfConverter` sizes each PDF page relative to its image. |
+| [ImagePdfConverter](Authoring/ImagePdfConverter.md) | class | Converts images (JPEG, PNG, TIFF, BMP) into PDF documents — one page per image (and, optionally, one page per TIFF frame). |
+| [ImagePdfOptions](Authoring/ImagePdfOptions.md) | class | Options for `ImagePdfConverter`. |
+| [ListStyle](Authoring/ListStyle.md) | class | List styling for bulleted and numbered lists. |
+| [NumberingFormat](Authoring/NumberingFormat.md) | enum | The numbering scheme of an ordered list or a page number. |
 | [PageBuilder](Authoring/PageBuilder.md) | class | Per-page drawing API. |
+| [PageNumberFormatter](Authoring/PageNumberFormatter.md) | class | Formats integers in the report numbering schemes. |
 | [PageSize](Authoring/PageSize.md) | record struct | A page size in PDF points (1 pt = 1/72 inch). |
+| [ParagraphStyle](Authoring/ParagraphStyle.md) | class | Paragraph styling: font, size, colour, alignment, spacing, and indents. |
 | [PdfDocumentBuilder](Authoring/PdfDocumentBuilder.md) | class | Top-level entry point for creating fresh PDF documents. |
+| [ReportBuilder](Authoring/ReportBuilder.md) | class | Composes multi-page PDF reports from flowing content blocks — headings, paragraphs, bulleted and numbered lists, tables, images, rules, and page breaks — with automatic pagination. |
+| [ReportCell](Authoring/ReportCell.md) | class | One table cell: text or an image, an optional column/row span, and optional per-cell style overrides. |
+| [ReportColumn](Authoring/ReportColumn.md) | class | A table column: optional header text, width, and default cell styling. |
+| [ReportFont](Authoring/ReportFont.md) | class | A report font: a Standard-14 family plus bold/italic flags, resolved to the matching Standard-14 PostScript name at draw time. |
+| [ReportFontFamily](Authoring/ReportFontFamily.md) | enum | The Standard-14 font families available to report content. |
+| [ReportPageSetup](Authoring/ReportPageSetup.md) | class | Page geometry for a report: paper size and the four margins. |
+| [ReportRow](Authoring/ReportRow.md) | class | One table row: its cells plus optional height and background overrides. |
+| [ReportTable](Authoring/ReportTable.md) | class | A report table: columns, rows, and a style. |
 | [StandardFonts](Authoring/StandardFonts.md) | class | The PDF Standard 14 fonts. |
+| [TableBorderMode](Authoring/TableBorderMode.md) | enum | Which grid lines a table draws. |
 | [TableBuilder](Authoring/TableBuilder.md) | class | Fluent table builder. |
 | [TableRenderResult](Authoring/TableRenderResult.md) | class | Outcome of rendering a table; may contain overflow rows. |
+| [TableStyle](Authoring/TableStyle.md) | class | Table-level styling: fonts, borders, padding, header and fills. |
 | [TextAlignment](Authoring/TextAlignment.md) | enum | Text alignment within a block or table cell. |
 | [TextBlockResult](Authoring/TextBlockResult.md) | class | Result of a `PageBuilder.DrawTextBlock` call. |
 | [VerticalAlignment](Authoring/VerticalAlignment.md) | enum | Vertical alignment within a table cell. |
@@ -299,6 +319,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [BmpDecoder](Images/BmpDecoder.md) | class | Decodes a Windows BMP image into an `ImageFrame`. |
 | [BmpEncoder](Images/BmpEncoder.md) | class | Encodes an `ImageFrame` to Windows BMP format. |
 | [CmykConverter](Images/CmykConverter.md) | class | Converts `PixelBuffer` BGRA data to packed CMYK 8 bits per channel. |
 | [CmykImage](Images/CmykImage.md) | class | A planar CMYK 8-bit-per-channel image. |

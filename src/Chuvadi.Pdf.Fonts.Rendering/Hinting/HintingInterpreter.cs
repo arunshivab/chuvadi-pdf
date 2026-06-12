@@ -553,7 +553,10 @@ internal sealed class HintingInterpreter
                 State.SingleWidthCutIn = Pop();
                 break;
             case OpSsw:
-                State.SingleWidthValue = Pop();
+                // The popped value is in FUnits; convert to pixels via the
+                // current scale, the same way WCVTF treats its argument
+                // (FreeType Ins_SSW: FT_MulFix(args[0], scale)).
+                State.SingleWidthValue = F26Dot6.MulFix(Pop(), _scale);
                 break;
             case OpFlipOn:
                 State.AutoFlip = true;
@@ -604,7 +607,10 @@ internal sealed class HintingInterpreter
                 Push(_ppem);
                 break;
             case OpMps:
-                Push(_ppem);
+                // The classic interpreter (conformance reference: FreeType
+                // v35) pushes the ppem; the spec-true point size is available
+                // via MeasuredPointSize when an embedder supplies it.
+                Push(MeasuredPointSize != 0 ? MeasuredPointSize : _ppem);
                 break;
             case OpGcCurrent:
                 GetCoordinate(useDual: false);
@@ -812,13 +818,13 @@ internal sealed class HintingInterpreter
                 }
                 else if (op >= OpRoundLow && op <= OpRoundHigh)
                 {
-                    Push(Round(Pop(), 0));
+                    Push(Round(Pop(), _engineCompensation[op & 3]));
                 }
                 else if (op >= OpNroundLow && op <= OpNroundHigh)
                 {
-                    // No-round: the spec applies engine compensation only; with
-                    // zero compensation this is the identity.
-                    Push(Pop());
+                    // No-round: engine compensation only (Round_None), keyed
+                    // by the opcode's distance-type bits.
+                    Push(RoundNone(Pop(), _engineCompensation[op & 3]));
                 }
                 else if (_instructionDefs.TryGetValue(op, out byte[]? body))
                 {
@@ -1296,6 +1302,57 @@ internal sealed class HintingInterpreter
         State.RoundThreshold = threshold;
     }
 
+    // Engine compensation per distance type — gray (0), black (1), white (2),
+    // and the reserved fourth slot — indexed by the bottom two bits of the
+    // MDRP / MIRP / ROUND / NROUND opcodes. The conformance reference
+    // (FreeType v35) sets all four values to zero; the table exists so the
+    // plumbing is spec-shaped and embedders can model MS-rasterizer-style
+    // black/white compensation. Values are F26Dot6.
+    private readonly int[] _engineCompensation = new int[4];
+
+    /// <summary>
+    /// Sets the engine compensation for a distance type (0 = gray, 1 = black,
+    /// 2 = white, 3 = reserved), in F26Dot6. All values default to zero,
+    /// matching the conformance reference (FreeType v35).
+    /// </summary>
+    /// <param name="distanceType">The distance type, 0–3.</param>
+    /// <param name="value">The compensation, in F26Dot6.</param>
+    internal void SetEngineCompensation(int distanceType, int value)
+    {
+        if (distanceType < 0 || distanceType > 3)
+        {
+            throw new System.ArgumentOutOfRangeException(
+                nameof(distanceType), "Distance type must be 0..3.");
+        }
+        _engineCompensation[distanceType] = value;
+    }
+
+    /// <summary>
+    /// Optional spec-true value for the MPS (Measure Point Size) instruction,
+    /// in F26Dot6. When zero (the default) MPS pushes the current ppem — the
+    /// classic-interpreter behaviour of the conformance reference
+    /// (FreeType v35); the true point size depends on the rendering DPI,
+    /// which the interpreter does not know.
+    /// </summary>
+    internal int MeasuredPointSize { get; set; }
+
+    // Round_None: no rounding, engine compensation only, never crossing zero
+    // (FreeType Round_None). Applied by NROUND and by the unrounded branch
+    // of MDRP / MIRP regardless of the current round state.
+    private static int RoundNone(int distance, int compensation)
+    {
+        if (distance >= 0)
+        {
+            int val = distance + compensation;
+            return val < 0 ? 0 : val;
+        }
+        else
+        {
+            int val = distance - compensation;
+            return val > 0 ? 0 : val;
+        }
+    }
+
     /// <summary>
     /// Rounds an engine distance (F26Dot6) under the current round state,
     /// applying the given engine compensation. Implements the TrueType
@@ -1745,11 +1802,23 @@ internal sealed class HintingInterpreter
             zone.OriginalX[point] - refZone.OriginalX[State.Rp0],
             zone.OriginalY[point] - refZone.OriginalY[State.Rp0]);
 
-        int distance = ApplySingleWidth(originalDistance);
-        if (round)
+        // Single-width cut-in, MDRP form (FreeType Ins_MDRP): snap when the
+        // original distance falls inside the window around the single-width
+        // value; the snapped sign follows the original distance.
+        int distance = originalDistance;
+        if (State.SingleWidthCutIn > 0 &&
+            distance < State.SingleWidthValue + State.SingleWidthCutIn &&
+            distance > State.SingleWidthValue - State.SingleWidthCutIn)
         {
-            distance = Round(distance, 0);
+            distance = distance >= 0 ? State.SingleWidthValue : -State.SingleWidthValue;
         }
+
+        // Engine compensation is keyed by the opcode's distance-type bits and
+        // applies in both branches (Round_None when not rounding).
+        int compensation = _engineCompensation[opcode & 3];
+        distance = round
+            ? Round(distance, compensation)
+            : RoundNone(distance, compensation);
 
         distance = EnforceMinimumDistance(distance, originalDistance, keepMinimum);
 
@@ -1785,7 +1854,29 @@ internal sealed class HintingInterpreter
             return;
         }
 
-        int cvtDistance = ApplySingleWidth(GetControlValue(cvtIndex));
+        int cvtDistance = GetControlValue(cvtIndex);
+
+        // Single-width cut-in, MIRP form (FreeType Ins_MIRP): snap when the
+        // CVT distance lies within the cut-in of the single-width value; the
+        // snapped sign follows the CVT distance.
+        if (Math.Abs(cvtDistance - State.SingleWidthValue) < State.SingleWidthCutIn)
+        {
+            cvtDistance = cvtDistance >= 0 ? State.SingleWidthValue : -State.SingleWidthValue;
+        }
+
+        // UNDOCUMENTED: when zp1 is the twilight zone, the MS rasterizer
+        // seeds the point's original (and current) position from rp0 plus
+        // the CVT distance along the freedom vector — confirmed by Greg
+        // Hitchcock (FreeType Ins_MIRP).
+        if (State.Zp1 == 0)
+        {
+            zone.OriginalX[point] = refZone.OriginalX[State.Rp0]
+                + F2Dot14.Mul(cvtDistance, State.FreedomVectorX);
+            zone.OriginalY[point] = refZone.OriginalY[State.Rp0]
+                + F2Dot14.Mul(cvtDistance, State.FreedomVectorY);
+            zone.CurrentX[point] = zone.OriginalX[point];
+            zone.CurrentY[point] = zone.OriginalY[point];
+        }
 
         int originalDistance = DualProject(
             zone.OriginalX[point] - refZone.OriginalX[State.Rp0],
@@ -1796,17 +1887,29 @@ internal sealed class HintingInterpreter
             cvtDistance = -cvtDistance;
         }
 
-        int distance = cvtDistance;
+        // Engine compensation is keyed by the opcode's distance-type bits and
+        // applies in both branches (Round_None when not rounding).
+        int compensation = _engineCompensation[opcode & 3];
+        int distance;
         if (round)
         {
+            int candidate = cvtDistance;
+
             // Control-value cut-in: when the CVT distance is too far from the
             // actual original distance, use the original distance instead.
-            if (Math.Abs(cvtDistance - originalDistance) > State.ControlValueCutIn)
+            // UNDOCUMENTED: the test only applies when both zone pointers
+            // reference the same zone (FreeType Ins_MIRP).
+            if (State.Zp0 == State.Zp1 &&
+                Math.Abs(cvtDistance - originalDistance) > State.ControlValueCutIn)
             {
-                distance = originalDistance;
+                candidate = originalDistance;
             }
 
-            distance = Round(distance, 0);
+            distance = Round(candidate, compensation);
+        }
+        else
+        {
+            distance = RoundNone(cvtDistance, compensation);
         }
 
         distance = EnforceMinimumDistance(distance, originalDistance, keepMinimum);
@@ -1828,32 +1931,6 @@ internal sealed class HintingInterpreter
     private static bool IsValidPoint(int point, Zone zone)
     {
         return point >= 0 && point < zone.PointCount;
-    }
-
-    // Snaps a distance to the single-width value when it lies within the
-    // single-width cut-in. With the default cut-in of zero this is a no-op;
-    // the full single-width semantics are a later refinement.
-    private int ApplySingleWidth(int distance)
-    {
-        if (State.SingleWidthCutIn <= 0)
-        {
-            return distance;
-        }
-
-        int width = State.SingleWidthValue;
-        if (distance >= 0)
-        {
-            if (Math.Abs(distance - width) < State.SingleWidthCutIn)
-            {
-                distance = width;
-            }
-        }
-        else if (Math.Abs(distance + width) < State.SingleWidthCutIn)
-        {
-            distance = -width;
-        }
-
-        return distance;
     }
 
     // Clamps a distance to the graphics-state minimum distance, preserving the
