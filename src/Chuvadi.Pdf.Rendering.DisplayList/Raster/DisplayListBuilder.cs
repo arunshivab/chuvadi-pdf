@@ -1249,12 +1249,182 @@ public static class DisplayListBuilder
                 return;
             }
 
+            // Not a self-describing codec stream: interpret the bytes as raw
+            // PDF image samples (Flate/CCITT/LZW output) using the image
+            // dictionary's geometry and colour space.
+            frame ??= FrameFromRawSamples(xobjStream, imageBytes);
+
             if (frame is null)
             {
                 return;
             }
 
             _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips()));
+        }
+
+        // Converts decoded raw samples into an ImageFrame for the cases the
+        // raster pipeline supports: 1-bpc DeviceGray (scanned bilevel, e.g.
+        // CCITTFaxDecode output), 8-bpc DeviceGray, and 8-bpc DeviceRGB,
+        // including ICCBased streams with 1 or 3 components, honouring a
+        // /Decode [1 0] inversion for the gray cases. Stencil masks
+        // (/ImageMask true) and other colour spaces return null and the
+        // image is skipped, as before.
+        private ImageFrame? FrameFromRawSamples(PdfStream stream, byte[] samples)
+        {
+            PdfDictionary dict = stream.Dictionary;
+
+            if (ReadBoolEntry(dict, "ImageMask"))
+            {
+                return null;
+            }
+
+            int width = ReadIntEntry(dict, "Width");
+            int height = ReadIntEntry(dict, "Height");
+            int bpc = ReadIntEntry(dict, "BitsPerComponent");
+
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            int components = ResolveComponentCount(dict);
+            bool invert = GrayDecodeInverted(dict);
+
+            if (components == 1 && bpc == 1)
+            {
+                int stride = (width + 7) / 8;
+                if (samples.Length < stride * height)
+                {
+                    return null;
+                }
+
+                ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Gray8);
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        int bit = (samples[(y * stride) + (x >> 3)] >> (7 - (x & 7))) & 1;
+                        bool white = invert ? bit == 0 : bit == 1;
+                        byte v = white ? (byte)255 : (byte)0;
+                        frame.Pixels.SetPixelBgra(x, y, v, v, v, 255);
+                    }
+                }
+                return frame;
+            }
+
+            if (components == 1 && bpc == 8)
+            {
+                if (samples.Length < width * height)
+                {
+                    return null;
+                }
+
+                ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Gray8);
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        byte v = samples[(y * width) + x];
+                        if (invert)
+                        {
+                            v = (byte)(255 - v);
+                        }
+                        frame.Pixels.SetPixelBgra(x, y, v, v, v, 255);
+                    }
+                }
+                return frame;
+            }
+
+            if (components == 3 && bpc == 8)
+            {
+                if (samples.Length < width * height * 3)
+                {
+                    return null;
+                }
+
+                ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        int si = ((y * width) + x) * 3;
+                        frame.Pixels.SetPixelBgra(
+                            x, y, samples[si + 2], samples[si + 1], samples[si], 255);
+                    }
+                }
+                return frame;
+            }
+
+            return null;
+        }
+
+        // Number of colour components implied by /ColorSpace: DeviceGray and
+        // CalGray are 1, DeviceRGB and CalRGB are 3, and ICCBased defers to
+        // its stream's /N. Unsupported spaces return 0.
+        private int ResolveComponentCount(PdfDictionary dict)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csRef))
+            {
+                return 0;
+            }
+
+            PdfPrimitive cs = _objects.Resolve(csRef);
+
+            if (cs is PdfName name)
+            {
+                return name.Value switch
+                {
+                    "DeviceGray" or "CalGray" or "G" => 1,
+                    "DeviceRGB" or "CalRGB" or "RGB" => 3,
+                    _ => 0,
+                };
+            }
+
+            if (cs is PdfArray array && array.Count >= 2 &&
+                array[0] is PdfName family && family.Value == "ICCBased")
+            {
+                PdfStream? icc = _objects.ResolveAs<PdfStream>(array[1]);
+                if (icc is not null &&
+                    icc.Dictionary.TryGetValue(PdfName.Intern("N"), out PdfPrimitive? n) &&
+                    n is PdfInteger count)
+                {
+                    return count.Value is 1 or 3 ? count.Value : 0;
+                }
+            }
+
+            return 0;
+        }
+
+        // True when /Decode is [1 0] for a single-component image (inverted
+        // gray, common in scanned PDFs).
+        private bool GrayDecodeInverted(PdfDictionary dict)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? decodeRef))
+            {
+                return false;
+            }
+
+            return _objects.Resolve(decodeRef) is PdfArray decode &&
+                   decode.Count >= 2 &&
+                   AsDouble(decode[0]) > AsDouble(decode[1]);
+        }
+
+        private int ReadIntEntry(PdfDictionary dict, string key)
+        {
+            if (!dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value))
+            {
+                return 0;
+            }
+            return _objects.Resolve(value) is PdfInteger i ? i.Value : 0;
+        }
+
+        private bool ReadBoolEntry(PdfDictionary dict, string key)
+        {
+            if (!dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value))
+            {
+                return false;
+            }
+            return _objects.Resolve(value) is PdfBoolean b && b.Value;
         }
 
         private void EmitFormXObject(PdfStream xobjStream, PdfDictionary? outerResources)

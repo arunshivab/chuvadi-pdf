@@ -63,7 +63,10 @@ internal static class ContentStreamLoader
         return Array.Empty<byte>();
     }
 
-    /// <summary>Runs a stream's filter chain (aliases resolved); raw bytes when unfiltered.</summary>
+    /// <summary>
+    /// Runs a stream's filter chain (aliases resolved), honouring per-filter
+    /// /DecodeParms entries; raw bytes when unfiltered.
+    /// </summary>
     internal static byte[] Decode(PdfStream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -74,11 +77,13 @@ internal static class ContentStreamLoader
         }
 
         PdfPrimitive? filter = stream.Filter;
+        PdfPrimitive? decodeParms = ReadDecodeParms(stream);
 
         if (filter is PdfName filterName)
         {
             string resolved = FilterRegistry.ResolveAlias(filterName.Value);
-            return Pipeline.Decode(resolved, stream.RawBytes, null);
+            return Pipeline.Decode(
+                resolved, stream.RawBytes, FilterParameters.FromDictionary(decodeParms));
         }
 
         if (filter is PdfArray filterArray)
@@ -89,12 +94,27 @@ internal static class ContentStreamLoader
                 if (filterArray[i] is PdfName fn)
                 {
                     string resolved = FilterRegistry.ResolveAlias(fn.Value);
-                    data = Pipeline.Decode(resolved, data, null);
+                    data = Pipeline.Decode(
+                        resolved, data, FilterParameters.FromDictionary(decodeParms, i));
                 }
             }
             return data;
         }
 
         return stream.RawBytes;
+    }
+
+    // /DecodeParms with its /DP abbreviation (PDF 32000-1:2008 Table 5).
+    private static PdfPrimitive? ReadDecodeParms(PdfStream stream)
+    {
+        if (stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms))
+        {
+            return parms;
+        }
+        if (stream.Dictionary.TryGetValue(PdfName.Intern("DP"), out PdfPrimitive? abbreviated))
+        {
+            return abbreviated;
+        }
+        return null;
     }
 }

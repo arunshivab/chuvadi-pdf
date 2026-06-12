@@ -111,6 +111,45 @@ public sealed record FilterParameters
     public int EarlyChange { get; init; } = 1;
 
     /// <summary>
+    /// True when the source dictionary carried an explicit /Columns entry.
+    /// Filters whose Columns default differs from 1 (CCITTFaxDecode
+    /// defaults to 1728) use this to distinguish "absent" from "1".
+    /// </summary>
+    public bool ColumnsSpecified { get; init; }
+
+    /// <summary>
+    /// For CCITTFaxDecode: the K encoding parameter. Negative = pure
+    /// two-dimensional (Group 4), 0 = pure one-dimensional (Group 3 1-D),
+    /// positive = mixed one/two-dimensional (Group 3 2-D). Default 0.
+    /// PDF 32000-1:2008 Table 11.
+    /// </summary>
+    public int CcittK { get; init; }
+
+    /// <summary>
+    /// For CCITTFaxDecode: the number of image rows, or 0 when unknown
+    /// (decode until end-of-block or data end). Default 0.
+    /// </summary>
+    public int Rows { get; init; }
+
+    /// <summary>
+    /// For CCITTFaxDecode: when true, decoded black pixels are 1 bits;
+    /// when false (the PDF default), black pixels are 0 bits.
+    /// </summary>
+    public bool BlackIs1 { get; init; }
+
+    /// <summary>
+    /// For CCITTFaxDecode: when true, each encoded row starts on a byte
+    /// boundary. Default false.
+    /// </summary>
+    public bool EncodedByteAlign { get; init; }
+
+    /// <summary>
+    /// For CCITTFaxDecode: when true (the PDF default), the data is
+    /// expected to end with an end-of-block pattern (EOFB or RTC).
+    /// </summary>
+    public bool EndOfBlock { get; init; } = true;
+
+    /// <summary>
     /// Builds <see cref="FilterParameters"/> from a <c>/DecodeParms</c> (or
     /// <c>/DecodeParams</c>) value taken from a stream dictionary.
     /// </summary>
@@ -150,6 +189,7 @@ public sealed record FilterParameters
         int colors = ReadInt(parmsDict, "Colors", 1);
         int bitsPerComponent = ReadInt(parmsDict, "BitsPerComponent", 8);
         int earlyChange = ReadInt(parmsDict, "EarlyChange", 1);
+        bool columnsSpecified = parmsDict.TryGetValue(PdfName.Intern("Columns"), out PdfPrimitive? _);
 
         return new FilterParameters
         {
@@ -158,6 +198,12 @@ public sealed record FilterParameters
             Colors = colors,
             BitsPerComponent = bitsPerComponent,
             EarlyChange = earlyChange,
+            ColumnsSpecified = columnsSpecified,
+            CcittK = ReadInt(parmsDict, "K", 0),
+            Rows = ReadInt(parmsDict, "Rows", 0),
+            BlackIs1 = ReadBool(parmsDict, "BlackIs1", false),
+            EncodedByteAlign = ReadBool(parmsDict, "EncodedByteAlign", false),
+            EndOfBlock = ReadBool(parmsDict, "EndOfBlock", true),
         };
     }
 
@@ -166,6 +212,14 @@ public sealed record FilterParameters
         return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
             && value is PdfInteger integer
             ? integer.Value
+            : fallback;
+    }
+
+    private static bool ReadBool(PdfDictionary dict, string key, bool fallback)
+    {
+        return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+            && value is PdfBoolean flag
+            ? flag.Value
             : fallback;
     }
 }

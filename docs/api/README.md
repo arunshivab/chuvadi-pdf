@@ -237,6 +237,7 @@ python tools/gen_api_docs.py
 | [Adler32](Filters/Adler32.md) | class | Computes and verifies Adler-32 checksums as defined in RFC 1950. |
 | [Ascii85Filter](Filters/Ascii85Filter.md) | class | Implements the PDF ASCII85Decode filter. 4 binary bytes → 5 ASCII characters. |
 | [AsciiHexFilter](Filters/AsciiHexFilter.md) | class | Implements the PDF ASCIIHexDecode filter. |
+| [CcittFaxFilter](Filters/CcittFaxFilter.md) | class | Implements the `CCITTFaxDecode` filter: Group 3 one-dimensional (Modified Huffman), Group 3 two-dimensional (Modified READ), and Group 4 (Modified Modified READ) decoding of bilevel image data, as used by scanned-document PDFs. |
 | [DeflateFilter](Filters/DeflateFilter.md) | class | Implements the PDF FlateDecode filter using zlib-framed DEFLATE. |
 | [FilterException](Filters/FilterException.md) | class | Thrown when a PDF stream filter encounters data it cannot decode or encode. |
 | [FilterParameters](Filters/FilterParameters.md) | record | Parameters passed to a filter's Decode or Encode operation, derived from the `/DecodeParms` or `/EncodeParms` dictionary in the stream dictionary. |
@@ -328,7 +329,7 @@ python tools/gen_api_docs.py
 | [ImageException](Images/ImageException.md) | class | Thrown when an image cannot be decoded or encoded due to an invalid format, unsupported feature, or data corruption. |
 | [ImageFrame](Images/ImageFrame.md) | class | A decoded image frame held in a `PixelBuffer`. |
 | [JpegDecoder](Images/JpegDecoder.md) | class | Decodes a baseline sequential DCT JPEG (SOF0) into an `ImageFrame`. |
-| [JpegEncoder](Images/JpegEncoder.md) | class | Pure-C# baseline DCT JPEG encoder. |
+| [JpegEncoder](Images/JpegEncoder.md) | class | Encodes images as baseline sequential JPEG (SOF0) with JFIF headers. |
 | [PngDecoder](Images/PngDecoder.md) | class | Decodes a PNG image into an `ImageFrame`. |
 | [PngEncoder](Images/PngEncoder.md) | class | Encodes an `ImageFrame` to PNG format. |
 | [TiffDecoder](Images/TiffDecoder.md) | class | Decodes TIFF images per TIFF 6.0 baseline. |
@@ -351,8 +352,11 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
+| [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
 | [OperationsException](Operations/OperationsException.md) | class | Thrown when a PDF page operation (merge, split, delete, rotate, reorder) cannot be completed due to an invalid argument or document structure. |
 | [PageOperations](Operations/PageOperations.md) | class | Provides static methods for high-level PDF page operations: merge, split, delete, rotate, and reorder. |
+| [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
 
 ## Chuvadi.Pdf.Primitives
 

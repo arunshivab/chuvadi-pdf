@@ -11,6 +11,40 @@ numbered A01..ANN).
 
 ---
 
+## [2.8.0] - 2026-06-12
+
+### Added
+- **JPEG encoder** (`Chuvadi.Pdf.Images.JpegEncoder`): baseline JFIF export
+  with IJG quality 1–100, completing PDF→image support across PNG, BMP,
+  TIFF, and JPEG. Colour encodes as YCbCr 4:4:4; grayscale frames encode
+  single-component.
+- **CCITTFaxDecode filter** (`Chuvadi.Pdf.Filters.CcittFaxFilter`): Group 3
+  one- and two-dimensional and Group 4 fax decoding — scanned-document PDFs
+  now render. Honours K, Columns, Rows, BlackIs1, EncodedByteAlign, and
+  EndOfBlock; registered with the `CCF` alias.
+- **Raw raster images.** The rasterizer now renders raw-sample images
+  (FlateDecode RGB/Gray, CCITT bilevel, ICCBased 1/3-component), honouring
+  per-filter `/DecodeParms` and `/Decode [1 0]` inversion. These were
+  previously dropped silently.
+- **PDF compression** (`Chuvadi.Pdf.Operations.PdfCompressor`):
+  garbage-collects unreachable objects, Flate-compresses raw streams, and
+  optionally re-encodes photographic images as JPEG
+  (`CompressionOptions.RecompressImages`). The catalog graph (outlines,
+  forms, metadata) is preserved.
+
+### Changed
+- **Real DEFLATE compression.** The Flate encoder previously emitted stored
+  (uncompressed) blocks; it now performs LZ77 with fixed-Huffman coding.
+  PNG exports, authored documents, and compressed streams shrink
+  dramatically (typical content streams to 10–20% of raw size).
+
+### Removed
+- **`Chuvadi.Pdf.Images.Jpeg` project.** An orphaned duplicate JPEG encoder
+  with no consumers or tests; superseded by
+  `Chuvadi.Pdf.Images.JpegEncoder`.
+
+---
+
 ## [2.7.1] - 2026-06-12
 
 ### Fixed

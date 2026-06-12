@@ -23,6 +23,7 @@ public static class FilterRegistry
         new Ascii85Filter(),
         new RunLengthFilter(),
         new LzwFilter(),
+        new CcittFaxFilter(),
     ];
 
     private static readonly Dictionary<string, string> Aliases =
@@ -33,6 +34,7 @@ public static class FilterRegistry
             { "A85", "ASCII85Decode" },
             { "RL",  "RunLengthDecode" },
             { "LZW", "LZWDecode" },
+            { "CCF", "CCITTFaxDecode" },
         };
 
     /// <summary>

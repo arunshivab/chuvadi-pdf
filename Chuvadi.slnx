@@ -29,7 +29,6 @@
     <Project Path="src/Chuvadi.Pdf.Fonts/Chuvadi.Pdf.Fonts.csproj" />
     <Project Path="src/Chuvadi.Pdf.Forms/Chuvadi.Pdf.Forms.csproj" />
     <Project Path="src/Chuvadi.Pdf.Graphics/Chuvadi.Pdf.Graphics.csproj" />
-    <Project Path="src/Chuvadi.Pdf.Images.Jpeg/Chuvadi.Pdf.Images.Jpeg.csproj" />
     <Project Path="src/Chuvadi.Pdf.Images/Chuvadi.Pdf.Images.csproj" />
     <Project Path="src/Chuvadi.Pdf.IO/Chuvadi.Pdf.IO.csproj" />
     <Project Path="src/Chuvadi.Pdf.Objects/Chuvadi.Pdf.Objects.csproj" />
