@@ -782,6 +782,17 @@ internal sealed class DeflateInflater
 /// </summary>
 internal sealed class DeflateDeflater
 {
+    // LZ77 + fixed-Huffman DEFLATE (RFC 1951 §3.2.5–3.2.6). Hash-chain
+    // match search over a 32 KiB window; emits one fixed-Huffman block, or
+    // falls back to stored blocks when they would be smaller (incompressible
+    // input). The companion inflater in this file decodes both block types.
+    private const int MinMatch = 3;
+    private const int MaxMatch = 258;
+    private const int WindowSize = 32768;
+    private const int HashBits = 15;
+    private const int HashSize = 1 << HashBits;
+    private const int MaxChainLength = 128;
+
     private readonly byte[] _data;
 
     internal DeflateDeflater(byte[] data)
@@ -791,26 +802,221 @@ internal sealed class DeflateDeflater
 
     internal byte[] Deflate()
     {
-        // For Phase 1: use a single stored block for correctness.
-        // LZ77 compression with fixed Huffman will be added in a later pass
-        // once correctness is verified on the full test corpus.
-        // Stored blocks are valid DEFLATE and produce correct output
-        // at the cost of larger file size.
+        byte[] compressed = DeflateFixedHuffman();
+        int storedSize = StoredSize(_data.Length);
+        return compressed.Length <= storedSize ? compressed : DeflateStored();
+    }
 
-        System.Collections.Generic.List<byte> output = new System.Collections.Generic.List<byte>();
+    private static int StoredSize(int dataLength)
+    {
+        if (dataLength == 0)
+        {
+            return 5;
+        }
+        int blocks = (dataLength + 65534) / 65535;
+        return dataLength + (blocks * 5);
+    }
+
+    // ── Fixed-Huffman path ─────────────────────────────────────────
+
+    private byte[] DeflateFixedHuffman()
+    {
+        LsbBitWriter writer = new();
+
+        // BFINAL = 1, BTYPE = 01 (fixed Huffman).
+        writer.WriteBits(1, 1);
+        writer.WriteBits(1, 2);
+
+        int[] head = new int[HashSize];
+        int[] prev = new int[WindowSize];
+        for (int i = 0; i < HashSize; i++)
+        {
+            head[i] = -1;
+        }
+
+        int pos = 0;
+        int length = _data.Length;
+
+        while (pos < length)
+        {
+            int matchLength = 0;
+            int matchDistance = 0;
+
+            if (pos + MinMatch <= length)
+            {
+                int hash = Hash(pos);
+                int candidate = head[hash];
+                int chain = MaxChainLength;
+                int limit = pos - WindowSize;
+
+                while (candidate >= 0 && candidate > limit && chain-- > 0)
+                {
+                    int candidateLength = MatchLength(candidate, pos, length);
+                    if (candidateLength > matchLength)
+                    {
+                        matchLength = candidateLength;
+                        matchDistance = pos - candidate;
+                        if (matchLength >= MaxMatch)
+                        {
+                            break;
+                        }
+                    }
+                    candidate = prev[candidate & (WindowSize - 1)];
+                }
+            }
+
+            if (matchLength >= MinMatch)
+            {
+                EmitLengthDistance(writer, matchLength, matchDistance);
+
+                // Insert every covered position into the hash chains so later
+                // matches can reference inside this run.
+                int stop = Math.Min(pos + matchLength, length - MinMatch + 1);
+                for (int p = pos; p < stop; p++)
+                {
+                    InsertHash(head, prev, p);
+                }
+                pos += matchLength;
+            }
+            else
+            {
+                EmitLiteral(writer, _data[pos]);
+                if (pos + MinMatch <= length)
+                {
+                    InsertHash(head, prev, pos);
+                }
+                pos++;
+            }
+        }
+
+        EmitEndOfBlock(writer);
+        return writer.ToArray();
+    }
+
+    private int Hash(int pos)
+    {
+        return ((_data[pos] << 10) ^ (_data[pos + 1] << 5) ^ _data[pos + 2]) & (HashSize - 1);
+    }
+
+    private void InsertHash(int[] head, int[] prev, int pos)
+    {
+        int hash = Hash(pos);
+        prev[pos & (WindowSize - 1)] = head[hash];
+        head[hash] = pos;
+    }
+
+    private int MatchLength(int candidate, int pos, int length)
+    {
+        int max = Math.Min(MaxMatch, length - pos);
+        int n = 0;
+        while (n < max && _data[candidate + n] == _data[pos + n])
+        {
+            n++;
+        }
+        return n;
+    }
+
+    // ── Fixed-Huffman symbol emission (RFC 1951 §3.2.6) ───────────────
+
+    private static void EmitLiteral(LsbBitWriter writer, byte value)
+    {
+        if (value <= 143)
+        {
+            writer.WriteBitsMsbFirst(0x30 + value, 8);
+        }
+        else
+        {
+            writer.WriteBitsMsbFirst(0x190 + (value - 144), 9);
+        }
+    }
+
+    private static void EmitEndOfBlock(LsbBitWriter writer)
+    {
+        writer.WriteBitsMsbFirst(0, 7);                 // symbol 256
+    }
+
+    private static void EmitLengthSymbol(LsbBitWriter writer, int symbol)
+    {
+        if (symbol <= 279)
+        {
+            writer.WriteBitsMsbFirst(symbol - 256, 7);  // 256–279: 7 bits
+        }
+        else
+        {
+            writer.WriteBitsMsbFirst(0xC0 + (symbol - 280), 8);
+        }
+    }
+
+    // Length code bases for symbols 257..285 (RFC 1951 §3.2.5).
+    private static readonly int[] LengthBase =
+    [
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+        35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+    ];
+
+    private static readonly int[] LengthExtraBits =
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+        3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+    ];
+
+    // Distance code bases for codes 0..29 (RFC 1951 §3.2.5).
+    private static readonly int[] DistanceBase =
+    [
+        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+        257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+        8193, 12289, 16385, 24577,
+    ];
+
+    private static readonly int[] DistanceExtraBits =
+    [
+        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+        7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+    ];
+
+    private static void EmitLengthDistance(LsbBitWriter writer, int length, int distance)
+    {
+        // Length symbol: highest base ≤ length.
+        int lengthCode = LengthBase.Length - 1;
+        while (LengthBase[lengthCode] > length)
+        {
+            lengthCode--;
+        }
+        EmitLengthSymbol(writer, 257 + lengthCode);
+        if (LengthExtraBits[lengthCode] > 0)
+        {
+            writer.WriteBits(length - LengthBase[lengthCode], LengthExtraBits[lengthCode]);
+        }
+
+        // Distance code: highest base ≤ distance; fixed 5-bit code, MSB first.
+        int distanceCode = DistanceBase.Length - 1;
+        while (DistanceBase[distanceCode] > distance)
+        {
+            distanceCode--;
+        }
+        writer.WriteBitsMsbFirst(distanceCode, 5);
+        if (DistanceExtraBits[distanceCode] > 0)
+        {
+            writer.WriteBits(distance - DistanceBase[distanceCode], DistanceExtraBits[distanceCode]);
+        }
+    }
+
+    // ── Stored fallback ─────────────────────────────────────────────
+
+    private byte[] DeflateStored()
+    {
+        System.Collections.Generic.List<byte> output = new();
 
         int remaining = _data.Length;
         int pos = 0;
-        bool first = true;
 
         if (remaining == 0)
         {
-            // Empty stored block, final.
-            output.Add(0x01); // BFINAL=1, BTYPE=00
-            output.Add(0x00); // LEN low
-            output.Add(0x00); // LEN high
-            output.Add(0xFF); // NLEN low (~0x00)
-            output.Add(0xFF); // NLEN high (~0x00)
+            output.Add(0x01);
+            output.Add(0x00);
+            output.Add(0x00);
+            output.Add(0xFF);
+            output.Add(0xFF);
             return [.. output];
         }
 
@@ -819,20 +1025,13 @@ internal sealed class DeflateDeflater
             int blockSize = Math.Min(remaining, 65535);
             bool isFinal = (remaining - blockSize) == 0;
 
-            // BFINAL (1 bit) + BTYPE (2 bits) = 3 bits = byte 0x01 or 0x00.
-            // For stored block BTYPE=00 so byte is: isFinal ? 0x01 : 0x00.
             output.Add(isFinal ? (byte)0x01 : (byte)0x00);
-
-            // LEN: 2 bytes little-endian.
             output.Add((byte)(blockSize & 0xFF));
             output.Add((byte)((blockSize >> 8) & 0xFF));
-
-            // NLEN: one's complement of LEN, 2 bytes little-endian.
             int nlen = (~blockSize) & 0xFFFF;
             output.Add((byte)(nlen & 0xFF));
             output.Add((byte)((nlen >> 8) & 0xFF));
 
-            // Data bytes.
             for (int i = 0; i < blockSize; i++)
             {
                 output.Add(_data[pos + i]);
@@ -840,12 +1039,55 @@ internal sealed class DeflateDeflater
 
             pos += blockSize;
             remaining -= blockSize;
-            first = false;
         }
 
-        _ = first; // suppress unused warning
-
         return [.. output];
+    }
+
+    // DEFLATE packs bits LSB-first within bytes; Huffman codes themselves
+    // are written most-significant-bit first (RFC 1951 §3.1.1).
+    private sealed class LsbBitWriter
+    {
+        private readonly System.Collections.Generic.List<byte> _bytes = new();
+        private int _buffer;
+        private int _bitCount;
+
+        internal void WriteBits(int value, int count)
+        {
+            // value's bits, least significant first.
+            _buffer |= (value & ((1 << count) - 1)) << _bitCount;
+            _bitCount += count;
+            FlushFullBytes();
+        }
+
+        internal void WriteBitsMsbFirst(int code, int count)
+        {
+            for (int i = count - 1; i >= 0; i--)
+            {
+                WriteBits((code >> i) & 1, 1);
+            }
+        }
+
+        private void FlushFullBytes()
+        {
+            while (_bitCount >= 8)
+            {
+                _bytes.Add((byte)(_buffer & 0xFF));
+                _buffer >>= 8;
+                _bitCount -= 8;
+            }
+        }
+
+        internal byte[] ToArray()
+        {
+            if (_bitCount > 0)
+            {
+                _bytes.Add((byte)(_buffer & 0xFF));
+                _buffer = 0;
+                _bitCount = 0;
+            }
+            return [.. _bytes];
+        }
     }
 }
 

@@ -20,4 +20,8 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

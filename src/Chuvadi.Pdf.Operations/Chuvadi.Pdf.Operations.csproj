@@ -28,6 +28,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />

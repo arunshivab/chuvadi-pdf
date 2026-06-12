@@ -40,15 +40,16 @@ air-gap-deployed kiosks.
 | Capability                             | Module                          |
 |----------------------------------------|---------------------------------|
 | Read PDF 1.4–2.0 (xref + xref streams) | Chuvadi.Pdf.IO                  |
-| All standard filters                   | Chuvadi.Pdf.Filters             |
+| Standard filters (incl. CCITT Group 3/4) | Chuvadi.Pdf.Filters           |
 | Text extraction (3 strategies)         | Chuvadi.Pdf.Text                |
-| Page rasterisation → PNG/BMP           | Chuvadi.Pdf.Rendering           |
+| Page rasterisation → PNG/BMP/TIFF/JPEG | Chuvadi.Pdf.Rendering           |
 | TrueType / OpenType glyph extraction   | Chuvadi.Pdf.Fonts.Rendering     |
 | Text and image watermarks              | Chuvadi.Pdf.Watermark           |
 | **True PHI-safe redaction**            | Chuvadi.Pdf.Redaction           |
 | AcroForm read and fill                 | Chuvadi.Pdf.Forms               |
 | Document outlines (bookmarks)          | Chuvadi.Pdf.Forms               |
 | Merge / split / delete / rotate        | Chuvadi.Pdf.Operations          |
+| PDF compression (GC + restream)        | Chuvadi.Pdf.Operations          |
 | PDF authoring (text, tables, images)   | Chuvadi.Pdf.Authoring           |
 | Report layout (flowing pages, tables)  | Chuvadi.Pdf.Authoring           |
 | Image → PDF (JPEG/PNG/TIFF/BMP)        | Chuvadi.Pdf.Authoring           |

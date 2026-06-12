@@ -35,6 +35,31 @@ SVG sink ignores cs/scn colour operators (raster implements them); raster
 quote operators bypass composite-font routing; SVG sink does not recurse
 into form XObjects.
 
+### N.1a Reader feature batch
+**Status:** SHIPPED in v2.8.0 (CHANGE-LOG A33). JPEG encoder, CCITTFaxDecode
+(Group 3/4), raster raw-image rendering with /DecodeParms, PdfCompressor,
+and real LZ77+fixed-Huffman DEFLATE.
+
+### N.5 JBIG2Decode filter
+**Status:** Open. Scanned bilevel images compressed with JBIG2 render blank.
+Large spec (arithmetic coding, symbol dictionaries, generic regions);
+deserves its own PR.
+
+### N.6 JPXDecode filter
+**Status:** Open. JPEG 2000 images render blank. Very large spec (wavelets,
+EBCOT); deserves its own PR.
+
+### N.7 ImageMask stencil compositing
+**Status:** Open. /ImageMask true images are skipped on the raster path
+because CompositeImage copies pixels rather than alpha-blending with the
+fill colour.
+
+### N.8 Dynamic-Huffman DEFLATE + writer object streams
+**Status:** Open. The deflater uses fixed Huffman (typically 85–90% of zlib
+ratios); dynamic Huffman would close the gap. PdfWriter emits classic xref
+tables; object streams + xref streams would shrink files further and let
+PdfCompressor pack non-stream objects.
+
 ### N.2 Autohinter follow-ups
 **Status:** v2.7.0 ships Y-only fitting for simple glyphs.
 - Composite glyphs in unhinted fonts (component-wise Y fitting with

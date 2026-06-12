@@ -54,6 +54,54 @@ int EarlyChange
 
 For LZW: early change flag. 0 = compatible with original LZW; 1 = early change (PDF default).
 
+### `ColumnsSpecified`
+
+```csharp
+bool ColumnsSpecified
+```
+
+True when the source dictionary carried an explicit /Columns entry. Filters whose Columns default differs from 1 (CCITTFaxDecode defaults to 1728) use this to distinguish "absent" from "1".
+
+### `CcittK`
+
+```csharp
+int CcittK
+```
+
+For CCITTFaxDecode: the K encoding parameter. Negative = pure two-dimensional (Group 4), 0 = pure one-dimensional (Group 3 1-D), positive = mixed one/two-dimensional (Group 3 2-D). Default 0. PDF 32000-1:2008 Table 11.
+
+### `Rows`
+
+```csharp
+int Rows
+```
+
+For CCITTFaxDecode: the number of image rows, or 0 when unknown (decode until end-of-block or data end). Default 0.
+
+### `BlackIs1`
+
+```csharp
+bool BlackIs1
+```
+
+For CCITTFaxDecode: when true, decoded black pixels are 1 bits; when false (the PDF default), black pixels are 0 bits.
+
+### `EncodedByteAlign`
+
+```csharp
+bool EncodedByteAlign
+```
+
+For CCITTFaxDecode: when true, each encoded row starts on a byte boundary. Default false.
+
+### `EndOfBlock`
+
+```csharp
+bool EndOfBlock
+```
+
+For CCITTFaxDecode: when true (the PDF default), the data is expected to end with an end-of-block pattern (EOFB or RTC).
+
 ## Methods
 
 ### `FromDictionary`

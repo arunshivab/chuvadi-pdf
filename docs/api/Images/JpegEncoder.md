@@ -1,8 +1,8 @@
 # JpegEncoder
 
-**Class** in `Chuvadi.Pdf.Images.Jpeg` (Images)
+**Class** in `Chuvadi.Pdf.Images` (Images)
 
-Pure-C# baseline DCT JPEG encoder. Produces JFIF-compliant JPEG byte streams from raw RGB pixel data.
+Encodes images as baseline sequential JPEG (SOF0) with JFIF headers.
 
 ```csharp
 public static class JpegEncoder
@@ -10,40 +10,29 @@ public static class JpegEncoder
 
 ## Remarks
 
-Implements ITU-T T.81 baseline sequential DCT-based coding with Huffman entropy coding. Uses the IJG standard quantization tables scaled by a quality factor (1-100) and the standard Huffman tables.  
+Colour images encode as YCbCr with 4:4:4 sampling (no chroma subsampling) — slightly larger files than 4:2:0 in exchange for clean edges on rasterised text, which is the dominant content this encoder serves. Grayscale frames (`ImageColorFormat.Gray8`) encode as single-component JPEGs. Alpha is ignored (JPEG carries no alpha); CMYK frames are not supported and throw.  
 
- Supports 24-bit RGB and 8-bit grayscale input. The output is a complete JFIF container (SOI ... EOI) suitable for direct embedding as a `data:image/jpeg;base64,...` URL or storage as a `.jpg` file.
+ The quality parameter follows the Independent JPEG Group convention: 1 (worst) to 100 (best), scaling the Annex K reference quantisation tables. The default of 85 matches common screenshot/export quality.
 
 ## Methods
 
-### `EncodeRgb`
+### `Encode`
 
 __static__
 
 ```csharp
-static byte[] EncodeRgb(byte[] rgb, int width, int height, int quality = 85)
+static void Encode(ImageFrame frame, Stream output, int quality = 85)
 ```
 
-Encodes RGB pixel data to JPEG bytes.
+Encodes the frame as a baseline JFIF JPEG and writes it to the stream.
 
 **Parameters**
 
-- `rgb` — Interleaved 24-bit RGB pixel data.
-- `width` — Pixel width.
-- `height` — Pixel height.
-- `quality` — Quality factor 1-100 (default 85).
-
-### `EncodeGrayscale`
-
-__static__
-
-```csharp
-static byte[] EncodeGrayscale(byte[] gray, int width, int height, int quality = 85)
-```
-
-Encodes grayscale pixel data to JPEG bytes.
+- `frame` — The image to encode. Alpha channels are ignored.
+- `output` — The destination stream.
+- `quality` — Quality from 1 (smallest, worst) to 100 (largest, best), IJG convention. Default 85. <exception cref="ArgumentNullException"> Thrown when `frame` or `output` is null. </exception> <exception cref="ArgumentOutOfRangeException"> Thrown when `quality` is outside 1–100. </exception> <exception cref="ImageException"> Thrown when the frame's colour format cannot be represented in JPEG (e.g. `ImageColorFormat.Cmyk32`). </exception>
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Images.Jpeg/JpegEncoder.cs`](../../../src/Chuvadi.Pdf.Images.Jpeg/JpegEncoder.cs)_
+_Source: [`src/Chuvadi.Pdf.Images/JpegEncoder.cs`](../../../src/Chuvadi.Pdf.Images/JpegEncoder.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._
