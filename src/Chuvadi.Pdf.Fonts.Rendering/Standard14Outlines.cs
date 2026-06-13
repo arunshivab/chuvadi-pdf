@@ -46,7 +46,7 @@ public static class Standard14Outlines
         {
             return new GraphicsPath();
         }
-        return DeserializeGlyph(bytes);
+        return DeserializeGlyph(bytes, entry.UnitsPerEm);
     }
 
     /// <summary>True when the bundle was built from real font data.</summary>
@@ -55,8 +55,12 @@ public static class Standard14Outlines
     /// <summary>Returns the list of font names known to the bundle.</summary>
     public static IReadOnlyCollection<string> KnownFonts => Loaded.Value.Fonts.Keys;
 
-    private static GraphicsPath DeserializeGlyph(byte[] data)
+    private static GraphicsPath DeserializeGlyph(byte[] data, int unitsPerEm)
     {
+        // Normalise design-unit coordinates to a 1000-unit em so callers can
+        // scale uniformly by pointSize / 1000 regardless of the substitute
+        // font's native units-per-em.
+        double scale = unitsPerEm > 0 ? 1000.0 / unitsPerEm : 1.0;
         GraphicsPath path = new();
         int cursor = 0;
         int cmdCount = ReadUInt16(data, ref cursor);
@@ -69,7 +73,7 @@ public static class Standard14Outlines
             {
                 short px = ReadInt16(data, ref cursor);
                 short py = ReadInt16(data, ref cursor);
-                pts[p] = (px, py);
+                pts[p] = (px * scale, py * scale);
             }
             switch (cmd)
             {

@@ -992,3 +992,34 @@ Verified with an independent external PDF parser (pikepdf): split, merge, and co
 **Files affected:**
 `src/Chuvadi.Pdf.Operations/PageOperations.cs`,
 `tests/Chuvadi.Pdf.Operations.Tests/PageBuilderSharedResourceTests.cs` (new).
+
+
+---
+
+## A35 - Standard-14 text rendering: real outline bundle + raster wiring
+
+**Date:** 2026-06-13
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (Standard14Outlines, bundle), `Chuvadi.Pdf.Rendering.DisplayList` (raster text path), `tools/build_standard14_bundle.py`, `Standard14.bin`
+**Rationale:** Found wiring the library into a reader. Rasterising a normal PDF produced pages with vector graphics but no text. Most real documents use the Standard 14 fonts (Helvetica/Times/Courier) without embedding a font program, on the assumption the consumer supplies the glyphs. Chuvadi anticipated this with an embedded outline bundle, but two things were unfinished.
+
+Root causes:
+1. **The bundle was a placeholder.** `Standard14.bin` shipped as a 576-byte header with zero glyphs (the source comment said so), so outline lookups returned empty paths. It is now generated from the 14 substitute TTFs (Liberation Sans/Serif/Mono, URW StandardSymbolsPS/D050000L) - 361,786 bytes, ~191 glyphs per text font.
+2. **The raster path never consulted the bundle.** `DisplayListBuilder.ResolveFontRenderer` built a `FontRenderer` only from an embedded font program; for a non-embedded font it returned null and `ShowTextSimple` skipped glyph emission entirely. It now falls back to `RenderableFont` (which reads the bundle) for the 14 standard font names, emitting `DrawGlyphOp`s and advancing by the AFM standard widths.
+
+Supporting fixes:
+- The build tool converted quadratic TrueType outlines to cubic via Qu2CuPen. The loader's QUAD case only handled a single 2-point segment, but TrueType `qCurveTo` bundles many implied-on-curve points (up to 9 in Liberation Sans); without conversion, curved glyphs rendered malformed. all_cubic emits only 3-point cubics, which the loader draws directly.
+- The tool resolves symbol-encoded fonts (Symbol, ZapfDingbats) that have no Unicode cmap, via their (3,0) subtable at 0xF000+code, and extends coverage to 0x20-0xFF (Latin-1 accents for text fonts).
+- `Standard14Outlines` normalises outlines to a 1000-unit em on load (the substitute fonts use 2048), so callers scale uniformly by pointSize/1000. Without this, glyphs rendered ~2x too large.
+
+Verified: rasterising a reportlab PDF that uses non-embedded Helvetica now renders all text legibly (heading, body lines) alongside the image; previously the text band had zero dark pixels. 27/27 projects, 1,754 tests green (248 Fonts.Rendering, 117 Rendering).
+
+**Known cosmetic follow-up:** intra-word tracking is slightly loose because glyph shapes are Liberation substitutes placed on AFM standard advances; legible and correctly laid out, but spacing fidelity could be revisited.
+
+**Licensing:** Liberation = SIL OFL 1.1; URW StandardSymbolsPS/D050000L = AGPL with font exception. Both redistributable under Apache-2.0 (noted in the build tool header).
+
+**Files affected:**
+`src/Chuvadi.Pdf.Fonts.Rendering/Standard14Outlines.cs`,
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Resources/Standard14.bin` (regenerated),
+`tools/build_standard14_bundle.py`,
+`tools/fonts/` (14 substitute TTFs).

@@ -47,6 +47,7 @@ import struct, sys, os, pathlib
 try:
     from fontTools.ttLib import TTFont
     from fontTools.pens.recordingPen import RecordingPen
+    from fontTools.pens.qu2cuPen import Qu2CuPen
 except ImportError:
     print("ERROR: pip install fonttools", file=sys.stderr)
     sys.exit(2)
@@ -74,16 +75,48 @@ CMD_CUBIC = 2
 CMD_QUAD = 3
 CMD_CLOSE = 4
 
-def extract_glyph(font, char_code):
-    """Return [(cmd, [(x,y),...]), ...] for the glyph mapping the given char code."""
-    cmap = font.getBestCmap()
-    if char_code not in cmap:
+def build_code_map(font):
+    """Map PDF character codes (0x20..0xFF) to glyph names.
+
+    Text fonts expose a Unicode cmap (getBestCmap). Symbol-encoded fonts
+    (Symbol, ZapfDingbats) have no Unicode cmap; their (3, 0) symbol subtable
+    maps code 0xF000+cc, so a PDF byte code cc resolves through 0xF000+cc.
+    """
+    unicode_cmap = font.getBestCmap()
+    if unicode_cmap is not None:
+        return {cc: unicode_cmap[cc] for cc in range(0x20, 0x100) if cc in unicode_cmap}
+
+    # Symbol font: find a (3, 0) symbol subtable and resolve via 0xF000+cc.
+    symbol = None
+    for table in font["cmap"].tables:
+        if table.platformID == 3 and table.platEncID == 0:
+            symbol = table.cmap
+            break
+    if symbol is None:
+        return {}
+
+    code_map = {}
+    for cc in range(0x20, 0x100):
+        name = symbol.get(0xF000 + cc) or symbol.get(cc)
+        if name is not None:
+            code_map[cc] = name
+    return code_map
+
+
+def extract_glyph(glyph_set, glyph_name, units_per_em):
+    """Return [(cmd, [(x,y),...]), ...] for a named glyph.
+
+    Quadratic TrueType curves are converted to cubic Beziers via Qu2CuPen so
+    every curve is a single 3-point segment the C# loader renders directly.
+    A raw qCurveTo may bundle many off-curve points in one call (TrueType
+    implied on-curve points), which the loader does not decompose.
+    """
+    if glyph_name not in glyph_set:
         return None
-    glyph_name = cmap[char_code]
-    glyph_set = font.getGlyphSet()
     glyph = glyph_set[glyph_name]
     pen = RecordingPen()
-    glyph.draw(pen)
+    converter = Qu2CuPen(pen, max_err=max(0.5, units_per_em / 1000.0), all_cubic=True)
+    glyph.draw(converter)
     out = []
     for verb, args in pen.value:
         if verb == "moveTo":
@@ -91,6 +124,7 @@ def extract_glyph(font, char_code):
         elif verb == "lineTo":
             out.append((CMD_LINE, list(args)))
         elif verb == "qCurveTo":
+            # Fallback only; all_cubic=True should prevent this.
             out.append((CMD_QUAD, list(args)))
         elif verb == "curveTo":
             out.append((CMD_CUBIC, list(args)))
@@ -136,10 +170,15 @@ def build_bundle(input_dir, output_path):
         out.extend(name_bytes)
         out.extend(struct.pack("<i", units_per_em))
 
+        glyph_set = font.getGlyphSet()
+        code_map = build_code_map(font)
         entries = bytearray()
         glyph_count = 0
-        for char_code in range(0x20, 0x7F):
-            commands = extract_glyph(font, char_code)
+        for char_code in range(0x20, 0x100):
+            glyph_name = code_map.get(char_code)
+            if glyph_name is None:
+                continue
+            commands = extract_glyph(glyph_set, glyph_name, units_per_em)
             if commands is None:
                 continue
             glyph_data = pack_glyph(commands)
