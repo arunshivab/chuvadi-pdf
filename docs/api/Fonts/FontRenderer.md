@@ -54,6 +54,22 @@ int GetGlyphIndex(int codePoint)
 
 Maps a Unicode code point to its glyph index. Returns 0 (.notdef) when the character is not present in the font.
 
+### `GetGlyphIndexForCode`
+
+```csharp
+int GetGlyphIndexForCode(int code, bool symbolic)
+```
+
+Resolves a raw character code (from a content-stream string) to a glyph index, honouring symbol and Macintosh cmaps and a direct code-as-index fallback. Use for simple fonts where the code, not a Unicode value, selects the glyph. Returns 0 (.notdef) when nothing matches.
+
+### `GetGlyphIndexUnicode`
+
+```csharp
+int GetGlyphIndexUnicode(int codePoint)
+```
+
+Maps a Unicode code point to a glyph index via the Unicode cmap only.
+
 ### `GetGlyphOutline`
 
 ```csharp

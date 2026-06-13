@@ -11,6 +11,37 @@ numbered A01..ANN).
 
 ---
 
+## [2.8.3] - 2026-06-13
+
+### Fixed
+- **Embedded subset fonts now render the correct glyphs.** Documents whose
+  fonts are embedded and subsetted (e.g. produced by LibreOffice/eLORA) showed
+  blank or garbled text. Two causes: the TrueType loader only parsed `(3,1)`
+  format-4 cmaps and ignored the `(1,0)` format-0 tables these fonts use; and
+  the rasterizer selected glyphs by decoded Unicode rather than by the
+  content-stream character code. The raster text path now selects glyphs by
+  code (symbol/Mac/Unicode cmaps as the encoding requires, with a subset
+  code-as-index fallback), keeping the Unicode path for standard fonts.
+- **Embedded Type1 (`FontFile`) fonts now render.** Added a Type1 program
+  interpreter (eexec/charstring decryption, the Type1 charstring operators
+  including seac and flex, built-in and `/Differences` encodings). Previously
+  these glyphs did not render at all.
+- **Simple-font advances now come from the font's `/Widths` array** (the
+  authoritative source per PDF §9.2.4) when present, falling back to the font
+  program's metrics — fixing letter spacing for both TrueType and Type1.
+
+### Added
+- TrueType cmap formats 0 and 6, and separate retention of Unicode, symbol,
+  and Macintosh cmap subtables.
+- Word spacing is applied to single-byte code 32 per §9.3.3.
+
+### Known gap
+Embedded JPEG (`DCTDecode`) image XObjects are not yet decoded for display, so
+documents whose graphics are baseline-JPEG (e.g. a scanned masthead) show those
+images blank. Text renders fully. A JPEG decoder is planned separately.
+
+---
+
 ## [2.8.2] - 2026-06-13
 
 ### Fixed

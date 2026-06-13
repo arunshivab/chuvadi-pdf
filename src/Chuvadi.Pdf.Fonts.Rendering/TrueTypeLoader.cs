@@ -65,8 +65,12 @@ public sealed class TrueTypeLoader
     private int _numberOfHMetrics;
     private bool _longLoca; // false = short (uint16 * 2), true = long (uint32)
 
-    // cmap: Unicode BMP → glyph index (format 4)
+    // cmap subtables, retained separately so simple fonts can select glyphs
+    // by code (symbol/Mac) or by Unicode as the encoding requires.
     private Dictionary<int, int>? _cmapF4;
+    private Dictionary<int, int>? _cmapUnicode;
+    private Dictionary<int, int>? _cmapSymbol;
+    private Dictionary<int, int>? _cmapMac;
 
     /// <summary>
     /// Loads a font from raw TTF/OTF bytes.
@@ -252,10 +256,11 @@ public sealed class TrueTypeLoader
 
         int numTables = ReadUInt16(_cmapOffset + 2);
 
-        // Prefer platform 3 (Windows) encoding 1 (BMP Unicode), then platform 0 (Unicode)
-        uint bestOffset = 0;
-        int bestScore = -1;
-
+        // Retain Unicode, Macintosh, and symbol subtables separately. Simple
+        // PDF fonts select glyphs by character code through whichever of these
+        // applies (PDF 32000-1:2008 §9.6.6); embedded subset fonts often carry
+        // only a (1, 0) table that maps content-stream codes directly to subset
+        // glyph indices, while normal fonts expose a (3, 1) Unicode table.
         for (int i = 0; i < numTables; i++)
         {
             uint recordOffset = _cmapOffset + 4 + (uint)(i * 8);
@@ -264,36 +269,129 @@ public sealed class TrueTypeLoader
             uint subtableOffset = _cmapOffset + ReadUInt32(recordOffset + 4);
             int format = ReadUInt16(subtableOffset);
 
-            int score = -1;
+            Dictionary<int, int>? parsed = format switch
+            {
+                0 => ParseCmapFormat0(subtableOffset),
+                4 => ParseCmapFormat4(subtableOffset),
+                6 => ParseCmapFormat6(subtableOffset),
+                _ => null,
+            };
 
-            if (platformId == 3 && encodingId == 1 && format == 4)
+            if (parsed is null || parsed.Count == 0)
             {
-                score = 10; // Best: Windows Unicode BMP format 4
-            }
-            else if (platformId == 0 && format == 4)
-            {
-                score = 5; // Good: Unicode platform format 4
+                continue;
             }
 
-            if (score > bestScore)
+            if (platformId == 3 && encodingId == 0)
             {
-                bestScore = score;
-                bestOffset = subtableOffset;
+                _cmapSymbol ??= parsed;
+            }
+            else if (platformId == 1)
+            {
+                _cmapMac ??= parsed;
+            }
+            else if ((platformId == 3 && (encodingId == 1 || encodingId == 10)) || platformId == 0)
+            {
+                _cmapUnicode ??= parsed;
+            }
+            else
+            {
+                // Unknown platform: keep as a last-resort Mac-style table.
+                _cmapMac ??= parsed;
             }
         }
 
-        if (bestOffset == 0 || bestScore < 0)
-        {
-            return; // No supported cmap found
-        }
-
-        ParseCmapFormat4(bestOffset);
+        // Back-compatible default used by GetGlyphIndex (Unicode lookups).
+        _cmapF4 = _cmapUnicode ?? _cmapMac ?? _cmapSymbol;
     }
 
-    private void ParseCmapFormat4(uint offset)
+    /// <summary>
+    /// Resolves a raw single-byte (or symbol) character code to a glyph index,
+    /// trying the symbol, Macintosh, and Unicode subtables in the order
+    /// appropriate for <paramref name="symbolic"/> fonts, then a direct
+    /// code-as-glyph-index fallback for subset fonts whose code equals the GID.
+    /// Returns 0 (.notdef) when nothing matches.
+    /// </summary>
+    public int GetGlyphIndexForCode(int code, bool symbolic)
     {
-        // format 4: segmented mapping to delta values
-        // OpenType spec §cmap, format 4
+        if (symbolic)
+        {
+            if (TryCmap(_cmapSymbol, 0xF000 + code, out int g)) { return g; }
+            if (TryCmap(_cmapSymbol, code, out g)) { return g; }
+            if (TryCmap(_cmapMac, code, out g)) { return g; }
+            if (TryCmap(_cmapUnicode, code, out g)) { return g; }
+        }
+        else
+        {
+            if (TryCmap(_cmapUnicode, code, out int g)) { return g; }
+            if (TryCmap(_cmapMac, code, out g)) { return g; }
+            if (TryCmap(_cmapSymbol, 0xF000 + code, out g)) { return g; }
+            if (TryCmap(_cmapSymbol, code, out g)) { return g; }
+        }
+
+        // Subset fonts (e.g. LibreOffice output) may have no usable cmap and
+        // instead use the code as the glyph index directly.
+        if (code > 0 && code < _numGlyphs)
+        {
+            return code;
+        }
+
+        return 0;
+    }
+
+    /// <summary>Maps a Unicode code point to a glyph index via the Unicode cmap.</summary>
+    public int GetGlyphIndexUnicode(int codePoint)
+    {
+        return TryCmap(_cmapUnicode, codePoint, out int g) ? g : 0;
+    }
+
+    private static bool TryCmap(Dictionary<int, int>? cmap, int code, out int glyphId)
+    {
+        if (cmap is not null && cmap.TryGetValue(code, out glyphId) && glyphId != 0)
+        {
+            return true;
+        }
+        glyphId = 0;
+        return false;
+    }
+
+    // format 0: byte-encoding table — 256 single-byte codes to glyph indices.
+    private Dictionary<int, int> ParseCmapFormat0(uint offset)
+    {
+        Dictionary<int, int> map = new(256);
+        uint glyphArray = offset + 6;
+        for (int c = 0; c < 256; c++)
+        {
+            int glyphId = _data[glyphArray + c];
+            if (glyphId != 0)
+            {
+                map[c] = glyphId;
+            }
+        }
+        return map;
+    }
+
+    // format 6: trimmed table mapping a contiguous range of codes.
+    private Dictionary<int, int> ParseCmapFormat6(uint offset)
+    {
+        int firstCode = ReadUInt16(offset + 6);
+        int entryCount = ReadUInt16(offset + 8);
+        uint glyphArray = offset + 10;
+        Dictionary<int, int> map = new(entryCount);
+        for (int i = 0; i < entryCount; i++)
+        {
+            int glyphId = ReadUInt16(glyphArray + (uint)(i * 2));
+            if (glyphId != 0)
+            {
+                map[firstCode + i] = glyphId;
+            }
+        }
+        return map;
+    }
+
+    private Dictionary<int, int> ParseCmapFormat4(uint offset)
+    {
+        // format 4: segmented mapping to delta values (OpenType §cmap)
         int segCountX2 = ReadUInt16(offset + 6);
         int segCount = segCountX2 / 2;
 
@@ -301,9 +399,8 @@ public sealed class TrueTypeLoader
         uint startCodesOffset = endCodesOffset + (uint)(segCount * 2) + 2;
         uint deltaOffset = startCodesOffset + (uint)(segCount * 2);
         uint rangeOffset = deltaOffset + (uint)(segCount * 2);
-        uint glyphIdArrayBase = rangeOffset + (uint)(segCount * 2);
 
-        _cmapF4 = new Dictionary<int, int>(segCount * 32);
+        Dictionary<int, int> map = new(segCount * 32);
 
         for (int seg = 0; seg < segCount; seg++)
         {
@@ -314,7 +411,7 @@ public sealed class TrueTypeLoader
 
             if (startCode == 0xFFFF)
             {
-                break; // End of segment list
+                break;
             }
 
             for (int c = startCode; c <= endCode; c++)
@@ -327,7 +424,6 @@ public sealed class TrueTypeLoader
                 }
                 else
                 {
-                    // idRangeOffset is a byte offset from the rangeOffset field itself
                     uint glyphIdOffset = rangeOffset + (uint)(seg * 2)
                                        + (uint)rangeOff
                                        + (uint)((c - startCode) * 2);
@@ -339,12 +435,13 @@ public sealed class TrueTypeLoader
                     }
                 }
 
-                if (glyphId != 0 && !_cmapF4.ContainsKey(c))
+                if (glyphId != 0 && !map.ContainsKey(c))
                 {
-                    _cmapF4[c] = glyphId;
+                    map[c] = glyphId;
                 }
             }
         }
+        return map;
     }
 
     // ── glyf table — Glyph outline extraction ─────────────────────────────

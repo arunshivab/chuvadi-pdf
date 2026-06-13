@@ -70,6 +70,22 @@ GlyphMetrics GetGlyphMetrics(int glyphId)
 
 Returns the typographic metrics for a glyph without building its path. Useful for text advance width calculations.
 
+### `GetGlyphIndexForCode`
+
+```csharp
+int GetGlyphIndexForCode(int code, bool symbolic)
+```
+
+Resolves a raw single-byte (or symbol) character code to a glyph index, trying the symbol, Macintosh, and Unicode subtables in the order appropriate for `symbolic` fonts, then a direct code-as-glyph-index fallback for subset fonts whose code equals the GID. Returns 0 (.notdef) when nothing matches.
+
+### `GetGlyphIndexUnicode`
+
+```csharp
+int GetGlyphIndexUnicode(int codePoint)
+```
+
+Maps a Unicode code point to a glyph index via the Unicode cmap.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs)_
