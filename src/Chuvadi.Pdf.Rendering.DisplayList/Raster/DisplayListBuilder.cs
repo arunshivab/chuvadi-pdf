@@ -130,6 +130,9 @@ public static class DisplayListBuilder
         private readonly Dictionary<string, FontRenderer?> _fontCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
         private readonly Dictionary<string, RenderableFont?> _std14FontCache;
+        private readonly Dictionary<string, bool> _symbolicCache;
+        private readonly Dictionary<string, Type1FontRenderer?> _type1Cache;
+        private readonly Dictionary<string, (int First, double[] Widths)?> _widthsCache;
 
         // Render-op accumulator
         private readonly List<RenderOp> _ops;
@@ -161,6 +164,9 @@ public static class DisplayListBuilder
             _fontCache = new Dictionary<string, FontRenderer?>();
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
             _std14FontCache = new Dictionary<string, RenderableFont?>();
+            _symbolicCache = new Dictionary<string, bool>();
+            _type1Cache = new Dictionary<string, Type1FontRenderer?>();
+            _widthsCache = new Dictionary<string, (int, double[])?>();
             _ops = new List<RenderOp>();
             _state = new BuilderGraphicsState();
             _stateStack = new Stack<BuilderGraphicsState>();
@@ -755,7 +761,7 @@ public static class DisplayListBuilder
         {
             // ' â€” move to next line and show text
             TextNextLine();
-            ShowTextSimple(DecodeSimpleText(text));
+            ShowTextSimple(text);
         }
 
         /// <inheritdoc />
@@ -765,7 +771,7 @@ public static class DisplayListBuilder
             _state.WordSpacing = wordSpacing;
             _state.CharacterSpacing = charSpacing;
             TextNextLine();
-            ShowTextSimple(DecodeSimpleText(text));
+            ShowTextSimple(text);
         }
 
         // â”€â”€ Text showing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -788,13 +794,13 @@ public static class DisplayListBuilder
             }
             else
             {
-                ShowTextSimple(DecodeSimpleText(raw));
+                ShowTextSimple(raw);
             }
         }
 
-        private void ShowTextSimple(string text)
+        private void ShowTextSimple(byte[] raw)
         {
-            if (string.IsNullOrEmpty(text) || _state.FontSize <= 0)
+            if (raw is null || raw.Length == 0 || _state.FontSize <= 0)
             {
                 return;
             }
@@ -809,13 +815,49 @@ public static class DisplayListBuilder
             // from the embedded substitute bundle via RenderableFont.
             RenderableFont? std14 = renderer is null ? GetStd14Font() : null;
 
-            foreach (char c in text)
+            // Embedded Type1 (FontFile) programs, parsed separately from the
+            // TrueType path.
+            Type1FontRenderer? type1 = renderer is null && std14 is null ? GetType1Font() : null;
+
+            Chuvadi.Pdf.Fonts.PdfFont? pdfFont = GetPdfFont();
+            bool symbolic = IsSymbolicFont();
+
+            // Simple fonts use single-byte codes: one byte = one code = one glyph.
+            foreach (byte b in raw)
             {
+                int code = b;
                 double advance;
 
-                if (renderer is null && std14 is not null)
+                if (renderer is not null)
                 {
-                    Path glyphPath = std14.GetGlyphPath(c, _state.FontSize);
+                    int gid = ResolveEmbeddedGid(renderer, pdfFont, code, symbolic);
+                    GlyphOutline glyph = renderer.GetGlyphOutline(gid);
+                    GlyphOutline? hintedGlyph = TryHint(renderer, gid);
+                    GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
+
+                    if (emit && !scaled.IsEmpty && _state.FillValid)
+                    {
+                        Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
+
+                        if (_state.TextRise != 0.0)
+                        {
+                            Transform rise = new Transform(1, 0, 0, 1, 0, _state.TextRise);
+                            glyphPlacement = rise.Multiply(glyphPlacement);
+                        }
+
+                        Path placed = TransformPath(scaled.Outline, glyphPlacement);
+                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                    }
+
+                    double programAdvance = hintedGlyph is not null && !_lightHinting
+                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
+                        : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
+                    advance = ResolveSimpleAdvance(code, programAdvance);
+                }
+                else if (std14 is not null)
+                {
+                    char ch = DecodeOneChar(pdfFont, code);
+                    Path glyphPath = std14.GetGlyphPath(ch, _state.FontSize);
 
                     if (emit && !glyphPath.IsEmpty && _state.FillValid)
                     {
@@ -831,47 +873,39 @@ public static class DisplayListBuilder
                         _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
                     }
 
-                    advance = std14.GetAdvanceWidth(c, _state.FontSize);
+                    advance = ResolveSimpleAdvance(code, std14.GetAdvanceWidth(ch, _state.FontSize));
                 }
-                else if (renderer is null)
+                else if (type1 is not null)
                 {
-                    // No font available â€” approximate advance, no glyph emission
-                    advance = 0.6 * _state.FontSize;
-                }
-                else
-                {
-                    GlyphOutline glyph = renderer.GetGlyphOutlineForChar(c);
-                    GlyphOutline? hintedGlyph = TryHint(renderer, renderer.GetGlyphIndex(c));
-                    GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
+                    Path glyphPath = type1.GetGlyphPath(code, _state.FontSize, out double adv);
 
-                    if (emit && !scaled.IsEmpty && _state.FillValid)
+                    if (emit && !glyphPath.IsEmpty && _state.FillValid)
                     {
-                        // Glyph outline is in PDF text space with the
-                        // font-size scale already applied. Compose:
-                        //   final = textMatrix Â· ctm
-                        // and apply to the glyph path.
                         Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
 
-                        // Apply text rise if non-zero
                         if (_state.TextRise != 0.0)
                         {
                             Transform rise = new Transform(1, 0, 0, 1, 0, _state.TextRise);
                             glyphPlacement = rise.Multiply(glyphPlacement);
                         }
 
-                        Path placed = TransformPath(scaled.Outline, glyphPlacement);
+                        Path placed = TransformPath(glyphPath, glyphPlacement);
                         _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
                     }
 
-                    advance = hintedGlyph is not null && !_lightHinting
-                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
-                        : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
+                    advance = ResolveSimpleAdvance(code, adv);
+                }
+                else
+                {
+                    // No font available — approximate advance, no glyph emission.
+                    advance = 0.6 * _state.FontSize;
                 }
 
-                // Per Â§9.4.4: tx = (w + Tc + TwÂ·(c==space ? 1 : 0)) Â· Th/100
+                // Per §9.4.4: tx = (w + Tc + Tw·(code==32 ? 1 : 0)) · Th/100.
+                // Word spacing applies to the single-byte code 32 only.
                 double extra = _state.CharacterSpacing;
 
-                if (c == ' ')
+                if (code == 32)
                 {
                     extra += _state.WordSpacing;
                 }
@@ -881,6 +915,225 @@ public static class DisplayListBuilder
                 Transform advanceMatrix = new Transform(1, 0, 0, 1, tx, 0);
                 _textMatrix = advanceMatrix.Multiply(_textMatrix);
             }
+        }
+
+        // Returns the advance for a code from the font's /Widths array (PDF
+        // glyph-space, 1/1000 em) when present, else the supplied program
+        // advance. /Widths is the authoritative source for simple fonts.
+        private double ResolveSimpleAdvance(int code, double programAdvance)
+        {
+            (int First, double[] Widths)? table = GetSimpleWidths();
+            if (table is null)
+            {
+                return programAdvance;
+            }
+
+            int index = code - table.Value.First;
+            if (index < 0 || index >= table.Value.Widths.Length)
+            {
+                return programAdvance;
+            }
+
+            double w = table.Value.Widths[index];
+            return w > 0 ? w / 1000.0 * _state.FontSize : programAdvance;
+        }
+
+        private (int First, double[] Widths)? GetSimpleWidths()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_widthsCache.TryGetValue(_state.FontName, out (int First, double[] Widths)? cached))
+            {
+                return cached;
+            }
+
+            (int First, double[] Widths)? table = ResolveSimpleWidths();
+            _widthsCache[_state.FontName] = table;
+            return table;
+        }
+
+        private (int First, double[] Widths)? ResolveSimpleWidths()
+        {
+            PdfDictionary? fd = ResolveFontDict();
+            if (fd is null)
+            {
+                return null;
+            }
+
+            if (!fd.TryGetValue(PdfName.Intern("FirstChar"), out PdfPrimitive? firstPrim)
+                || _objects.ResolveAs<PdfInteger>(firstPrim ?? PdfNull.Value) is not PdfInteger first)
+            {
+                return null;
+            }
+
+            if (!fd.TryGetValue(PdfName.Intern("Widths"), out PdfPrimitive? widthsPrim)
+                || _objects.ResolveAs<PdfArray>(widthsPrim ?? PdfNull.Value) is not PdfArray widthsArr)
+            {
+                return null;
+            }
+
+            double[] widths = new double[widthsArr.Count];
+            for (int i = 0; i < widthsArr.Count; i++)
+            {
+                PdfPrimitive? w = _objects.Resolve(widthsArr[i]);
+                widths[i] = w switch
+                {
+                    PdfInteger pi => pi.Value,
+                    PdfReal pr => pr.Value,
+                    _ => 0.0,
+                };
+            }
+
+            return (first.Value, widths);
+        }
+
+        // Resolves a content-stream byte code to a glyph index in an embedded
+        // TrueType/OpenType program. Non-symbolic fonts with a Unicode cmap go
+        // code -> Unicode (via the font's encoding) -> Unicode cmap, preserving
+        // standard-encoding behaviour; otherwise the code selects the glyph
+        // directly through the symbol/Mac cmap or as a subset glyph index.
+        private int ResolveEmbeddedGid(
+            FontRenderer renderer, Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code, bool symbolic)
+        {
+            if (!symbolic && pdfFont is not null)
+            {
+                string decoded = pdfFont.DecodeCode(code);
+                if (decoded.Length > 0)
+                {
+                    int gid = renderer.GetGlyphIndexUnicode(decoded[0]);
+                    if (gid != 0)
+                    {
+                        return gid;
+                    }
+                }
+            }
+
+            int byCode = renderer.GetGlyphIndexForCode(code, symbolic);
+            if (byCode != 0)
+            {
+                return byCode;
+            }
+
+            // Final attempt: a symbolic font that nonetheless has a usable
+            // Unicode mapping via its encoding.
+            if (pdfFont is not null)
+            {
+                string decoded = pdfFont.DecodeCode(code);
+                if (decoded.Length > 0)
+                {
+                    int gid = renderer.GetGlyphIndexUnicode(decoded[0]);
+                    if (gid != 0)
+                    {
+                        return gid;
+                    }
+                }
+            }
+
+            return 0;
+        }
+
+        // Decodes a single content-stream code to one character via the font's
+        // encoding/ToUnicode, for substitute (Standard-14) rendering. Falls back
+        // to Latin-1 interpretation of the raw byte.
+        private static char DecodeOneChar(Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code)
+        {
+            if (pdfFont is not null)
+            {
+                string decoded = pdfFont.DecodeCode(code);
+                if (decoded.Length > 0)
+                {
+                    return decoded[0];
+                }
+            }
+
+            return (char)code;
+        }
+
+        // Reads the /Flags symbolic bit (bit 3, value 4) from the current font's
+        // FontDescriptor. Cached per resource font name.
+        private bool IsSymbolicFont()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return false;
+            }
+
+            if (_symbolicCache.TryGetValue(_state.FontName, out bool cached))
+            {
+                return cached;
+            }
+
+            bool symbolic = ResolveSymbolicFlag();
+            _symbolicCache[_state.FontName] = symbolic;
+            return symbolic;
+        }
+
+        private bool ResolveSymbolicFlag()
+        {
+            PdfDictionary? fd = ResolveFontDict();
+            if (fd is null)
+            {
+                return false;
+            }
+
+            PdfDictionary? descriptor = _objects.ResolveAs<PdfDictionary>(
+                fd.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? d) ? d ?? PdfNull.Value : PdfNull.Value);
+
+            // Type0 fonts carry the descriptor on the descendant font.
+            if (descriptor is null
+                && fd.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? df)
+                && _objects.ResolveAs<PdfArray>(df ?? PdfNull.Value) is PdfArray arr
+                && arr.Count > 0
+                && _objects.ResolveAs<PdfDictionary>(arr[0]) is PdfDictionary cid
+                && cid.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? cd))
+            {
+                descriptor = _objects.ResolveAs<PdfDictionary>(cd ?? PdfNull.Value);
+            }
+
+            if (descriptor is null)
+            {
+                return false;
+            }
+
+            if (descriptor.TryGetValue(PdfName.Intern("Flags"), out PdfPrimitive? flagsPrim)
+                && _objects.ResolveAs<PdfInteger>(flagsPrim ?? PdfNull.Value) is PdfInteger flags)
+            {
+                // Bit 3 (value 4) = Symbolic.
+                return (flags.Value & 4) != 0;
+            }
+
+            return false;
+        }
+
+        // Resolves the current font's dictionary from the page resources.
+        private PdfDictionary? ResolveFontDict()
+        {
+            PdfDictionary? resources = _state.FontResources;
+            if (resources is null)
+            {
+                return null;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDict))
+            {
+                return null;
+            }
+
+            PdfDictionary? fonts = _objects.ResolveAs<PdfDictionary>(fontDict ?? PdfNull.Value);
+            if (fonts is null)
+            {
+                return null;
+            }
+
+            if (!fonts.TryGetValue(PdfName.Intern(_state.FontName), out PdfPrimitive? fontRef))
+            {
+                return null;
+            }
+
+            return _objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value);
         }
 
         // Renders a composite (Type0) text string. Codes are two bytes
@@ -1053,6 +1306,60 @@ public static class DisplayListBuilder
             }
         }
 
+        private Type1FontRenderer? GetType1Font()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_type1Cache.TryGetValue(_state.FontName, out Type1FontRenderer? cached))
+            {
+                return cached;
+            }
+
+            Type1FontRenderer? font = ResolveType1Font();
+            _type1Cache[_state.FontName] = font;
+            return font;
+        }
+
+        private Type1FontRenderer? ResolveType1Font()
+        {
+            PdfDictionary? fd = ResolveFontDict();
+            if (fd is null)
+            {
+                return null;
+            }
+
+            PdfName? subtype = fd.GetName(PdfName.Intern("Subtype"));
+            if (subtype is null || !string.Equals(subtype.Value, "Type1", System.StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            PdfDictionary? descriptor = _objects.ResolveAs<PdfDictionary>(
+                fd.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? d) ? d ?? PdfNull.Value : PdfNull.Value);
+            if (descriptor is null)
+            {
+                return null;
+            }
+
+            byte[]? fontFile = ExtractStreamBytes(descriptor, "FontFile");
+            if (fontFile is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Type1FontRenderer.Create(fontFile, fd, _objects);
+            }
+            catch (System.Exception)
+            {
+                return null;
+            }
+        }
+
         private Chuvadi.Pdf.Fonts.PdfFont? GetPdfFont()
         {
             if (string.IsNullOrEmpty(_state.FontName))
@@ -1216,6 +1523,19 @@ public static class DisplayListBuilder
             }
 
             return null;
+        }
+
+        // Resolves and decodes a named stream entry (e.g. FontFile) on a
+        // dictionary, returning the decoded bytes or null when absent.
+        private byte[]? ExtractStreamBytes(PdfDictionary dict, string key)
+        {
+            if (!dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? streamRef))
+            {
+                return null;
+            }
+
+            PdfStream? stream = _objects.ResolveAs<PdfStream>(streamRef ?? PdfNull.Value);
+            return stream is null ? null : ContentStreamLoader.Decode(stream);
         }
 
         // â”€â”€ XObject Do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1588,33 +1908,5 @@ public static class DisplayListBuilder
         }
 
 
-        private string DecodeSimpleText(byte[] raw)
-        {
-            Chuvadi.Pdf.Fonts.PdfFont? font = GetPdfFont();
-
-
-            if (font is null)
-            {
-                // No font resolved; fall back to Latin-1 byte interpretation.
-                char[] fallback = new char[raw.Length];
-                for (int i = 0; i < raw.Length; i++)
-                {
-                    fallback[i] = (char)raw[i];
-                }
-                return new string(fallback);
-            }
-
-            // Decode each single-byte code through the font's encoding/ToUnicode
-            // so the glyph lookup receives the correct character. One code maps
-            // to one glyph and one advance for simple fonts, preserving the
-            // per-code advance bookkeeping in ShowText.
-            System.Text.StringBuilder sb = new System.Text.StringBuilder(raw.Length);
-            foreach (byte code in raw)
-            {
-                string u = font.DecodeCode(code);
-                sb.Append(u.Length > 0 ? u[0] : (char)code);
-            }
-            return sb.ToString();
-        }
     }
 }

@@ -1023,3 +1023,29 @@ Verified: rasterising a reportlab PDF that uses non-embedded Helvetica now rende
 `src/Chuvadi.Pdf.Fonts.Rendering/Resources/Standard14.bin` (regenerated),
 `tools/build_standard14_bundle.py`,
 `tools/fonts/` (14 substitute TTFs).
+
+
+---
+
+## A36 - Embedded font rendering: code-based glyph selection + Type1 support
+
+**Date:** 2026-06-13
+**Scope:** `Chuvadi.Pdf.Fonts.Rendering` (TrueTypeLoader, FontRenderer, new Type1FontRenderer, new StandardEncoding), `Chuvadi.Pdf.Rendering.DisplayList` (raster text path)
+**Rationale:** A real AERB/eLORA letter rasterised blank, then (after a partial fix) with garbled glyphs. The document used four embedded subset fonts - three TrueType (FontFile2) and one Type1 (FontFile) - none of them Standard-14. Diagnosis required external tooling (pikepdf + fontTools) to read the actual cmaps and content-stream codes.
+
+Root causes and fixes:
+1. **Cmap coverage.** TrueTypeLoader only parsed (3,1)/(0,x) format-4 cmaps. LibreOffice subset fonts carry a (1,0) format-0 cmap mapping content-stream codes directly to subset glyph indices. Added format 0 and 6 parsing, and now retain Unicode, symbol (3,0), and Macintosh (1,0) subtables separately, exposing GetGlyphIndexForCode(code, symbolic) and GetGlyphIndexUnicode(cp).
+2. **Glyph selection key.** The raster text path decoded bytes to Unicode first and looked glyphs up by Unicode value - correct for standard fonts, wrong for symbolic/subset fonts whose cmap is keyed by the raw code. ShowTextSimple now iterates the raw bytes; for each code it resolves a GID via the font's encoding (non-symbolic: code -> Unicode -> Unicode cmap, preserving existing behaviour) then by code through the symbol/Mac cmaps and a code-as-index fallback. This fixed F1/F2/F3 (the body text) while keeping the 117 render tests and 248 font tests green.
+3. **Type1 programs.** Added Type1FontRenderer: PFB normalisation, eexec decryption (R=55665), charstring decryption (R=4330, lenIV), the Type1 charstring interpreter (hsbw/sbw, moveto/lineto/curveto family, closepath, callsubr/return, hstem/vstem, div, seac accent composition via StandardEncoding, flex and hint-replacement OtherSubrs, endchar), and code->name resolution via the font's built-in /Encoding or the PDF /Differences. Wired as a third fallback in the text path after embedded TrueType and Standard-14.
+4. **Advances.** Simple-font advance widths now come from the PDF /Widths array (FirstChar + Widths) when present - the authoritative source - fixing spacing for the Type1 "Note:" run and making all simple-font advances spec-correct. Word spacing now keys on single-byte code 32.
+
+Verified: the AERB letter renders all text correctly (heading, body, signature block, special notes, the bold Type1 "Note:", the blue hyperlink), matching the source. Whole-page dark-pixel count went 377 (blank) -> 28,970. 27/27 projects, 1,758 tests green.
+
+**Known gap (separate work):** the masthead is an embedded baseline JPEG (DCTDecode, 569x113, DeviceRGB) image XObject; Chuvadi does not yet decode DCTDecode for display, so it renders blank. A baseline JPEG decoder (Huffman + IDCT + YCbCr->RGB + chroma upsampling) is a separate component.
+
+**Files affected:**
+`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/FontRenderer.cs`,
+`src/Chuvadi.Pdf.Fonts.Rendering/Type1FontRenderer.cs` (new),
+`src/Chuvadi.Pdf.Fonts.Rendering/StandardEncoding.cs` (new),
+`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.

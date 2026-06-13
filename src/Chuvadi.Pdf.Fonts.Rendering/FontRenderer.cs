@@ -70,6 +70,23 @@ public sealed class FontRenderer
     }
 
     /// <summary>
+    /// Resolves a raw character code (from a content-stream string) to a glyph
+    /// index, honouring symbol and Macintosh cmaps and a direct code-as-index
+    /// fallback. Use for simple fonts where the code, not a Unicode value,
+    /// selects the glyph. Returns 0 (.notdef) when nothing matches.
+    /// </summary>
+    public int GetGlyphIndexForCode(int code, bool symbolic)
+    {
+        return _loader.GetGlyphIndexForCode(code, symbolic);
+    }
+
+    /// <summary>Maps a Unicode code point to a glyph index via the Unicode cmap only.</summary>
+    public int GetGlyphIndexUnicode(int codePoint)
+    {
+        return _loader.GetGlyphIndexUnicode(codePoint);
+    }
+
+    /// <summary>
     /// Gets the glyph outline for a glyph index, in font design units (unscaled).
     /// Results are cached after first access.
     /// </summary>
