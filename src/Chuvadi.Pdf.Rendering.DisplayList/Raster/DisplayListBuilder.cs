@@ -129,6 +129,7 @@ public static class DisplayListBuilder
         private readonly bool _autohintFallback;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
+        private readonly Dictionary<string, RenderableFont?> _std14FontCache;
 
         // Render-op accumulator
         private readonly List<RenderOp> _ops;
@@ -159,6 +160,7 @@ public static class DisplayListBuilder
             _autohintFallback = autohintFallback;
             _fontCache = new Dictionary<string, FontRenderer?>();
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
+            _std14FontCache = new Dictionary<string, RenderableFont?>();
             _ops = new List<RenderOp>();
             _state = new BuilderGraphicsState();
             _stateStack = new Stack<BuilderGraphicsState>();
@@ -802,11 +804,36 @@ public static class DisplayListBuilder
 
             FontRenderer? renderer = GetFontRenderer();
 
+            // Non-embedded Standard-14 fonts (Helvetica/Times/Courier/Symbol/
+            // ZapfDingbats) carry no font program; their glyph outlines come
+            // from the embedded substitute bundle via RenderableFont.
+            RenderableFont? std14 = renderer is null ? GetStd14Font() : null;
+
             foreach (char c in text)
             {
                 double advance;
 
-                if (renderer is null)
+                if (renderer is null && std14 is not null)
+                {
+                    Path glyphPath = std14.GetGlyphPath(c, _state.FontSize);
+
+                    if (emit && !glyphPath.IsEmpty && _state.FillValid)
+                    {
+                        Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
+
+                        if (_state.TextRise != 0.0)
+                        {
+                            Transform rise = new Transform(1, 0, 0, 1, 0, _state.TextRise);
+                            glyphPlacement = rise.Multiply(glyphPlacement);
+                        }
+
+                        Path placed = TransformPath(glyphPath, glyphPlacement);
+                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                    }
+
+                    advance = std14.GetAdvanceWidth(c, _state.FontSize);
+                }
+                else if (renderer is null)
                 {
                     // No font available â€” approximate advance, no glyph emission
                     advance = 0.6 * _state.FontSize;
@@ -963,6 +990,67 @@ public static class DisplayListBuilder
             FontRenderer? renderer = ResolveFontRenderer();
             _fontCache[_state.FontName] = renderer;
             return renderer;
+        }
+
+        private RenderableFont? GetStd14Font()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_std14FontCache.TryGetValue(_state.FontName, out RenderableFont? cached))
+            {
+                return cached;
+            }
+
+            RenderableFont? font = ResolveStd14Font();
+            _std14FontCache[_state.FontName] = font;
+            return font;
+        }
+
+        private RenderableFont? ResolveStd14Font()
+        {
+            PdfDictionary? resources = _state.FontResources;
+
+            if (resources is null)
+            {
+                return null;
+            }
+
+            if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDict))
+            {
+                return null;
+            }
+
+            PdfDictionary? fonts = _objects.ResolveAs<PdfDictionary>(fontDict ?? PdfNull.Value);
+
+            if (fonts is null)
+            {
+                return null;
+            }
+
+            if (!fonts.TryGetValue(PdfName.Intern(_state.FontName), out PdfPrimitive? fontRef))
+            {
+                return null;
+            }
+
+            PdfDictionary? fd = _objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value);
+
+            if (fd is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                RenderableFont font = RenderableFont.FromDictionary(fd, _objects);
+                return font.IsStandard14 ? font : null;
+            }
+            catch (System.Exception)
+            {
+                return null;
+            }
         }
 
         private Chuvadi.Pdf.Fonts.PdfFont? GetPdfFont()

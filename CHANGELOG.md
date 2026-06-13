@@ -11,6 +11,34 @@ numbered A01..ANN).
 
 ---
 
+## [2.8.2] - 2026-06-13
+
+### Fixed
+- **Non-embedded Standard-14 fonts now render text.** Pages using the
+  standard Helvetica/Times/Courier/Symbol/ZapfDingbats fonts without an
+  embedded font program previously rasterised with no text (only vector
+  graphics appeared). The rasterizer's font resolver returned nothing when a
+  font had no embedded program, so glyph emission was skipped. It now falls
+  back to the embedded substitute-outline bundle for the 14 standard fonts.
+
+### Changed
+- **The Standard-14 outline bundle is now built from real font data.**
+  `Standard14.bin` was previously a header-only placeholder. It is now
+  generated from the Liberation (SIL OFL) and URW (AGPL-with-font-exception)
+  substitute fonts: all 14 fonts, ASCII plus Latin-1, ~191 glyphs each.
+  Glyph outlines are normalised to a 1000-unit em on load.
+- **The bundle build tool** (`tools/build_standard14_bundle.py`) now converts
+  quadratic TrueType curves to cubic via fontTools' Qu2CuPen (the loader
+  renders single-segment cubics; raw multi-point `qCurveTo` was unsupported),
+  resolves symbol-encoded fonts that lack a Unicode cmap, and covers
+  0x20–0xFF.
+
+### Note
+Glyph shapes are metric-compatible substitutes (Liberation/URW), not Adobe's
+original outlines — standard practice for headless PDF rendering.
+
+---
+
 ## [2.8.1] - 2026-06-13
 
 ### Fixed
