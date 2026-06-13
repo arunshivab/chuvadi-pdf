@@ -30,8 +30,8 @@
     <Product>Chuvadi PDF Library</Product>
     <Copyright>Copyright © 2025 Chuvadi Contributors</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/chuvadi/chuvadi</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/chuvadi/chuvadi</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/arunshivab/chuvadi-pdf</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/arunshivab/chuvadi-pdf</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>pdf;document;parse;extract;merge;split;dotnet;csharp</PackageTags>

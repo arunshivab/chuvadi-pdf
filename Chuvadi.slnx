@@ -37,11 +37,13 @@
     <Project Path="src/Chuvadi.Pdf.Reader/Chuvadi.Pdf.Reader.csproj" />
     <Project Path="src/Chuvadi.Pdf.Redaction/Chuvadi.Pdf.Redaction.csproj" />
     <Project Path="src/Chuvadi.Pdf.Rendering.DisplayList/Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <Project Path="src/Chuvadi.Pdf.Rendering.Wpf/Chuvadi.Pdf.Rendering.Wpf.csproj" />
     <Project Path="src/Chuvadi.Pdf.Rendering/Chuvadi.Pdf.Rendering.csproj" />
     <Project Path="src/Chuvadi.Pdf.Signatures/Chuvadi.Pdf.Signatures.csproj" />
     <Project Path="src/Chuvadi.Pdf.Svg/Chuvadi.Pdf.Svg.csproj" />
     <Project Path="src/Chuvadi.Pdf.Text/Chuvadi.Pdf.Text.csproj" />
     <Project Path="src/Chuvadi.Pdf.Watermark/Chuvadi.Pdf.Watermark.csproj" />
+    <Project Path="src/Chuvadi.Pdf/Chuvadi.Pdf.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Chuvadi.Cryptography.Tests/Chuvadi.Cryptography.Tests.csproj" />

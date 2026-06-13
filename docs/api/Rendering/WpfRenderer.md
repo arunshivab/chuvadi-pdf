@@ -10,7 +10,7 @@ public sealed class WpfRenderer
 
 ## Remarks
 
-Translates each `RenderOp` into WPF drawing primitives via `DrawingContext`. `PathOp` becomes a `StreamGeometry` drawn with `DrawingContext.DrawGeometry`; `TextOp` becomes a `FormattedText` drawn with `DrawingContext.DrawText`; `ImageOp` becomes a `BitmapSource` drawn with `DrawingContext.DrawImage`.  
+Translates each `RenderOp` into WPF drawing primitives via `DrawingContext`. `PathOp` becomes a `StreamGeometry` drawn with `DrawingContext.DrawGeometry`; `TextOp` becomes a `FormattedText` drawn with `DrawingContext.DrawText`; `ImageOp` becomes a `BitmapSource` drawn with `DrawingContext`.  
 
  Coordinate handling: the renderer applies an outer `(1, 0, 0, -1, 0, pageHeight)` transform so PDF coordinates flow through directly. Text runs receive a local counter-flip so glyphs read upright.
 
