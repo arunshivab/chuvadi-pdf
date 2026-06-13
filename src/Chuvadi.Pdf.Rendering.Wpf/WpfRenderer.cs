@@ -10,6 +10,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Rendering.DisplayList;
+using PathSegment = Chuvadi.Pdf.Rendering.DisplayList.PathSegment;
+using FillRule = Chuvadi.Pdf.Rendering.DisplayList.FillRule;
 
 namespace Chuvadi.Pdf.Rendering.Wpf;
 
@@ -23,7 +25,7 @@ namespace Chuvadi.Pdf.Rendering.Wpf;
 /// <see cref="StreamGeometry"/> drawn with <see cref="DrawingContext.DrawGeometry"/>;
 /// <see cref="TextOp"/> becomes a <see cref="FormattedText"/> drawn with
 /// <see cref="DrawingContext.DrawText"/>; <see cref="ImageOp"/> becomes a
-/// <see cref="BitmapSource"/> drawn with <see cref="DrawingContext.DrawImage"/>.
+/// <see cref="BitmapSource"/> drawn with <see cref="DrawingContext"/>.
 /// </para>
 /// <para>
 /// Coordinate handling: the renderer applies an outer
@@ -163,7 +165,7 @@ public sealed class WpfRenderer
         MatrixTransform xf = new(new Matrix(op.Transform.A, op.Transform.B,
             op.Transform.C, op.Transform.D, op.Transform.E, op.Transform.F));
         dc.PushTransform(xf);
-        dc.DrawImage(bitmap, new Rect(0, 0, 1, 1));
+        dc.DrawImage(bitmap, new System.Windows.Rect(0, 0, 1, 1));
         dc.Pop();
     }
 
@@ -214,11 +216,11 @@ public sealed class WpfRenderer
         int n = width * height;
         for (int i = 0; i < n; i++)
         {
-            double c = cmyk[i * 4]     / 255.0;
+            double c = cmyk[i * 4] / 255.0;
             double m = cmyk[i * 4 + 1] / 255.0;
             double y = cmyk[i * 4 + 2] / 255.0;
             double k = cmyk[i * 4 + 3] / 255.0;
-            rgb[i * 3]     = (byte)((1 - c) * (1 - k) * 255);
+            rgb[i * 3] = (byte)((1 - c) * (1 - k) * 255);
             rgb[i * 3 + 1] = (byte)((1 - m) * (1 - k) * 255);
             rgb[i * 3 + 2] = (byte)((1 - y) * (1 - k) * 255);
         }

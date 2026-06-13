@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Meta-package. Installing Chuvadi.Pdf pulls in the entire cross-platform
+    Chuvadi PDF library as transitive package dependencies, so consumers can
+    add one package and have read, render, author, extract, forms, redaction,
+    signatures, and image support available. Pick individual Chuvadi.Pdf.*
+    packages instead if you want a minimal dependency surface.
+
+    The Windows-only Chuvadi.Pdf.Rendering.Wpf package is intentionally NOT
+    referenced here, so this meta-package stays cross-platform.
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>Chuvadi.Pdf</AssemblyName>
+    <RootNamespace>Chuvadi.Pdf</RootNamespace>
+    <Description>
+      Meta-package for the Chuvadi PDF library. Pulls in the full cross-platform
+      stack (read, write, render, extract, author, forms, redaction, signatures,
+      images) as a single dependency. Zero external NuGet dependencies. .NET 10.
+    </Description>
+
+    <!-- Metadata-only package: no compiled output, just dependencies. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
+    <!-- NU5128: dependency group without a matching lib is expected for a meta-package. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <!-- Nothing to document; this project has no API surface of its own. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chuvadi.Cryptography\Chuvadi.Cryptography.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Annotations\Chuvadi.Pdf.Annotations.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Color\Chuvadi.Pdf.Color.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Content\Chuvadi.Pdf.Content.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Encryption\Chuvadi.Pdf.Encryption.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Forms\Chuvadi.Pdf.Forms.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Reader\Chuvadi.Pdf.Reader.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Redaction\Chuvadi.Pdf.Redaction.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Signatures\Chuvadi.Pdf.Signatures.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Svg\Chuvadi.Pdf.Svg.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Watermark\Chuvadi.Pdf.Watermark.csproj" />
+  </ItemGroup>
+
+</Project>

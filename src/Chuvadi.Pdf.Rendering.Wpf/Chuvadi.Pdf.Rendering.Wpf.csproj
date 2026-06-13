@@ -9,6 +9,8 @@
     </Description>
     <PackageId>Chuvadi.Pdf.Rendering.Wpf</PackageId>
     <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0-windows</TargetFrameworks>
   </PropertyGroup>
   <ItemGroup>
