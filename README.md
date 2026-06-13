@@ -71,6 +71,26 @@ comments): see [`docs/api/`](docs/api/README.md).
 
 ## Quick start (library)
 
+Open a document, render a page to any format — one call each:
+
+```csharp
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Reader;   // one-call rendering
+
+using PdfDocument doc = PdfDocument.Open("input.pdf");
+
+File.WriteAllBytes("page0.png", doc.RenderPageToPng(0));        // PNG at 150 DPI
+File.WriteAllBytes("page0.jpg", doc.RenderPageToJpeg(0, 300));  // JPEG at 300 DPI
+File.WriteAllBytes("page0.bmp", doc.RenderPageToBmp(0));        // BMP
+File.WriteAllBytes("page0.tif", doc.RenderPageToTiff(0));       // TIFF
+File.WriteAllText ("page0.svg", doc.RenderPageToSvg(0));        // SVG (selectable text)
+File.WriteAllBytes("all.tif",   doc.RenderToTiff());           // every page → one multi-page TIFF
+```
+
+Each method also has a `Stream` overload (e.g. `doc.RenderPageToPng(0, outputStream)`)
+and a DPI parameter for raster formats. For full control over the pipeline, build a
+`PageDisplayList` and feed it to `SvgRenderer` or `PageRasterizer` directly.
+
 ```csharp
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Text;
