@@ -1071,3 +1071,24 @@ Not supported: 12-bit precision, arithmetic coding (SOF9-11), lossless JPEG.
 **Files affected:**
 `src/Chuvadi.Pdf.Images/JpegDecoder.cs` (rewritten),
 `tests/Chuvadi.Pdf.Images.Tests/JpegProgressiveTests.cs` (new).
+
+
+---
+
+## A38 - One-call render facade; removal of the obsolete SvgExporter
+
+**Date:** 2026-06-14
+**Scope:** `Chuvadi.Pdf.Reader` (new facade), `Chuvadi.Pdf.Svg` (removal), README
+**Rationale:** Feedback from the first app built on the library (the Reader) reported a CV rendering with an upside-down photo and doubled/overlapping text. Investigation: the app called `SvgExporter.ExportPage(doc, i)` - a single static call that greps first - which the library had marked [Obsolete] in favour of SvgRenderer. Rendering the same file empirically through both paths confirmed SvgExporter is genuinely broken in 2.8.4 (flipped/mangled image, structurally overlapping glyph positions) while SvgRenderer is correct. So the library's problem was not capability but ergonomics: the path of least resistance led to the deprecated, broken API. For a library whose stated goal is "any amateur can build a PDF editor," the recommended path must also be the easiest.
+
+Decisions (from the owner):
+1. Remove the obsolete code outright - no deprecated code in the package. Deleted SvgExporter.cs plus the helpers used only by it: ImageDispatcher.cs, TextDispatcher.cs, SvgGraphicsState.cs (and SvgExporterTests.cs). StreamDecoder stays - it is used by the live FontEmbedder, not just the exporter. Verified by reference analysis that the deleted files were reachable only from SvgExporter.
+2. Provide one-call output to every format, not just SVG. Added `PdfRenderExtensions` in Chuvadi.Pdf.Reader: PdfDocument extensions RenderPageToSvg/Png/Jpeg/Bmp/Tiff (byte[] + Stream, DPI parameter), plus RenderToTiff() for a multi-page TIFF of all pages. Internally these wrap SvgRenderer (vector) and PageRasterizer + the existing image encoders (raster). Home is Chuvadi.Pdf.Reader, the existing high-level consumer facade; it gained ProjectReferences to Rendering and Images.
+3. Ship as 3.0.0 (breaking: a public type was removed).
+
+README quick-start now leads with the one-call render facade. Verified: every format opens correctly in an external image library, the PNG render matches the correct SvgRenderer output (right-side-up masthead, clean text), and DPI scaling works. 27/27 projects, 1,756 tests green (SvgExporter's 6 tests removed; 9 facade tests added).
+
+**Files affected:**
+removed `src/Chuvadi.Pdf.Svg/{SvgExporter,ImageDispatcher,TextDispatcher,SvgGraphicsState}.cs`, `tests/Chuvadi.Pdf.Svg.Tests/SvgExporterTests.cs`;
+added `src/Chuvadi.Pdf.Reader/PdfRenderExtensions.cs`, `tests/Chuvadi.Pdf.Reader.Tests/PdfRenderExtensionsTests.cs`;
+modified `src/Chuvadi.Pdf.Reader/Chuvadi.Pdf.Reader.csproj` (refs), `README.md`.

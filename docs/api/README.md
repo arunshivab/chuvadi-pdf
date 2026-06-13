@@ -393,6 +393,7 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [ChuvadiPdfReader](Reader/ChuvadiPdfReader.md) | class | Production implementation of `IPdfReader` backed by the Chuvadi PDF library. |
 | [IPdfReader](Reader/IPdfReader.md) | interface | High-level facade over the Chuvadi library for interactive PDF readers. |
+| [PdfRenderExtensions](Reader/PdfRenderExtensions.md) | class | One-call rendering of PDF pages to common output formats. |
 
 ## Chuvadi.Pdf.Redaction
 

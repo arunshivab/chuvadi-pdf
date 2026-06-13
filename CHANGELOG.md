@@ -11,6 +11,30 @@ numbered A01..ANN).
 
 ---
 
+## [3.0.0] - 2026-06-14
+
+### Added
+- **One-call render facade.** `PdfDocument` extension methods in
+  `Chuvadi.Pdf.Reader` render a page to any format in a single call:
+  `RenderPageToSvg`, `RenderPageToPng`, `RenderPageToJpeg`, `RenderPageToBmp`,
+  `RenderPageToTiff` (each with `byte[]` and `Stream` forms and a DPI parameter),
+  plus `RenderToTiff()` for an all-pages multi-page TIFF. Open a document, call
+  one method, get the result — no manual pipeline assembly.
+
+### Removed
+- **BREAKING: `SvgExporter` removed.** The obsolete content-stream SVG exporter
+  (and its internal-only helpers `TextDispatcher`, `ImageDispatcher`,
+  `SvgGraphicsState`) has been deleted. It produced incorrect output —
+  vertically flipped images and overlapping text — and was superseded by
+  `SvgRenderer`, which renders the neutral `PageDisplayList` correctly. Migrate
+  to `document.RenderPageToSvg(pageIndex)` (simplest) or
+  `new SvgRenderer(options).RenderPage(document, pageIndex)`.
+
+### Notes
+This release was driven by feedback from the first application built on the
+library: the easy-to-find call was the deprecated, broken one. The fix makes the
+obvious path the correct path and removes the broken path entirely.
+
 ## [2.8.4] - 2026-06-13
 
 ### Added
