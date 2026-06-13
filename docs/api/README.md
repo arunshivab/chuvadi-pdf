@@ -493,7 +493,6 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [SvgExportOptions](Svg/SvgExportOptions.md) | class | Options for PDF → SVG export. |
-| [SvgExporter](Svg/SvgExporter.md) | class | — |
 | [SvgFontStrategy](Svg/SvgFontStrategy.md) | enum | How embedded fonts are handled. |
 | [SvgRenderer](Svg/SvgRenderer.md) | class | Renders a `PageDisplayList` to SVG. |
 | [SvgTextStrategy](Svg/SvgTextStrategy.md) | enum | How text is rendered to SVG. |
