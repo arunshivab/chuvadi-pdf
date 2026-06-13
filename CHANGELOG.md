@@ -11,6 +11,32 @@ numbered A01..ANN).
 
 ---
 
+## [2.8.4] - 2026-06-13
+
+### Added
+- **Progressive JPEG (SOF2) decoding.** Embedded `DCTDecode` images encoded as
+  progressive JPEG previously failed to decode and rendered blank (e.g. a
+  scanned/exported masthead). The decoder now handles progressive scans —
+  spectral selection and successive approximation (DC and AC, first and
+  refinement passes) — accumulating coefficients across all scans before the
+  inverse DCT.
+- **4-component JPEG (CMYK and YCCK).** Handles the Adobe APP14 colour
+  transform and the Adobe inverted-channel convention, converting to RGB for
+  display. Grayscale (1-component) and YCbCr/RGB (3-component) baseline and
+  progressive are all supported, with chroma subsampling and restart intervals.
+
+### Fixed
+- The decoder was rebuilt around a coefficient-buffer architecture shared by
+  baseline and progressive paths; baseline output is unchanged (verified
+  against the existing image tests).
+
+### Notes
+Verified against a reference decoder across baseline/progressive, 4:4:4/4:2:0,
+grayscale, and CMYK fixtures (max per-channel difference within IDCT rounding).
+Not supported: 12-bit precision, arithmetic coding, and lossless JPEG.
+
+---
+
 ## [2.8.3] - 2026-06-13
 
 ### Fixed

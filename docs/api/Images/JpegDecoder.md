@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Images` (Images)
 
-Decodes a baseline sequential DCT JPEG (SOF0) into an `ImageFrame`.
+Decodes baseline sequential (SOF0) and progressive (SOF2) DCT JPEG images into an `ImageFrame`. Supports 8-bit precision with 1 component (grayscale), 3 components (YCbCr or RGB), and 4 components (CMYK or YCCK, using the Adobe APP14 colour transform). Chroma subsampling and restart intervals are handled.
 
 ```csharp
 public static class JpegDecoder
@@ -10,14 +10,7 @@ public static class JpegDecoder
 
 ## Remarks
 
-Supports: 
- 
-- Baseline DCT (SOF0 marker) — covers 95%+ of JPEG in PDFs 
-- YCbCr → RGB colour conversion 
-- Grayscale (1 component) 
-- 4:2:0, 4:2:2, 4:4:4 chroma subsampling 
-- Up to 4 Huffman tables (DC + AC per component) 
-- Up to 4 quantisation tables  Not supported: progressive JPEG (SOF2), arithmetic coding (SOF9), lossless JPEG, JFIF/EXIF metadata (ignored). ISO 10918-1:1994 — Digital compression and coding of continuous-tone images.
+Not supported: 12-bit precision, arithmetic coding (SOF9–SOF11), and lossless modes. CMYK/YCCK output is converted to RGB for display, honouring the Adobe inverted-channel convention.
 
 ## Methods
 
@@ -29,7 +22,7 @@ __static__
 static ImageFrame Decode(byte[] data)
 ```
 
-Decodes a JPEG from a byte array.
+Decodes a JPEG from a byte array. <exception cref="ArgumentNullException">When `data` is null.</exception> <exception cref="ImageException">When the JPEG is invalid or unsupported.</exception>
 
 ### `Decode`
 
@@ -39,7 +32,7 @@ __static__
 static ImageFrame Decode(Stream input)
 ```
 
-Decodes a JPEG from a stream.
+Decodes a JPEG from a stream. <exception cref="ArgumentNullException">When `input` is null.</exception> <exception cref="ImageException">When the JPEG is invalid or unsupported.</exception>
 
 ---
 
