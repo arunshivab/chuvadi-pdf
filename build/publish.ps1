@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Publishes the packed Chuvadi NuGet packages to a feed (nuget.org by default).
 
@@ -29,7 +29,7 @@
     .\build\publish.ps1 -ApiKey $env:NUGET_API_KEY
 #>
 param(
-    [Parameter(Mandatory = $true)] [string] $ApiKey,
+    [string] $ApiKey,
     [string] $Source = "https://api.nuget.org/v3/index.json",
     [string] $PackageDir = "artifacts\nupkg",
     [switch] $DryRun
@@ -62,13 +62,17 @@ foreach ($pkg in $packages) {
     }
 
     Write-Host "  Pushing $($pkg.Name)..." -ForegroundColor Gray
-    dotnet nuget push $pkg.FullName --api-key $ApiKey --source $Source --skip-duplicate
+    if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+        dotnet nuget push $pkg.FullName --source $Source --skip-duplicate
+    } else {
+        dotnet nuget push $pkg.FullName --api-key $ApiKey --source $Source --skip-duplicate
+    }
     if ($LASTEXITCODE -ne 0) { throw "Push failed for $($pkg.Name)." }
 }
 
 Write-Host ""
 if ($DryRun) {
-    Write-Host "Dry run complete — nothing pushed." -ForegroundColor Cyan
+    Write-Host "Dry run complete - nothing pushed." -ForegroundColor Cyan
 } else {
     Write-Host "All packages pushed to $Source." -ForegroundColor Green
 }
