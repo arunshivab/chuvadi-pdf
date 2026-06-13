@@ -1049,3 +1049,25 @@ Verified: the AERB letter renders all text correctly (heading, body, signature b
 `src/Chuvadi.Pdf.Fonts.Rendering/Type1FontRenderer.cs` (new),
 `src/Chuvadi.Pdf.Fonts.Rendering/StandardEncoding.cs` (new),
 `src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`.
+
+
+---
+
+## A37 - Progressive + CMYK/YCCK JPEG decoding for embedded images
+
+**Date:** 2026-06-13
+**Scope:** `Chuvadi.Pdf.Images` (JpegDecoder)
+**Rationale:** A real AERB/eLORA letter rendered all text correctly (after A36) but the masthead - emblem, Devanagari, and red title - stayed blank. Inspection (pikepdf + marker dump) showed the masthead is a progressive JPEG (SOF2, 569x113, 4:2:0). The rasterizer already routed DCTDecode through JpegDecoder, but the decoder supported only baseline (SOF0) and threw ImageException on SOF2, which EmitImageXObject silently dropped. So the wiring was fine; the decoder lacked progressive support.
+
+Implementation:
+- Rebuilt JpegContext around a per-component DCT coefficient buffer (sized to the MCU-aligned block grid), shared by baseline and progressive. Baseline decodes a full block per call; progressive runs multiple scans, each updating a spectral band / bit-plane: decodeDCFirst, decodeDCSuccessive, decodeACFirst (with EOB runs), decodeACSuccessive (the successive-approximation refinement state machine). After the final scan, every block is dequantised, inverse-DCT'd, and written to a component sample plane; output assembly upsamples and colour-converts.
+- Added 4-component support: Adobe APP14 transform (YCCK when transform=2, else CMYK), the Adobe inverted-channel convention, and CMYK->RGB for display. Existing 1- and 3-component paths preserved.
+- Marker-aware bit reader over an in-memory byte[] handles stuffing (FF 00) and stops cleanly at the next marker; restart intervals reset DC predictors, EOB run, and AC state.
+
+Verification: decoded baseline/progressive x 4:4:4/4:2:0, progressive grayscale, and progressive CMYK fixtures and compared against a reference decoder - max per-channel difference within IDCT rounding (<=5 for RGB, <=1 for gray/CMYK). The real masthead decodes correctly (meanDiff 2.21; the maxDiff outliers are high-contrast red-on-white edge ringing). The full letter now rasterises complete - masthead included. 27/27 projects, 1,762 tests green (+4 progressive decoder tests). Baseline image tests unchanged (58 -> still green).
+
+Not supported: 12-bit precision, arithmetic coding (SOF9-11), lossless JPEG.
+
+**Files affected:**
+`src/Chuvadi.Pdf.Images/JpegDecoder.cs` (rewritten),
+`tests/Chuvadi.Pdf.Images.Tests/JpegProgressiveTests.cs` (new).

@@ -329,7 +329,7 @@ python tools/gen_api_docs.py
 | [ImageColorFormat](Images/ImageColorFormat.md) | enum | Specifies the colour format of a decoded image. |
 | [ImageException](Images/ImageException.md) | class | Thrown when an image cannot be decoded or encoded due to an invalid format, unsupported feature, or data corruption. |
 | [ImageFrame](Images/ImageFrame.md) | class | A decoded image frame held in a `PixelBuffer`. |
-| [JpegDecoder](Images/JpegDecoder.md) | class | Decodes a baseline sequential DCT JPEG (SOF0) into an `ImageFrame`. |
+| [JpegDecoder](Images/JpegDecoder.md) | class | Decodes baseline sequential (SOF0) and progressive (SOF2) DCT JPEG images into an `ImageFrame`. |
 | [JpegEncoder](Images/JpegEncoder.md) | class | Encodes images as baseline sequential JPEG (SOF0) with JFIF headers. |
 | [PngDecoder](Images/PngDecoder.md) | class | Decodes a PNG image into an `ImageFrame`. |
 | [PngEncoder](Images/PngEncoder.md) | class | Encodes an `ImageFrame` to PNG format. |
