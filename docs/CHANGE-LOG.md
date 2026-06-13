@@ -968,3 +968,27 @@ Key decisions:
 `src/Chuvadi.Pdf.Operations/PdfCompressor.cs` (new),
 `src/Chuvadi.Pdf.Operations/Chuvadi.Pdf.Operations.csproj`,
 `src/Chuvadi.Pdf.Images.Jpeg/` (removed), `Chuvadi.slnx`.
+
+
+---
+
+## A34 - PageBuilder deep copy: stop mutating the source document
+
+**Date:** 2026-06-13
+**Scope:** `Chuvadi.Pdf.Operations` (PageBuilder copy/remap; all page-tree operations)
+**Rationale:** Bug found while wiring the library into a fresh reader project. Chaining operations on one document - rasterize, split, then compress - produced a compressed file missing its images and signature, and split/merge output was blank for real documents. Root cause was not the compressor: `PageBuilder.CopyDictionary` was a shallow copy, so a copied page shared the very same `/Resources` dictionary instance as the source, and `RemapReferences` then rewrote that shared dictionary's reference numbers in place.
+
+Consequences of the old behaviour:
+- The source `PdfDocument` was mutated by any page operation. A later operation on the same document resolved the now-rewritten references to the wrong objects (or to nothing), dropping fonts and images. This is why a compress after a split lost the image and signature.
+- Multi-page documents whose pages share a font or image resource object had that shared dictionary remapped more than once, scrambling references in the output itself.
+- The array branch of the remapper was a no-op (a `// rebuild if needed` placeholder), so indirect references inside arrays - `/Annots`, array `/Contents` - were never renumbered.
+
+Fix: replaced the shallow copy plus in-place remap with a single recursive deep copy (`DeepCopyPrimitive` / `DeepCopyDictionary`) that always allocates new dictionary, array, and stream instances and rewrites reference numbers through the remap table. Scalars and references are immutable and shared safely. `CopyDictionary` now delegates to the deep copy with an empty remap (detach without renumbering). The source document is never touched.
+
+Verified with an independent external PDF parser (pikepdf): split, merge, and compressed outputs of a real text-plus-image PDF all retain their image streams, and the source document's references are unchanged after splitting. New regression tests build multi-page documents that share one font object and one image object across all pages and assert (1) the source is not mutated by `SplitPages`, (2) every split page keeps the shared font and image, (3) merge preserves resources across all pages, and (4) a second operation on an already-split document still sees intact resources.
+
+**Note:** this is a pre-existing defect, not a v2.8.0 regression; it surfaced now because chaining operations and inspecting real output exercised the shared-resource path that the synthetic page-count tests never did.
+
+**Files affected:**
+`src/Chuvadi.Pdf.Operations/PageOperations.cs`,
+`tests/Chuvadi.Pdf.Operations.Tests/PageBuilderSharedResourceTests.cs` (new).
