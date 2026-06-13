@@ -11,6 +11,26 @@ numbered A01..ANN).
 
 ---
 
+## [2.8.1] - 2026-06-13
+
+### Fixed
+- **Page operations no longer corrupt the source document.** `SplitPages`,
+  `Merge`, `ExtractPages`, `DeletePages`, `RotatePages`, and `ReorderPages`
+  shared the source document's nested resource dictionaries (e.g.
+  `/Resources`) with their output and remapped references in place. This
+  mutated the original document — so a second operation on the same
+  `PdfDocument` (for example compressing a document that had just been
+  split) saw scrambled references and dropped fonts and images — and it
+  scrambled references for multi-page documents whose pages share resource
+  objects. The page builder now performs a true deep copy and never mutates
+  shared state.
+- **References nested inside arrays are now remapped.** The array branch of
+  the old reference-remapper was a no-op, so indirect references inside
+  arrays (such as `/Annots` or an array `/Contents`) kept their original
+  object numbers after a page operation. They are now renumbered correctly.
+
+---
+
 ## [2.8.0] - 2026-06-12
 
 ### Added
