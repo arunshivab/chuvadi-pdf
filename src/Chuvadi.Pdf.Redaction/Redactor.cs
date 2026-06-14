@@ -303,6 +303,16 @@ public static class Redactor
                     continue;
                 }
 
+                // Inline image: BI <dict> ID <binary> EI. The binary data is not
+                // tokenisable, so consume the whole run as a unit and decide
+                // redaction from the CTM (it paints the unit square, like Do).
+                if (token.RawText == "BI")
+                {
+                    HandleInlineImage(tok, content, output, state, rects, token.ByteOffset);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
                 string op = token.RawText;
                 bool drop = ProcessOperator(op, pendingOperands, state, rects);
 
@@ -383,6 +393,68 @@ public static class Redactor
     /// Returns true if the unit square (0,0)-(1,1) transformed by the current CTM
     /// intersects any redaction rectangle on this page.
     /// </summary>
+    /// <summary>
+    /// Consumes an inline image (<c>BI … ID &lt;binary&gt; EI</c>) as one unit.
+    /// The image is dropped when the unit square mapped by the current CTM
+    /// intersects a redaction rectangle (inline images paint the unit square,
+    /// like <c>Do</c> images); otherwise the original bytes are copied verbatim.
+    /// </summary>
+    private static void HandleInlineImage(
+        PdfTokenizer tok, byte[] content, MemoryStream output,
+        RedactState state, List<RectangleF> rects, long biStart)
+    {
+        // Read the inline-image dictionary tokens until the ID keyword; the
+        // binary image data begins immediately after it.
+        while (true)
+        {
+            PdfToken t = tok.Read();
+            if (t.IsEndOfStream)
+            {
+                // Malformed (no ID): copy from BI to end and stop.
+                output.Write(content, (int)biStart, content.Length - (int)biStart);
+                return;
+            }
+
+            if (t.Type == PdfTokenType.Keyword && t.RawText == "ID")
+            {
+                break;
+            }
+        }
+
+        int eiEnd = FindInlineImageEnd(content, (int)tok.Position);
+
+        if (!ShouldRedactImageAtCtm(state, rects))
+        {
+            output.Write(content, (int)biStart, eiEnd - (int)biStart);
+            output.WriteByte((byte)'\n');
+        }
+
+        tok.Seek(eiEnd);
+    }
+
+    /// <summary>
+    /// Finds the offset just past the <c>EI</c> that ends an inline image's
+    /// data, scanning from <paramref name="dataStart"/> for a whitespace-
+    /// delimited <c>EI</c>. Returns the content length if none is found.
+    /// </summary>
+    private static int FindInlineImageEnd(byte[] content, int dataStart)
+    {
+        for (int i = dataStart; i + 1 < content.Length; i++)
+        {
+            if (content[i] == (byte)'E' && content[i + 1] == (byte)'I'
+                && (i == 0 || IsWhitespaceByte(content[i - 1]))
+                && (i + 2 >= content.Length || IsWhitespaceByte(content[i + 2])))
+            {
+                return i + 2;
+            }
+        }
+
+        return content.Length;
+    }
+
+    private static bool IsWhitespaceByte(byte b) =>
+        b == 0x00 || b == 0x09 || b == 0x0A || b == 0x0C || b == 0x0D || b == 0x20;
+
     private static bool ShouldRedactImageAtCtm(RedactState state, List<RectangleF> rects)
     {
         if (rects.Count == 0)

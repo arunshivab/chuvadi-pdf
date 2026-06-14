@@ -1130,3 +1130,19 @@ Gate: 27/27 projects, 1,771 tests (6 new), `dotnet format` clean.
 Gate: 27/27 projects, 1,774 tests (3 new), style clean.
 
 **Files:** added `TrueTypeFontEmbedder.cs`, `EmbeddedFontObjects.cs`, `CustomFontRegistry.cs`, `tests/.../CustomFontEmbeddingTests.cs`, `tests/.../Fixtures/LiberationSerif-Regular.ttf`, `docs/custom-fonts.md`; modified `ContentStreamWriter.cs`, `PageBuilder.cs`, `PdfDocumentBuilder.cs`, both csprojs, CHANGELOG.
+
+
+---
+
+## A41 - Inline-image redaction + backlog reconciliation
+
+**Date:** 2026-06-14
+**Scope:** Redaction (`Redactor`), docs/BACKLOG.md
+**Rationale:** Completing the non-text redaction story. Verifying the backlog before starting revealed that pattern-based redaction (the originally-planned next item) and non-text image/form redaction were already shipped and only inline images remained - so the backlog itself was reconciled against the code as part of this PR.
+
+- **Inline images.** The content tokenizer has no `BI/ID/EI` handling, so inline-image binary data was being tokenized as operators - a latent correctness bug for any content stream containing an inline image. `Redactor.RewriteContent` now intercepts the `BI` keyword, reads the dict up to `ID`, scans the raw bytes for the whitespace-delimited `EI`, and treats `BI…EI` as one unit: dropped when the CTM-mapped unit square intersects a redaction rect (reusing `ShouldRedactImageAtCtm`, since inline images paint the unit square like `Do`), otherwise copied verbatim; parsing resumes past `EI` via `tokenizer.Seek`. Two tests: image-in-rect removed with surrounding text intact; image-out-of-rect preserved with operator-like binary data correctly skipped (regression guard for the latent bug).
+- **Backlog reconciliation.** Verified every "Not started" item against the code by grep. Found pattern redaction (`PatternMatcher`/`CommonPatterns`, tested), non-text image/form redaction (`ShouldRedactImageAtCtm`), optional content toggle, and linearization (`LinearizedWriter`, tested) all already shipped despite "Not started" labels. Rewrote `docs/BACKLOG.md` to a verified Shipped list + a clean 1-13 open roadmap, replacing the duplicate N.5-N.8 numbering. Remaining non-text redaction work (nested form-XObject recursion) kept as open item 1.
+
+Gate: 27/27 projects, 1,776 tests (2 new), style clean. No public API change.
+
+**Files:** modified `src/Chuvadi.Pdf.Redaction/Redactor.cs`, `tests/Chuvadi.Pdf.Redaction.Tests/RedactionTests.cs`, `docs/BACKLOG.md`, `CHANGELOG.md`.
