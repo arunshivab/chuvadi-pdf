@@ -11,6 +11,25 @@ numbered A01..ANN).
 
 ---
 
+## [3.5.1] - 2026-06-14
+
+### Fixed
+- **Merge no longer corrupts pages when inputs reuse object numbers.**
+  `PageOperations.Merge` renumbered referenced objects through a table keyed on
+  the bare object number. Object numbers are per-document, so two inputs that
+  reused the same number for different objects (common with shared
+  letterhead/forms) collided: distinct content streams collapsed onto one, and
+  pages from the second document came out blank, doubled, or failed with "stream
+  ended unexpectedly". The remap is now keyed by `(source document, object
+  number)`, so each input keeps its own objects while shared objects within a
+  single document still de-duplicate.
+- **Every written PDF now carries a trailer `/ID`.** `PdfWriter.Write` emitted
+  `/ID` only on the encryption path, so Merge, ExtractPages, and Split produced
+  files without one; some viewers (e.g. Adobe) synthesised an ID on open and then
+  prompted to save on close even after only viewing. The writer now derives a
+  stable, content-based `/ID` (ISO 32000-1 §14.4) for every file; output stays
+  deterministic and any caller-supplied `/ID` is preserved.
+
 ## [3.5.0] - 2026-06-14
 
 ### Added

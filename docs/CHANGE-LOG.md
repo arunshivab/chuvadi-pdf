@@ -1182,3 +1182,20 @@ Gate: 27/27 projects, 1,777 tests (1 new), style clean. No public API change (`T
 Gate: 27/27 projects, 1,790 tests (13 new), style clean. New public API (`FontStyle`, `FontSlant`, `FontStyleClassifier`, `TextOp.Style`, four `TextRun` members) -> api docs regenerated.
 
 **Files:** added `FontStyle.cs`, `FontStyleClassifier.cs` (+ 2 test files); modified `RenderOp.cs`, `BuilderState.cs`, `DisplayListBuilder.cs`, `TextRun.cs`, `TextRunExtractor.cs`, `SvgRenderer.cs`, `CHANGELOG.md`, `docs/BACKLOG.md`, and regenerated `docs/api/**`.
+
+
+---
+
+## A44 - Fix Merge cross-document object-number collision + write deterministic trailer /ID
+
+**Date:** 2026-06-14
+**Scope:** Operations (`PageOperations.PageBuilder`), IO (`PdfWriter`)
+**Rationale:** Two defects surfaced wiring Merge/Split into Chuvadi Reader, reproduced with an independent parser on two inputs whose object numbers overlap (a 4-page document with /Contents *arrays* + a 3-page single-stream document, both numbering from 1).
+
+- **Collision.** `PageBuilder.Write` built its renumbering table (`idRemap`) and its "already added" set keyed on the bare original object number. Object numbers are per-document, so document A object 4 and document B object 4 shared one slot: B's pages were rewritten onto A's streams and B's real streams were skipped, producing blank/doubled/corrupt pages. Fix: thread a per-page source-document index (`PageEntry.DocIndex`; `AddPage`/`AddPageWithRotation` gain a `docIndex`, default 0 for the single-document operations) and key the remap, the dedup set, and the deep-copy reference rewrite on `(DocIndex, ObjectNumber)`. Within one document the index is constant, so genuinely shared objects still de-duplicate; across documents identical numbers stay distinct.
+- **Missing /ID.** `PdfWriter.Write` set `/ID` only when encrypting, so Merge/ExtractPages/Split output had none and Adobe prompted to save on close. `GetOrCreateFileId` now takes the sorted object list and derives a 16-byte identifier from a SHA-256 over each object's id + stream bytes (truncated to 16), set as `/ID = [id id]` before the encryption block so both paths share one value. Content-derived rather than random keeps output deterministic - parallel and sequential redaction stay byte-identical - and is §14.4-aligned. The linearized path (`LinearizedWriter`) is separate and unchanged.
+- **Verification.** On the reported inputs: merged 7 pages, /ID present, all 7 content streams decompress to their own correct text (RealA page 1; RealB pages 1-3) with no bleed, blanks, or duplication - refuting every repro symptom. Four regression tests added: cross-document collision content integrity, Merge /ID, ExtractPages /ID, deterministic-/ID byte-identity.
+
+Gate: 27/27 projects, 1,796 tests (4 new), style clean. No public API change (the new `docIndex` parameters are on internal members; `GetOrCreateFileId` is private) - no api-doc regeneration.
+
+**Files:** modified `src/Chuvadi.Pdf.Operations/PageOperations.cs`, `src/Chuvadi.Pdf.IO/PdfWriter.cs`; added `tests/Chuvadi.Pdf.Operations.Tests/MergeIntegrityTests.cs`; modified `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/BACKLOG.md`.
