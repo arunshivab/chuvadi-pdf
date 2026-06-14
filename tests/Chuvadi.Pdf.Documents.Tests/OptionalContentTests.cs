@@ -92,6 +92,56 @@ public sealed class OptionalContentReaderTests
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    [Fact]
+    public void SetVisibility_HidesLayerByName()
+    {
+        using PdfDocument doc = BuildDocumentWithOcgs(
+            new[] { "Layer A", "Layer B" }, new int[0], "ON");
+
+        using MemoryStream output = new MemoryStream();
+        OptionalContentWriter.SetVisibility(
+            output, doc, new Dictionary<string, bool> { ["Layer B"] = false });
+
+        output.Seek(0, SeekOrigin.Begin);
+        using PdfDocument modified = PdfDocument.Open(output, leaveOpen: true);
+        IReadOnlyList<OptionalContentGroup> after = OptionalContentReader.GetGroups(modified);
+
+        after.Should().HaveCount(2);
+        after[0].Name.Should().Be("Layer A");
+        after[0].IsVisibleByDefault.Should().BeTrue();
+        after[1].Name.Should().Be("Layer B");
+        after[1].IsVisibleByDefault.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SetVisibility_ReShowsHiddenLayer()
+    {
+        using PdfDocument doc = BuildDocumentWithOcgs(new[] { "Layer A" }, new[] { 0 }, "ON");
+        OptionalContentReader.GetGroups(doc)[0].IsVisibleByDefault.Should().BeFalse();
+
+        using MemoryStream output = new MemoryStream();
+        OptionalContentWriter.SetVisibility(
+            output, doc, new Dictionary<string, bool> { ["Layer A"] = true });
+
+        output.Seek(0, SeekOrigin.Begin);
+        using PdfDocument modified = PdfDocument.Open(output, leaveOpen: true);
+        OptionalContentReader.GetGroups(modified)[0].IsVisibleByDefault.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SetVisibility_UnknownLayerName_IsIgnored()
+    {
+        using PdfDocument doc = BuildDocumentWithOcgs(new[] { "Layer A" }, new int[0], "ON");
+
+        using MemoryStream output = new MemoryStream();
+        OptionalContentWriter.SetVisibility(
+            output, doc, new Dictionary<string, bool> { ["Nonexistent"] = false });
+
+        output.Seek(0, SeekOrigin.Begin);
+        using PdfDocument modified = PdfDocument.Open(output, leaveOpen: true);
+        OptionalContentReader.GetGroups(modified)[0].IsVisibleByDefault.Should().BeTrue();
+    }
+
     private static PdfDocument BuildMinimalDocument(PdfDictionary? catalogExtras)
     {
         PdfObjectId catalogId = new(1, 0);

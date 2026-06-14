@@ -211,6 +211,7 @@ python tools/gen_api_docs.py
 | [EncryptionInfo](Documents/EncryptionInfo.md) | class | Describes the encryption properties of a `PdfDocument`. |
 | [OptionalContentGroup](Documents/OptionalContentGroup.md) | class | An Optional Content Group (OCG) — a named, toggleable layer in a PDF. |
 | [OptionalContentReader](Documents/OptionalContentReader.md) | class | Reads optional content groups (layers) from a PDF document. |
+| [OptionalContentWriter](Documents/OptionalContentWriter.md) | class | Writes optional-content (layer) visibility changes to a PDF document. |
 | [PdfDocument](Documents/PdfDocument.md) | class | Represents an opened PDF document. |
 | [PdfDocumentAsync](Documents/PdfDocumentAsync.md) | class | Async-capable entry points for `PdfDocument`. |
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |

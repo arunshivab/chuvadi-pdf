@@ -11,6 +11,28 @@ numbered A01..ANN).
 
 ---
 
+## [3.1.0] - 2026-06-14
+
+### Added
+- **Streaming page enumeration.** `PdfPageCollection.EnumerateStreaming()` walks
+  the page tree once and yields pages without retaining them, for
+  constant-memory traversal of very large documents (the indexer stays lazy and
+  cached for random access).
+- **Optional content (layer) toggling.** `OptionalContentWriter.SetVisibility`
+  writes a copy of a document with named layers shown or hidden, complementing
+  the existing `OptionalContentReader`.
+- **Parallel redaction.** Opt-in `RedactionOptions.MaxDegreeOfParallelism` runs
+  the per-page redaction interpreter and overlay generation in parallel. Loading
+  and final assembly stay sequential, so the output is byte-for-byte identical
+  to the sequential path; the default (1) is unchanged single-threaded behaviour.
+- **Rasterizer benchmark.** A BenchmarkDotNet rasterize hot-path scenario
+  (150/300 DPI) added to `Chuvadi.Benchmarks`.
+
+### Fixed
+- Developer guide: corrected the signatures section — signature *creation*,
+  timestamping, and LTV are supported (`PdfCounterSigner`,
+  `PdfDocumentTimestamper`, `PdfLtvUpdater`), not read-only as previously stated.
+
 ## [3.0.0] - 2026-06-14
 
 ### Added

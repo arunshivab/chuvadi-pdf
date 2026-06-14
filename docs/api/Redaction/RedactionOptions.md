@@ -48,6 +48,14 @@ double PatternPadding
 
 Gets or initialises the padding (PDF points) added around each pattern-derived rectangle to compensate for font-metric approximation. Default: 1.0.
 
+### `MaxDegreeOfParallelism`
+
+```csharp
+int MaxDegreeOfParallelism
+```
+
+Gets or initialises the maximum number of threads used for the per-page content-rewrite stage. Default: `1` (sequential).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Redaction/RedactionOptions.cs`](../../../src/Chuvadi.Pdf.Redaction/RedactionOptions.cs)_

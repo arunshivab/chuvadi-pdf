@@ -87,6 +87,77 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         }
     }
 
+    /// <summary>
+    /// Enumerates every page in document order <b>without retaining them</b>,
+    /// for constant-memory traversal of very large documents.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="GetEnumerator"/> and the indexer — which cache each
+    /// page so repeated access is cheap — this method walks the page tree once
+    /// and yields freshly-constructed <see cref="PdfPage"/> instances that are
+    /// not stored in the collection's cache. A full pass over a 10,000-page
+    /// document therefore holds only the current page in memory rather than all
+    /// of them. Use it for one-shot streaming work (export every page, extract
+    /// all text) where you do not need random access afterwards; use the
+    /// indexer when you will revisit pages.
+    /// </remarks>
+    /// <returns>The document's pages, in order, one at a time.</returns>
+    public IEnumerable<PdfPage> EnumerateStreaming()
+    {
+        int index = 0;
+        foreach (PdfDictionary leaf in WalkPageDictionaries(_pagesRoot, 0))
+        {
+            yield return new PdfPage(leaf, _resolver, index);
+            index++;
+        }
+    }
+
+    /// <summary>
+    /// Yields the leaf /Page dictionaries under <paramref name="node"/> in
+    /// document order, recursing through intermediate /Pages nodes. Mirrors the
+    /// traversal in <see cref="FindPage"/> but streams every leaf instead of
+    /// stopping at one index, and allocates nothing per page.
+    /// </summary>
+    private IEnumerable<PdfDictionary> WalkPageDictionaries(PdfDictionary node, int depth)
+    {
+        if (depth > MaxPageTreeDepth)
+        {
+            throw new PdfCorruptionException(
+                $"Page tree depth exceeds maximum ({MaxPageTreeDepth}); " +
+                "document may contain a cyclic /Kids reference.");
+        }
+
+        PdfArray kids = node.GetArray(PdfName.Kids) ??
+            throw new PdfCorruptionException(
+                "Page tree node is missing the required /Kids array.");
+
+        for (int i = 0; i < kids.Count; i++)
+        {
+            PdfPrimitive kidRef = kids.GetAs<PdfPrimitive>(i) ?? PdfNull.Value;
+            PdfPrimitive kid = _resolver.Resolve(kidRef);
+
+            if (kid is not PdfDictionary kidDict)
+            {
+                throw new PdfCorruptionException(
+                    $"Page tree /Kids[{i}] is not a dictionary.");
+            }
+
+            PdfName? kidType = kidDict.Type;
+
+            if (kidType == PdfName.Page)
+            {
+                yield return kidDict;
+            }
+            else if (kidType == PdfName.Pages)
+            {
+                foreach (PdfDictionary leaf in WalkPageDictionaries(kidDict, depth + 1))
+                {
+                    yield return leaf;
+                }
+            }
+        }
+    }
+
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 

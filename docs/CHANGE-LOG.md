@@ -1092,3 +1092,22 @@ README quick-start now leads with the one-call render facade. Verified: every fo
 removed `src/Chuvadi.Pdf.Svg/{SvgExporter,ImageDispatcher,TextDispatcher,SvgGraphicsState}.cs`, `tests/Chuvadi.Pdf.Svg.Tests/SvgExporterTests.cs`;
 added `src/Chuvadi.Pdf.Reader/PdfRenderExtensions.cs`, `tests/Chuvadi.Pdf.Reader.Tests/PdfRenderExtensionsTests.cs`;
 modified `src/Chuvadi.Pdf.Reader/Chuvadi.Pdf.Reader.csproj` (refs), `README.md`.
+
+
+---
+
+## A39 - Performance & document-feature batch: streaming pages, OC toggle, parallel redaction, rasterizer benchmark
+
+**Date:** 2026-06-14
+**Scope:** Documents, Redaction, benchmarks, developer guide
+**Rationale:** Stock-take batch of the tractable Performance & Scale and Document-features items (linearization and Tagged-PDF/PDF-A carved out as conformance-graded efforts of their own). Several items turned out partly built, so the work was incremental.
+
+- **Streaming page enumeration.** `PdfPageCollection` was already lazy+caching; added `EnumerateStreaming()` - a non-caching page-tree walk that yields each leaf page once, so a full pass over a huge document holds only the current page.
+- **Optional content toggle.** Reading already shipped (`OptionalContentReader`). Added `OptionalContentWriter.SetVisibility(output, document, name->visible)`: edits the default config's /ON and /OFF arrays unambiguously (independent of /BaseState) and writes out, rewriting the shallowest indirect object that owns the change (the /D object, else /OCProperties, else the catalog when both are inline).
+- **Parallel redaction.** The redactor already grouped work per page. Found `PdfObjectStore.TryGet` is not thread-safe (a cache miss writes back), so the store-touching load stays serial; only the pure per-page transforms (`RewriteContent`, `BuildOverlay`) run under `Parallel.For`, gated by the new opt-in `RedactionOptions.MaxDegreeOfParallelism` (default 1). Object-number allocation and assembly stay serial in stable order, so output is byte-identical - verified by a test asserting parallel (-1) equals sequential (1) byte-for-byte across 4 pages, plus all 31 existing redaction tests unchanged.
+- **Rasterizer benchmark.** Added `RasterizeBench` (150/300 DPI) to the existing `Chuvadi.Benchmarks` project.
+- **Doc correction.** Found `Chuvadi.Pdf.Signatures/Signing/` (PdfCounterSigner, PdfDocumentTimestamper, PdfLtvUpdater) is public and shipped; corrected the developer guide section 14 and module map, which had wrongly said signatures were read-only.
+
+Gate: 27/27 projects, 1,771 tests (6 new), `dotnet format` clean.
+
+**Files:** added `src/Chuvadi.Pdf.Documents/OptionalContentWriter.cs`, `benchmarks/Chuvadi.Benchmarks/Scenarios/RasterizeBench.cs`, `tests/Chuvadi.Pdf.Documents.Tests` (+5 tests), `tests/Chuvadi.Pdf.Redaction.Tests` (+1 test); modified `PdfPageCollection.cs`, `Redactor.cs`, `RedactionOptions.cs`, `Chuvadi.Benchmarks.csproj`, `docs/developer-guide.md`, `docs/BACKLOG.md`.

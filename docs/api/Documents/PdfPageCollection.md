@@ -32,6 +32,18 @@ IEnumerator<PdfPage> GetEnumerator()
 
 <inheritdoc/>
 
+### `EnumerateStreaming`
+
+```csharp
+IEnumerable<PdfPage> EnumerateStreaming()
+```
+
+Enumerates every page in document order <b>without retaining them</b>, for constant-memory traversal of very large documents.
+
+**Returns:** The document's pages, in order, one at a time.
+
+**Remarks:** Unlike `GetEnumerator` and the indexer — which cache each page so repeated access is cheap — this method walks the page tree once and yields freshly-constructed `PdfPage` instances that are not stored in the collection's cache. A full pass over a 10,000-page document therefore holds only the current page in memory rather than all of them. Use it for one-shot streaming work (export every page, extract all text) where you do not need random access afterwards; use the indexer when you will revisit pages.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/PdfPageCollection.cs`](../../../src/Chuvadi.Pdf.Documents/PdfPageCollection.cs)_

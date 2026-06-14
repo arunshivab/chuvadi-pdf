@@ -20,6 +20,7 @@ public sealed class RedactionOptions
         Patterns = new List<PatternRule>();
         OverlayColor = ColorF.Black;
         PatternPadding = 1.0;
+        MaxDegreeOfParallelism = 1;
     }
 
     /// <summary>
@@ -45,4 +46,18 @@ public sealed class RedactionOptions
     /// rectangle to compensate for font-metric approximation. Default: 1.0.
     /// </summary>
     public double PatternPadding { get; init; }
+
+    /// <summary>
+    /// Gets or initialises the maximum number of threads used for the
+    /// per-page content-rewrite stage. Default: <c>1</c> (sequential).
+    /// </summary>
+    /// <remarks>
+    /// Only the pure per-page transforms (the redaction interpreter and overlay
+    /// generation) run in parallel; loading and the final object assembly stay
+    /// sequential, so the output is byte-for-byte identical to the sequential
+    /// path regardless of this value. Use <c>1</c> for deterministic
+    /// single-threaded behaviour, a value &gt; 1 to cap the thread count, or
+    /// <c>-1</c> to use all available cores.
+    /// </remarks>
+    public int MaxDegreeOfParallelism { get; init; }
 }

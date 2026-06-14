@@ -92,8 +92,8 @@ without computing coordinates by hand.
   document is downloaded.
 
 ### N.6 Optional content (layers)
-**Status:** Not started.
-- Read and toggle `/OC` optional content groups.
+**Status:** SHIPPED — reading via `OptionalContentReader.GetGroups`; toggling via
+`OptionalContentWriter.SetVisibility` (v3.1.0).
 
 ### N.7 Font embedding (subsetted)
 **Status:** New content uses the 14 standard fonts.
@@ -108,17 +108,44 @@ without computing coordinates by hand.
 
 ---
 
+### N.9 Rich text-run style metadata (copy-with-formatting enablement)
+**Status:** Partial — SVG emits family/size; text-run style not started.
+**Why:** Consumers (the Reader app first) want to copy selected text and paste
+it *anywhere* with formatting preserved (bold, italic, font family, size). The
+clipboard payload itself is the consumer's responsibility (emit HTML/RTF/etc.);
+the library's job is to faithfully expose per-run style so any consumer can
+reconstruct it. Consumer-agnostic — no assumption about the paste target.
+**Current state:** `SvgWriter.EmitText` already emits `font-family`,
+`font-size`, `font-weight`, and `font-style`, but the renderer derives weight
+and slant *only* by substring-matching the BaseFont name
+(`SvgRenderer.ResolveStyleHints`). `TextRun` (returned by `GetTextRunsAsync`)
+carries no style fields at all — only geometry and Unicode.
+**Work:**
+- A shared style classifier resolving (family, weight, slant, size) per text run
+  from: BaseFont name; font-descriptor `Flags`/`ItalicAngle`/`StemV`; synthetic
+  **bold** via stroke / fill-stroke render mode; synthetic **italic** via a
+  shear in the text matrix. Requires threading FontDescriptor data into `TextOp`
+  (today it carries only the BaseFont string).
+- Add `FontFamily`, `FontSize`, `FontWeight`, and `Slant` to `TextRun`.
+- Replace the SVG renderer's name-only `ResolveStyleHints` with the shared
+  classifier so SVG weight/style is faithful too (catches subset fonts whose
+  names hide the style, and synthetic bold/italic).
+
 ## Performance & Scale
 
 ### P.1 Streaming page enumeration
-- Open a 10 000-page PDF without loading every page into memory.
+**Status:** SHIPPED in v3.1.0 — `PdfPageCollection.EnumerateStreaming()` walks
+the page tree once and yields pages without retaining them.
 
 ### P.2 Parallel redaction
-- Per-page redaction tasks run in parallel; serialise writes.
+**Status:** SHIPPED in v3.1.0 — opt-in `RedactionOptions.MaxDegreeOfParallelism`;
+the pure per-page transforms run in parallel, load and assembly stay serial, so
+output is byte-identical to the sequential path.
 
 ### P.3 Benchmarks and regression detection
-- BenchmarkDotNet suite for hot paths (tokenizer, deflate, rasterizer).
-- Baseline timings tracked per release.
+**Status:** Partial — BenchmarkDotNet suite covers Brotli, parser-open, and (new
+in v3.1.0) the rasterizer hot path. Per-release baseline tracking is still a
+manual run-and-commit step; automated regression diffing remains open.
 
 ---
 

@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Graphics;
@@ -114,6 +115,8 @@ public static class Redactor
 
         int nextObjectNum = FindNextObjectNumber(document);
 
+        List<RedactionWork> work = new List<RedactionWork>();
+
         foreach (KeyValuePair<int, List<RectangleF>> kvp in byPage)
         {
             int pageIndex = kvp.Key;
@@ -129,44 +132,75 @@ public static class Redactor
             }
 
             PdfPage page = document.Pages[pageIndex];
-            List<RectangleF> rects = kvp.Value;
+            work.Add(new RedactionWork(pageId, page, kvp.Value));
+        }
 
-            // Track original content stream object numbers for removal — they must NOT
-            // be carried over to the output (PHI leak otherwise).
-            TrackOriginalContentStreams(page, document.Objects, removedContentStreamNums);
+        // Phase 1 (serial) — touches the lazy object store, which is NOT
+        // thread-safe (a cache miss writes back), so loading and content-stream
+        // tracking must stay single-threaded.
+        byte[][] originals = new byte[work.Count][];
+        for (int i = 0; i < work.Count; i++)
+        {
+            TrackOriginalContentStreams(work[i].Page, document.Objects, removedContentStreamNums);
+            originals[i] = LoadContentBytes(work[i].Page, document.Objects, pipeline);
+        }
 
-            // Load and decode original content
-            byte[] original = LoadContentBytes(page, document.Objects, pipeline);
+        // Phase 2 (parallel-capable) — the redaction interpreter and overlay
+        // generation are pure functions of the page bytes and rectangles, with
+        // no shared state, so they can run concurrently. Opt-in via
+        // MaxDegreeOfParallelism (default 1 = sequential).
+        byte[][] redactedBytes = new byte[work.Count][];
+        byte[][] overlayBytes = new byte[work.Count][];
 
-            // Run redaction interpreter
-            byte[] redacted = RewriteContent(original, rects);
+        if (options.MaxDegreeOfParallelism == 1)
+        {
+            for (int i = 0; i < work.Count; i++)
+            {
+                redactedBytes[i] = RewriteContent(originals[i], work[i].Rects);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
+            }
+        }
+        else
+        {
+            ParallelOptions parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.MaxDegreeOfParallelism <= 0
+                    ? -1
+                    : options.MaxDegreeOfParallelism,
+            };
 
-            // Append overlay rectangles
-            byte[] overlay = BuildOverlay(rects, options.OverlayColor);
+            Parallel.For(0, work.Count, parallelOptions, i =>
+            {
+                redactedBytes[i] = RewriteContent(originals[i], work[i].Rects);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
+            });
+        }
 
-            // Build new page object: /Contents = [redactedStreamRef, overlayStreamRef]
+        // Phase 3 (serial) — allocate object numbers and assemble the output in
+        // stable order, so the result is identical regardless of parallelism.
+        for (int i = 0; i < work.Count; i++)
+        {
             PdfObjectId redactedId = new PdfObjectId(nextObjectNum++, 0);
             PdfObjectId overlayId = new PdfObjectId(nextObjectNum++, 0);
 
             PdfDictionary redactedDict = new PdfDictionary();
-            redactedDict.Set(PdfName.Length, redacted.Length);
+            redactedDict.Set(PdfName.Length, redactedBytes[i].Length);
             allObjects.Add(new PdfIndirectObject(
-                redactedId, new PdfStream(redactedDict, redacted)));
+                redactedId, new PdfStream(redactedDict, redactedBytes[i])));
 
             PdfDictionary overlayDict = new PdfDictionary();
-            overlayDict.Set(PdfName.Length, overlay.Length);
+            overlayDict.Set(PdfName.Length, overlayBytes[i].Length);
             allObjects.Add(new PdfIndirectObject(
-                overlayId, new PdfStream(overlayDict, overlay)));
+                overlayId, new PdfStream(overlayDict, overlayBytes[i])));
 
-            // Build modified page
-            PdfDictionary modifiedPage = CopyDictionary(page.Dictionary);
+            PdfDictionary modifiedPage = CopyDictionary(work[i].Page.Dictionary);
             PdfArray contents = new PdfArray([
                 new PdfReference(redactedId),
                 new PdfReference(overlayId),
             ]);
             modifiedPage.Set(PdfName.Contents, contents);
-            allObjects.Add(new PdfIndirectObject(pageId, modifiedPage));
-            rewrittenPageNums.Add(pageId.ObjectNumber);
+            allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
+            rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
         }
 
         // Copy untouched objects (excluding modified pages and replaced content streams)
@@ -200,6 +234,26 @@ public static class Redactor
         }
 
         PdfWriter.Write(output, allObjects, trailer);
+    }
+
+    /// <summary>
+    /// Per-page work item carried between the redaction phases: the page object
+    /// id, the page, and the rectangles to redact on it.
+    /// </summary>
+    private readonly struct RedactionWork
+    {
+        public RedactionWork(PdfObjectId pageId, PdfPage page, List<RectangleF> rects)
+        {
+            PageId = pageId;
+            Page = page;
+            Rects = rects;
+        }
+
+        public PdfObjectId PageId { get; }
+
+        public PdfPage Page { get; }
+
+        public List<RectangleF> Rects { get; }
     }
 
     // ── Content stream rewriter ───────────────────────────────────────────
