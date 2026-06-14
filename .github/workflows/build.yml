@@ -30,6 +30,15 @@ jobs:
           find src tests tools examples -name '*.cs' -print0 \
             | xargs -0 python3 tools/check_style.py
 
+      - name: Reject stray delivery artifacts
+        run: |
+          stray=$(git ls-files | grep -E '^chuvadi-|(^|/)DELIVERY\.md$|.+/src/Chuvadi\.Pdf\.' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::Stray delivery artifacts are committed — a delivery zip was probably extracted inside the repo. Remove these paths:"
+            echo "$stray"
+            exit 1
+          fi
+
   # ── API docs freshness check ──────────────────────────────────────────────
   docs:
     name: docs-up-to-date

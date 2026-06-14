@@ -62,11 +62,15 @@ foreach ($pkg in $packages) {
     }
 
     Write-Host "  Pushing $($pkg.Name)..." -ForegroundColor Gray
-    if ([string]::IsNullOrWhiteSpace($ApiKey)) {
-        dotnet nuget push $pkg.FullName --source $Source --skip-duplicate
-    } else {
-        dotnet nuget push $pkg.FullName --api-key $ApiKey --source $Source --skip-duplicate
+    $pushArgs = @('nuget', 'push', $pkg.FullName, '--source', $Source)
+    if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+        $pushArgs += @('--api-key', $ApiKey)
     }
+    # --skip-duplicate is only supported for server feeds, not local folder feeds.
+    if ($Source -match '^https?://') {
+        $pushArgs += '--skip-duplicate'
+    }
+    dotnet @pushArgs
     if ($LASTEXITCODE -ne 0) { throw "Push failed for $($pkg.Name)." }
 }
 
