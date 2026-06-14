@@ -1230,15 +1230,3 @@ Gate: 27/27 projects, 1,797 tests (3 new), style clean. New public API (`PdfDocu
 Gate: 27/27 projects, style clean. New regression tests in `XrefAndMetadataTests` (20-byte entries; /Info; XMP). `DocumentMetadataTests` absent-XMP fixture switched to a hand-assembled raw PDF (the writer now always emits metadata); `WatermarkTests` size assertion replaced with a watermark-content assertion (a cross-serializer size comparison is no longer meaningful). No public API change -> no api-doc regeneration.
 
 **Files:** modified `src/Chuvadi.Pdf.Objects/XrefTable.cs`, `src/Chuvadi.Pdf.IO/PdfWriter.cs`; added `tests/Chuvadi.Pdf.IO.Tests/XrefAndMetadataTests.cs`; modified `tests/Chuvadi.Pdf.Documents.Tests/DocumentMetadataTests.cs`, `tests/Chuvadi.Pdf.Watermark.Tests/WatermarkTests.cs`, `CHANGELOG.md`, `docs/CHANGE-LOG.md`.
-
-## A47 - Conformance audit (Phase A, code survey) + backlog expansion
-
-**Date:** 2026-06-15
-**Scope:** docs only (`docs/CONFORMANCE-AUDIT.md` new, `docs/BACKLOG.md`)
-**Rationale:** Drive the roadmap from a systematic spec-coverage survey instead of one bug report at a time.
-
-Phase A is a source survey against ISO 32000-1 with file:line evidence for every verdict (no runtime corpus yet - that is Phase B). New findings not previously tracked, now backlog items 12-18: shadings/gradients (`sh` is a no-op, `ContentStreamWalker.cs:403`; no ShadingType 1-7); graphics-state transparency (`gs` no-op, `:402` - `ca`/`CA`, blend modes, ExtGState `SMask`, transparency groups ignored); non-device colour spaces (Separation/DeviceN tint transforms ignored, Indexed mis-keyed, Lab/raw-CMYK/ICCBased-N4 images unrendered - `Raster/DisplayListBuilder.cs:294,314,1772`); patterns (tiling type 1 + shading type 2 suppressed); annotation `/AP` appearance rendering (page `/Annots` not drawn at render time); XFA rendering; Type3 fonts (no `CharProcs` handling). Confirmed already-tracked: Indic shaping (#2), JBIG2 (#4), JPX (#5), SVG ImageMask (#6), SVG cs/scn + form recursion + quote operators (#11).
-
-No code change. Phase B (runtime corpus audit) is the follow-up.
-
-**Files:** added `docs/CONFORMANCE-AUDIT.md`; modified `docs/BACKLOG.md`, `docs/CHANGE-LOG.md`.
