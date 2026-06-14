@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
@@ -157,7 +158,7 @@ public sealed class WatermarkStamperTests
     // ── Functional tests ───────────────────────────────────────────────────
 
     [Fact]
-    public void ApplyText_SinglePage_ProducesLargerPdf()
+    public void ApplyText_SinglePage_AddsWatermarkContent()
     {
         using (MemoryStream source = BuildBlankPdf())
         using (PdfDocument doc = PdfDocument.Open(source, leaveOpen: true))
@@ -166,7 +167,11 @@ public sealed class WatermarkStamperTests
             WatermarkStamper.ApplyText(output, doc,
                 new TextWatermarkOptions("CONFIDENTIAL"));
 
-            output.Length.Should().BeGreaterThan(source.Length);
+            // Verify the watermark overlay was added by its graphics-state name.
+            // This is more robust than a raw size comparison, which is unreliable
+            // now that the source and watermark paths serialize differently.
+            string text = Encoding.Latin1.GetString(output.ToArray());
+            text.Should().Contain("WMTextGS");
         }
     }
 

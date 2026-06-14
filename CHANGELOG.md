@@ -11,6 +11,26 @@ numbered A01..ANN).
 
 ---
 
+## [3.7.0] - 2026-06-15
+
+### Fixed
+- **Cross-reference entries are now exactly 20 bytes (ISO 32000-1 §7.5.4).**
+  Each `xref` entry was written with a stray space before its CRLF
+  (`nnnnnnnnnn ggggg n \r\n`), making it 21 bytes. Lenient readers (qpdf,
+  pikepdf, and Chuvadi's own reader) scan past the misalignment, but Adobe
+  Acrobat rejects the table, rebuilds it on open, and marks the file modified —
+  so it prompts "save changes?" on close even after the file was only viewed.
+  The space is removed; entries are now 20 bytes. Affects every written PDF
+  (merge, extract, split, authoring, watermarking).
+
+### Added
+- **Document metadata on every written PDF.** Output now carries an `/Info`
+  dictionary (`/Producer`, `/Creator`) and an XMP `/Metadata` stream on the
+  catalog. Both are deterministic — a fixed producer plus identifiers derived
+  from the file id, with no timestamps — so identical input still yields
+  byte-identical output, and any caller-supplied `/Info` or `/Metadata` is
+  preserved.
+
 ## [3.6.0] - 2026-06-14
 
 ### Added

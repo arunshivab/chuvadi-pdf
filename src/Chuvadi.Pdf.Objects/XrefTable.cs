@@ -283,14 +283,17 @@ public sealed class XrefTable
     private static byte[] FormatEntry(XrefEntry entry)
     {
         // PDF 32000-1:2008 §7.5.4: each entry is exactly 20 bytes.
-        // Format: nnnnnnnnnn ggggg n \r\n  (with space before \r\n)
-        // or:     nnnnnnnnnn ggggg f \r\n
+        // Format: nnnnnnnnnn ggggg n\r\n  (exactly 20 bytes per ISO 32000-1
+        // §7.5.4: 10-digit offset, space, 5-digit generation, space, type,
+        // 2-byte EOL). The EOL is a bare CRLF — no space before it, or the
+        // entry would be 21 bytes and strict readers (e.g. Acrobat) reject the
+        // table and rebuild it, marking the file modified.
         string offsetOrNext = entry.IsFree
             ? ((long)entry.ByteOffset).ToString("D10", CultureInfo.InvariantCulture)
             : entry.ByteOffset.ToString("D10", CultureInfo.InvariantCulture);
 
         char type = entry.IsInUse ? 'n' : 'f';
-        string formatted = $"{offsetOrNext} {entry.Generation:D5} {type} \r\n";
+        string formatted = $"{offsetOrNext} {entry.Generation:D5} {type}\r\n";
         return Encoding.ASCII.GetBytes(formatted);
     }
 

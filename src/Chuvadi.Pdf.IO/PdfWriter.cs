@@ -129,7 +129,13 @@ public static class PdfWriter
         // prompt to save on close even after only viewing. The value is derived
         // from the document content, so the output is deterministic and any
         // caller-supplied /ID is preserved.
-        GetOrCreateFileId(trailer, sortedObjects);
+        byte[] fileId = GetOrCreateFileId(trailer, sortedObjects);
+
+        // Document information (/Info) and XMP metadata (/Metadata on the
+        // catalog). Deterministic — a fixed Producer plus identifiers derived
+        // from the file id, no timestamps — so identical input stays
+        // byte-identical. Any caller-supplied /Info or /Metadata is preserved.
+        maxObjectNumber = AddDocumentMetadata(sortedObjects, trailer, fileId, maxObjectNumber);
 
         // If encrypting, create the /Encrypt indirect object and append to objects.
         int encryptObjectNumber = -1;
@@ -522,6 +528,97 @@ public static class PdfWriter
         WriteAscii(output, "\nstream\n");
         output.Write(stream.RawBytes, 0, stream.RawBytes.Length);
         WriteAscii(output, "\nendstream");
+    }
+
+    // "Chuvadi", hoisted per CA1861. Written as a hex string by WriteString.
+    private static readonly byte[] ProducerBytes = Encoding.ASCII.GetBytes("Chuvadi");
+
+    // Adds a deterministic /Info dictionary and an XMP /Metadata stream when the
+    // document lacks them, returning the updated maximum object number. Both are
+    // appended as indirect objects (so the encryption pass below covers them);
+    // /Metadata is attached to a copy of the catalog to avoid mutating caller
+    // state. Identifiers derive from the file id, keeping output reproducible.
+    private static int AddDocumentMetadata(
+        List<PdfIndirectObject> objects,
+        PdfDictionary trailer,
+        byte[] fileId,
+        int maxObjectNumber)
+    {
+        int next = maxObjectNumber;
+
+        if (!trailer.ContainsKey(PdfName.Intern("Info")))
+        {
+            next++;
+            PdfDictionary info = new PdfDictionary();
+            info.Set(PdfName.Intern("Producer"), new PdfString(ProducerBytes));
+            info.Set(PdfName.Intern("Creator"), new PdfString(ProducerBytes));
+            objects.Add(new PdfIndirectObject(new PdfObjectId(next, 0), info));
+            trailer.Set(PdfName.Intern("Info"), new PdfReference(new PdfObjectId(next, 0)));
+        }
+
+        // /Metadata lives on the catalog (trailer /Root). Only add it when the
+        // catalog is resolvable in this object set and does not already carry one.
+        if (trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootPrim)
+            && rootPrim is PdfReference rootRef)
+        {
+            int rootNum = rootRef.ObjectId.ObjectNumber;
+            for (int i = 0; i < objects.Count; i++)
+            {
+                if (objects[i].Id.ObjectNumber != rootNum
+                    || objects[i].Value is not PdfDictionary catalog
+                    || catalog.ContainsKey(PdfName.Intern("Metadata")))
+                {
+                    continue;
+                }
+
+                next++;
+                string idHex = Convert.ToHexString(fileId);
+                byte[] xmp = BuildXmpPacket(idHex);
+
+                PdfDictionary metaDict = new PdfDictionary();
+                metaDict.Set(PdfName.Type, PdfName.Intern("Metadata"));
+                metaDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("XML"));
+                metaDict.Set(PdfName.Length, xmp.Length);
+                objects.Add(new PdfIndirectObject(new PdfObjectId(next, 0), new PdfStream(metaDict, xmp)));
+
+                PdfDictionary catalogCopy = new PdfDictionary();
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in catalog)
+                {
+                    catalogCopy.Set(entry.Key, entry.Value);
+                }
+
+                catalogCopy.Set(PdfName.Intern("Metadata"), new PdfReference(new PdfObjectId(next, 0)));
+                objects[i] = new PdfIndirectObject(objects[i].Id, catalogCopy);
+                break;
+            }
+        }
+
+        return next;
+    }
+
+    // Minimal, valid XMP packet. Identifiers come from the file id so the packet
+    // is deterministic. No timestamps, for reproducible output.
+    private static byte[] BuildXmpPacket(string idHex)
+    {
+        string xml =
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n" +
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n" +
+            "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n" +
+            "    <rdf:Description rdf:about=\"\"\n" +
+            "        xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n" +
+            "        xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n" +
+            "        xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n" +
+            "        xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\">\n" +
+            "      <pdf:Producer>Chuvadi</pdf:Producer>\n" +
+            "      <xmp:CreatorTool>Chuvadi</xmp:CreatorTool>\n" +
+            "      <dc:format>application/pdf</dc:format>\n" +
+            "      <xmpMM:DocumentID>uuid:" + idHex + "</xmpMM:DocumentID>\n" +
+            "      <xmpMM:InstanceID>uuid:" + idHex + "</xmpMM:InstanceID>\n" +
+            "    </rdf:Description>\n" +
+            "  </rdf:RDF>\n" +
+            "</x:xmpmeta>\n" +
+            "<?xpacket end=\"w\"?>";
+        return Encoding.UTF8.GetBytes(xml);
     }
 
     private static void WriteString(Stream output, PdfString s)
