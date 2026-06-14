@@ -323,6 +323,67 @@ public sealed class RedactorTests
         return ms;
     }
 
+    [Fact]
+    public void Apply_InlineImageInRedactRect_RemovesImageButKeepsSurroundingText()
+    {
+        string trap = "Q()BTq\u0001\u0002\u0003\u0004\u0005\u0006";
+        string content =
+            "BT /F1 12 Tf 10 10 Td (KEEPTEXT) Tj ET\n" +
+            "q 40 0 0 40 60 60 cm BI /W 2 /H 2 /CS /RGB /BPC 8 ID " + trap + " EI Q\n" +
+            "BT /F1 12 Tf 10 30 Td (TAILTEXT) Tj ET\n";
+
+        using (MemoryStream source = BuildTextPdf(content))
+        using (PdfDocument doc = PdfDocument.Open(source, leaveOpen: true))
+        using (MemoryStream output = new MemoryStream())
+        {
+            RedactionOptions opts = new RedactionOptions
+            {
+                Rectangles = new List<RedactionRect>
+                {
+                    new RedactionRect(0, new RectangleF(55, 55, 50, 50)),
+                },
+            };
+            Redactor.Apply(output, doc, opts);
+
+            string outputText = Encoding.Latin1.GetString(output.ToArray());
+
+            outputText.Should().NotContain("BI ", "the inline image must be removed");
+            outputText.Should().Contain("KEEPTEXT", "text before the image must survive");
+            outputText.Should().Contain("TAILTEXT", "text after the image must survive");
+        }
+    }
+
+    [Fact]
+    public void Apply_InlineImageOutsideRect_IsPreservedAndBinaryDoesNotCorruptParsing()
+    {
+        string trap = "Q()BTq\u0001\u0002\u0003\u0004\u0005\u0006";
+        string content =
+            "BT /F1 12 Tf 10 10 Td (KEEPTEXT) Tj ET\n" +
+            "q 40 0 0 40 60 60 cm BI /W 2 /H 2 /CS /RGB /BPC 8 ID " + trap + " EI Q\n" +
+            "BT /F1 12 Tf 10 30 Td (TAILTEXT) Tj ET\n";
+
+        using (MemoryStream source = BuildTextPdf(content))
+        using (PdfDocument doc = PdfDocument.Open(source, leaveOpen: true))
+        using (MemoryStream output = new MemoryStream())
+        {
+            RedactionOptions opts = new RedactionOptions
+            {
+                Rectangles = new List<RedactionRect>
+                {
+                    new RedactionRect(0, new RectangleF(0, 0, 5, 5)),
+                },
+            };
+            Redactor.Apply(output, doc, opts);
+
+            string outputText = Encoding.Latin1.GetString(output.ToArray());
+
+            outputText.Should().Contain("BI ", "the inline image must be preserved");
+            outputText.Should().Contain(" EI", "the inline image must be preserved");
+            outputText.Should().Contain("TAILTEXT",
+                "binary image data must be skipped as a unit so following text still parses");
+        }
+    }
+
     private static MemoryStream BuildTextPdf(string contentStream)
     {
         byte[] contentBytes = Encoding.Latin1.GetBytes(contentStream);

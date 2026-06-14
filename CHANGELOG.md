@@ -11,6 +11,26 @@ numbered A01..ANN).
 
 ---
 
+## [3.3.0] - 2026-06-14
+
+### Added
+- **Inline-image redaction.** The redactor now removes inline images
+  (`BI … ID <binary> EI`) whose CTM-mapped unit square intersects a redaction
+  rectangle, matching the existing behaviour for `Do` image/form XObjects.
+
+### Fixed
+- **Inline-image parsing in redaction.** Inline-image binary data was previously
+  fed to the content tokenizer as if it were operators, which could corrupt the
+  rewrite of any content stream containing an inline image. The redactor now
+  consumes `BI … EI` as a single unit and resumes parsing after `EI`.
+
+### Changed
+- **Backlog reconciled against the code.** `docs/BACKLOG.md` was rewritten: items
+  wrongly marked "Not started" but in fact shipped (pattern redaction, non-text
+  image redaction, optional content, linearization) were moved to Shipped, and
+  the duplicate N.5–N.8 numbering was replaced with a single 1–13 open-roadmap
+  scheme.
+
 ## [3.2.0] - 2026-06-14
 
 ### Added
