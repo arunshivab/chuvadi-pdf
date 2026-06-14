@@ -249,6 +249,40 @@ public sealed class PdfDocumentTests
     }
 
     [Fact]
+    public void EnumerateStreaming_YieldsEveryPageInOrder()
+    {
+        using MemoryStream ms = BuildPdfWithPages(3);
+        ms.Seek(0, SeekOrigin.Begin);
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+
+        List<int> indices = new List<int>();
+        foreach (PdfPage page in doc.Pages.EnumerateStreaming())
+        {
+            indices.Add(page.Index);
+        }
+
+        indices.Should().Equal(0, 1, 2);
+    }
+
+    [Fact]
+    public void EnumerateStreaming_MatchesIndexedAccess()
+    {
+        using MemoryStream ms = BuildPdfWithPages(3);
+        ms.Seek(0, SeekOrigin.Begin);
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+
+        int streamed = 0;
+        foreach (PdfPage page in doc.Pages.EnumerateStreaming())
+        {
+            streamed++;
+        }
+
+        streamed.Should().Be(3);
+        // The indexer still works afterwards (independent construction).
+        doc.Pages[2].Index.Should().Be(2);
+    }
+
+    [Fact]
     public void Pages_OutOfRange_Throws()
     {
         using (MemoryStream ms = BuildPdfWithPages(2))

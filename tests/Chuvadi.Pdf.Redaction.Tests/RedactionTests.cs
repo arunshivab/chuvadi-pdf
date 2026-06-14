@@ -243,6 +243,86 @@ public sealed class RedactorTests
         return PdfDocument.Open(BuildTextPdf("BT /F1 12 Tf 100 100 Td (X) Tj ET"), leaveOpen: false);
     }
 
+    [Fact]
+    public void Apply_ParallelOutput_IsByteIdenticalToSequential()
+    {
+        byte[] sequential = RunRedaction(maxDegreeOfParallelism: 1);
+        byte[] parallel = RunRedaction(maxDegreeOfParallelism: -1);
+
+        parallel.Should().Equal(sequential);
+    }
+
+    private static byte[] RunRedaction(int maxDegreeOfParallelism)
+    {
+        using MemoryStream source = BuildMultiPageTextPdf(4);
+        source.Seek(0, SeekOrigin.Begin);
+        using PdfDocument doc = PdfDocument.Open(source, leaveOpen: true);
+
+        RedactionOptions options = new RedactionOptions
+        {
+            MaxDegreeOfParallelism = maxDegreeOfParallelism,
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            options.Rectangles.Add(new RedactionRect(i, new RectangleF(90, 90, 200, 30)));
+        }
+
+        using MemoryStream output = new MemoryStream();
+        Redactor.Apply(output, doc, options);
+        return output.ToArray();
+    }
+
+    private static MemoryStream BuildMultiPageTextPdf(int pageCount)
+    {
+        List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
+        PdfObjectId catalogId = new PdfObjectId(1, 0);
+        PdfObjectId pagesId = new PdfObjectId(2, 0);
+        List<PdfPrimitive> kids = new List<PdfPrimitive>();
+        int objNum = 3;
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            PdfObjectId pageId = new PdfObjectId(objNum++, 0);
+            PdfObjectId streamId = new PdfObjectId(objNum++, 0);
+
+            byte[] contentBytes = Encoding.Latin1.GetBytes(
+                "BT /F1 12 Tf 100 100 Td (SECRET_" + i + ") Tj ET");
+            PdfDictionary streamDict = new PdfDictionary();
+            streamDict.Set(PdfName.Length, contentBytes.Length);
+            objects.Add(new PdfIndirectObject(streamId, new PdfStream(streamDict, contentBytes)));
+
+            PdfDictionary pageDict = new PdfDictionary();
+            pageDict.Set(PdfName.Type, PdfName.Page);
+            pageDict.Set(PdfName.Parent, new PdfReference(pagesId));
+            pageDict.Set(PdfName.Contents, new PdfReference(streamId));
+            pageDict.Set(PdfName.MediaBox, new PdfArray([
+                new PdfInteger(0), new PdfInteger(0),
+                new PdfInteger(612), new PdfInteger(792),
+            ]));
+            objects.Add(new PdfIndirectObject(pageId, pageDict));
+            kids.Add(new PdfReference(pageId));
+        }
+
+        PdfDictionary pagesDict = new PdfDictionary();
+        pagesDict.Set(PdfName.Type, PdfName.Pages);
+        pagesDict.Set(PdfName.Kids, new PdfArray(kids));
+        pagesDict.Set(PdfName.Count, pageCount);
+
+        PdfDictionary catalogDict = new PdfDictionary();
+        catalogDict.Set(PdfName.Type, PdfName.Catalog);
+        catalogDict.Set(PdfName.Pages, new PdfReference(pagesId));
+
+        objects.Insert(0, new PdfIndirectObject(pagesId, pagesDict));
+        objects.Insert(0, new PdfIndirectObject(catalogId, catalogDict));
+
+        PdfDictionary trailer = new PdfDictionary();
+        trailer.Set(PdfName.Root, new PdfReference(catalogId));
+
+        MemoryStream ms = new MemoryStream();
+        PdfWriter.Write(ms, objects, trailer);
+        return ms;
+    }
+
     private static MemoryStream BuildTextPdf(string contentStream)
     {
         byte[] contentBytes = Encoding.Latin1.GetBytes(contentStream);

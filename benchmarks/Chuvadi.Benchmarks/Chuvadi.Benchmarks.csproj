@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
   </ItemGroup>
 

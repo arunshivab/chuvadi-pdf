@@ -502,11 +502,11 @@ CompressionResult result = PdfCompressor.Compress(doc, output, new CompressionOp
 
 ---
 
-## 14. Reading and verifying signatures
+## 14. Signatures: reading, verifying, and signing
 
-`Chuvadi.Pdf.Signatures` reads existing digital signatures and exposes the exact
-byte ranges they cover, so you can verify them with your own cryptographic
-stack. (Chuvadi reads and inspects signatures; it does not create new ones.)
+`Chuvadi.Pdf.Signatures` both reads existing digital signatures and creates new
+ones. For reading, it exposes the exact byte ranges each signature covers so you
+can verify them with your own cryptographic stack:
 
 ```csharp
 using Chuvadi.Pdf.Documents;
@@ -523,6 +523,21 @@ foreach (PdfSignature signature in doc.Signatures())
     Console.WriteLine($"Covers {signedBytes.Length} bytes.");
 }
 ```
+
+For creating signatures, the `Signing` APIs operate on PDF bytes and append an
+incremental update (the original bytes are preserved verbatim):
+
+- `PdfCounterSigner.AddSignature(byte[] pdf, ISigner signer, PdfSigningOptions options)`
+  — add a signature; you supply an `ISigner` wrapping your key/certificate.
+- `PdfDocumentTimestamper.AddDocumentTimestamp(byte[] pdf, Options options)`
+  — add an RFC 3161 document timestamp.
+- `PdfLtvUpdater.AddLtvMaterial(byte[] pdf, LtvOptions material)`
+  — embed long-term-validation material (certificates, CRLs, OCSP responses) so
+  a signature stays verifiable after its certificates expire.
+
+Because signing depends on your certificate and signing service, see the API
+reference under `docs/api/Signatures/` for the `ISigner`, `PdfSigningOptions`,
+and `LtvOptions` details.
 
 ---
 
@@ -636,7 +651,7 @@ catch (Exception ex)
 | Watermark                             | `Chuvadi.Pdf.Watermark`            |
 | Read / add annotations                | `Chuvadi.Pdf.Annotations`          |
 | Author reports / images → PDF         | `Chuvadi.Pdf.Authoring`            |
-| Read / verify signatures              | `Chuvadi.Pdf.Signatures`           |
+| Read / verify / create signatures     | `Chuvadi.Pdf.Signatures`           |
 | Encode / decode images                | `Chuvadi.Pdf.Images`               |
 | WPF on-screen rendering (Windows)     | `Chuvadi.Pdf.Rendering.Wpf`        |
 | Everything (meta-package)             | `Chuvadi.Pdf`                      |
