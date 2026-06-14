@@ -11,6 +11,22 @@ numbered A01..ANN).
 
 ---
 
+## [3.6.0] - 2026-06-14
+
+### Added
+- **`PdfDocument.IsXfa`.** True when the document is an XFA form (its
+  `/AcroForm` carries an `/XFA` entry). XFA content lives outside standard page
+  content, so such documents render essentially blank; consumers can use this
+  flag to show a notice instead of reaching into the catalog themselves.
+
+### Fixed
+- **SVG rendering now applies image `/SMask` (soft-mask transparency).** An image
+  XObject with an `/SMask` was embedded as opaque colour with the mask dropped,
+  so transparent regions — whose colour bytes are conventionally black —
+  rendered as a solid black box (affecting any transparent logo, watermark, or
+  signature image). The renderer now decodes the soft mask and embeds the image
+  as an RGBA PNG with the mask applied as alpha (honouring the mask's `/Decode`).
+
 ## [3.5.1] - 2026-06-14
 
 ### Fixed

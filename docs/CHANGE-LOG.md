@@ -1199,3 +1199,20 @@ Gate: 27/27 projects, 1,790 tests (13 new), style clean. New public API (`FontSt
 Gate: 27/27 projects, 1,796 tests (4 new), style clean. No public API change (the new `docIndex` parameters are on internal members; `GetOrCreateFileId` is private) - no api-doc regeneration.
 
 **Files:** modified `src/Chuvadi.Pdf.Operations/PageOperations.cs`, `src/Chuvadi.Pdf.IO/PdfWriter.cs`; added `tests/Chuvadi.Pdf.Operations.Tests/MergeIntegrityTests.cs`; modified `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/BACKLOG.md`.
+
+
+---
+
+## A45 - Apply image /SMask in SVG rendering + expose PdfDocument.IsXfa
+
+**Date:** 2026-06-14
+**Scope:** Rendering.DisplayList (`ImageOp`, SVG `DisplayListBuilder.EmitXObject`), Svg (`ImageEncoder`), Documents (`PdfDocument`)
+**Rationale:** Two issues from the Chuvadi Reader integration writeup - #3 (serious, soft-mask) and #4 (minor, XFA detection).
+
+- **/SMask dropped (black box).** The SVG image path embedded only the base colour image; an `/SMask` (a DeviceGray alpha image) was ignored, so transparent regions - whose colour data is conventionally black - rendered as a solid black box. Fix: `EmitXObject` resolves `/SMask` (raw base images only; a JPEG base would need decoding before alpha can be attached), decodes its 8-bit gray samples (honouring `/Decode [1 0]` inversion) and carries them on new `ImageOp.SoftMaskAlpha`/`SoftMaskWidth`/`SoftMaskHeight`. `ImageEncoder.BuildDataUrl` builds an RGBA buffer (base RGB/gray expanded, mask nearest-neighbour resampled when sizes differ) and emits a colour-type-6 PNG; `EncodePng` gained the type-6 case. Verified on the reported `transparent_logo.pdf`: the embedded PNG is now RGBA with a fully transparent background (corner alpha 0) instead of opaque black.
+- **XFA detection.** XFA forms render essentially blank because their content lives in the `/AcroForm /XFA` stream, not page content. New `PdfDocument.IsXfa` (expression-bodied over a private helper, so it surfaces in the API docs) lets consumers show a notice without reaching into the catalog. Full XFA rendering remains out of scope.
+- **Backlog correction.** The v3.5.1 reconciliation wrongly marked `#6 ImageMask stencil` as shipped in the SVG path; stencil compositing in fact exists only in the raster path (`Raster/DisplayListBuilder`, `RasterRawImageTests`). The reconciled entry is corrected to raster-only and the SVG `/ImageMask` case is re-opened as item 6. `/SMask` (fixed here) is a distinct feature from `/ImageMask` (a 1-bit stencil).
+
+Gate: 27/27 projects, 1,797 tests (3 new), style clean. New public API (`PdfDocument.IsXfa`; `ImageOp.SoftMaskAlpha`/`SoftMaskWidth`/`SoftMaskHeight`) -> api docs regenerated.
+
+**Files:** modified `src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`, `src/Chuvadi.Pdf.Rendering.DisplayList/DisplayListBuilder.cs`, `src/Chuvadi.Pdf.Svg/ImageEncoder.cs`, `src/Chuvadi.Pdf.Documents/PdfDocument.cs`; added `tests/Chuvadi.Pdf.Svg.Tests/ImageSoftMaskTests.cs`, `tests/Chuvadi.Pdf.Documents.Tests/XfaDetectionTests.cs`; modified `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/BACKLOG.md`, and regenerated `docs/api/Documents/PdfDocument.md`, `docs/api/Rendering/ImageOp.md`.

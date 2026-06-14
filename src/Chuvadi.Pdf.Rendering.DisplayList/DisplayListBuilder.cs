@@ -1102,6 +1102,48 @@ public static class DisplayListBuilder
                 catch { return; }
             }
 
+            byte[]? softMaskAlpha = null;
+            int softMaskWidth = 0;
+            int softMaskHeight = 0;
+
+            // /SMask: a DeviceGray image whose samples are the base image's alpha
+            // channel. Only applied when the base is a decodable raw image (a JPEG
+            // base would need decoding before alpha can be attached).
+            if (format == ImageFormat.Raw
+                && stream.Dictionary.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smRef)
+                && _doc.Objects.Resolve(smRef) is PdfStream smStream)
+            {
+                int smWidth = IntOf(smStream.Dictionary, "Width", 0);
+                int smHeight = IntOf(smStream.Dictionary, "Height", 0);
+                int smBpc = IntOf(smStream.Dictionary, "BitsPerComponent", 8);
+
+                if (smWidth > 0 && smHeight > 0 && smBpc == 8)
+                {
+                    try
+                    {
+                        byte[] smPixels = ContentStreamLoader.Decode(smStream);
+                        if (smPixels.Length >= smWidth * smHeight)
+                        {
+                            if (IsDecodeInverted(smStream.Dictionary))
+                            {
+                                for (int i = 0; i < smPixels.Length; i++)
+                                {
+                                    smPixels[i] = (byte)(255 - smPixels[i]);
+                                }
+                            }
+
+                            softMaskAlpha = smPixels;
+                            softMaskWidth = smWidth;
+                            softMaskHeight = smHeight;
+                        }
+                    }
+                    catch
+                    {
+                        softMaskAlpha = null;
+                    }
+                }
+            }
+
             _ops.Add(new ImageOp
             {
                 PixelData = pixelData,
@@ -1110,9 +1152,33 @@ public static class DisplayListBuilder
                 Height = height,
                 BitsPerComponent = bpc,
                 ColorSpace = cs,
+                SoftMaskAlpha = softMaskAlpha,
+                SoftMaskWidth = softMaskWidth,
+                SoftMaskHeight = softMaskHeight,
                 Transform = s.Ctm,
             });
         }
+
+        // True when /Decode is [1 0] for a single-component image (inverts samples).
+        private static bool IsDecodeInverted(PdfDictionary dict)
+        {
+            if (dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? d)
+                && d is PdfArray arr && arr.Count >= 2
+                && arr[0] is PdfReal or PdfInteger && arr[1] is PdfReal or PdfInteger)
+            {
+                double d0 = NumberOf(arr[0]);
+                double d1 = NumberOf(arr[1]);
+                return d0 == 1.0 && d1 == 0.0;
+            }
+            return false;
+        }
+
+        private static double NumberOf(PdfPrimitive p) => p switch
+        {
+            PdfInteger i => i.Value,
+            PdfReal r => r.Value,
+            _ => 0.0,
+        };
 
         private static int IntOf(PdfDictionary d, string key, int fallback)
         {

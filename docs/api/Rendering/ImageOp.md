@@ -66,6 +66,30 @@ PdfColorSpace ColorSpace
 
 Color space of raw pixel data.
 
+### `SoftMaskAlpha`
+
+```csharp
+byte[]? SoftMaskAlpha
+```
+
+Optional soft-mask alpha (one 8-bit sample per pixel) from the image's `/SMask`. When present, it is applied as the image's alpha channel.
+
+### `SoftMaskWidth`
+
+```csharp
+int SoftMaskWidth
+```
+
+Width of `SoftMaskAlpha` in samples.
+
+### `SoftMaskHeight`
+
+```csharp
+int SoftMaskHeight
+```
+
+Height of `SoftMaskAlpha` in samples.
+
 ### `Transform`
 
 ```csharp
