@@ -82,6 +82,14 @@ PdfColor StrokeColor
 
 Stroke color (when mode includes stroke).
 
+### `Style`
+
+```csharp
+FontStyle Style
+```
+
+Resolved presentation style (family, weight, slant).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_

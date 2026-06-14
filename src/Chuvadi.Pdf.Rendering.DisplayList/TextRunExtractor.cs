@@ -51,7 +51,11 @@ public static class TextRunExtractor
                 boundingBox: r.Bounds,
                 glyphs: r.Glyphs,
                 direction: TextDirection.LeftToRight,
-                readingOrderIndex: i));
+                readingOrderIndex: i,
+                fontFamily: r.Style.FontFamily,
+                fontWeight: r.Style.Weight,
+                slant: r.Style.Slant,
+                fontSize: r.FontSize));
         }
         return runs;
     }
@@ -93,6 +97,7 @@ public static class TextRunExtractor
             OriginX = bx,
             BaselineY = by,
             FontSize = t.FontSize,
+            Style = t.Style,
         };
     }
 
@@ -104,5 +109,7 @@ public static class TextRunExtractor
         public double OriginX { get; init; }
         public double BaselineY { get; init; }
         public double FontSize { get; init; }
+
+        public FontStyle Style { get; init; } = FontStyle.Default;
     }
 }

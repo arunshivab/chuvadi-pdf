@@ -24,6 +24,7 @@ internal sealed class BuilderState
     internal AffineMatrix TextLineMatrix { get; set; } = AffineMatrix.Identity;
     internal string? FontKey { get; set; }
     internal string? BaseFont { get; set; }
+    internal FontStyle Style { get; set; } = FontStyle.Default;
     internal double FontSize { get; set; } = 12.0;
     internal double CharSpacing { get; set; }
     internal double WordSpacing { get; set; }
@@ -85,6 +86,7 @@ internal sealed class BuilderState
         TextLineMatrix = TextLineMatrix,
         FontKey = FontKey,
         BaseFont = BaseFont,
+        Style = Style,
         FontSize = FontSize,
         CharSpacing = CharSpacing,
         WordSpacing = WordSpacing,

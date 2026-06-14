@@ -11,6 +11,22 @@ numbered A01..ANN).
 
 ---
 
+## [3.5.0] - 2026-06-14
+
+### Added
+- **Per-run font style on extracted text (copy-with-format).** `TextRun` now
+  carries `FontFamily`, `FontWeight` (CSS-style numeric), `Slant`
+  (normal/italic/oblique), and `FontSize`, so callers can reconstruct formatted
+  text. A new shared `FontStyleClassifier` derives these from the base font name
+  combined with the FontDescriptor `/Flags`, `/ItalicAngle`, and `/StemV`; the
+  resolved `FontStyle` is carried on `TextOp` and surfaced on `TextRun`.
+
+### Changed
+- **SVG text styling now descriptor-aware.** `SvgRenderer` resolves bold/italic
+  through the shared `FontStyleClassifier` (`TextOp.Style`) instead of a
+  name-only substring check, so fonts that signal style only through their
+  descriptor are now rendered with the correct weight/slant.
+
 ## [3.4.0] - 2026-06-14
 
 ### Added

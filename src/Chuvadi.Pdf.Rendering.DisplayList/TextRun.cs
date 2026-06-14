@@ -41,13 +41,21 @@ public sealed class TextRun
         Rect boundingBox,
         IReadOnlyList<GlyphPosition> glyphs,
         TextDirection direction,
-        int readingOrderIndex)
+        int readingOrderIndex,
+        string fontFamily,
+        int fontWeight,
+        FontSlant slant,
+        double fontSize)
     {
         Unicode = unicode;
         BoundingBox = boundingBox;
         Glyphs = glyphs;
         Direction = direction;
         ReadingOrderIndex = readingOrderIndex;
+        FontFamily = fontFamily;
+        FontWeight = fontWeight;
+        Slant = slant;
+        FontSize = fontSize;
     }
 
     /// <summary>The logical character sequence (concatenation of glyph Unicodes).</summary>
@@ -64,4 +72,16 @@ public sealed class TextRun
 
     /// <summary>Monotonic 0-based reading-order index within the page.</summary>
     public int ReadingOrderIndex { get; }
+
+    /// <summary>Resolved font family (subset tag and style suffix stripped).</summary>
+    public string FontFamily { get; }
+
+    /// <summary>CSS-style numeric weight (400 normal, 700 bold).</summary>
+    public int FontWeight { get; }
+
+    /// <summary>Slant classification (normal, italic, or oblique).</summary>
+    public FontSlant Slant { get; }
+
+    /// <summary>Effective font size of the run in user-space points.</summary>
+    public double FontSize { get; }
 }

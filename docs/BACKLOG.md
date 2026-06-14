@@ -36,6 +36,9 @@ Reconciled as shipped (were wrongly listed open):
   **parallel redaction**, **rasterizer benchmark** (v3.1.0).
 - **Custom TrueType font embedding in authoring** (v3.2.0) - `AddTrueTypeFont`,
   Type0/CIDFontType2, Indic-capable, logical order.
+- **Copy-with-format / per-run text style** (v3.5.0) - `TextRun` carries
+  `FontFamily`/`FontWeight`/`Slant`/`FontSize` via a shared `FontStyleClassifier`
+  (name + descriptor); SVG styling uses the same classifier.
 - **Glyph subsetting for embedded fonts** (v3.4.0) - `TrueTypeSubsetter`; embeds
   only used glyphs and drops non-rendering tables (GSUB/GPOS/cmap/post). ~98%
   smaller FontFile2; numbering preserved so the Identity CID-to-GID map holds.
@@ -44,7 +47,7 @@ Reconciled as shipped (were wrongly listed open):
 
 ## Open roadmap
 
-Items 1-12 are independent and may be re-ordered. Status verified against code.
+Items 1-11 are independent and may be re-ordered. Status verified against code.
 
 ### Redaction
 **1. Nested-form redaction (recursion).** Recurse into form XObjects'
@@ -61,42 +64,34 @@ uses them. *Large - HarfBuzz-class, its own effort.*
 **3. Autohinter follow-ups.** Composite-glyph Y-fitting in unhinted fonts;
 optional X-axis stem fitting for mono/low-DPI.
 
-### Text / extraction
-**4. Copy-with-format (per-run style on `TextRun`).** Expose `FontFamily`,
-`FontSize`, `FontWeight`, `Slant` on `TextRun` (today: only geometry + Unicode)
-via a shared style classifier (BaseFont name; descriptor `Flags`/`ItalicAngle`/
-`StemV`; synthetic bold via render mode; synthetic italic via text-matrix shear).
-Replace the SVG renderer's name-only `ResolveStyleHints` with the same
-classifier. Requires threading FontDescriptor data into `TextOp`. *Reader value.*
-
 ### Image codecs (rendering)
-**5. JBIG2Decode.** Scanned bilevel images render blank. *Large (arithmetic
+**4. JBIG2Decode.** Scanned bilevel images render blank. *Large (arithmetic
 coding, symbol dictionaries, generic regions).*
 
-**6. JPXDecode (JPEG 2000).** Renders blank. *Very large (wavelets, EBCOT).*
+**5. JPXDecode (JPEG 2000).** Renders blank. *Very large (wavelets, EBCOT).*
 
-**7. ImageMask stencil compositing.** `/ImageMask true` images are skipped;
+**6. ImageMask stencil compositing.** `/ImageMask true` images are skipped;
 alpha-blend the stencil with the fill colour instead of copying pixels.
 
 ### Compression / output
-**8. Dynamic-Huffman DEFLATE.** The deflater uses fixed Huffman (~85-90% of zlib
+**7. Dynamic-Huffman DEFLATE.** The deflater uses fixed Huffman (~85-90% of zlib
 ratios); dynamic Huffman closes the gap.
 
-**9. Object streams + xref streams (writer).** `PdfWriter` emits classic xref
+**8. Object streams + xref streams (writer).** `PdfWriter` emits classic xref
 tables; object/xref streams shrink files and let `PdfCompressor` pack non-stream
 objects.
 
 ### Accessibility / archival
-**10. Tagged PDF / PDF-A.** Generate `/StructTreeRoot` on page creation;
+**9. Tagged PDF / PDF-A.** Generate `/StructTreeRoot` on page creation;
 PDF/UA-1 first, then PDF/A. *Large.*
 
 ### Performance
-**11. Automated benchmark regression diffing.** The BenchmarkDotNet suite (Brotli,
+**10. Automated benchmark regression diffing.** The BenchmarkDotNet suite (Brotli,
 parser-open, rasterizer) exists; per-release baseline capture + auto-compare in
 CI remain.
 
 ### Rendering fidelity (small - one tidy PR)
-**12. SVG sink follow-ups.** SVG sink ignores `cs`/`scn` colour operators (raster
+**11. SVG sink follow-ups.** SVG sink ignores `cs`/`scn` colour operators (raster
 implements them) and does not recurse into form XObjects; raster quote operators
 (`'`/`"`) bypass composite-font routing.
 
@@ -110,6 +105,6 @@ Publish to nuget.org, reserve the `Chuvadi` package prefix, add a real
 
 ## Triage rules
 1. Items move to a CHANGE-LOG A-entry when work begins.
-2. Open items 1-12 are independent and may be re-ordered.
+2. Open items 1-11 are independent and may be re-ordered.
 3. **Verify status against the code before starting** - this file has drifted
    before; a quick grep prevents re-building shipped features.
