@@ -1165,3 +1165,20 @@ Gate: 27/27 projects, 1,776 tests (2 new), style clean. No public API change.
 Gate: 27/27 projects, 1,777 tests (1 new), style clean. No public API change (`TrueTypeSubsetter` is internal).
 
 **Files:** added `src/Chuvadi.Pdf.Authoring/TrueTypeSubsetter.cs`; modified `TrueTypeFontEmbedder.cs`, `tests/Chuvadi.Pdf.Authoring.Tests/CustomFontEmbeddingTests.cs`, `docs/custom-fonts.md`, `docs/BACKLOG.md`, `CHANGELOG.md`.
+
+
+---
+
+## A43 - Per-run font style (copy-with-format) + shared style classifier
+
+**Date:** 2026-06-14
+**Scope:** Rendering.DisplayList (`FontStyle`, `FontStyleClassifier`, `TextOp`, `TextRun`, `DisplayListBuilder`, `TextRunExtractor`), Svg (`SvgRenderer`)
+**Rationale:** `TextRun` exposed only geometry + Unicode, so a consumer (e.g. the Reader) could not copy text with formatting. The SVG renderer separately inferred bold/italic from the base-font name only, missing fonts that signal style through their descriptor.
+
+- **Shared classifier.** `FontStyleClassifier.Classify(baseFont, flags?, italicAngle?, stemV?)` returns a `FontStyle { FontFamily, Weight, Slant, ItalicAngle }`. It strips subset tags, extracts the family before the first `-`/`,`, and marks bold (name `Bold`/`Black`/`Heavy`, `/Flags` ForceBold bit 19, or `/StemV` >= 140) and italic/oblique (name `Italic`/`Oblique`, `/Flags` Italic bit 7, or non-zero `/ItalicAngle`). Pure (primitives in, `FontStyle` out) so it has no PDF dependency and is shared by both consumers.
+- **Threading.** `DisplayListBuilder.SetFont` resolves the descriptor (handling the Type0 -> descendant-CIDFont hop) once per font key, classifies, and stores the `FontStyle` on `BuilderState`; both `TextOp` construction sites copy it onto `TextOp.Style`. `TextRunExtractor` carries it (and the run's `FontSize`) onto the new `TextRun` members. `SvgRenderer.ResolveStyleHints` now maps `TextOp.Style` to CSS, replacing the name-only check (output shape unchanged: `"bold"`/`"italic"`/null).
+- **Verification.** Classifier unit-tested across name, flag, italic-angle, and StemV branches; extractor propagation unit-tested; and on a real authored PDF the builder's descriptor path yields families `Helvetica`/`LiPiSansTamil`/`LiPiSansDeva` with correct sizes (16/48).
+
+Gate: 27/27 projects, 1,790 tests (13 new), style clean. New public API (`FontStyle`, `FontSlant`, `FontStyleClassifier`, `TextOp.Style`, four `TextRun` members) -> api docs regenerated.
+
+**Files:** added `FontStyle.cs`, `FontStyleClassifier.cs` (+ 2 test files); modified `RenderOp.cs`, `BuilderState.cs`, `DisplayListBuilder.cs`, `TextRun.cs`, `TextRunExtractor.cs`, `SvgRenderer.cs`, `CHANGELOG.md`, `docs/BACKLOG.md`, and regenerated `docs/api/**`.

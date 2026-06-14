@@ -53,6 +53,9 @@ public static class DisplayListBuilder
         // unchanged; only the PdfFont.FromDictionary build is memoised.
         private readonly Dictionary<string, PdfFont> _pdfFontByKey = new();
 
+        // Resolved presentation style per font resource key (computed once in SetFont).
+        private readonly Dictionary<string, FontStyle> _styleByKey = new();
+
         // v2.1.8: graceful-degradation events accumulated during build,
         // surfaced on PageDisplayList.Diagnostics. Deduplicated by
         // (kind, message) so a single condition that fires per-character
@@ -352,6 +355,7 @@ public static class DisplayListBuilder
             s.FontKey = name;
             s.FontSize = size;
             s.BaseFont = ResolveBaseFont(name);
+            s.Style = ResolveFontStyle(name, s.BaseFont);
         }
 
         /// <inheritdoc />
@@ -610,6 +614,7 @@ public static class DisplayListBuilder
                 RenderingMode = s.RenderingMode,
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
+                Style = s.Style,
             });
 
             // Advance text matrix by the total advance of this run.
@@ -820,6 +825,7 @@ public static class DisplayListBuilder
                 RenderingMode = s.RenderingMode,
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
+                Style = s.Style,
             });
 
             AffineMatrix step = new(1, 0, 0, 1, cursorX, 0);
@@ -873,6 +879,72 @@ public static class DisplayListBuilder
             }
             return resolved;
         }
+
+        // Resolve (and cache) the presentation style for a font resource key,
+        // combining the base name with the FontDescriptor /Flags, /ItalicAngle,
+        // and /StemV when present.
+        private FontStyle ResolveFontStyle(string fontKey, string? baseFont)
+        {
+            if (_styleByKey.TryGetValue(fontKey, out FontStyle cached))
+            {
+                return cached;
+            }
+
+            int? flags = null;
+            double? italicAngle = null;
+            int? stemV = null;
+
+            PdfDictionary? font = ResolveFontDict(fontKey);
+            PdfDictionary? descriptor = font is null ? null : ResolveFontDescriptor(font);
+            if (descriptor is not null)
+            {
+                if (descriptor.TryGetValue(PdfName.Intern("Flags"), out PdfPrimitive? fv)
+                    && _doc.Objects.Resolve(fv) is PdfInteger fi)
+                {
+                    flags = fi.Value;
+                }
+
+                if (descriptor.TryGetValue(PdfName.Intern("ItalicAngle"), out PdfPrimitive? iv))
+                {
+                    italicAngle = AsDouble(_doc.Objects.Resolve(iv));
+                }
+
+                if (descriptor.TryGetValue(PdfName.Intern("StemV"), out PdfPrimitive? sv)
+                    && AsDouble(_doc.Objects.Resolve(sv)) is double stem)
+                {
+                    stemV = (int)stem;
+                }
+            }
+
+            FontStyle style = FontStyleClassifier.Classify(baseFont ?? string.Empty, flags, italicAngle, stemV);
+            _styleByKey[fontKey] = style;
+            return style;
+        }
+
+        private PdfDictionary? ResolveFontDescriptor(PdfDictionary font)
+        {
+            // Type0 fonts carry the descriptor on their descendant CIDFont.
+            if (font.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? st)
+                && st is PdfName stn && stn.Value == "Type0"
+                && font.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? dfv)
+                && _doc.Objects.ResolveAs<PdfArray>(dfv) is PdfArray descendants
+                && descendants.Count > 0
+                && _doc.Objects.ResolveAs<PdfDictionary>(descendants[0]) is PdfDictionary cidFont)
+            {
+                font = cidFont;
+            }
+
+            return font.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? fdv)
+                ? _doc.Objects.ResolveAs<PdfDictionary>(fdv)
+                : null;
+        }
+
+        private static double? AsDouble(PdfPrimitive? primitive) => primitive switch
+        {
+            PdfInteger i => i.Value,
+            PdfReal r => r.Value,
+            _ => null,
+        };
 
         private static FontWidths FontWidthsFallback()
         {

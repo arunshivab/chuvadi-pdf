@@ -426,6 +426,9 @@ python tools/gen_api_docs.py
 | [DrawImageOp](Rendering/DrawImageOp.md) | class | Paints a decoded image at the position specified by a transformation matrix. |
 | [FillPathOp](Rendering/FillPathOp.md) | class | Fills a path with a flat colour, applying the configured fill rule. |
 | [FillRule](Rendering/FillRule.md) | enum | Fill rule for a path or clip region. |
+| [FontSlant](Rendering/FontSlant.md) | enum | Slant classification for a text run. |
+| [FontStyle](Rendering/FontStyle.md) | record struct | Resolved presentation style for a text run — family, weight, and slant — derived from a font's base name and FontDescriptor. |
+| [FontStyleClassifier](Rendering/FontStyleClassifier.md) | class | Derives a `FontStyle` from a font's base name and, when available, its FontDescriptor `/Flags`, `/ItalicAngle`, and `/StemV`. |
 | [GlyphPosition](Rendering/GlyphPosition.md) | record struct | The position of a single glyph in a `TextRun`. |
 | [HintingMode](Rendering/HintingMode.md) | enum | Controls how strongly the TrueType bytecode hinting interpreter adjusts glyph outlines before rasterization. |
 | [ImageFormat](Rendering/ImageFormat.md) | enum | Raster format of image pixel data. |

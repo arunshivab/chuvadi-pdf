@@ -157,6 +157,9 @@ public sealed class TextOp : RenderOp
 
     /// <summary>Stroke color (when mode includes stroke).</summary>
     public PdfColor StrokeColor { get; init; }
+
+    /// <summary>Resolved presentation style (family, weight, slant).</summary>
+    public FontStyle Style { get; init; } = FontStyle.Default;
 }
 
 /// <summary>Raster format of image pixel data.</summary>

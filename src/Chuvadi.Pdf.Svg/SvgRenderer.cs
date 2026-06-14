@@ -593,7 +593,7 @@ public sealed class SvgRenderer
         string transform = combined.ToSvgMatrix();
         string family = ResolveFamily(op.BaseFont, familyByBaseFont);
         string fill = SrgbCss(op.FillColor);
-        (string? fontWeight, string? fontStyle) = ResolveStyleHints(op.BaseFont);
+        (string? fontWeight, string? fontStyle) = ResolveStyleHints(op.Style);
 
         // v2.1.3 — embedded fonts carry authoritative glyph advances in hmtx;
         // emitting per-glyph X attributes would force the browser to override
@@ -847,13 +847,8 @@ public sealed class SvgRenderer
     /// PDF BaseFont name. Returning a non-null hint lets the SVG writer emit
     /// the matching CSS attribute on the text element.
     /// </summary>
-    private static (string? fontWeight, string? fontStyle) ResolveStyleHints(string baseFont)
-    {
-        bool isBold = baseFont.Contains("Bold", StringComparison.Ordinal);
-        bool isItalic = baseFont.Contains("Italic", StringComparison.Ordinal)
-            || baseFont.Contains("Oblique", StringComparison.Ordinal);
-        return (isBold ? "bold" : null, isItalic ? "italic" : null);
-    }
+    private static (string? fontWeight, string? fontStyle) ResolveStyleHints(FontStyle style) =>
+        (style.IsBold ? "bold" : null, style.IsItalic ? "italic" : null);
 
     private static string BlendModeCss(PdfBlendMode mode) => mode switch
     {
