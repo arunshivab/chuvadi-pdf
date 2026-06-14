@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using Chuvadi.Pdf.IO;
@@ -93,6 +94,29 @@ public sealed class DocumentMetadataTests
         PdfWriter.Write(ms, objects, trailer);
         ms.Seek(0, SeekOrigin.Begin);
         return ms;
+    }
+
+    // Hand-assembled PDF that genuinely lacks /Info and /Metadata (the writer
+    // now always injects those), to exercise the reader's absent-metadata path.
+    private static MemoryStream BuildRawPdfWithoutMetadata()
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append("%PDF-1.7\n");
+        int off1 = sb.Length;
+        sb.Append("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        int off2 = sb.Length;
+        sb.Append("2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+        int xrefPos = sb.Length;
+        sb.Append("xref\n0 3\n");
+        sb.Append("0000000000 65535 f\r\n");
+        sb.Append(off1.ToString("D10", CultureInfo.InvariantCulture));
+        sb.Append(" 00000 n\r\n");
+        sb.Append(off2.ToString("D10", CultureInfo.InvariantCulture));
+        sb.Append(" 00000 n\r\n");
+        sb.Append("trailer\n<< /Root 1 0 R /Size 3 >>\nstartxref\n");
+        sb.Append(xrefPos.ToString(CultureInfo.InvariantCulture));
+        sb.Append("\n%%EOF");
+        return new MemoryStream(Encoding.ASCII.GetBytes(sb.ToString()));
     }
 
     /// <summary>
@@ -336,7 +360,7 @@ public sealed class DocumentMetadataTests
     [Fact]
     public void XmpMetadata_AbsentEntry_IsNull()
     {
-        using (MemoryStream ms = BuildPdfWithoutInfo())
+        using (MemoryStream ms = BuildRawPdfWithoutMetadata())
         using (PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true))
         {
             doc.XmpMetadata.Should().BeNull();

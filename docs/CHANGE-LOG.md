@@ -1216,3 +1216,17 @@ Gate: 27/27 projects, 1,796 tests (4 new), style clean. No public API change (th
 Gate: 27/27 projects, 1,797 tests (3 new), style clean. New public API (`PdfDocument.IsXfa`; `ImageOp.SoftMaskAlpha`/`SoftMaskWidth`/`SoftMaskHeight`) -> api docs regenerated.
 
 **Files:** modified `src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`, `src/Chuvadi.Pdf.Rendering.DisplayList/DisplayListBuilder.cs`, `src/Chuvadi.Pdf.Svg/ImageEncoder.cs`, `src/Chuvadi.Pdf.Documents/PdfDocument.cs`; added `tests/Chuvadi.Pdf.Svg.Tests/ImageSoftMaskTests.cs`, `tests/Chuvadi.Pdf.Documents.Tests/XfaDetectionTests.cs`; modified `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/BACKLOG.md`, and regenerated `docs/api/Documents/PdfDocument.md`, `docs/api/Rendering/ImageOp.md`.
+
+## A46 - Fix 21-byte xref entries (Adobe save-prompt) + write /Info and XMP metadata
+
+**Date:** 2026-06-15
+**Scope:** Objects (`XrefTable.FormatEntry`), IO (`PdfWriter`)
+**Rationale:** Adobe Acrobat prompted to save merged/extracted documents on close even after only viewing them. Diagnosed from a real `merged3.pdf` supplied via the Chuvadi Reader integration.
+
+- **Root cause: 21-byte xref entries.** `XrefTable.FormatEntry` emitted `"{offset} {gen:D5} {type} \r\n"` - a space before the CRLF - so each cross-reference entry was 21 bytes, not the 20 mandated by ISO 32000-1 §7.5.4. qpdf, pikepdf, and Chuvadi's own reader recover by scanning, so every structural check reported clean; Acrobat instead discards the misaligned table, rebuilds it on open, and marks the document modified. Confirmed by isolation: rewriting only the xref entries of the user's file to 20 bytes (nothing else changed) stopped the prompt in the user's Acrobat. Fix: drop the space -> `"{offset} {gen:D5} {type}\r\n"` = 20 bytes. Covers every writer, since all route through `XrefTable`/`PdfWriter`.
+- **Diagnosis discipline.** An earlier width check sliced exactly 20 bytes and inspected the last two, silently truncating the 21st byte; measuring the *stride* between consecutive entries against a pikepdf-written control is what exposed it. An A/B test - a no-metadata pikepdf re-save also opened clean - disproved the initially-suspected `/Info`/XMP metadata theory and pointed at the serializer.
+- **Metadata (hygiene, not the cause).** Metadata absence was not the trigger, but a public library should still emit it. `PdfWriter.Write` now adds a deterministic `/Info` (Producer/Creator) and an XMP `/Metadata` stream (pdf:Producer, dc:format, xmpMM:DocumentID/InstanceID derived from the file id) attached to a *copy* of the catalog (no caller-state mutation). Deterministic - no timestamps - so the redaction byte-identical guarantee holds. Caller-supplied entries are preserved.
+
+Gate: 27/27 projects, style clean. New regression tests in `XrefAndMetadataTests` (20-byte entries; /Info; XMP). `DocumentMetadataTests` absent-XMP fixture switched to a hand-assembled raw PDF (the writer now always emits metadata); `WatermarkTests` size assertion replaced with a watermark-content assertion (a cross-serializer size comparison is no longer meaningful). No public API change -> no api-doc regeneration.
+
+**Files:** modified `src/Chuvadi.Pdf.Objects/XrefTable.cs`, `src/Chuvadi.Pdf.IO/PdfWriter.cs`; added `tests/Chuvadi.Pdf.IO.Tests/XrefAndMetadataTests.cs`; modified `tests/Chuvadi.Pdf.Documents.Tests/DocumentMetadataTests.cs`, `tests/Chuvadi.Pdf.Watermark.Tests/WatermarkTests.cs`, `CHANGELOG.md`, `docs/CHANGE-LOG.md`.
