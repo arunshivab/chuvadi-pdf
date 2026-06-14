@@ -42,6 +42,12 @@ Reconciled as shipped (were wrongly listed open):
 - **Glyph subsetting for embedded fonts** (v3.4.0) - `TrueTypeSubsetter`; embeds
   only used glyphs and drops non-rendering tables (GSUB/GPOS/cmap/post). ~98%
   smaller FontFile2; numbering preserved so the Identity CID-to-GID map holds.
+- **ImageMask stencil compositing** - `/ImageMask true` images composite the
+  stencil with the current fill colour via proper source-over alpha rather than
+  copying pixels: raster `BuildStencilFrame` + `PageRasterizer.CompositeImage`
+  (v2.8.0); SVG `EmitXObject` + `ImageEncoder.BuildStencil` emit an RGBA data
+  URL. `/Decode` inversion honoured. Tested (`ImageMaskStencilTests`,
+  `RasterRawImageTests`).
 
 ---
 
@@ -70,8 +76,9 @@ coding, symbol dictionaries, generic regions).*
 
 **5. JPXDecode (JPEG 2000).** Renders blank. *Very large (wavelets, EBCOT).*
 
-**6. ImageMask stencil compositing.** `/ImageMask true` images are skipped;
-alpha-blend the stencil with the fill colour instead of copying pixels.
+**6. ImageMask stencil compositing.** SHIPPED - see "Reconciled as shipped"
+above (raster v2.8.0 `BuildStencilFrame` + `CompositeImage`; SVG `EmitXObject` +
+`ImageEncoder.BuildStencil`). Slot retained to avoid renumbering 7-11.
 
 ### Compression / output
 **7. Dynamic-Huffman DEFLATE.** The deflater uses fixed Huffman (~85-90% of zlib

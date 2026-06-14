@@ -5,10 +5,12 @@
 // Writes PDF files in full-rewrite mode with classic xref tables.
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Security.Cryptography;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Encryption;
 using Chuvadi.Pdf.Primitives;
@@ -122,6 +124,13 @@ public static class PdfWriter
             }
         }
 
+        // Ensure the trailer carries a file identifier (/ID, ISO 32000-1 §14.4).
+        // Without it some viewers (e.g. Adobe) synthesise one on open and then
+        // prompt to save on close even after only viewing. The value is derived
+        // from the document content, so the output is deterministic and any
+        // caller-supplied /ID is preserved.
+        GetOrCreateFileId(trailer, sortedObjects);
+
         // If encrypting, create the /Encrypt indirect object and append to objects.
         int encryptObjectNumber = -1;
         Encryptor? encryptor = null;
@@ -133,7 +142,7 @@ public static class PdfWriter
             PdfObjectId encryptId = new PdfObjectId(encryptObjectNumber, 0);
 
             PdfDictionary encryptDict = EncryptionDictionaryBuilder.Build(
-                encryption, GetOrCreateFileId(trailer));
+                encryption, GetOrCreateFileId(trailer, sortedObjects));
 
             sortedObjects.Add(new PdfIndirectObject(encryptId, encryptDict));
             maxObjectNumber = encryptObjectNumber;
@@ -359,7 +368,9 @@ public static class PdfWriter
         return value;
     }
 
-    private static byte[] GetOrCreateFileId(PdfDictionary trailer)
+    private static byte[] GetOrCreateFileId(
+        PdfDictionary trailer,
+        IReadOnlyList<PdfIndirectObject> objects)
     {
         if (trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? idPrim) &&
             idPrim is PdfArray idArr && idArr.Count >= 1 && idArr[0] is PdfString idStr)
@@ -367,12 +378,27 @@ public static class PdfWriter
             return idStr.Bytes;
         }
 
-        // Generate a fresh /ID (two identical 16-byte random IDs for a new doc).
+        // Derive a stable 16-byte identifier from the document content so the
+        // output is deterministic (e.g. parallel and sequential redaction yield
+        // byte-identical files) and §14.4-aligned (a content-based identifier).
         byte[] fid = new byte[16];
-        using (System.Security.Cryptography.RandomNumberGenerator rng =
-            System.Security.Cryptography.RandomNumberGenerator.Create())
+        using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
         {
-            rng.GetBytes(fid);
+            byte[] header = new byte[8];
+            foreach (PdfIndirectObject obj in objects)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(0, 4), obj.Id.ObjectNumber);
+                BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4, 4), obj.Id.Generation);
+                hash.AppendData(header);
+
+                if (obj.Value is PdfStream stream && stream.RawBytes.Length > 0)
+                {
+                    hash.AppendData(stream.RawBytes);
+                }
+            }
+
+            byte[] full = hash.GetHashAndReset();
+            Array.Copy(full, fid, fid.Length);
         }
 
         PdfString idString = new PdfString(fid);
