@@ -11,6 +11,18 @@ numbered A01..ANN).
 
 ---
 
+## [3.4.0] - 2026-06-14
+
+### Added
+- **Glyph subsetting for embedded fonts.** `AddTrueTypeFont` now embeds only the
+  glyphs actually drawn (plus their composite components), via the new
+  `TrueTypeSubsetter`. Non-rendering tables (`GSUB`/`GPOS`/`GDEF`/`cmap`/`post`)
+  are dropped, since a CIDFontType2 with an Identity CID-to-GID map never
+  consults them and the layout tables are large in complex-script fonts. Glyph
+  numbering is preserved, so the Identity mapping, per-CID widths, and ToUnicode
+  are unchanged. A two-font Tamil + Devanagari page dropped from ~309 KB to
+  ~7 KB (~98% smaller); CFF/OpenType-CFF fonts are embedded whole.
+
 ## [3.3.0] - 2026-06-14
 
 ### Added

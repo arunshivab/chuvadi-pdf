@@ -33,9 +33,14 @@ Indic renders correctly for isolated or already-ordered glyphs. Scripts that
 need conjunct formation or matra reordering (for example "கி" or "क्ष") are not
 yet shaped — that is a separate, larger effort.
 
-**Whole-font embedding.** The complete font program is embedded; glyph
-subsetting (embedding only the used glyphs to shrink the file) is a planned
-follow-up.
+**Glyph subsetting (automatic).** Only the glyphs actually drawn are embedded,
+and non-rendering tables (`GSUB`/`GPOS`/`GDEF`/`cmap`/`post`) are dropped — the
+viewer never consults them for a CIDFontType2 with an Identity CID-to-GID map,
+and the layout tables are large in complex-script fonts. This typically shrinks
+the embedded `FontFile2` by an order of magnitude or more (e.g. a Tamil page
+went from ~82 KB to ~1.6 KB). Glyph numbering is preserved, so the embedding
+otherwise behaves identically. CFF/OpenType-CFF fonts are embedded whole (the
+subsetter operates on `glyf`-based fonts).
 
 ## Converting a variable WOFF2 to a static TTF
 

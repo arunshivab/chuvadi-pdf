@@ -1146,3 +1146,22 @@ Gate: 27/27 projects, 1,774 tests (3 new), style clean.
 Gate: 27/27 projects, 1,776 tests (2 new), style clean. No public API change.
 
 **Files:** modified `src/Chuvadi.Pdf.Redaction/Redactor.cs`, `tests/Chuvadi.Pdf.Redaction.Tests/RedactionTests.cs`, `docs/BACKLOG.md`, `CHANGELOG.md`.
+
+
+---
+
+## A42 - Glyph subsetting for embedded TrueType fonts
+
+**Date:** 2026-06-14
+**Scope:** Authoring (`TrueTypeSubsetter`, `TrueTypeFontEmbedder`)
+**Rationale:** v3.2.0 embedded the whole font program; for complex-script fonts (e.g. the Noto/LiPi Indic faces) that is tens of KB per font, dominated by `glyf` outlines and the GSUB/GPOS/GDEF layout tables.
+
+- **Approach (numbering preserved).** `TrueTypeSubsetter.Subset(font, usedGlyphs)` keeps used glyphs at their original ids and truncates `numGlyphs` to the highest used id + 1; unused glyphs become empty. Because glyph numbering does not change, `CIDToGIDMap` stays `/Identity`, the content stream still emits original gids, and the per-CID `W` array and `ToUnicode` are untouched - the only embedder change is the `FontFile2` bytes. The alternative (renumbering glyphs + a `CIDToGIDMap` stream) would shrink `loca`/`hmtx` slightly more but is far more invasive; deferred.
+- **What is kept vs dropped.** Kept: `head`, `hhea`, `maxp`, `hmtx`, `loca`, `glyf`, and `cvt`/`fpgm`/`prep`/`gasp` when present. Dropped: `cmap`, `post`, `name`, `OS/2`, and `GSUB`/`GPOS`/`GDEF` - a CIDFontType2 with an Identity CID-to-GID map does not consult them, and the layout tables are the bulk of an Indic font. Descriptor metrics are still read from the original font (which retains `OS/2`).
+- **Composite glyphs.** The used set is closed over composite components (parsing the component flags to skip args/transforms) so referenced glyphs keep real outlines; no remapping is needed since ids are unchanged.
+- **Correctness.** Long `loca`; `checkSumAdjustment` recomputed. CFF fonts (no `glyf`/`loca`) pass through unchanged.
+- **Verification.** Subsetting a Tamil face to 5 glyphs: 82,644 -> 1,564 bytes (1.9%); fontTools opens the result (tables reduced to the rendering set) and Chuvadi re-parses the க outline identically (50 segments). End-to-end via the public API, a two-font Tamil + Devanagari page went 309,037 -> 7,001 bytes and rendered back pixel-identical by eye.
+
+Gate: 27/27 projects, 1,777 tests (1 new), style clean. No public API change (`TrueTypeSubsetter` is internal).
+
+**Files:** added `src/Chuvadi.Pdf.Authoring/TrueTypeSubsetter.cs`; modified `TrueTypeFontEmbedder.cs`, `tests/Chuvadi.Pdf.Authoring.Tests/CustomFontEmbeddingTests.cs`, `docs/custom-fonts.md`, `docs/BACKLOG.md`, `CHANGELOG.md`.
