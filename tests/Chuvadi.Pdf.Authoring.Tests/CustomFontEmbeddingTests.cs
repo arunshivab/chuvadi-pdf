@@ -12,6 +12,33 @@ namespace Chuvadi.Pdf.Authoring.Tests;
 
 public sealed class CustomFontEmbeddingTests
 {
+    [Fact]
+    public void EmbeddedFont_IsSubsetted_FarSmallerThanOriginal()
+    {
+        byte[] ttf = LoadFixtureFont();
+
+        PdfDocumentBuilder builder = PdfDocumentBuilder.Create()
+            .AddTrueTypeFont("Sub", ttf);
+        builder.AddPage(PageSize.A4).DrawText("Hi", 50, 50, "Sub", 24, Colors.Black);
+        byte[] bytes = builder.ToByteArray();
+
+        using PdfDocument doc = PdfDocument.Open(new MemoryStream(bytes), leaveOpen: false);
+        PdfObjectStore store = doc.Objects;
+
+        PdfDictionary type0 = ResolveFontResource(store, doc.Pages[0].Dictionary, "Sub");
+        PdfArray descendants = store.ResolveAs<PdfArray>(
+            type0[PdfName.Intern("DescendantFonts")])!;
+        PdfDictionary cidFont = store.ResolveAs<PdfDictionary>(descendants[0])!;
+        PdfDictionary descriptor = store.ResolveAs<PdfDictionary>(
+            cidFont[PdfName.Intern("FontDescriptor")])!;
+        PdfStream fontFile = store.ResolveAs<PdfStream>(
+            descriptor[PdfName.Intern("FontFile2")])!;
+
+        fontFile.RawBytes.Length.Should().BeGreaterThan(0);
+        fontFile.RawBytes.Length.Should().BeLessThan(ttf.Length / 2,
+            "the embedded subset for two glyphs must be far smaller than the full font");
+    }
+
     private static byte[] LoadFixtureFont() =>
         File.ReadAllBytes(Path.Combine(
             System.AppContext.BaseDirectory, "Fixtures", "LiberationSerif-Regular.ttf"));

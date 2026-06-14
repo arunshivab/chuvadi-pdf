@@ -78,13 +78,25 @@ public static class TrueTypeFontEmbedder
 
         SfntMetrics metrics = SfntMetrics.Read(ttf, scale);
 
+        // Subset the font program to the used glyphs (numbering preserved, so the
+        // Identity CID-to-GID map and per-CID widths below stay valid). Read
+        // descriptor metrics from the original above, since the subset drops
+        // OS/2 and other non-rendering tables.
+        HashSet<int> usedGlyphs = new HashSet<int> { 0 };
+        foreach (int gid in widthByGid.Keys)
+        {
+            usedGlyphs.Add(gid);
+        }
+
+        byte[] fontProgram = TrueTypeSubsetter.Subset(ttf, usedGlyphs);
+
         List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
 
-        // FontFile2 — the raw TrueType program, uncompressed.
+        // FontFile2 — the (subsetted) TrueType program, uncompressed.
         PdfObjectId fontFileId = allocateId();
         PdfDictionary fontFileDict = new PdfDictionary();
-        fontFileDict.Set(PdfName.Intern("Length1"), ttf.Length);
-        objects.Add(new PdfIndirectObject(fontFileId, new PdfStream(fontFileDict, ttf)));
+        fontFileDict.Set(PdfName.Intern("Length1"), fontProgram.Length);
+        objects.Add(new PdfIndirectObject(fontFileId, new PdfStream(fontFileDict, fontProgram)));
 
         // FontDescriptor.
         PdfObjectId descriptorId = allocateId();
