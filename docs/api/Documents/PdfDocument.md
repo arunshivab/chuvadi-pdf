@@ -215,6 +215,14 @@ Gets the XMP metadata stream bytes, or null when the document has no /Metadata e
 
 **Remarks:** Returns the raw stream bytes as they appear in the file. The XMP specification recommends that metadata streams be uncompressed for searchability; if a producer has chosen to apply a filter, the returned bytes will be in their filtered form. Callers needing the decoded form can read `Catalog`'s /Metadata entry directly and apply the appropriate filter.
 
+### `HasXfaForm`
+
+```csharp
+bool IsXfa => HasXfaForm()
+```
+
+Returns true when the document is an XFA form, i.e. its `/AcroForm` dictionary carries an `/XFA` entry. XFA content lives outside standard page content, so rendering such a document produces an essentially empty page; consumers can use this flag to show a notice instead of a blank page.
+
 ### `Dispose`
 
 ```csharp

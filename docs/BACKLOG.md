@@ -42,12 +42,17 @@ Reconciled as shipped (were wrongly listed open):
 - **Glyph subsetting for embedded fonts** (v3.4.0) - `TrueTypeSubsetter`; embeds
   only used glyphs and drops non-rendering tables (GSUB/GPOS/cmap/post). ~98%
   smaller FontFile2; numbering preserved so the Identity CID-to-GID map holds.
-- **ImageMask stencil compositing** - `/ImageMask true` images composite the
-  stencil with the current fill colour via proper source-over alpha rather than
-  copying pixels: raster `BuildStencilFrame` + `PageRasterizer.CompositeImage`
-  (v2.8.0); SVG `EmitXObject` + `ImageEncoder.BuildStencil` emit an RGBA data
-  URL. `/Decode` inversion honoured. Tested (`ImageMaskStencilTests`,
-  `RasterRawImageTests`).
+- **ImageMask stencil compositing (raster only)** - `/ImageMask true` images
+  composite the stencil with the current fill colour via proper source-over
+  alpha rather than copying pixels: raster `BuildStencilFrame` +
+  `PageRasterizer.CompositeImage` (v2.8.0); `/Decode` inversion honoured. Tested
+  (`RasterRawImageTests`). The **SVG** path does not yet handle `/ImageMask` -
+  see open item 6.
+- **Image `/SMask` (soft-mask transparency) in SVG** (v3.6.0) - an image with an
+  `/SMask` is embedded as an RGBA PNG with the mask applied as alpha
+  (`ImageOp.SoftMaskAlpha`, `ImageEncoder` RGBA path), instead of dropping the
+  mask and rendering transparent regions as black. `/Decode [1 0]` inversion
+  honoured. Tested (`ImageSoftMaskTests`).
 
 ---
 
@@ -76,9 +81,12 @@ coding, symbol dictionaries, generic regions).*
 
 **5. JPXDecode (JPEG 2000).** Renders blank. *Very large (wavelets, EBCOT).*
 
-**6. ImageMask stencil compositing.** SHIPPED - see "Reconciled as shipped"
-above (raster v2.8.0 `BuildStencilFrame` + `CompositeImage`; SVG `EmitXObject` +
-`ImageEncoder.BuildStencil`). Slot retained to avoid renumbering 7-11.
+**6. ImageMask stencil compositing in the SVG path.** Raster handles
+`/ImageMask true` (v2.8.0, see Shipped); the SVG renderer does not - such a
+1-bit stencil image is currently skipped. Apply the stencil with the current
+fill colour as an RGBA `<image>` (the same RGBA-PNG machinery added for `/SMask`
+in v3.6.0 can be reused). Note: `/SMask` (soft-mask alpha) is already handled in
+SVG and is a separate feature from `/ImageMask` (a 1-bit stencil).
 
 ### Compression / output
 **7. Dynamic-Huffman DEFLATE.** The deflater uses fixed Huffman (~85-90% of zlib

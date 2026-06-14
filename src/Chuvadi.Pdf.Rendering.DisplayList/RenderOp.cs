@@ -198,6 +198,18 @@ public sealed class ImageOp : RenderOp
     public PdfColorSpace ColorSpace { get; init; } = PdfColorSpace.DeviceRgb;
 
     /// <summary>
+    /// Optional soft-mask alpha (one 8-bit sample per pixel) from the image's
+    /// <c>/SMask</c>. When present, it is applied as the image's alpha channel.
+    /// </summary>
+    public byte[]? SoftMaskAlpha { get; init; }
+
+    /// <summary>Width of <see cref="SoftMaskAlpha"/> in samples.</summary>
+    public int SoftMaskWidth { get; init; }
+
+    /// <summary>Height of <see cref="SoftMaskAlpha"/> in samples.</summary>
+    public int SoftMaskHeight { get; init; }
+
+    /// <summary>
     /// Transformation matrix placing the image. The unit-square at (0,0)-(1,1)
     /// is mapped to the image's destination rectangle.
     /// </summary>

@@ -379,6 +379,32 @@ public sealed class PdfDocument : IDisposable
     /// <summary>Returns true when the document is linearized (Fast Web View).</summary>
     public bool IsLinearized => Linearization is not null;
 
+    /// <summary>
+    /// Returns true when the document is an XFA form, i.e. its
+    /// <c>/AcroForm</c> dictionary carries an <c>/XFA</c> entry. XFA content
+    /// lives outside standard page content, so rendering such a document
+    /// produces an essentially empty page; consumers can use this flag to show
+    /// a notice instead of a blank page.
+    /// </summary>
+    public bool IsXfa => HasXfaForm();
+
+    private bool HasXfaForm()
+    {
+        PdfDictionary? catalog = _reader.Catalog;
+        if (catalog is null)
+        {
+            return false;
+        }
+
+        if (!catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? acroForm))
+        {
+            return false;
+        }
+
+        PdfDictionary? acro = Objects.ResolveAs<PdfDictionary>(acroForm);
+        return acro is not null && acro.ContainsKey(PdfName.Intern("XFA"));
+    }
+
     private LinearizationInfo? _linearization;
     private bool _linearizationProbed;
 
