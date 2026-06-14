@@ -42,6 +42,7 @@ python tools/gen_api_docs.py
 | [Color](Authoring/Color.md) | record struct | An RGB color in [0, 1] floating-point space. |
 | [Colors](Authoring/Colors.md) | class | Common named colors. |
 | [ColumnWidthMode](Authoring/ColumnWidthMode.md) | enum | How a column's width is specified. |
+| [EmbeddedFontObjects](Authoring/EmbeddedFontObjects.md) | class | The result of embedding a TrueType font: the top-level Type0 font object id to reference from a page's `/Font` resource, and every object that must be added to the document. |
 | [HeaderFooterStyle](Authoring/HeaderFooterStyle.md) | class | Header / footer band styling. |
 | [ImagePageSizing](Authoring/ImagePageSizing.md) | enum | How `ImagePdfConverter` sizes each PDF page relative to its image. |
 | [ImagePdfConverter](Authoring/ImagePdfConverter.md) | class | Converts images (JPEG, PNG, TIFF, BMP) into PDF documents — one page per image (and, optionally, one page per TIFF frame). |
@@ -68,6 +69,7 @@ python tools/gen_api_docs.py
 | [TableStyle](Authoring/TableStyle.md) | class | Table-level styling: fonts, borders, padding, header and fills. |
 | [TextAlignment](Authoring/TextAlignment.md) | enum | Text alignment within a block or table cell. |
 | [TextBlockResult](Authoring/TextBlockResult.md) | class | Result of a `PageBuilder.DrawTextBlock` call. |
+| [TrueTypeFontEmbedder](Authoring/TrueTypeFontEmbedder.md) | class | Builds the PDF object graph that embeds a TrueType (`glyf`) font as a composite Type0 font with Identity-H encoding, so authored content can draw text in a custom font. |
 | [VerticalAlignment](Authoring/VerticalAlignment.md) | enum | Vertical alignment within a table cell. |
 
 ## Chuvadi.Pdf.Color

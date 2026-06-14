@@ -1111,3 +1111,22 @@ modified `src/Chuvadi.Pdf.Reader/Chuvadi.Pdf.Reader.csproj` (refs), `README.md`.
 Gate: 27/27 projects, 1,771 tests (6 new), `dotnet format` clean.
 
 **Files:** added `src/Chuvadi.Pdf.Documents/OptionalContentWriter.cs`, `benchmarks/Chuvadi.Benchmarks/Scenarios/RasterizeBench.cs`, `tests/Chuvadi.Pdf.Documents.Tests` (+5 tests), `tests/Chuvadi.Pdf.Redaction.Tests` (+1 test); modified `PdfPageCollection.cs`, `Redactor.cs`, `RedactionOptions.cs`, `Chuvadi.Benchmarks.csproj`, `docs/developer-guide.md`, `docs/BACKLOG.md`.
+
+
+---
+
+## A40 - Custom TrueType font embedding in authoring (Indic-capable)
+
+**Date:** 2026-06-14
+**Scope:** Authoring; new `TrueTypeFontEmbedder`, `EmbeddedFontObjects`, `CustomFontRegistry`; `PdfDocumentBuilder.AddTrueTypeFont`
+**Rationale:** Authored output (ReportBuilder/PdfDocumentBuilder) could only use the 14 standard fonts, so non-Latin content (Tamil/Devanagari for Lipi HIS, Kaval) was impossible. Investigation with the SIL OFL LiPi Sans family confirmed Chuvadi's TrueType glyph primitive already renders Indic glyf outlines correctly (Tamil/Deva rendered by eye via TrueTypeLoader), so the missing piece was authoring-side embedding, not rendering.
+
+- New `TrueTypeFontEmbedder.Build(ttf, loader, usedCodepoints, baseFont, allocId)` produces the Type0 object graph: FontFile2 (full program, uncompressed, /Length1), FontDescriptor (Flags/FontBBox/Ascent/Descent/CapHeight/ItalicAngle parsed from head/hhea/OS-2/post, scaled to 1000/em), CIDFontType2 descendant (CIDToGIDMap=/Identity, DW=1000, /W for used glyphs), ToUnicode CMap (gid->Unicode, surrogate-aware), and the top Type0 (Identity-H).
+- Reuses `TrueTypeLoader` (Fonts.Rendering) for cmap lookups and per-glyph advance widths; added the Fonts.Rendering project reference to Authoring (no cycle).
+- Authoring wiring: `CustomFontRegistry` tracks registered fonts + used code points; `PageBuilder.DrawText` maps text->GIDs and emits `<hex> Tj` via the new `ContentStreamWriter.ShowGlyphsAt`; `PdfDocumentBuilder` embeds each used font once at build time and references the shared Type0 from each page's /Font resources.
+- **Proven end to end:** authored Tamil (கமலனவ, கநதம) and Devanagari (कखगघ) via the public API and rendered them back through Chuvadi correctly; verified by eye and by structural tests (Type0 + CIDFontType2 + FontFile2 + Identity-H + W + ToUnicode; shared-across-pages; unused-not-embedded).
+- **Scope boundary:** logical-order only, no GSUB/GPOS shaping or reordering; variable fonts must be pre-instantiated to static; whole-font embed (subsetting deferred). All recorded honestly in CHANGELOG and docs/custom-fonts.md.
+
+Gate: 27/27 projects, 1,774 tests (3 new), style clean.
+
+**Files:** added `TrueTypeFontEmbedder.cs`, `EmbeddedFontObjects.cs`, `CustomFontRegistry.cs`, `tests/.../CustomFontEmbeddingTests.cs`, `tests/.../Fixtures/LiberationSerif-Regular.ttf`, `docs/custom-fonts.md`; modified `ContentStreamWriter.cs`, `PageBuilder.cs`, `PdfDocumentBuilder.cs`, both csprojs, CHANGELOG.

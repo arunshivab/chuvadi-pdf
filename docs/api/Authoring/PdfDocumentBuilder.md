@@ -66,6 +66,21 @@ PdfDocumentBuilder SetFooter(Action<PageBuilder, int, int> draw)
 
 Registers a page footer callback. Same shape as `SetHeader`.
 
+### `AddTrueTypeFont`
+
+```csharp
+PdfDocumentBuilder AddTrueTypeFont(string name, byte[] fontData)
+```
+
+Registers a TrueType font program so pages can draw text in it. The font is embedded (as a Type0 / CIDFontType2 composite font) only if used, and only the glyphs actually drawn get width and ToUnicode entries.
+
+**Parameters**
+
+- `name` — The font name to pass to `PageBuilder.DrawText`; also recorded as the PostScript base-font name.
+- `fontData` — The complete static TrueType (glyf) font program.
+
+**Remarks:** The font must be a static TrueType font (convert variable fonts to a static instance first). Text is emitted in logical order without complex-script shaping, so Latin renders correctly and Indic renders correctly only for isolated or already-ordered glyphs.
+
 ### `AddPage`
 
 ```csharp
