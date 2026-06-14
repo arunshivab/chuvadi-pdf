@@ -11,6 +11,26 @@ numbered A01..ANN).
 
 ---
 
+## [3.2.0] - 2026-06-14
+
+### Added
+- **Custom TrueType font embedding in authoring.** `PdfDocumentBuilder.AddTrueTypeFont(name, ttfBytes)`
+  registers a static TrueType (glyf) font; `PageBuilder.DrawText` then draws text
+  in it. The font is embedded as a composite Type0 / CIDFontType2 font with
+  Identity-H encoding, a `/W` width array and `/ToUnicode` CMap covering the
+  glyphs actually used, and a FontDescriptor whose metrics are read from the
+  font's sfnt tables. A font used on multiple pages is embedded once and shared;
+  a registered-but-unused font is not embedded. This enables authoring of
+  non-Latin scripts (e.g. Tamil, Devanagari) and any custom Latin font.
+
+### Notes
+- Text is emitted in logical order **without** complex-script shaping (no
+  GSUB/GPOS or reordering), so Latin renders correctly and Indic renders
+  correctly for isolated or already-ordered glyphs; conjunct/matra shaping is a
+  separate future effort. Variable fonts must be instantiated to a static
+  instance first (see `docs/custom-fonts.md`). Glyph subsetting (embedding only
+  used glyphs) is a planned follow-up; this version embeds the whole font program.
+
 ## [3.1.0] - 2026-06-14
 
 ### Added

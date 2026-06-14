@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using Chuvadi.Pdf.Images;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -15,6 +17,7 @@ namespace Chuvadi.Pdf.Authoring;
 public sealed class PageBuilder
 {
     private readonly ContentStreamWriter _w;
+    private readonly CustomFontRegistry? _customFonts;
     internal List<HyperlinkRect> Hyperlinks { get; } = new();
     internal List<ImageRef> Images { get; } = new();
     internal HashSet<string> Fonts { get; } = new();
@@ -26,9 +29,15 @@ public sealed class PageBuilder
     public double Height { get; }
 
     internal PageBuilder(PageSize size)
+        : this(size, null)
+    {
+    }
+
+    internal PageBuilder(PageSize size, CustomFontRegistry? customFonts)
     {
         Width = size.Width;
         Height = size.Height;
+        _customFonts = customFonts;
         _w = new ContentStreamWriter(Height);
     }
 
@@ -47,7 +56,15 @@ public sealed class PageBuilder
         Fonts.Add(font);
         _w.PushState();
         _w.SetFillRgb(color);
-        _w.ShowTextAt(FontKey(font), size, x, y, text);
+        if (_customFonts is not null && _customFonts.TryGet(font, out CustomFont custom))
+        {
+            _w.ShowGlyphsAt(FontKey(font), size, x, y, EncodeGlyphs(text, custom));
+        }
+        else
+        {
+            _w.ShowTextAt(FontKey(font), size, x, y, text);
+        }
+
         _w.PopState();
         return this;
     }
@@ -211,6 +228,35 @@ public sealed class PageBuilder
     internal ContentStreamWriter Writer => _w;
 
     internal static string FontKey(string fontName) => fontName.Replace("-", string.Empty);
+
+    /// <summary>
+    /// Maps the text's Unicode code points to glyph ids via the font's cmap,
+    /// records them as used, and returns the concatenated two-byte hex GID
+    /// string for an Identity-H Tj operand. Code points with no glyph map to
+    /// glyph 0 (.notdef). This emits glyphs in logical order without complex
+    /// shaping (no GSUB/GPOS or reordering).
+    /// </summary>
+    private static string EncodeGlyphs(string text, CustomFont custom)
+    {
+        StringBuilder sb = new StringBuilder(text.Length * 4);
+        int i = 0;
+        while (i < text.Length)
+        {
+            int codepoint = char.ConvertToUtf32(text, i);
+            i += char.IsSurrogatePair(text, i) ? 2 : 1;
+            custom.UsedCodepoints.Add(codepoint);
+            int gid = custom.Loader.GetGlyphIndex(codepoint);
+            if (gid < 0)
+            {
+                gid = 0;
+            }
+
+            sb.Append(((gid >> 8) & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
+            sb.Append((gid & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
 
     private static List<string> WordWrap(string text, string font, double size, double maxWidth)
     {

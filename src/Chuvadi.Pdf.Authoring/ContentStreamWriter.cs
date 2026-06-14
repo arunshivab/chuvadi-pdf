@@ -88,6 +88,23 @@ internal sealed class ContentStreamWriter
         _sb.AppendLine("ET");
     }
 
+    /// <summary>
+    /// Emits a single line of text encoded as two-byte big-endian glyph
+    /// identifiers, for a composite (Type0 / Identity-H) font.
+    /// <paramref name="hexGlyphs"/> is the concatenated four-hex-digit GID
+    /// string (e.g. <c>00120015</c>).
+    /// </summary>
+    internal void ShowGlyphsAt(
+        string fontKey, double size, double x, double yFromTop, string hexGlyphs)
+    {
+        double baselineY = FlipY(yFromTop + size);
+        _sb.AppendLine("BT");
+        _sb.AppendLine($"/{fontKey} {F(size)} Tf");
+        _sb.AppendLine($"1 0 0 1 {F(x)} {F(baselineY)} Tm");
+        _sb.AppendLine($"<{hexGlyphs}> Tj");
+        _sb.AppendLine("ET");
+    }
+
     // ── Images ────────────────────────────────────────────────────────────
 
     /// <summary>Renders an image XObject named <paramref name="imageKey"/>.</summary>

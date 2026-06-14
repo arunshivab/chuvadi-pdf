@@ -29,6 +29,7 @@ namespace Chuvadi.Pdf.Authoring;
 public sealed class PdfDocumentBuilder
 {
     private readonly List<PageBuilder> _pages = new();
+    private readonly CustomFontRegistry _customFonts = new();
     private Action<PageBuilder, int, int>? _header;
     private Action<PageBuilder, int, int>? _footer;
     private string? _title;
@@ -66,10 +67,34 @@ public sealed class PdfDocumentBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers a TrueType font program so pages can draw text in it. The font
+    /// is embedded (as a Type0 / CIDFontType2 composite font) only if used, and
+    /// only the glyphs actually drawn get width and ToUnicode entries.
+    /// </summary>
+    /// <param name="name">
+    /// The font name to pass to <see cref="PageBuilder.DrawText"/>; also recorded
+    /// as the PostScript base-font name.
+    /// </param>
+    /// <param name="fontData">The complete static TrueType (glyf) font program.</param>
+    /// <remarks>
+    /// The font must be a static TrueType font (convert variable fonts to a
+    /// static instance first). Text is emitted in logical order without
+    /// complex-script shaping, so Latin renders correctly and Indic renders
+    /// correctly only for isolated or already-ordered glyphs.
+    /// </remarks>
+    public PdfDocumentBuilder AddTrueTypeFont(string name, byte[] fontData)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(fontData);
+        _customFonts.Register(name, fontData);
+        return this;
+    }
+
     /// <summary>Adds a page of the given size and returns its builder.</summary>
     public PageBuilder AddPage(PageSize size)
     {
-        PageBuilder p = new(size);
+        PageBuilder p = new(size, _customFonts);
         _pages.Add(p);
         return p;
     }
@@ -116,6 +141,26 @@ public sealed class PdfDocumentBuilder
         PdfObjectId[] pageIds = new PdfObjectId[_pages.Count];
         for (int i = 0; i < _pages.Count; i++) { pageIds[i] = new(nextId++, 0); }
 
+        // Embed each used custom font once; share it across pages.
+        Dictionary<string, PdfObjectId> customFontIds =
+            new Dictionary<string, PdfObjectId>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, CustomFont> entry in _customFonts.Fonts)
+        {
+            if (entry.Value.UsedCodepoints.Count == 0)
+            {
+                continue;
+            }
+
+            EmbeddedFontObjects embedded = TrueTypeFontEmbedder.Build(
+                entry.Value.FontData,
+                entry.Value.Loader,
+                entry.Value.UsedCodepoints,
+                entry.Key.Replace(" ", string.Empty),
+                () => new PdfObjectId(nextId++, 0));
+            objects.AddRange(embedded.Objects);
+            customFontIds[entry.Key] = embedded.Type0FontId;
+        }
+
         // Per-page content stream + resources + annotations.
         for (int i = 0; i < _pages.Count; i++)
         {
@@ -132,6 +177,13 @@ public sealed class PdfDocumentBuilder
             PdfDictionary fontDict = new();
             foreach (string fontName in p.Fonts)
             {
+                if (customFontIds.TryGetValue(fontName, out PdfObjectId customId))
+                {
+                    fontDict.Set(
+                        PdfName.Intern(PageBuilder.FontKey(fontName)), new PdfReference(customId));
+                    continue;
+                }
+
                 PdfObjectId fontId = new(nextId++, 0);
                 PdfDictionary font = new();
                 font.Set(PdfName.Type, PdfName.Intern("Font"));

@@ -156,3 +156,17 @@ manual run-and-commit step; automated regression diffing remains open.
    they are independent.
 3. N.1 (DisplayList consolidation) is sequenced immediately after the
    v2.7.0 merge to avoid the two implementations drifting further.
+
+---
+
+## Fonts — authoring (post v3.2.0)
+
+### Glyph subsetting for embedded fonts
+**Status:** Not started. v3.2.0 embeds the whole font program. Build a subset
+font (used glyphs only: rebuilt glyf/loca/cmap/hmtx/maxp) to shrink output.
+
+### Complex-script (Indic) shaping
+**Status:** Not started — large, its own effort (HarfBuzz-class). Apply GSUB
+ligatures/conjuncts, GPOS mark positioning, and Indic reordering so authored
+Tamil/Devanagari words (matras, conjuncts) are shaped correctly. The embedded
+fonts already carry the needed GSUB/GPOS tables; this is the engine that uses them.
