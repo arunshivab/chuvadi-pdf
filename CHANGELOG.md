@@ -10,6 +10,33 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.9.0] - 2026-06-15
+
+### Fixed
+- **Watermarking preserved document integrity.** `WatermarkStamper` (text and
+  image) now force-loads the full object graph before numbering, so freshly
+  opened documents no longer collide watermark object numbers with existing
+  objects, and catalog-only objects (metadata, outlines, names, attachments,
+  struct tree) are carried into the output instead of being dropped. The trailer
+  `/Info` dictionary is also preserved, so Title/Author/Subject/Keywords and
+  dates survive a watermark pass.
+
+### Added
+- **Compression safety guard.** `PdfCompressor.Compress` now skips digitally
+  signed and encrypted documents by default rather than silently invalidating a
+  signature or emitting decrypted content. It writes nothing and reports
+  `CompressionResult.SkipReason` (`CompressionSkipReason.Signed` / `Encrypted`),
+  so a batch run over a mixed corpus continues instead of throwing. Opt in per
+  hazard with `CompressionOptions.AllowSignedRewrite` /
+  `AllowEncryptedRewrite`.
+- **Compression benchmark and ratio/quality baseline.** A new
+  `Chuvadi.Benchmarks.Compression` support library provides a deterministic
+  synthetic corpus, ratio measurement, and a global-SSIM quality metric for the
+  lossy image path. A committed `compression-baseline.json` plus a CI gate test
+  (`CompressionRatioBaselineTests`) fail the build on any ratio or quality
+  regression. The BenchmarkDotNet suite gains a `CompressionBench` timing
+  scenario, and the runner gains `--compression-report` and
+  `--update-compression-baseline` for inspecting and regenerating the baseline.
 
 ## [3.8.0] - 2026-06-15
 

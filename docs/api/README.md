@@ -358,6 +358,7 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
 | [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
+| [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress` declined to rewrite a document. |
 | [OperationsException](Operations/OperationsException.md) | class | Thrown when a PDF page operation (merge, split, delete, rotate, reorder) cannot be completed due to an invalid argument or document structure. |
 | [PageComposer](Operations/PageComposer.md) | class | Builds a new PDF by placing pages from existing documents onto target sheets under arbitrary affine transforms. |
 | [PageOperations](Operations/PageOperations.md) | class | Provides static methods for high-level PDF page operations: merge, split, delete, rotate, and reorder. |

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
+    <ProjectReference Include="..\..\benchmarks\Chuvadi.Benchmarks.Compression\Chuvadi.Benchmarks.Compression.csproj" />
   </ItemGroup>
 
 </Project>

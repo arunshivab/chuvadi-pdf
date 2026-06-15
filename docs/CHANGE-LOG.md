@@ -1273,3 +1273,47 @@ Gate: 27/27 projects; Operations.Tests 39 -> 48 (composition + placement + accep
 Gate: 27/27 projects; Images.Tests 62 -> 64, Svg.Tests 7 -> 10 (5 new regression tests). New public API (SvgExportOptions.Background) -> api docs regenerated.
 
 **Files:** modified `src/Chuvadi.Pdf.Images/TiffEncoder.cs`, `src/Chuvadi.Pdf.Svg/{SvgWriter,SvgRenderer,SvgExportOptions}.cs`, `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/api/Svg/SvgExportOptions.md`, `docs/api/README.md`; added `tests/Chuvadi.Pdf.Images.Tests/TiffWicCompatibilityTests.cs`, `tests/Chuvadi.Pdf.Svg.Tests/SvgPageGeometryTests.cs`.
+
+## A50 - Watermark object-integrity fix: force-load graph before numbering + preserve /Info
+
+Symptom class: watermarking a freshly opened document could reuse object numbers
+already in use (collisions) and drop catalog-only objects, and always lost the
+document `/Info`.
+
+Root causes. (1) `WatermarkDocument` computed the next object number from the
+object store's lazily-cached set, which on a freshly opened document is nearly
+empty, so the next-number floor was far too low — watermark objects collided
+with existing pages/fonts, and the "copy all original objects" pass only copied
+the lazily-loaded subset, dropping objects reachable only from the catalog
+(metadata, outlines, names, attachments, struct tree). (2) `BuildTrailer` set
+only `/Root`; the writer then synthesized a generic `/Info`, discarding the
+source document's metadata.
+
+Fix. Added a force-load BFS from the trailer (resolving every reference and
+descending streams/dictionaries/arrays) so numbering sees the whole graph;
+floored the next number against the trailer `/Size`; and carried the source
+`/Info` forward in `BuildTrailer`. Mirrors the force-load already used by
+`PageStamper`. Locked with two regression tests proven to fail before each fix
+(`WatermarkObjectIntegrityTests`).
+
+## A51 - Compression safety guard + ratio/quality benchmark baseline
+
+Guard. A full compressing rewrite invalidates digital signatures and emits
+decrypted content. `PdfCompressor.Compress` now evaluates a guard first
+(`IsSigned` via the low-level AcroForm `/SigFlags` SignaturesExist bit;
+`document.Encryption` for encryption) and, by default, returns a result with
+`CompressionSkipReason` and writes nothing — batch-friendly skip rather than a
+throw — with `AllowSignedRewrite` / `AllowEncryptedRewrite` to opt in. Chosen
+return-and-skip over throwing so a mixed-corpus batch run is not interrupted.
+
+Measurement foundations. To make later compression work provable, added a
+`Chuvadi.Benchmarks.Compression` support library: a deterministic synthetic
+corpus exercising each lever (raw-stream Flate, orphan GC, lossy image
+recompression), ratio measurement, and a global-SSIM quality metric that
+replicates the compressor's exact encode path. A committed
+`compression-baseline.json` (tolerance 0.02) plus a CI test
+(`CompressionRatioBaselineTests`) gate against ratio growth or quality drop;
+`CompressionBench` provides the speed signal; `--compression-report` and
+`--update-compression-baseline` inspect and regenerate the baseline. Global
+single-window SSIM was chosen for Phase 0 (deterministic, monotonic with
+quality); windowed/multi-scale SSIM is a later perceptual refinement.

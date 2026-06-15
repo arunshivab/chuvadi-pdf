@@ -34,6 +34,22 @@ int ImagesRecompressed
 
 Images re-encoded as JPEG.
 
+### `SkipReason`
+
+```csharp
+CompressionSkipReason SkipReason
+```
+
+Why the rewrite was skipped, or `CompressionSkipReason.None` when the document was rewritten normally.
+
+### `Skipped`
+
+```csharp
+bool Skipped => SkipReason != CompressionSkipReason.None
+```
+
+True when the document was left untouched and nothing was written to the output stream because a safety guard fired (see `SkipReason`).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/PdfCompressor.cs`](../../../src/Chuvadi.Pdf.Operations/PdfCompressor.cs)_
