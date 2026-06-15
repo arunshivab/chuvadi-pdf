@@ -50,6 +50,14 @@ bool PrettyPrint
 
 Indent the SVG output (default: false, compact).
 
+### `Background`
+
+```csharp
+ColorF? Background
+```
+
+Opaque colour for the page sheet, emitted as a full-page background rectangle behind all content. Defaults to `ColorF.White`, matching the rasteriser's default white paper. Set to `null` for a transparent SVG (useful when compositing over another background).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Svg/SvgExportOptions.cs`](../../../src/Chuvadi.Pdf.Svg/SvgExportOptions.cs)_

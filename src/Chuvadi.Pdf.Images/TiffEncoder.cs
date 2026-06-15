@@ -110,17 +110,37 @@ public static class TiffEncoder
                 }
             }
 
-            byte[] compressed = PackBitsCompress(raw);
+            // PackBits MUST be packed per scanline (TIFF 6.0 §9): rows are
+            // compressed independently. Windows' WIC decoder (Photos, Photo
+            // Viewer, Paint) and other strict readers reset the algorithm at
+            // each row boundary, so whole-image packing shifts the rows and
+            // leaves a black band at the bottom. The image is also split into
+            // multiple strips of roughly 8 KB, as the format recommends.
+            int rowBytes = width * samplesPerPixel;
+            int rowsPerStrip = Math.Max(1, 8192 / rowBytes);
+            int stripCount = (height + rowsPerStrip - 1) / rowsPerStrip;
 
-            // Write strip data at current position
-            long stripOffset = ms.Position;
-            w.Write(compressed);
+            long[] stripOffsets = new long[stripCount];
+            int[] stripByteCounts = new int[stripCount];
 
-            // Patch the previous "next IFD" pointer to point at the IFD we're about to write
+            for (int s = 0; s < stripCount; s++)
+            {
+                int firstRow = s * rowsPerStrip;
+                int rowsInStrip = Math.Min(rowsPerStrip, height - firstRow);
+
+                List<byte> stripData = new List<byte>(rowsInStrip * rowBytes);
+                for (int r = 0; r < rowsInStrip; r++)
+                {
+                    PackBitsCompressRow(raw, (firstRow + r) * rowBytes, rowBytes, stripData);
+                }
+
+                stripOffsets[s] = ms.Position;
+                stripByteCounts[s] = stripData.Count;
+                w.Write(stripData.ToArray());
+            }
+
+            // Pad to even boundary (TIFF convention) before the IFD.
             long ifdOffset = ms.Position;
-            long endOfStripData = ifdOffset;
-
-            // Pad to even boundary (TIFF convention)
             if (ifdOffset % 2 != 0)
             {
                 w.Write((byte)0);
@@ -132,52 +152,74 @@ public static class TiffEncoder
             WriteU32(w, (uint)ifdOffset);
             ms.Position = savedPos;
 
-            // Build IFD entries (12 entries — tags below)
-            ushort numEntries = 12;
+            // IFD: 14 entries (adds Orientation 274 and PlanarConfiguration 284).
+            ushort numEntries = 14;
             WriteU16(w, numEntries);
 
-            // We need an offset for BitsPerSample (3 SHORTs = 6 bytes > 4, so it goes external)
-            // Compute its offset after the IFD body.
-            long ifdBodyEnd = ms.Position + (numEntries * 12) + 4;
-            long bitsPerSampleOffset = ifdBodyEnd;
-            // BitsPerSample takes samplesPerPixel × 2 bytes (each is a SHORT).
-            long xResOffset = bitsPerSampleOffset + (samplesPerPixel * 2);
+            // External blobs follow the IFD body, in tag order: BitsPerSample,
+            // then StripOffsets[]/StripByteCounts[] (only when multi-strip),
+            // then the two resolution rationals.
+            long externalStart = ms.Position + (numEntries * 12) + 4;
+            long bitsPerSampleOffset = externalStart;
+            long stripOffsetsArrayOffset = bitsPerSampleOffset + (samplesPerPixel * 2);
+            long stripByteCountsArrayOffset =
+                stripOffsetsArrayOffset + (stripCount > 1 ? stripCount * 4 : 0);
+            long xResOffset =
+                stripByteCountsArrayOffset + (stripCount > 1 ? stripCount * 4 : 0);
             long yResOffset = xResOffset + 8;
 
-            // Write entries (tag, type, count, value-or-offset)
-            WriteEntry(w, 256, 4, 1, (uint)width);                // ImageWidth (LONG)
-            WriteEntry(w, 257, 4, 1, (uint)height);               // ImageLength (LONG)
-            WriteEntry(w, 258, 3, (uint)samplesPerPixel, (uint)bitsPerSampleOffset);  // BitsPerSample → external
-            WriteEntry(w, 259, 3, 1, 32773);                       // Compression: PackBits
-            WriteEntry(w, 262, 3, 1, isCmyk ? 5u : 2u);            // Photometric: 2=RGB, 5=CMYK
-            WriteEntry(w, 273, 4, 1, (uint)stripOffset);           // StripOffsets
-            WriteEntry(w, 277, 3, 1, (uint)samplesPerPixel);       // SamplesPerPixel
-            WriteEntry(w, 278, 4, 1, (uint)height);                // RowsPerStrip
-            WriteEntry(w, 279, 4, 1, (uint)compressed.Length);     // StripByteCounts
-            WriteEntry(w, 282, 5, 1, (uint)xResOffset);            // XResolution → external
-            WriteEntry(w, 283, 5, 1, (uint)yResOffset);            // YResolution → external
-            WriteEntry(w, 296, 3, 1, 2);                           // ResolutionUnit: inch
+            uint stripOffsetsValue = stripCount == 1
+                ? (uint)stripOffsets[0]
+                : (uint)stripOffsetsArrayOffset;
+            uint stripByteCountsValue = stripCount == 1
+                ? (uint)stripByteCounts[0]
+                : (uint)stripByteCountsArrayOffset;
 
-            // NextIFDOffset: 0 for now, will be patched on next iteration
+            // Entries MUST be in ascending tag order.
+            WriteEntry(w, 256, 4, 1, (uint)width);                  // ImageWidth
+            WriteEntry(w, 257, 4, 1, (uint)height);                 // ImageLength
+            WriteEntry(w, 258, 3, (uint)samplesPerPixel, (uint)bitsPerSampleOffset); // BitsPerSample
+            WriteEntry(w, 259, 3, 1, 32773);                        // Compression: PackBits
+            WriteEntry(w, 262, 3, 1, isCmyk ? 5u : 2u);             // Photometric
+            WriteEntry(w, 273, 4, (uint)stripCount, stripOffsetsValue);    // StripOffsets
+            WriteEntry(w, 274, 3, 1, 1);                            // Orientation: top-left
+            WriteEntry(w, 277, 3, 1, (uint)samplesPerPixel);        // SamplesPerPixel
+            WriteEntry(w, 278, 4, 1, (uint)rowsPerStrip);           // RowsPerStrip
+            WriteEntry(w, 279, 4, (uint)stripCount, stripByteCountsValue); // StripByteCounts
+            WriteEntry(w, 282, 5, 1, (uint)xResOffset);             // XResolution
+            WriteEntry(w, 283, 5, 1, (uint)yResOffset);             // YResolution
+            WriteEntry(w, 284, 3, 1, 1);                            // PlanarConfiguration: chunky
+            WriteEntry(w, 296, 3, 1, 2);                            // ResolutionUnit: inch
+
+            // NextIFDOffset: 0 for now, patched on the next iteration.
             previousNextIfdPos = ms.Position;
             WriteU32(w, 0);
 
-            // External value for BitsPerSample (one SHORT per sample, 8 bits each)
+            // External BitsPerSample (one SHORT per sample, 8 bits each).
             for (int k = 0; k < samplesPerPixel; k++)
             {
                 WriteU16(w, 8);
             }
 
-            // XResolution (RATIONAL: 72/1)
+            // External StripOffsets / StripByteCounts arrays (only when > 1 strip).
+            if (stripCount > 1)
+            {
+                for (int s = 0; s < stripCount; s++)
+                {
+                    WriteU32(w, (uint)stripOffsets[s]);
+                }
+
+                for (int s = 0; s < stripCount; s++)
+                {
+                    WriteU32(w, (uint)stripByteCounts[s]);
+                }
+            }
+
+            // XResolution / YResolution (RATIONAL 72/1).
             WriteU32(w, 72);
             WriteU32(w, 1);
-
-            // YResolution (RATIONAL: 72/1)
             WriteU32(w, 72);
             WriteU32(w, 1);
-
-            // (Strip data was already written before the IFD. endOfStripData is unused below.)
-            _ = endOfStripData;
         }
 
         return ms.ToArray();
@@ -207,43 +249,49 @@ public static class TiffEncoder
         w.Write((byte)((v >> 24) & 0xFF));
     }
 
-    private static byte[] PackBitsCompress(byte[] input)
+    /// <summary>
+    /// PackBits-compresses a single scanline of <paramref name="input"/> spanning
+    /// <paramref name="count"/> bytes from <paramref name="start"/>, appending the
+    /// packed bytes to <paramref name="output"/>. Each row is compressed
+    /// independently, which is what strict TIFF readers (including Windows' WIC)
+    /// require. Runs of three or more identical bytes are emitted as
+    /// <c>(-(n-1), byte)</c>; literal sequences as <c>(n-1, bytes...)</c>. The run
+    /// and literal lengths are capped at 128 bytes per packet.
+    /// </summary>
+    /// <param name="input">The full, row-major pixel buffer.</param>
+    /// <param name="start">The offset of the first byte of the row.</param>
+    /// <param name="count">The number of bytes in the row.</param>
+    /// <param name="output">The buffer that receives the packed bytes.</param>
+    private static void PackBitsCompressRow(byte[] input, int start, int count, List<byte> output)
     {
-        // PackBits encoder. Walks the input emitting runs (>=2 identical bytes)
-        // as (-(n-1), byte) and literal sequences as (n-1, bytes...).
-        // Max run length per packet: 128.
-        List<byte> output = new List<byte>(input.Length);
-        int i = 0;
+        int end = start + count;
+        int i = start;
 
-        while (i < input.Length)
+        while (i < end)
         {
-            // Try to find a run
-            int runStart = i;
             int runByte = input[i];
             int runLen = 1;
 
-            while (i + runLen < input.Length && input[i + runLen] == runByte && runLen < 128)
+            while (i + runLen < end && input[i + runLen] == runByte && runLen < 128)
             {
                 runLen++;
             }
 
             if (runLen >= 3)
             {
-                // Encode as a run
                 output.Add((byte)(sbyte)(-(runLen - 1)));
                 output.Add((byte)runByte);
                 i += runLen;
             }
             else
             {
-                // Literal run — collect bytes until a run-of-3 starts or we hit 128
                 int litStart = i;
                 int litLen = 0;
 
-                while (i < input.Length && litLen < 128)
+                while (i < end && litLen < 128)
                 {
-                    // Check if a run of 3 starts here
-                    if (i + 2 < input.Length &&
+                    // Stop the literal when a run of three identical bytes begins.
+                    if (i + 2 < end &&
                         input[i] == input[i + 1] && input[i + 1] == input[i + 2])
                     {
                         break;
@@ -260,7 +308,5 @@ public static class TiffEncoder
                 }
             }
         }
-
-        return output.ToArray();
     }
 }

@@ -28,6 +28,7 @@ using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 using Chuvadi.Pdf.Rendering.DisplayList;
+using ColorF = Chuvadi.Pdf.Graphics.ColorF;
 
 namespace Chuvadi.Pdf.Svg;
 
@@ -175,6 +176,14 @@ public sealed class SvgRenderer
         ArgumentNullException.ThrowIfNull(list);
         SvgWriter w = new(_opts.Precision);
         w.StartSvg(list.MediaWidth, list.MediaHeight);
+
+        // Opaque page sheet behind all content (unflipped coordinates), so the
+        // SVG matches the rasteriser's white paper and composites consistently
+        // across viewers. Skipped when Background is null (transparent export).
+        if (_opts.Background is ColorF background)
+        {
+            w.EmitPageBackground(list.MediaWidth, list.MediaHeight, ToHexColor(background));
+        }
 
         // Build the per-page font-embedding registry BEFORE the page-flip
         // group opens. AddFontFace inserts <style>@font-face{...}</style>
@@ -775,6 +784,19 @@ public sealed class SvgRenderer
           .Append(' ').Append(maxY.ToString(fmt, CultureInfo.InvariantCulture));
         sb.Append(" Z");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Formats a colour as an SVG <c>#rrggbb</c> string, converting to DeviceRGB
+    /// first so gray and CMYK page backgrounds resolve correctly.
+    /// </summary>
+    private static string ToHexColor(ColorF color)
+    {
+        ColorF rgb = color.ToRgb();
+        int r = (int)Math.Round(Math.Clamp(rgb.R, 0f, 1f) * 255f);
+        int g = (int)Math.Round(Math.Clamp(rgb.G, 0f, 1f) * 255f);
+        int b = (int)Math.Round(Math.Clamp(rgb.B, 0f, 1f) * 255f);
+        return $"#{r:X2}{g:X2}{b:X2}";
     }
 
     private static string PathToSvg(PathGeometry g, int precision)

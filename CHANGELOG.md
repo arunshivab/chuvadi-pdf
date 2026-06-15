@@ -11,6 +11,42 @@ numbered A01..ANN).
 
 ---
 
+## [3.8.0] - 2026-06-15
+
+### Added
+- **Page composition.** High-level operations for placing existing pages under
+  arbitrary affine transforms, all keeping vector and text content intact and
+  selectable:
+  - `PageComposer` — build a new document by placing pages onto target sheets
+    (standard or custom size): rotate by any angle, resize between paper sizes,
+    and N-up / imposition (`AddPage`, `AddPageMatching`, `PlacePage`, `Write`).
+  - `PageStamper` — overlay or underlay a source page onto one, several, or all
+    pages of an existing document (`Place`, `PlaceOnAll`), preserving the rest.
+  - `Placement` — convenience transforms (`ScaleToFit`, `Center`,
+    `RotatedSize`, `RotateIntoBox`, `RotateAboutCenter`).
+  - `PdfPage.EffectiveSize` — the page's displayed size, accounting for
+    `/Rotate`.
+- **Text extraction follows form XObjects.** `TextExtractor` now recurses into
+  form XObjects invoked with `Do`, so text on composed or stamped pages is
+  extractable — along with any other form-XObject text previously missed.
+- **`SvgExportOptions.Background`** (`ColorF?`, default white). SVG export now
+  emits an opaque full-page background rectangle, matching the rasteriser's
+  default paper; set to null for a transparent SVG.
+
+### Fixed
+- Page import forces a full object-graph load before numbering, fixing a latent
+  lazy-loading bug where newly added object numbers could collide with the
+  catalog (or drop unloaded objects) on large documents.
+- **TIFF output now decodes in Windows/WIC viewers.** PackBits is packed per
+  scanline across multiple ~8 KB strips, with explicit Orientation and
+  PlanarConfiguration tags. Whole-image single-strip packing previously shifted
+  rows and left a black band in Photos, Photo Viewer, WPS, and Paint, even
+  though libtiff-family decoders tolerated it.
+- **SVG pages render correctly aligned in every engine.** The root width/height
+  now carry an explicit `pt` unit; emitting them unitless let some viewers treat
+  the point-sized values as points and rescale the canvas by 96/72 while leaving
+  the content at 1 unit = 1px, pushing the page off-centre.
+
 ## [3.7.0] - 2026-06-15
 
 ### Fixed

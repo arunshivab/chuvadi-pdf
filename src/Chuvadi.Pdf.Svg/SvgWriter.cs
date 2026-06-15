@@ -45,9 +45,32 @@ internal sealed class SvgWriter
     {
         _body.Append("<svg xmlns=\"http://www.w3.org/2000/svg\" ");
         _body.Append("xmlns:xlink=\"http://www.w3.org/1999/xlink\" ");
+        // Width/height carry an explicit "pt" unit. PDF page boxes are measured
+        // in points, and the values here are points; emitting them unitless lets
+        // some viewers treat them as points and rescale the canvas by 96/72 while
+        // leaving the (1 unit = 1px) content alone, which pushes the page off to
+        // one side. With an explicit unit the viewBox maps cleanly onto the
+        // physical page in every engine.
         _body.AppendFormat(CultureInfo.InvariantCulture,
-            "width=\"{0}\" height=\"{1}\" viewBox=\"0 0 {0} {1}\">",
+            "width=\"{0}pt\" height=\"{1}pt\" viewBox=\"0 0 {0} {1}\">",
             F(width), F(height));
+    }
+
+    /// <summary>
+    /// Emits an opaque page-background rectangle covering the whole media box,
+    /// in the unflipped (top-left origin) coordinate system, before any page
+    /// content. PDF pages assume an opaque white sheet; without this the SVG is
+    /// transparent and composites differently from the rasteriser and across
+    /// viewers.
+    /// </summary>
+    /// <param name="width">Page width in user units (points).</param>
+    /// <param name="height">Page height in user units (points).</param>
+    /// <param name="fill">SVG colour string for the sheet (e.g. <c>#ffffff</c>).</param>
+    internal void EmitPageBackground(double width, double height, string fill)
+    {
+        _body.AppendFormat(CultureInfo.InvariantCulture,
+            "<rect x=\"0\" y=\"0\" width=\"{0}\" height=\"{1}\" fill=\"{2}\"/>",
+            F(width), F(height), EscapeXml(fill));
     }
 
     /// <summary>

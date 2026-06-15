@@ -88,6 +88,24 @@ public sealed class PdfPage
     public int Rotate => GetInheritedInteger(PdfName.Rotate, 0);
 
     /// <summary>
+    /// The page's displayed size — its crop box dimensions with width and
+    /// height swapped when <see cref="Rotate"/> is 90° or 270°. Use this to
+    /// compute fit/scale transforms against the page as the viewer shows it.
+    /// </summary>
+    /// <remarks>PDF 32000-1:2008 §7.7.3.3, Table 30 — Rotate.</remarks>
+    public (double Width, double Height) EffectiveSize
+    {
+        get
+        {
+            PdfRectangle box = CropBox;
+            int rotation = ((Rotate % 360) + 360) % 360;
+            return rotation is 90 or 270
+                ? (box.Height, box.Width)
+                : (box.Width, box.Height);
+        }
+    }
+
+    /// <summary>
     /// Gets the Resources dictionary for this page, or null when absent.
     /// PDF 32000-1:2008 §7.7.3.3, Table 30 — Resources.
     /// </summary>

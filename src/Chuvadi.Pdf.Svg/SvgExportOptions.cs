@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.0 — SVG export
 
+using Chuvadi.Pdf.Graphics;
+
 namespace Chuvadi.Pdf.Svg;
 
 /// <summary>How text is rendered to SVG.</summary>
@@ -50,4 +52,12 @@ public sealed class SvgExportOptions
 
     /// <summary>Indent the SVG output (default: false, compact).</summary>
     public bool PrettyPrint { get; init; }
+
+    /// <summary>
+    /// Opaque colour for the page sheet, emitted as a full-page background
+    /// rectangle behind all content. Defaults to <see cref="ColorF.White"/>,
+    /// matching the rasteriser's default white paper. Set to <see langword="null"/>
+    /// for a transparent SVG (useful when compositing over another background).
+    /// </summary>
+    public ColorF? Background { get; init; } = ColorF.White;
 }

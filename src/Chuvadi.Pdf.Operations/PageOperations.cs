@@ -347,7 +347,7 @@ public static class PageOperations
             int docIndex = 0)
         {
             // Deep-copy the page dictionary, stripping /Parent (will be rewritten).
-            PdfDictionary pageCopy = CopyDictionary(page.Dictionary);
+            PdfDictionary pageCopy = ObjectImporter.CopyDictionary(page.Dictionary);
             pageCopy.Set(PdfName.Type, PdfName.Page);
             pageCopy.Set(PdfName.Intern("Rotate"), rotate);
 
@@ -359,7 +359,7 @@ public static class PageOperations
 
             // Copy referenced objects (Resources, Contents).
             List<PdfIndirectObject> referencedObjects = new List<PdfIndirectObject>();
-            CollectReferences(page.Dictionary, resolver, referencedObjects,
+            ObjectImporter.CollectReferences(page.Dictionary, resolver, referencedObjects,
                 new HashSet<int>());
 
             _pages.Add(new PageEntry(pageCopy, referencedObjects, docIndex));
@@ -431,7 +431,7 @@ public static class PageOperations
                 // (deep-copied in AddPage). Deep-copy again with the remap to
                 // produce the final renumbered page, then set /Parent.
                 PdfDictionary pageDict =
-                    (PdfDictionary)DeepCopyPrimitive(
+                    (PdfDictionary)ObjectImporter.DeepCopyPrimitive(
                         _pages[i].PageDict, _pages[i].DocIndex, idRemap);
                 pageDict.Set(PdfName.Parent, new PdfReference(pagesId));
                 allObjects.Add(new PdfIndirectObject(pageIds[i], pageDict));
@@ -453,7 +453,7 @@ public static class PageOperations
                     addedOriginals.Add(key);
                     int newId = idRemap[key];
                     PdfPrimitive valueCopy =
-                        DeepCopyPrimitive(refObj.Value, entry.DocIndex, idRemap);
+                        ObjectImporter.DeepCopyPrimitive(refObj.Value, entry.DocIndex, idRemap);
                     allObjects.Add(new PdfIndirectObject(new PdfObjectId(newId, 0), valueCopy));
                 }
             }
@@ -473,126 +473,6 @@ public static class PageOperations
 
         // ── Object collection ──────────────────────────────────────────────
 
-        private static void CollectReferences(
-            PdfPrimitive primitive,
-            IPdfObjectResolver resolver,
-            List<PdfIndirectObject> collected,
-            HashSet<int> visited)
-        {
-            if (primitive is PdfReference reference)
-            {
-                int num = reference.ObjectId.ObjectNumber;
-
-                if (visited.Contains(num))
-                {
-                    return;
-                }
-
-                visited.Add(num);
-                PdfPrimitive resolved = resolver.Resolve(reference);
-                collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
-                CollectReferences(resolved, resolver, collected, visited);
-            }
-            else if (primitive is PdfDictionary dict)
-            {
-                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
-                {
-                    if (entry.Key == PdfName.Parent)
-                    {
-                        continue; // Never follow /Parent — it forms a cycle
-                    }
-
-                    CollectReferences(entry.Value, resolver, collected, visited);
-                }
-            }
-            else if (primitive is PdfArray array)
-            {
-                for (int i = 0; i < array.Count; i++)
-                {
-                    CollectReferences(array[i], resolver, collected, visited);
-                }
-            }
-            else if (primitive is PdfStream stream)
-            {
-                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
-                {
-                    CollectReferences(entry.Value, resolver, collected, visited);
-                }
-            }
-        }
-
-        // ── Deep copy with reference remapping ─────────────────────────────
-
-        // The empty remap used to detach a dictionary from the source
-        // document without renumbering (object IDs aren't known until Write).
-        private static readonly Dictionary<(int Doc, int Num), int> EmptyRemap =
-            new Dictionary<(int Doc, int Num), int>();
-
-        // Deep-copies a primitive, rewriting indirect-reference object numbers
-        // through idRemap. Always returns NEW dictionary, array, and stream
-        // instances, so neither the source document nor any other page copy is
-        // ever mutated (the cause of cross-operation corruption when nested
-        // dictionaries such as /Resources were shared and remapped in place).
-        // Scalars and references are immutable and returned as-is, with a
-        // reference's number rewritten when present in idRemap.
-        private static PdfPrimitive DeepCopyPrimitive(
-            PdfPrimitive primitive,
-            int docIndex,
-            Dictionary<(int Doc, int Num), int> idRemap)
-        {
-            switch (primitive)
-            {
-                case PdfReference reference:
-                    return idRemap.TryGetValue(
-                        (docIndex, reference.ObjectId.ObjectNumber), out int newNum)
-                        ? new PdfReference(new PdfObjectId(newNum, 0))
-                        : reference;
-
-                case PdfStream stream:
-                    return new PdfStream(
-                        DeepCopyDictionary(stream.Dictionary, docIndex, idRemap),
-                        stream.RawBytes);
-
-                case PdfDictionary dict:
-                    return DeepCopyDictionary(dict, docIndex, idRemap);
-
-                case PdfArray array:
-                    PdfArray arrayCopy = new PdfArray([]);
-                    for (int i = 0; i < array.Count; i++)
-                    {
-                        arrayCopy.Add(DeepCopyPrimitive(array[i], docIndex, idRemap));
-                    }
-                    return arrayCopy;
-
-                default:
-                    // PdfName, PdfInteger, PdfReal, PdfString, PdfBoolean,
-                    // PdfNull — immutable, safe to share.
-                    return primitive;
-            }
-        }
-
-        private static PdfDictionary DeepCopyDictionary(
-            PdfDictionary source,
-            int docIndex,
-            Dictionary<(int Doc, int Num), int> idRemap)
-        {
-            PdfDictionary copy = new PdfDictionary();
-
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in source)
-            {
-                copy.Set(entry.Key, DeepCopyPrimitive(entry.Value, docIndex, idRemap));
-            }
-
-            return copy;
-        }
-
-        // Detaches a dictionary from the source document (deep copy, no
-        // renumbering) for use before object IDs are assigned. The empty remap
-        // rewrites nothing, so the document index is irrelevant here.
-        private static PdfDictionary CopyDictionary(PdfDictionary source)
-        {
-            return DeepCopyDictionary(source, 0, EmptyRemap);
-        }
     }
 
     private sealed class PageEntry
