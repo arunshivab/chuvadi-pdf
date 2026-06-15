@@ -47,6 +47,48 @@ public sealed record CompressionOptions
     /// for JPEG recompression. Default 4096 (e.g. 64×64).
     /// </summary>
     public int MinImagePixelsToRecompress { get; init; } = 4096;
+
+    /// <summary>
+    /// When false (the default), a digitally signed document is not rewritten:
+    /// <see cref="PdfCompressor.Compress"/> returns a result whose
+    /// <see cref="CompressionResult.SkipReason"/> is
+    /// <see cref="CompressionSkipReason.Signed"/> and writes nothing, because a
+    /// full rewrite invalidates the signature byte ranges. Set to true to
+    /// rewrite anyway, accepting that existing signatures will break.
+    /// </summary>
+    public bool AllowSignedRewrite { get; init; }
+
+    /// <summary>
+    /// When false (the default), an encrypted document is not rewritten:
+    /// <see cref="PdfCompressor.Compress"/> returns a result whose
+    /// <see cref="CompressionResult.SkipReason"/> is
+    /// <see cref="CompressionSkipReason.Encrypted"/> and writes nothing, because
+    /// the reader exposes decrypted content and the rewrite would emit the
+    /// document without encryption. Set to true to rewrite the decrypted
+    /// content anyway.
+    /// </summary>
+    public bool AllowEncryptedRewrite { get; init; }
+}
+
+/// <summary>
+/// Why <see cref="PdfCompressor.Compress"/> declined to rewrite a document.
+/// </summary>
+public enum CompressionSkipReason
+{
+    /// <summary>The document was rewritten; no skip occurred.</summary>
+    None = 0,
+
+    /// <summary>
+    /// The document is digitally signed and
+    /// <see cref="CompressionOptions.AllowSignedRewrite"/> was not set.
+    /// </summary>
+    Signed = 1,
+
+    /// <summary>
+    /// The document is encrypted and
+    /// <see cref="CompressionOptions.AllowEncryptedRewrite"/> was not set.
+    /// </summary>
+    Encrypted = 2,
 }
 
 /// <summary>
@@ -62,6 +104,18 @@ public sealed record CompressionResult
 
     /// <summary>Images re-encoded as JPEG.</summary>
     public int ImagesRecompressed { get; init; }
+
+    /// <summary>
+    /// Why the rewrite was skipped, or <see cref="CompressionSkipReason.None"/>
+    /// when the document was rewritten normally.
+    /// </summary>
+    public CompressionSkipReason SkipReason { get; init; }
+
+    /// <summary>
+    /// True when the document was left untouched and nothing was written to the
+    /// output stream because a safety guard fired (see <see cref="SkipReason"/>).
+    /// </summary>
+    public bool Skipped => SkipReason != CompressionSkipReason.None;
 }
 
 /// <summary>
@@ -78,8 +132,12 @@ public sealed record CompressionResult
 /// </para>
 /// <para>
 /// The catalog graph (outlines, forms, named destinations, metadata) is
-/// preserved; this is a rewrite, not a page extraction. Encrypted documents
-/// are written back decrypted, as the reader exposes decrypted content.
+/// preserved; this is a rewrite, not a page extraction. Because a full rewrite
+/// invalidates digital signatures and emits decrypted content, signed and
+/// encrypted documents are skipped by default — nothing is written and the
+/// returned <see cref="CompressionResult.SkipReason"/> says why (see
+/// <see cref="CompressionOptions.AllowSignedRewrite"/> and
+/// <see cref="CompressionOptions.AllowEncryptedRewrite"/> to override).
 /// Object streams and cross-reference streams are a recorded follow-up
 /// (the writer currently emits classic cross-reference tables).
 /// </para>
@@ -100,6 +158,18 @@ public static class PdfCompressor
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(output);
         options ??= new CompressionOptions();
+
+        // ── 0. Safety guard ───────────────────────────────────────────────
+        // A full rewrite invalidates digital signatures and emits the document
+        // without its encryption. Such documents are skipped by default — no
+        // bytes are written to the output — so a batch run over a mixed corpus
+        // carries on instead of throwing; callers opt in per hazard to rewrite
+        // anyway.
+        CompressionSkipReason skip = EvaluateGuard(document, options);
+        if (skip != CompressionSkipReason.None)
+        {
+            return new CompressionResult { SkipReason = skip };
+        }
 
         // ── 1. Reachability from the trailer ─────────────────────────────
         Dictionary<int, PdfPrimitive> reachable = new();
@@ -193,6 +263,53 @@ public static class PdfCompressor
         PdfName.Root,
         PdfName.Intern("Info"),
     ];
+
+    // ── Safety guard ──────────────────────────────────────────────────────
+
+    private static CompressionSkipReason EvaluateGuard(
+        PdfDocument document, CompressionOptions options)
+    {
+        if (!options.AllowSignedRewrite && IsSigned(document))
+        {
+            return CompressionSkipReason.Signed;
+        }
+
+        if (!options.AllowEncryptedRewrite && document.Encryption is not null)
+        {
+            return CompressionSkipReason.Encrypted;
+        }
+
+        return CompressionSkipReason.None;
+    }
+
+    /// <summary>
+    /// Detects whether the document carries digital signatures by inspecting the
+    /// AcroForm /SigFlags SignaturesExist bit (PDF 32000-1:2008 §12.7.2, Table
+    /// 219). The low-level catalog walk avoids a dependency on the signatures
+    /// module.
+    /// </summary>
+    private static bool IsSigned(PdfDocument document)
+    {
+        if (!document.Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootValue) ||
+            document.Objects.Resolve(rootValue) is not PdfDictionary catalog)
+        {
+            return false;
+        }
+
+        if (!catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? acroValue) ||
+            document.Objects.Resolve(acroValue) is not PdfDictionary acroForm)
+        {
+            return false;
+        }
+
+        if (!acroForm.TryGetValue(PdfName.Intern("SigFlags"), out PdfPrimitive? flagsValue) ||
+            document.Objects.Resolve(flagsValue) is not PdfInteger flags)
+        {
+            return false;
+        }
+
+        return (flags.Value & 1) != 0;
+    }
 
     // ── Reachability ──────────────────────────────────────────────────────
 

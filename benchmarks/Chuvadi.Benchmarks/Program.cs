@@ -14,9 +14,21 @@ namespace Chuvadi.Benchmarks;
 /// </summary>
 internal static class Program
 {
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--compression-report")
+        {
+            return CompressionReport.Print();
+        }
+
+        if (args.Length > 0 && args[0] == "--update-compression-baseline")
+        {
+            CompressionReport.UpdateBaseline(CompressionReport.ResolveBaselinePath(args));
+            return 0;
+        }
+
         // Use BenchmarkSwitcher so users can pass --filter, --list, etc.
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, DefaultConfig.Instance);
+        return 0;
     }
 }

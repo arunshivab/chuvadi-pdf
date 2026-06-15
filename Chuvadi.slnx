@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Chuvadi.Benchmarks/Chuvadi.Benchmarks.csproj" />
+    <Project Path="benchmarks/Chuvadi.Benchmarks.Compression/Chuvadi.Benchmarks.Compression.csproj" />
   </Folder>
   <Folder Name="/examples/">
     <Project Path="examples/Chuvadi.Examples.Annotations/Chuvadi.Examples.Annotations.csproj" />

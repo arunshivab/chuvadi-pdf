@@ -289,14 +289,72 @@ internal sealed class WatermarkDocument
         _extraObjects = new List<PdfIndirectObject>();
         _pageWatermarks = new Dictionary<int, List<WatermarkEntry>>();
 
-        // Start numbering above existing objects
-        _nextObjectNumber = 1;
+        // The object store loads lazily, so force the full graph reachable from
+        // the trailer into memory before numbering. Without this a freshly
+        // opened document exposes only a partial object set, which breaks the
+        // rewrite two ways: the next object number is computed too low (new
+        // watermark streams collide with existing pages/fonts), and objects that
+        // were never loaded — outlines, /Names, attachments, metadata, the
+        // structure tree — are silently dropped when the originals are copied in
+        // Write.
+        ForceLoadAll(source);
 
+        // Start numbering above existing objects.
+        _nextObjectNumber = 1;
         foreach (PdfIndirectObject obj in source.Objects.Objects)
         {
             if (obj.Id.ObjectNumber >= _nextObjectNumber)
             {
                 _nextObjectNumber = obj.Id.ObjectNumber + 1;
+            }
+        }
+
+        // Floor at the trailer /Size (highest number + 1) as a safety net.
+        if (source.Trailer.TryGetValue(PdfName.Size, out PdfPrimitive? sizePrim)
+            && sizePrim is PdfInteger size && size.Value >= _nextObjectNumber)
+        {
+            _nextObjectNumber = (int)size.Value;
+        }
+    }
+
+    /// <summary>
+    /// Resolves every object reachable from the document trailer, forcing the
+    /// lazily-loaded store to materialise the complete object graph. This makes
+    /// the store's loaded set complete for both object-number allocation and the
+    /// original-object copy performed in <c>Write</c>.
+    /// </summary>
+    private static void ForceLoadAll(PdfDocument source)
+    {
+        HashSet<int> visited = new HashSet<int>();
+        Queue<PdfPrimitive> pending = new Queue<PdfPrimitive>();
+        pending.Enqueue(source.Trailer);
+
+        while (pending.Count > 0)
+        {
+            PdfPrimitive current = pending.Dequeue();
+            switch (current)
+            {
+                case PdfReference reference:
+                    if (visited.Add(reference.ObjectId.ObjectNumber))
+                    {
+                        pending.Enqueue(source.Objects.ResolveById(reference.ObjectId));
+                    }
+                    break;
+                case PdfStream stream:
+                    pending.Enqueue(stream.Dictionary);
+                    break;
+                case PdfDictionary dictionary:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                    {
+                        pending.Enqueue(entry.Value);
+                    }
+                    break;
+                case PdfArray array:
+                    foreach (PdfPrimitive item in array)
+                    {
+                        pending.Enqueue(item);
+                    }
+                    break;
             }
         }
     }
@@ -574,6 +632,15 @@ internal sealed class WatermarkDocument
                 trailer.Set(PdfName.Root, new PdfReference(obj.Id));
                 break;
             }
+        }
+
+        // Carry the document information dictionary forward. Without this the
+        // writer synthesises a generic /Info and the original Title, Author,
+        // Subject, Keywords and dates are lost. The referenced object is kept
+        // alive by the full-graph force-load in the constructor.
+        if (_source.Trailer.TryGetValue(PdfName.Intern("Info"), out PdfPrimitive? info))
+        {
+            trailer.Set(PdfName.Intern("Info"), info);
         }
 
         return trailer;
