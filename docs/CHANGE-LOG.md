@@ -1242,3 +1242,34 @@ Phase A is a source survey against ISO 32000-1 with file:line evidence for every
 No code change. Phase B (runtime corpus audit) is the follow-up.
 
 **Files:** added `docs/CONFORMANCE-AUDIT.md`; modified `docs/BACKLOG.md`, `docs/CHANGE-LOG.md`.
+
+## A48 - Page composition (PageComposer, PageStamper, Placement) + form-XObject text extraction
+
+**Date:** 2026-06-15
+**Scope:** Operations (new), Content (TextExtractor recursion), Documents (EffectiveSize)
+**Rationale:** The Reader/Bench needs high-level page transforms (rotate any angle, resize, N-up, stamp) built on the existing low-level matrix/import pieces.
+
+- **Shared import engine.** Factored Merge's deep-copy/remap (CollectReferences, DeepCopyPrimitive, keyed by (document, number)) out of PageOperations into an internal ObjectImporter, plus content decode and /Contents-array concatenation. PageOperations delegates to it; the 39 merge tests are unchanged.
+- **PageComposer (new document).** AddPage(PageSize | width,height | matching source) + PlacePage(source, index, Transform) + Write. Imports each source page as a form XObject (BBox = CropBox, native coordinates) and paints `q <cm> /Fm Do Q`; objects deduped per source by (document, number). Covers rotate-any-angle, resize, and N-up.
+- **PageStamper (existing document).** Overlay/underlay a source page onto one/range/all target pages, preserving the rest. Reuses the WatermarkDocument write-back shape; existing content is isolated in its own q/Q scope. Found and fixed a latent lazy-loading bug: the object store loads on demand, so computing the next object number from a freshly opened store saw almost nothing and new objects collided with the catalog (or originals were dropped). Fixed by force-loading the full graph from the trailer and flooring at /Size. WatermarkDocument shares this latent pattern - flagged for a follow-up.
+- **Placement helpers.** ScaleToFit, Center, RotatedSize, RotateIntoBox, RotateAboutCenter - the common matrices, so callers do not hand-roll them.
+- **TextExtractor form-XObject recursion.** ContentStreamParser now handles `Do`: resolve the named XObject, and if it is a form, decode and recurse with the form's /Resources (cycle-guarded, depth-limited at 12). Required for the acceptance - placed/stamped text is now extractable. Extraction already keyed position off the text matrix (not the CTM), so recursion is consistent.
+
+Gate: 27/27 projects; Operations.Tests 39 -> 48 (composition + placement + acceptance); Text.Tests unchanged at 17. New public API -> api docs regenerated.
+
+**Files:** added `src/Chuvadi.Pdf.Operations/{ObjectImporter,PageComposer,PageStamper,Placement}.cs`, `tests/Chuvadi.Pdf.Operations.Tests/PageCompositionTests.cs`; modified `src/Chuvadi.Pdf.Operations/PageOperations.cs` (+ csproj references), `src/Chuvadi.Pdf.Content/ContentStreamParser.cs`, `src/Chuvadi.Pdf.Documents/PdfPage.cs`, `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/api/*`.
+
+## A49 - Image-export hardening: WIC-compatible TIFF, cross-engine SVG geometry, SVG page background
+
+**Date:** 2026-06-15
+**Scope:** Images (TiffEncoder), Svg (SvgWriter, SvgRenderer, SvgExportOptions)
+**Rationale:** A page exported to TIFF rendered corrupted in every Windows/WIC viewer (Photos, Photo Viewer, WPS, Paint) while libtiff-family decoders read it fine, and the same page exported to SVG sat off-centre and transparent. All three are library output defects, not viewer artifacts - confirmed by byte-forensics, multi-decoder testing, and the user's own apps.
+
+- **TIFF per-row PackBits + multi-strip.** The encoder packed PackBits across the whole image in a single strip. WIC resets PackBits at row boundaries, so whole-image packing shifted rows and trailed a black band; libtiff tolerated it. Now each scanline is packed independently, the image is split into ~8 KB strips (StripOffsets/StripByteCounts become arrays), and explicit Orientation=1 and PlanarConfiguration=1 tags are written (IFD 12 -> 14 entries). Output is pixel-identical to the candidate the user confirmed opens cleanly in all four apps.
+- **SVG explicit `pt` units.** Root width/height were emitted unitless. Some viewers treat point-sized unitless values as points and rescale the canvas by 96/72 while rendering content at 1 unit = 1px, pushing the centred table to the left (0.569 vs the PDF's 0.757 table/page ratio - the 72/96 fingerprint). Emitting `width="...pt" height="...pt"` (viewBox unchanged) maps the page consistently across engines; the user confirmed the pt variant centres.
+- **SVG opaque page background.** SvgRenderer emitted no background, so the SVG was transparent and composited differently from the rasteriser and per-viewer. New `SvgExportOptions.Background` (`ColorF?`, default `ColorF.White`) emits a full-page rect behind content (ColorF.ToRgb -> #rrggbb, so gray/CMYK resolve); null gives a transparent SVG.
+- **PNG: no change.** The "PNG is JPEG" report was this chat's image re-encoding pipeline, confirmed on-disk with Format-Hex; RasterizeToPng already writes real PNGs.
+
+Gate: 27/27 projects; Images.Tests 62 -> 64, Svg.Tests 7 -> 10 (5 new regression tests). New public API (SvgExportOptions.Background) -> api docs regenerated.
+
+**Files:** modified `src/Chuvadi.Pdf.Images/TiffEncoder.cs`, `src/Chuvadi.Pdf.Svg/{SvgWriter,SvgRenderer,SvgExportOptions}.cs`, `CHANGELOG.md`, `docs/CHANGE-LOG.md`, `docs/api/Svg/SvgExportOptions.md`, `docs/api/README.md`; added `tests/Chuvadi.Pdf.Images.Tests/TiffWicCompatibilityTests.cs`, `tests/Chuvadi.Pdf.Svg.Tests/SvgPageGeometryTests.cs`.

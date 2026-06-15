@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -41,6 +42,7 @@ public sealed class ContentStreamParser
 {
     private readonly IPdfObjectResolver _resolver;
     private readonly PdfDictionary? _resources;
+    private readonly FilterPipeline _pipeline = FilterRegistry.CreateDefaultPipeline();
 
     /// <summary>
     /// Initialises a <see cref="ContentStreamParser"/> for a page.
@@ -72,6 +74,19 @@ public sealed class ContentStreamParser
             throw new ArgumentNullException(nameof(streams));
         }
 
+        return ParseStreams(streams, _resources, new HashSet<int>(), 0);
+    }
+
+    // Maximum form-XObject nesting depth, guarding against pathological or
+    // cyclic /Do reference chains.
+    private const int MaxFormDepth = 12;
+
+    private List<TextFragment> ParseStreams(
+        byte[] streams,
+        PdfDictionary? resources,
+        HashSet<int> visited,
+        int depth)
+    {
         List<TextFragment> fragments = new List<TextFragment>();
         Stack<GraphicsState> stateStack = new Stack<GraphicsState>();
         GraphicsState state = new GraphicsState();
@@ -167,7 +182,7 @@ public sealed class ContentStreamParser
                         {
                             string fontName = GetString(operands, operands.Count - 2);
                             double fontSize = GetDouble(operands, operands.Count - 1);
-                            state.Font = ResolveFont(fontName);
+                            state.Font = ResolveFont(fontName, resources);
                             state.FontSize = fontSize;
                         }
                         break;
@@ -306,6 +321,14 @@ public sealed class ContentStreamParser
                         }
                         break;
 
+                    case "Do":
+                        if (operands.Count >= 1 && depth < MaxFormDepth)
+                        {
+                            AppendFormText(
+                                GetString(operands, 0), resources, visited, depth, fragments);
+                        }
+                        break;
+
                     default:
                         // Unknown operator — discard operands and continue.
                         break;
@@ -392,9 +415,9 @@ public sealed class ContentStreamParser
 
     // ── Font resolution ───────────────────────────────────────────────────
 
-    private PdfFont ResolveFont(string fontName)
+    private PdfFont ResolveFont(string fontName, PdfDictionary? resources)
     {
-        if (_resources is null)
+        if (resources is null)
         {
             return PdfFont.Default();
         }
@@ -404,7 +427,7 @@ public sealed class ContentStreamParser
             return PdfFont.Default();
         }
 
-        PdfDictionary? fontDict = _resources.GetDictionary(PdfName.Font);
+        PdfDictionary? fontDict = ResolveDictionary(resources, PdfName.Font);
 
         if (fontDict is null)
         {
@@ -426,6 +449,97 @@ public sealed class ContentStreamParser
         }
 
         return PdfFont.FromDictionary(specificFontDict, _resolver);
+    }
+
+    // Resolves a named XObject in the given resources and, when it is a form,
+    // recurses into its content so text drawn via /Do (e.g. an imported or
+    // stamped page) is extracted too.
+    private void AppendFormText(
+        string name,
+        PdfDictionary? resources,
+        HashSet<int> visited,
+        int depth,
+        List<TextFragment> fragments)
+    {
+        if (resources is null || string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        PdfDictionary? xobjects = ResolveDictionary(resources, PdfName.XObject);
+        if (xobjects is null
+            || !xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? xref))
+        {
+            return;
+        }
+
+        // Guard against cyclic /Do references by object number.
+        if (xref is PdfReference reference && !visited.Add(reference.ObjectId.ObjectNumber))
+        {
+            return;
+        }
+
+        if (_resolver.Resolve(xref) is not PdfStream stream || !IsFormXObject(stream))
+        {
+            return;
+        }
+
+        byte[] content = DecodeStream(stream);
+        PdfDictionary? formResources =
+            ResolveDictionary(stream.Dictionary, PdfName.Resources) ?? resources;
+
+        fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1));
+    }
+
+    private static bool IsFormXObject(PdfStream stream)
+    {
+        return stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? subtype)
+            && subtype is PdfName name && name.Value == "Form";
+    }
+
+    private PdfDictionary? ResolveDictionary(PdfDictionary parent, PdfName key)
+    {
+        if (!parent.TryGetValue(key, out PdfPrimitive? value))
+        {
+            return null;
+        }
+
+        return _resolver.Resolve(value) as PdfDictionary;
+    }
+
+    private byte[] DecodeStream(PdfStream stream)
+    {
+        PdfDictionary dict = stream.Dictionary;
+
+        if (!dict.TryGetValue(PdfName.Filter, out PdfPrimitive? filterPrim))
+        {
+            return stream.RawBytes;
+        }
+
+        dict.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms);
+        byte[] current = stream.RawBytes;
+
+        if (filterPrim is PdfName single)
+        {
+            return _pipeline.Decode(
+                FilterRegistry.ResolveAlias(single.Value), current,
+                FilterParameters.FromDictionary(parms, 0));
+        }
+
+        if (filterPrim is PdfArray array)
+        {
+            for (int i = 0; i < array.Count; i++)
+            {
+                if (array[i] is PdfName filterName)
+                {
+                    current = _pipeline.Decode(
+                        FilterRegistry.ResolveAlias(filterName.Value), current,
+                        FilterParameters.FromDictionary(parms, i));
+                }
+            }
+        }
+
+        return current;
     }
 
     // ── Operand helpers ───────────────────────────────────────────────────
