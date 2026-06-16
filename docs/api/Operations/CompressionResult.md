@@ -34,6 +34,22 @@ int ImagesRecompressed
 
 Images re-encoded as JPEG.
 
+### `DuplicatesRemoved`
+
+```csharp
+int DuplicatesRemoved
+```
+
+Byte-identical indirect objects merged into one.
+
+### `ContentStreamsMinified`
+
+```csharp
+int ContentStreamsMinified
+```
+
+Content streams shrunk by whitespace/comment minification.
+
 ### `SkipReason`
 
 ```csharp

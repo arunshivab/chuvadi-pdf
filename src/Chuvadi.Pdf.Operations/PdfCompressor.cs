@@ -9,6 +9,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Images;
@@ -47,6 +49,12 @@ public sealed record CompressionOptions
     /// for JPEG recompression. Default 4096 (e.g. 64×64).
     /// </summary>
     public int MinImagePixelsToRecompress { get; init; } = 4096;
+
+    /// <summary>Drop the catalog /Metadata (XMP) stream. Off by default.</summary>
+    public bool RemoveMetadata { get; init; }
+
+    /// <summary>Drop the document information dictionary. Off by default.</summary>
+    public bool RemoveDocumentInfo { get; init; }
 
     /// <summary>
     /// When false (the default), a digitally signed document is not rewritten:
@@ -104,6 +112,12 @@ public sealed record CompressionResult
 
     /// <summary>Images re-encoded as JPEG.</summary>
     public int ImagesRecompressed { get; init; }
+
+    /// <summary>Byte-identical indirect objects merged into one.</summary>
+    public int DuplicatesRemoved { get; init; }
+
+    /// <summary>Content streams shrunk by whitespace/comment minification.</summary>
+    public int ContentStreamsMinified { get; init; }
 
     /// <summary>
     /// Why the rewrite was skipped, or <see cref="CompressionSkipReason.None"/>
@@ -171,9 +185,13 @@ public static class PdfCompressor
             return new CompressionResult { SkipReason = skip };
         }
 
+        PdfName[] effectiveRootKeys = options.RemoveDocumentInfo
+            ? new[] { PdfName.Root }
+            : RootKeys;
+
         // ── 1. Reachability from the trailer ─────────────────────────────
         Dictionary<int, PdfPrimitive> reachable = new();
-        foreach (PdfName key in RootKeys)
+        foreach (PdfName key in effectiveRootKeys)
         {
             if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
             {
@@ -204,7 +222,9 @@ public static class PdfCompressor
         // ── 3. Copy with remapped references and stream reduction ────────
         int streamsCompressed = 0;
         int imagesRecompressed = 0;
+        int contentStreamsMinified = 0;
         List<PdfIndirectObject> objects = new(reachable.Count);
+        HashSet<int> contentStreamNumbers = CollectContentStreamNumbers(document);
 
         foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
         {
@@ -212,21 +232,31 @@ public static class PdfCompressor
 
             if (copy is PdfStream stream)
             {
-                PdfStream? recompressed = options.RecompressImages
-                    ? TryRecompressImage(stream, document.Objects, options)
-                    : null;
-                if (recompressed is not null)
+                bool isContent = contentStreamNumbers.Contains(entry.Key) || IsFormXObject(stream.Dictionary);
+                PdfStream? minified = isContent ? TryMinifyContentStream(stream) : null;
+                if (minified is not null)
                 {
-                    copy = recompressed;
-                    imagesRecompressed++;
+                    copy = minified;
+                    contentStreamsMinified++;
                 }
                 else
                 {
-                    PdfStream? flated = TryFlateRawStream(stream, options);
-                    if (flated is not null)
+                    PdfStream? recompressed = options.RecompressImages
+                        ? TryRecompressImage(stream, document.Objects, options)
+                        : null;
+                    if (recompressed is not null)
                     {
-                        copy = flated;
-                        streamsCompressed++;
+                        copy = recompressed;
+                        imagesRecompressed++;
+                    }
+                    else
+                    {
+                        PdfStream? flated = TryFlateRawStream(stream, options);
+                        if (flated is not null)
+                        {
+                            copy = flated;
+                            streamsCompressed++;
+                        }
                     }
                 }
             }
@@ -236,7 +266,7 @@ public static class PdfCompressor
 
         // ── 4. New trailer ────────────────────────────────────────────────
         PdfDictionary trailer = new();
-        foreach (PdfName key in RootKeys)
+        foreach (PdfName key in effectiveRootKeys)
         {
             if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
             {
@@ -248,13 +278,36 @@ public static class PdfCompressor
             trailer.Set(PdfName.Intern("ID"), DeepCopy(fileId, remap));
         }
 
-        PdfWriter.Write(output, objects, trailer);
+        // ── 5. Optional metadata stripping, then drop orphans ──────
+        if (options.RemoveMetadata)
+        {
+            StripMetadata(objects, trailer);
+            GarbageCollect(objects, trailer);
+        }
+
+        // ── 6. Merge byte-identical objects, then densify numbering ──────
+        PdfDictionary deduped = Deduplicate(objects, trailer, out int duplicatesRemoved);
+        trailer = Densify(objects, deduped);
+
+        SynthesizedMetadata synthesized = SynthesizedMetadata.All;
+        if (options.RemoveDocumentInfo)
+        {
+            synthesized &= ~SynthesizedMetadata.Info;
+        }
+        if (options.RemoveMetadata)
+        {
+            synthesized &= ~SynthesizedMetadata.Metadata;
+        }
+
+        PdfWriter.Write(output, objects, trailer, null, synthesized);
 
         return new CompressionResult
         {
             ObjectsRemoved = Math.Max(0, totalObjects - reachable.Count),
             StreamsCompressed = streamsCompressed,
             ImagesRecompressed = imagesRecompressed,
+            DuplicatesRemoved = duplicatesRemoved,
+            ContentStreamsMinified = contentStreamsMinified,
         };
     }
 
@@ -415,6 +468,451 @@ public static class PdfCompressor
                 : PdfNull.Value;
         }
         return DeepCopy(primitive, remap);
+    }
+
+    // ── Object deduplication ──────────────────────────────────────────────
+
+    // Merges byte-identical indirect objects. Objects are grouped by a canonical
+    // content signature (dictionary key order is normalised, so order-only
+    // differences still merge); each duplicate is repointed at the lowest-
+    // numbered survivor and dropped. Repeated to a fixpoint so objects made
+    // identical by an earlier merge also collapse. Returns the rebuilt trailer;
+    // the object list is updated in place.
+    private static PdfDictionary Deduplicate(
+        List<PdfIndirectObject> objects, PdfDictionary trailer, out int removed)
+    {
+        removed = 0;
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+
+            Dictionary<string, int> survivorBySignature = new(StringComparer.Ordinal);
+            Dictionary<int, int> duplicateToSurvivor = new();
+            foreach (PdfIndirectObject obj in objects)
+            {
+                string signature = Signature(obj.Value);
+                if (survivorBySignature.TryGetValue(signature, out int survivor))
+                {
+                    duplicateToSurvivor[obj.Id.ObjectNumber] = survivor;
+                }
+                else
+                {
+                    survivorBySignature[signature] = obj.Id.ObjectNumber;
+                }
+            }
+
+            if (duplicateToSurvivor.Count == 0)
+            {
+                break;
+            }
+
+            changed = true;
+            removed += duplicateToSurvivor.Count;
+
+            // RemapPrimitive nulls references absent from the map, so every
+            // surviving number must map to itself in addition to the merges.
+            Dictionary<int, int> remap = new(objects.Count);
+            foreach (PdfIndirectObject obj in objects)
+            {
+                int number = obj.Id.ObjectNumber;
+                remap[number] = duplicateToSurvivor.TryGetValue(number, out int s) ? s : number;
+            }
+
+            List<PdfIndirectObject> survivors = new(objects.Count - duplicateToSurvivor.Count);
+            foreach (PdfIndirectObject obj in objects)
+            {
+                if (duplicateToSurvivor.ContainsKey(obj.Id.ObjectNumber))
+                {
+                    continue;
+                }
+                survivors.Add(new PdfIndirectObject(obj.Id, RemapPrimitive(obj.Value, remap)));
+            }
+
+            objects.Clear();
+            objects.AddRange(survivors);
+            trailer = (PdfDictionary)RemapPrimitive(trailer, remap);
+        }
+
+        return trailer;
+    }
+
+    // Renumbers the surviving objects 1..n densely (closing gaps left by merged
+    // duplicates) and rewrites all references and the trailer to match.
+    private static PdfDictionary Densify(List<PdfIndirectObject> objects, PdfDictionary trailer)
+    {
+        Dictionary<int, int> remap = new(objects.Count);
+        int next = 1;
+        foreach (PdfIndirectObject obj in objects)
+        {
+            remap[obj.Id.ObjectNumber] = next;
+            next++;
+        }
+
+        List<PdfIndirectObject> renumbered = new(objects.Count);
+        foreach (PdfIndirectObject obj in objects)
+        {
+            PdfObjectId id = new(remap[obj.Id.ObjectNumber], 0);
+            renumbered.Add(new PdfIndirectObject(id, RemapPrimitive(obj.Value, remap)));
+        }
+
+        objects.Clear();
+        objects.AddRange(renumbered);
+        return (PdfDictionary)RemapPrimitive(trailer, remap);
+    }
+
+    // Canonical content signature used to detect byte-identical objects. The
+    // serialization is unambiguous (type tags plus length-prefixed payloads)
+    // and order-normalised for dictionaries, then reduced to a SHA-256 digest.
+    private static string Signature(PdfPrimitive primitive)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendCanonical(primitive, hash);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static void AppendCanonical(PdfPrimitive primitive, IncrementalHash hash)
+    {
+        switch (primitive)
+        {
+            case PdfBoolean boolean:
+                AppendTag(hash, boolean.Value ? (byte)'t' : (byte)'f');
+                break;
+
+            case PdfInteger integer:
+                AppendTag(hash, (byte)'i');
+                hash.AppendData(BitConverter.GetBytes((long)integer.Value));
+                break;
+
+            case PdfReal real:
+                AppendTag(hash, (byte)'r');
+                hash.AppendData(BitConverter.GetBytes(real.Value));
+                break;
+
+            case PdfName name:
+                AppendTag(hash, (byte)'/');
+                AppendBytes(hash, Encoding.UTF8.GetBytes(name.Value));
+                break;
+
+            case PdfString text:
+                AppendTag(hash, (byte)'s');
+                AppendBytes(hash, text.Bytes);
+                break;
+
+            case PdfReference reference:
+                AppendTag(hash, (byte)'R');
+                hash.AppendData(BitConverter.GetBytes(reference.ObjectNumber));
+                hash.AppendData(BitConverter.GetBytes(reference.Generation));
+                break;
+
+            case PdfArray array:
+                AppendTag(hash, (byte)'[');
+                hash.AppendData(BitConverter.GetBytes(array.Count));
+                for (int i = 0; i < array.Count; i++)
+                {
+                    AppendCanonical(array[i], hash);
+                }
+                break;
+
+            case PdfDictionary dict:
+                AppendDictionary(dict, hash);
+                break;
+
+            case PdfStream stream:
+                AppendTag(hash, (byte)'S');
+                AppendDictionary(stream.Dictionary, hash);
+                AppendBytes(hash, stream.RawBytes);
+                break;
+
+            default:
+                AppendTag(hash, (byte)'n');   // PdfNull and anything else
+                break;
+        }
+    }
+
+    private static void AppendDictionary(PdfDictionary dict, IncrementalHash hash)
+    {
+        AppendTag(hash, (byte)'<');
+
+        List<PdfName> keys = new(dict.Keys);
+        keys.Sort((x, y) => string.CompareOrdinal(x.Value, y.Value));
+
+        hash.AppendData(BitConverter.GetBytes(keys.Count));
+        foreach (PdfName key in keys)
+        {
+            AppendBytes(hash, Encoding.UTF8.GetBytes(key.Value));
+            AppendCanonical(dict[key], hash);
+        }
+    }
+
+    private static void AppendTag(IncrementalHash hash, byte tag)
+    {
+        hash.AppendData(new byte[] { tag });
+    }
+
+    private static void AppendBytes(IncrementalHash hash, byte[] data)
+    {
+        hash.AppendData(BitConverter.GetBytes(data.Length));
+        hash.AppendData(data);
+    }
+
+    // ── Content-stream minification ───────────────────────────────────────
+
+    private static readonly FilterPipeline ContentPipeline = FilterRegistry.CreateDefaultPipeline();
+
+    // Collects the object numbers of page content streams by walking the page
+    // tree from the catalog. Form XObjects are recognised separately by their
+    // dictionary, so they are not collected here.
+    private static HashSet<int> CollectContentStreamNumbers(PdfDocument document)
+    {
+        HashSet<int> contents = new();
+        HashSet<int> visited = new();
+        PdfDictionary catalog = document.Catalog;
+        if (catalog.TryGetValue(PdfName.Pages, out PdfPrimitive? pages))
+        {
+            WalkPageTree(pages, document.Objects, contents, visited);
+        }
+        return contents;
+    }
+
+    private static void WalkPageTree(
+        PdfPrimitive node, PdfObjectStore resolver, HashSet<int> contents, HashSet<int> visited)
+    {
+        if (node is PdfReference nodeRef && !visited.Add(nodeRef.ObjectNumber))
+        {
+            return;
+        }
+
+        PdfPrimitive resolved = resolver.Resolve(node);
+        if (resolved is not PdfDictionary dict)
+        {
+            return;
+        }
+
+        PdfName? type = dict.GetAs<PdfName>(PdfName.Type);
+        if (type is not null && string.Equals(type.Value, "Pages", StringComparison.Ordinal))
+        {
+            if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsValue) &&
+                resolver.Resolve(kidsValue) is PdfArray kids)
+            {
+                for (int i = 0; i < kids.Count; i++)
+                {
+                    WalkPageTree(kids[i], resolver, contents, visited);
+                }
+            }
+        }
+        else if (dict.TryGetValue(PdfName.Contents, out PdfPrimitive? contentsValue))
+        {
+            AddContentTargets(contentsValue, resolver, contents);
+        }
+    }
+
+    private static void AddContentTargets(
+        PdfPrimitive contentsValue, PdfObjectStore resolver, HashSet<int> contents)
+    {
+        if (contentsValue is PdfReference contentRef)
+        {
+            if (resolver.Resolve(contentRef) is PdfArray array)
+            {
+                for (int i = 0; i < array.Count; i++)
+                {
+                    if (array[i] is PdfReference element)
+                    {
+                        contents.Add(element.ObjectNumber);
+                    }
+                }
+            }
+            else
+            {
+                contents.Add(contentRef.ObjectNumber);
+            }
+        }
+        else if (contentsValue is PdfArray inlineArray)
+        {
+            for (int i = 0; i < inlineArray.Count; i++)
+            {
+                if (inlineArray[i] is PdfReference element)
+                {
+                    contents.Add(element.ObjectNumber);
+                }
+            }
+        }
+    }
+
+    private static bool IsFormXObject(PdfDictionary dict)
+    {
+        PdfName? type = dict.GetAs<PdfName>(PdfName.Type);
+        PdfName? subtype = dict.GetAs<PdfName>(PdfName.Subtype);
+        return type is not null && string.Equals(type.Value, "XObject", StringComparison.Ordinal)
+            && subtype is not null && string.Equals(subtype.Value, "Form", StringComparison.Ordinal);
+    }
+
+    // Decodes, minifies, and re-Flate-encodes a content stream. Returns null when
+    // the stream carries decode parameters, cannot be decoded, is not safely
+    // minifiable, or does not shrink. The dictionary mutated here is the freshly
+    // copied one, so the source document is untouched.
+    private static PdfStream? TryMinifyContentStream(PdfStream stream)
+    {
+        if (stream.Dictionary.ContainsKey(PdfName.Intern("DecodeParms")) ||
+            stream.Dictionary.ContainsKey(PdfName.Intern("DP")))
+        {
+            return null;
+        }
+
+        byte[]? decoded = DecodeContentStream(stream);
+        if (decoded is null)
+        {
+            return null;
+        }
+
+        byte[]? minified = ContentStreamMinifier.Minify(decoded);
+        if (minified is null)
+        {
+            return null;
+        }
+
+        byte[] encoded;
+        try
+        {
+            using MemoryStream input = new(minified);
+            using MemoryStream packed = new();
+            Deflate.Encode(input, packed);
+            encoded = packed.ToArray();
+        }
+        catch (FilterException)
+        {
+            return null;
+        }
+
+        if (encoded.Length >= stream.RawBytes.Length)
+        {
+            return null;
+        }
+
+        PdfDictionary dict = stream.Dictionary;
+        dict.Set(PdfName.Filter, PdfName.FlateDecode);
+        dict.Remove(PdfName.Intern("DecodeParms"));
+        dict.Remove(PdfName.Intern("DP"));
+        return new PdfStream(dict, encoded);
+    }
+
+    private static byte[]? DecodeContentStream(PdfStream stream)
+    {
+        try
+        {
+            if (!stream.IsFiltered)
+            {
+                return stream.RawBytes;
+            }
+
+            PdfPrimitive? filter = stream.Filter;
+            if (filter is PdfName name)
+            {
+                return ContentPipeline.Decode(FilterRegistry.ResolveAlias(name.Value), stream.RawBytes, null);
+            }
+
+            if (filter is PdfArray array)
+            {
+                byte[] data = stream.RawBytes;
+                for (int i = 0; i < array.Count; i++)
+                {
+                    PdfName? element = array.GetAs<PdfName>(i);
+                    if (element is null)
+                    {
+                        return null;
+                    }
+                    data = ContentPipeline.Decode(FilterRegistry.ResolveAlias(element.Value), data, null);
+                }
+                return data;
+            }
+
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // ── Reachability over an in-memory object set ─────────────────────────
+
+    // Drops objects no longer reachable from the trailer (e.g. a stripped
+    // /Metadata stream and anything only it referenced).
+    private static void GarbageCollect(List<PdfIndirectObject> objects, PdfDictionary trailer)
+    {
+        Dictionary<int, PdfPrimitive> byNumber = new(objects.Count);
+        foreach (PdfIndirectObject obj in objects)
+        {
+            byNumber[obj.Id.ObjectNumber] = obj.Value;
+        }
+
+        HashSet<int> reached = new();
+        foreach (PdfPrimitive value in trailer.Values)
+        {
+            Mark(value, byNumber, reached);
+        }
+
+        objects.RemoveAll(obj => !reached.Contains(obj.Id.ObjectNumber));
+    }
+
+    private static void Mark(PdfPrimitive primitive, Dictionary<int, PdfPrimitive> byNumber, HashSet<int> reached)
+    {
+        switch (primitive)
+        {
+            case PdfReference reference:
+                if (reached.Add(reference.ObjectNumber) &&
+                    byNumber.TryGetValue(reference.ObjectNumber, out PdfPrimitive? target))
+                {
+                    Mark(target, byNumber, reached);
+                }
+                break;
+
+            case PdfDictionary dict:
+                foreach (PdfPrimitive value in dict.Values)
+                {
+                    Mark(value, byNumber, reached);
+                }
+                break;
+
+            case PdfArray array:
+                for (int i = 0; i < array.Count; i++)
+                {
+                    Mark(array[i], byNumber, reached);
+                }
+                break;
+
+            case PdfStream stream:
+                foreach (PdfPrimitive value in stream.Dictionary.Values)
+                {
+                    Mark(value, byNumber, reached);
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    // ── Metadata stripping ────────────────────────────────────────────────
+
+    // Removes the catalog /Metadata entry (the document XMP stream). The orphaned
+    // stream is dropped by the subsequent garbage-collect pass.
+    private static void StripMetadata(List<PdfIndirectObject> objects, PdfDictionary trailer)
+    {
+        if (!trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootValue) ||
+            rootValue is not PdfReference rootRef)
+        {
+            return;
+        }
+
+        foreach (PdfIndirectObject obj in objects)
+        {
+            if (obj.Id.ObjectNumber == rootRef.ObjectNumber && obj.Value is PdfDictionary catalog)
+            {
+                catalog.Remove(PdfName.Intern("Metadata"));
+                break;
+            }
+        }
     }
 
     // ── Stream reduction ──────────────────────────────────────────────────
