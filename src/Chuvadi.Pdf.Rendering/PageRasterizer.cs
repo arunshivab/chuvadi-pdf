@@ -649,7 +649,15 @@ public sealed class PageRasterizer
                 srcY = Math.Max(0, Math.Min(frame.Height - 1, srcY));
 
                 (byte sb, byte sg, byte sr, byte sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
-                buffer.SetPixelBgra(px, py, sb, sg, sr, sa);
+
+                if (sa == 255)
+                {
+                    buffer.SetPixelBgra(px, py, sb, sg, sr, sa);
+                }
+                else if (sa > 0)
+                {
+                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, sa));
+                }
             }
         }
     }
