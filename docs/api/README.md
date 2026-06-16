@@ -359,16 +359,28 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [BandText](Operations/BandText.md) | class | The left, centre, and right text segments of a header or footer band. |
 | [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
 | [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
 | [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress` declined to rewrite a document. |
+| [DocumentInfo](Operations/DocumentInfo.md) | class | Sets document-information metadata (Title, Author, Subject, Keywords) on an existing document and writes the result. |
+| [HeaderFooter](Operations/HeaderFooter.md) | class | Adds running headers and/or footers to a document, with three strategies for how the bands interact with existing content (see `PageContentFit`): overlay in the margins, always reserve-and-scale, or scale only when content intrudes. |
+| [HeaderFooterOptions](Operations/HeaderFooterOptions.md) | class | Options controlling header/footer content, geometry, and the content-fit strategy. |
 | [OperationsException](Operations/OperationsException.md) | class | Thrown when a PDF page operation (merge, split, delete, rotate, reorder) cannot be completed due to an invalid argument or document structure. |
+| [OutlineEntry](Operations/OutlineEntry.md) | class | A bookmark to write into a document outline: a title, the zero-based page it targets, and optional nested children. |
+| [OutlineWriter](Operations/OutlineWriter.md) | class | Writes a document outline (bookmark tree) onto an existing document, replacing any existing outline. |
 | [PageComposer](Operations/PageComposer.md) | class | Builds a new PDF by placing pages from existing documents onto target sheets under arbitrary affine transforms. |
+| [PageContentFit](Operations/PageContentFit.md) | enum | How header/footer bands interact with existing page content. |
 | [PageOperations](Operations/PageOperations.md) | class | Provides static methods for high-level PDF page operations: merge, split, delete, rotate, and reorder. |
+| [PageOverlay](Operations/PageOverlay.md) | class | Recolours existing pages by drawing a solid background fill behind the page content and/or rendering the existing content at reduced opacity. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
 | [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
+| [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
+| [StampContext](Operations/StampContext.md) | class | Substitutes tokens in a stamp template into final text for one page. |
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
+| [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
+| [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |
 
 ## Chuvadi.Pdf.Primitives
 
