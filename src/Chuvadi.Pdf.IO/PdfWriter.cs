@@ -98,11 +98,17 @@ public static class PdfWriter
     /// <param name="encryption">
     /// Encryption configuration. When null, no encryption is applied.
     /// </param>
+    /// <param name="synthesized">
+    /// Which absent document-level metadata to synthesise. Defaults to
+    /// <see cref="SynthesizedMetadata.All"/>, matching the standard behaviour;
+    /// reduce it to suppress synthesis of /Info and/or /Metadata.
+    /// </param>
     public static void Write(
         Stream output,
         IEnumerable<PdfIndirectObject> objects,
         PdfDictionary trailer,
-        EncryptionOptions? encryption)
+        EncryptionOptions? encryption,
+        SynthesizedMetadata synthesized = SynthesizedMetadata.All)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(objects);
@@ -135,7 +141,7 @@ public static class PdfWriter
         // catalog). Deterministic — a fixed Producer plus identifiers derived
         // from the file id, no timestamps — so identical input stays
         // byte-identical. Any caller-supplied /Info or /Metadata is preserved.
-        maxObjectNumber = AddDocumentMetadata(sortedObjects, trailer, fileId, maxObjectNumber);
+        maxObjectNumber = AddDocumentMetadata(sortedObjects, trailer, fileId, maxObjectNumber, synthesized);
 
         // If encrypting, create the /Encrypt indirect object and append to objects.
         int encryptObjectNumber = -1;
@@ -542,11 +548,12 @@ public static class PdfWriter
         List<PdfIndirectObject> objects,
         PdfDictionary trailer,
         byte[] fileId,
-        int maxObjectNumber)
+        int maxObjectNumber,
+        SynthesizedMetadata synthesized)
     {
         int next = maxObjectNumber;
 
-        if (!trailer.ContainsKey(PdfName.Intern("Info")))
+        if ((synthesized & SynthesizedMetadata.Info) != 0 && !trailer.ContainsKey(PdfName.Intern("Info")))
         {
             next++;
             PdfDictionary info = new PdfDictionary();
@@ -558,7 +565,8 @@ public static class PdfWriter
 
         // /Metadata lives on the catalog (trailer /Root). Only add it when the
         // catalog is resolvable in this object set and does not already carry one.
-        if (trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootPrim)
+        if ((synthesized & SynthesizedMetadata.Metadata) != 0
+            && trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootPrim)
             && rootPrim is PdfReference rootRef)
         {
             int rootNum = rootRef.ObjectId.ObjectNumber;

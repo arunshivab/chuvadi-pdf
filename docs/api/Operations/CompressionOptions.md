@@ -42,6 +42,22 @@ int MinImagePixelsToRecompress
 
 Minimum pixel count (width × height) for an image to be considered for JPEG recompression. Default 4096 (e.g. 64×64).
 
+### `RemoveMetadata`
+
+```csharp
+bool RemoveMetadata
+```
+
+Drop the catalog /Metadata (XMP) stream. Off by default.
+
+### `RemoveDocumentInfo`
+
+```csharp
+bool RemoveDocumentInfo
+```
+
+Drop the document information dictionary. Off by default.
+
 ### `AllowSignedRewrite`
 
 ```csharp

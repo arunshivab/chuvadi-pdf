@@ -318,7 +318,10 @@ python tools/gen_api_docs.py
 | [LinearizationInfo](IO/LinearizationInfo.md) | class | Parsed view of a PDF's linearization parameter dictionary. |
 | [LinearizationReader](IO/LinearizationReader.md) | class | Detects linearization and parses the parameter dictionary. |
 | [PdfReader](IO/PdfReader.md) | class | Opens an existing PDF file and provides access to its object graph. |
+| [PdfRepairer](IO/PdfRepairer.md) | class | Repairs structurally damaged PDFs that standard readers reject — broken or missing cross-reference tables, wrong `startxref` offsets, missing or corrupt trailers, leading junk before the header, truncated files, and duplicate objects from incremental updates. |
 | [PdfWriter](IO/PdfWriter.md) | class | Writes a complete PDF file to an output stream. |
+| [RepairReport](IO/RepairReport.md) | class | Describes what `PdfRepairer` did while reconstructing a damaged PDF. |
+| [SynthesizedMetadata](IO/SynthesizedMetadata.md) | enum | — |
 
 ## Chuvadi.Pdf.Images
 

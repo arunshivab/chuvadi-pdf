@@ -776,22 +776,30 @@ internal sealed class DeflateInflater
 // ── DEFLATE Deflate (compress) ────────────────────────────────────────────
 
 /// <summary>
-/// Compresses data using fixed Huffman DEFLATE.
-/// Produces a single non-final block using fixed Huffman codes.
-/// RFC 1951 — DEFLATE Compressed Data Format Specification.
+/// Compresses data using DEFLATE (RFC 1951): LZ77 matching followed by the
+/// smaller of fixed-Huffman, dynamic-Huffman, or stored encoding.
 /// </summary>
 internal sealed class DeflateDeflater
 {
-    // LZ77 + fixed-Huffman DEFLATE (RFC 1951 §3.2.5–3.2.6). Hash-chain
-    // match search over a 32 KiB window; emits one fixed-Huffman block, or
-    // falls back to stored blocks when they would be smaller (incompressible
-    // input). The companion inflater in this file decodes both block types.
+    // LZ77 + Huffman DEFLATE (RFC 1951 §3.2.5-3.2.7). Hash-chain match search
+    // over a 32 KiB window produces a token stream once; that stream is then
+    // emitted with fixed and with dynamic Huffman codes and the smaller is
+    // kept, falling back to stored blocks for incompressible input. The
+    // companion inflater in this file decodes all three block types.
     private const int MinMatch = 3;
     private const int MaxMatch = 258;
     private const int WindowSize = 32768;
     private const int HashBits = 15;
     private const int HashSize = 1 << HashBits;
     private const int MaxChainLength = 128;
+
+    // Symbol-space sizes (RFC 1951 §3.2.5-3.2.7).
+    private const int LitLenSymbols = 286;
+    private const int DistanceSymbols = 30;
+    private const int CodeLengthSymbols = 19;
+    private const int MaxCodeBits = 15;
+    private const int MaxCodeLengthBits = 7;
+    private const int EndOfBlock = 256;
 
     private readonly byte[] _data;
 
@@ -800,11 +808,49 @@ internal sealed class DeflateDeflater
         _data = data;
     }
 
+    // A literal byte or a back-reference (length, distance) produced by LZ77.
+    private readonly struct Token
+    {
+        internal Token(byte literal)
+        {
+            IsMatch = false;
+            Literal = literal;
+            Length = 0;
+            Distance = 0;
+        }
+
+        internal Token(int length, int distance)
+        {
+            IsMatch = true;
+            Literal = 0;
+            Length = length;
+            Distance = distance;
+        }
+
+        internal bool IsMatch { get; }
+
+        internal byte Literal { get; }
+
+        internal int Length { get; }
+
+        internal int Distance { get; }
+    }
+
     internal byte[] Deflate()
     {
-        byte[] compressed = DeflateFixedHuffman();
+        if (_data.Length == 0)
+        {
+            return DeflateStored();
+        }
+
+        System.Collections.Generic.List<Token> tokens = Tokenize();
+
+        byte[] fixedBytes = EmitFixed(tokens);
+        byte[] dynamicBytes = EmitDynamic(tokens);
+        byte[] best = dynamicBytes.Length < fixedBytes.Length ? dynamicBytes : fixedBytes;
+
         int storedSize = StoredSize(_data.Length);
-        return compressed.Length <= storedSize ? compressed : DeflateStored();
+        return best.Length <= storedSize ? best : DeflateStored();
     }
 
     private static int StoredSize(int dataLength)
@@ -817,15 +863,11 @@ internal sealed class DeflateDeflater
         return dataLength + (blocks * 5);
     }
 
-    // ── Fixed-Huffman path ─────────────────────────────────────────
+    // ── LZ77 tokenization ──────────────────────────────────────────────
 
-    private byte[] DeflateFixedHuffman()
+    private System.Collections.Generic.List<Token> Tokenize()
     {
-        LsbBitWriter writer = new();
-
-        // BFINAL = 1, BTYPE = 01 (fixed Huffman).
-        writer.WriteBits(1, 1);
-        writer.WriteBits(1, 2);
+        System.Collections.Generic.List<Token> tokens = new System.Collections.Generic.List<Token>();
 
         int[] head = new int[HashSize];
         int[] prev = new int[WindowSize];
@@ -867,10 +909,8 @@ internal sealed class DeflateDeflater
 
             if (matchLength >= MinMatch)
             {
-                EmitLengthDistance(writer, matchLength, matchDistance);
+                tokens.Add(new Token(matchLength, matchDistance));
 
-                // Insert every covered position into the hash chains so later
-                // matches can reference inside this run.
                 int stop = Math.Min(pos + matchLength, length - MinMatch + 1);
                 for (int p = pos; p < stop; p++)
                 {
@@ -880,7 +920,7 @@ internal sealed class DeflateDeflater
             }
             else
             {
-                EmitLiteral(writer, _data[pos]);
+                tokens.Add(new Token(_data[pos]));
                 if (pos + MinMatch <= length)
                 {
                     InsertHash(head, prev, pos);
@@ -889,8 +929,7 @@ internal sealed class DeflateDeflater
             }
         }
 
-        EmitEndOfBlock(writer);
-        return writer.ToArray();
+        return tokens;
     }
 
     private int Hash(int pos)
@@ -916,7 +955,31 @@ internal sealed class DeflateDeflater
         return n;
     }
 
-    // ── Fixed-Huffman symbol emission (RFC 1951 §3.2.6) ───────────────
+    // ── Fixed-Huffman emission (RFC 1951 §3.2.6) ───────────────────────
+
+    private byte[] EmitFixed(System.Collections.Generic.List<Token> tokens)
+    {
+        LsbBitWriter writer = new();
+
+        // BFINAL = 1, BTYPE = 01 (fixed Huffman).
+        writer.WriteBits(1, 1);
+        writer.WriteBits(1, 2);
+
+        foreach (Token token in tokens)
+        {
+            if (token.IsMatch)
+            {
+                EmitLengthDistance(writer, token.Length, token.Distance);
+            }
+            else
+            {
+                EmitLiteral(writer, token.Literal);
+            }
+        }
+
+        EmitEndOfBlock(writer);
+        return writer.ToArray();
+    }
 
     private static void EmitLiteral(LsbBitWriter writer, byte value)
     {
@@ -939,7 +1002,7 @@ internal sealed class DeflateDeflater
     {
         if (symbol <= 279)
         {
-            writer.WriteBitsMsbFirst(symbol - 256, 7);  // 256–279: 7 bits
+            writer.WriteBitsMsbFirst(symbol - 256, 7);  // 256-279: 7 bits
         }
         else
         {
@@ -947,7 +1010,464 @@ internal sealed class DeflateDeflater
         }
     }
 
-    // Length code bases for symbols 257..285 (RFC 1951 §3.2.5).
+    private static void EmitLengthDistance(LsbBitWriter writer, int length, int distance)
+    {
+        int lengthCode = LengthCodeOf(length);
+        EmitLengthSymbol(writer, 257 + lengthCode);
+        if (LengthExtraBits[lengthCode] > 0)
+        {
+            writer.WriteBits(length - LengthBase[lengthCode], LengthExtraBits[lengthCode]);
+        }
+
+        int distanceCode = DistanceCodeOf(distance);
+        writer.WriteBitsMsbFirst(distanceCode, 5);
+        if (DistanceExtraBits[distanceCode] > 0)
+        {
+            writer.WriteBits(distance - DistanceBase[distanceCode], DistanceExtraBits[distanceCode]);
+        }
+    }
+
+    // ── Dynamic-Huffman emission (RFC 1951 §3.2.7) ─────────────────────
+
+    private byte[] EmitDynamic(System.Collections.Generic.List<Token> tokens)
+    {
+        int[] litLenFreq = new int[LitLenSymbols];
+        int[] distFreq = new int[DistanceSymbols];
+
+        foreach (Token token in tokens)
+        {
+            if (token.IsMatch)
+            {
+                litLenFreq[257 + LengthCodeOf(token.Length)]++;
+                distFreq[DistanceCodeOf(token.Distance)]++;
+            }
+            else
+            {
+                litLenFreq[token.Literal]++;
+            }
+        }
+
+        litLenFreq[EndOfBlock]++;
+
+        int[] litLenLengths = BuildCodeLengths(litLenFreq, MaxCodeBits);
+        int[] distLengths = BuildCodeLengths(distFreq, MaxCodeBits);
+
+        // DEFLATE requires at least one distance code, even when no matches
+        // were emitted; supply a single unused code of length 1.
+        if (CountNonZero(distLengths) == 0)
+        {
+            distLengths[0] = 1;
+        }
+
+        int[] litLenCodes = BuildCanonicalCodes(litLenLengths);
+        int[] distCodes = BuildCanonicalCodes(distLengths);
+
+        int hlit = Math.Max(257, LastNonZeroIndex(litLenLengths) + 1);
+        int hdist = LastNonZeroIndex(distLengths) + 1;
+        if (hdist < 1)
+        {
+            hdist = 1;
+        }
+
+        // Combined code-length sequence (literal/length then distance).
+        int[] combined = new int[hlit + hdist];
+        Array.Copy(litLenLengths, 0, combined, 0, hlit);
+        Array.Copy(distLengths, 0, combined, hlit, hdist);
+
+        System.Collections.Generic.List<RleItem> rle = RunLengthEncode(combined);
+
+        int[] codeLengthFreq = new int[CodeLengthSymbols];
+        foreach (RleItem item in rle)
+        {
+            codeLengthFreq[item.Symbol]++;
+        }
+
+        int[] codeLengthLengths = BuildCodeLengths(codeLengthFreq, MaxCodeLengthBits);
+        int[] codeLengthCodes = BuildCanonicalCodes(codeLengthLengths);
+
+        int hclen = 4;
+        for (int k = CodeLengthSymbols - 1; k >= 4; k--)
+        {
+            if (codeLengthLengths[CodeLengthOrder[k]] > 0)
+            {
+                hclen = k + 1;
+                break;
+            }
+        }
+
+        LsbBitWriter writer = new();
+
+        // BFINAL = 1, BTYPE = 10 (dynamic Huffman).
+        writer.WriteBits(1, 1);
+        writer.WriteBits(2, 2);
+
+        writer.WriteBits(hlit - 257, 5);
+        writer.WriteBits(hdist - 1, 5);
+        writer.WriteBits(hclen - 4, 4);
+
+        for (int k = 0; k < hclen; k++)
+        {
+            writer.WriteBits(codeLengthLengths[CodeLengthOrder[k]], 3);
+        }
+
+        foreach (RleItem item in rle)
+        {
+            writer.WriteBitsMsbFirst(codeLengthCodes[item.Symbol], codeLengthLengths[item.Symbol]);
+            if (item.ExtraBits > 0)
+            {
+                writer.WriteBits(item.Extra, item.ExtraBits);
+            }
+        }
+
+        foreach (Token token in tokens)
+        {
+            if (token.IsMatch)
+            {
+                int lengthCode = LengthCodeOf(token.Length);
+                int lengthSymbol = 257 + lengthCode;
+                writer.WriteBitsMsbFirst(litLenCodes[lengthSymbol], litLenLengths[lengthSymbol]);
+                if (LengthExtraBits[lengthCode] > 0)
+                {
+                    writer.WriteBits(token.Length - LengthBase[lengthCode], LengthExtraBits[lengthCode]);
+                }
+
+                int distanceCode = DistanceCodeOf(token.Distance);
+                writer.WriteBitsMsbFirst(distCodes[distanceCode], distLengths[distanceCode]);
+                if (DistanceExtraBits[distanceCode] > 0)
+                {
+                    writer.WriteBits(token.Distance - DistanceBase[distanceCode], DistanceExtraBits[distanceCode]);
+                }
+            }
+            else
+            {
+                writer.WriteBitsMsbFirst(litLenCodes[token.Literal], litLenLengths[token.Literal]);
+            }
+        }
+
+        writer.WriteBitsMsbFirst(litLenCodes[EndOfBlock], litLenLengths[EndOfBlock]);
+        return writer.ToArray();
+    }
+
+    // A code-length-alphabet symbol (0-18) plus any RLE extra bits.
+    private readonly struct RleItem
+    {
+        internal RleItem(int symbol, int extra, int extraBits)
+        {
+            Symbol = symbol;
+            Extra = extra;
+            ExtraBits = extraBits;
+        }
+
+        internal int Symbol { get; }
+
+        internal int Extra { get; }
+
+        internal int ExtraBits { get; }
+    }
+
+    // RLE the code-length sequence using symbols 0-15 plus 16 (repeat previous
+    // 3-6), 17 (zero run 3-10), 18 (zero run 11-138). RFC 1951 §3.2.7.
+    private static System.Collections.Generic.List<RleItem> RunLengthEncode(int[] lengths)
+    {
+        System.Collections.Generic.List<RleItem> items = new System.Collections.Generic.List<RleItem>();
+
+        int i = 0;
+        while (i < lengths.Length)
+        {
+            int value = lengths[i];
+            int run = 1;
+            while (i + run < lengths.Length && lengths[i + run] == value)
+            {
+                run++;
+            }
+
+            if (value == 0)
+            {
+                while (run >= 11)
+                {
+                    int take = Math.Min(run, 138);
+                    items.Add(new RleItem(18, take - 11, 7));
+                    run -= take;
+                    i += take;
+                }
+                while (run >= 3)
+                {
+                    int take = Math.Min(run, 10);
+                    items.Add(new RleItem(17, take - 3, 3));
+                    run -= take;
+                    i += take;
+                }
+                while (run > 0)
+                {
+                    items.Add(new RleItem(0, 0, 0));
+                    run--;
+                    i++;
+                }
+            }
+            else
+            {
+                items.Add(new RleItem(value, 0, 0));
+                run--;
+                i++;
+                while (run >= 3)
+                {
+                    int take = Math.Min(run, 6);
+                    items.Add(new RleItem(16, take - 3, 2));
+                    run -= take;
+                    i += take;
+                }
+                while (run > 0)
+                {
+                    items.Add(new RleItem(value, 0, 0));
+                    run--;
+                    i++;
+                }
+            }
+        }
+
+        return items;
+    }
+
+    // ── Length-limited Huffman code-length construction ────────────────
+
+    // Builds canonical code lengths (each <= maxBits) for the given symbol
+    // frequencies. Unused symbols get length 0. Uses a Huffman tree for the
+    // initial lengths, the zlib bit-length overflow redistribution to enforce
+    // the limit, then assigns shortest codes to the most frequent symbols.
+    private static int[] BuildCodeLengths(int[] freqs, int maxBits)
+    {
+        int n = freqs.Length;
+        int[] lengths = new int[n];
+
+        System.Collections.Generic.List<int> active = new System.Collections.Generic.List<int>();
+        for (int s = 0; s < n; s++)
+        {
+            if (freqs[s] > 0)
+            {
+                active.Add(s);
+            }
+        }
+
+        if (active.Count == 0)
+        {
+            return lengths;
+        }
+        if (active.Count == 1)
+        {
+            lengths[active[0]] = 1;
+            return lengths;
+        }
+
+        int m = active.Count;
+        int maxNodes = (2 * m) - 1;
+        long[] weight = new long[maxNodes];
+        int[] left = new int[maxNodes];
+        int[] right = new int[maxNodes];
+        bool[] used = new bool[maxNodes];
+
+        for (int i = 0; i < m; i++)
+        {
+            weight[i] = freqs[active[i]];
+            left[i] = -1;
+            right[i] = -1;
+        }
+
+        int count = m;
+        for (int step = 0; step < m - 1; step++)
+        {
+            int a = PickMin(weight, used, count);
+            used[a] = true;
+            int b = PickMin(weight, used, count);
+            used[b] = true;
+            weight[count] = weight[a] + weight[b];
+            left[count] = a;
+            right[count] = b;
+            count++;
+        }
+
+        int[] depth = new int[count];
+        ComputeDepths(count - 1, left, right, depth);
+
+        int[] blCount = new int[maxBits + 1];
+        int overflow = 0;
+        for (int i = 0; i < m; i++)
+        {
+            int d = depth[i];
+            if (d > maxBits)
+            {
+                d = maxBits;
+                overflow++;
+            }
+            blCount[d]++;
+        }
+
+        if (overflow > 0)
+        {
+            do
+            {
+                int bits = maxBits - 1;
+                while (blCount[bits] == 0)
+                {
+                    bits--;
+                }
+                blCount[bits]--;
+                blCount[bits + 1] += 2;
+                blCount[maxBits]--;
+                overflow -= 2;
+            }
+            while (overflow > 0);
+        }
+
+        // Least frequent symbols receive the longest codes.
+        active.Sort((x, y) => freqs[x] != freqs[y] ? freqs[x].CompareTo(freqs[y]) : x.CompareTo(y));
+
+        int idx = 0;
+        for (int bits = maxBits; bits >= 1; bits--)
+        {
+            int c = blCount[bits];
+            for (int j = 0; j < c; j++)
+            {
+                lengths[active[idx]] = bits;
+                idx++;
+            }
+        }
+
+        return lengths;
+    }
+
+    private static int PickMin(long[] weight, bool[] used, int count)
+    {
+        int best = -1;
+        for (int i = 0; i < count; i++)
+        {
+            if (!used[i] && (best < 0 || weight[i] < weight[best]))
+            {
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    private static void ComputeDepths(int root, int[] left, int[] right, int[] depth)
+    {
+        // Iterative post-order/BFS depth assignment (avoids deep recursion on
+        // skewed trees). depth[root] = 0; children are one deeper.
+        System.Collections.Generic.Stack<int> nodes = new System.Collections.Generic.Stack<int>();
+        nodes.Push(root);
+        depth[root] = 0;
+        while (nodes.Count > 0)
+        {
+            int node = nodes.Pop();
+            int l = left[node];
+            int r = right[node];
+            if (l >= 0)
+            {
+                depth[l] = depth[node] + 1;
+                nodes.Push(l);
+            }
+            if (r >= 0)
+            {
+                depth[r] = depth[node] + 1;
+                nodes.Push(r);
+            }
+        }
+    }
+
+    private static int[] BuildCanonicalCodes(int[] lengths)
+    {
+        int n = lengths.Length;
+        int[] codes = new int[n];
+
+        int maxLen = 0;
+        foreach (int l in lengths)
+        {
+            if (l > maxLen)
+            {
+                maxLen = l;
+            }
+        }
+        if (maxLen == 0)
+        {
+            return codes;
+        }
+
+        int[] blCount = new int[maxLen + 1];
+        foreach (int l in lengths)
+        {
+            if (l > 0)
+            {
+                blCount[l]++;
+            }
+        }
+
+        int[] nextCode = new int[maxLen + 2];
+        int code = 0;
+        for (int bits = 1; bits <= maxLen; bits++)
+        {
+            code = (code + blCount[bits - 1]) << 1;
+            nextCode[bits] = code;
+        }
+
+        for (int s = 0; s < n; s++)
+        {
+            int len = lengths[s];
+            if (len > 0)
+            {
+                codes[s] = nextCode[len];
+                nextCode[len]++;
+            }
+        }
+
+        return codes;
+    }
+
+    private static int CountNonZero(int[] values)
+    {
+        int c = 0;
+        foreach (int v in values)
+        {
+            if (v > 0)
+            {
+                c++;
+            }
+        }
+        return c;
+    }
+
+    private static int LastNonZeroIndex(int[] values)
+    {
+        for (int i = values.Length - 1; i >= 0; i--)
+        {
+            if (values[i] > 0)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int LengthCodeOf(int length)
+    {
+        int lengthCode = LengthBase.Length - 1;
+        while (LengthBase[lengthCode] > length)
+        {
+            lengthCode--;
+        }
+        return lengthCode;
+    }
+
+    private static int DistanceCodeOf(int distance)
+    {
+        int distanceCode = DistanceBase.Length - 1;
+        while (DistanceBase[distanceCode] > distance)
+        {
+            distanceCode--;
+        }
+        return distanceCode;
+    }
+
+    // ── Length and distance tables (RFC 1951 §3.2.5) ───────────────────
+
     private static readonly int[] LengthBase =
     [
         3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
@@ -960,7 +1480,6 @@ internal sealed class DeflateDeflater
         3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
     ];
 
-    // Distance code bases for codes 0..29 (RFC 1951 §3.2.5).
     private static readonly int[] DistanceBase =
     [
         1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
@@ -974,32 +1493,11 @@ internal sealed class DeflateDeflater
         7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
     ];
 
-    private static void EmitLengthDistance(LsbBitWriter writer, int length, int distance)
-    {
-        // Length symbol: highest base ≤ length.
-        int lengthCode = LengthBase.Length - 1;
-        while (LengthBase[lengthCode] > length)
-        {
-            lengthCode--;
-        }
-        EmitLengthSymbol(writer, 257 + lengthCode);
-        if (LengthExtraBits[lengthCode] > 0)
-        {
-            writer.WriteBits(length - LengthBase[lengthCode], LengthExtraBits[lengthCode]);
-        }
-
-        // Distance code: highest base ≤ distance; fixed 5-bit code, MSB first.
-        int distanceCode = DistanceBase.Length - 1;
-        while (DistanceBase[distanceCode] > distance)
-        {
-            distanceCode--;
-        }
-        writer.WriteBitsMsbFirst(distanceCode, 5);
-        if (DistanceExtraBits[distanceCode] > 0)
-        {
-            writer.WriteBits(distance - DistanceBase[distanceCode], DistanceExtraBits[distanceCode]);
-        }
-    }
+    // Code-length alphabet order for the dynamic header (RFC 1951 §3.2.7).
+    private static readonly int[] CodeLengthOrder =
+    [
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+    ];
 
     // ── Stored fallback ─────────────────────────────────────────────
 
