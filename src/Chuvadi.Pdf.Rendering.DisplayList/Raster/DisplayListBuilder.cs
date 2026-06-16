@@ -1667,6 +1667,8 @@ public static class DisplayListBuilder
                 return;
             }
 
+            ApplySoftMask(xobjStream, frame);
+
             _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips()));
         }
 
@@ -1764,6 +1766,81 @@ public static class DisplayListBuilder
             }
 
             return null;
+        }
+
+        // Applies an image's /SMask (a DeviceGray image giving per-pixel alpha)
+        // onto the decoded frame's alpha channel. The soft mask is sampled at
+        // the frame's resolution (nearest-neighbour) when the dimensions differ.
+        // Without this, soft-masked images (e.g. faded watermarks) render as
+        // fully opaque, painting their backing colour where they should be
+        // transparent.
+        private void ApplySoftMask(PdfStream xobjStream, ImageFrame frame)
+        {
+            if (!xobjStream.Dictionary.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smRef))
+            {
+                return;
+            }
+
+            if (_objects.Resolve(smRef) is not PdfStream smStream)
+            {
+                return;
+            }
+
+            int smWidth = ReadIntEntry(smStream.Dictionary, "Width");
+            int smHeight = ReadIntEntry(smStream.Dictionary, "Height");
+            int smBpc = ReadIntEntry(smStream.Dictionary, "BitsPerComponent");
+
+            if (smWidth <= 0 || smHeight <= 0 || smBpc != 8)
+            {
+                return;
+            }
+
+            byte[] smSamples;
+
+            try
+            {
+                smSamples = ContentStreamLoader.Decode(smStream);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            if (smSamples.Length < smWidth * smHeight)
+            {
+                return;
+            }
+
+            bool invert = GrayDecodeInverted(smStream.Dictionary);
+            int fw = frame.Width;
+            int fh = frame.Height;
+
+            for (int y = 0; y < fh; y++)
+            {
+                int sy = smHeight == fh ? y : (int)((long)y * smHeight / fh);
+                if (sy >= smHeight)
+                {
+                    sy = smHeight - 1;
+                }
+
+                for (int x = 0; x < fw; x++)
+                {
+                    int sx = smWidth == fw ? x : (int)((long)x * smWidth / fw);
+                    if (sx >= smWidth)
+                    {
+                        sx = smWidth - 1;
+                    }
+
+                    byte alpha = smSamples[(sy * smWidth) + sx];
+                    if (invert)
+                    {
+                        alpha = (byte)(255 - alpha);
+                    }
+
+                    (byte b, byte g, byte r, byte _) = frame.Pixels.GetPixelBgra(x, y);
+                    frame.Pixels.SetPixelBgra(x, y, b, g, r, alpha);
+                }
+            }
         }
 
         // Number of colour components implied by /ColorSpace: DeviceGray and
