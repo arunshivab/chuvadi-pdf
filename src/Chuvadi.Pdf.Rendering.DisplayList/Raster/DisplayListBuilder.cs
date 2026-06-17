@@ -1,7 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  PDF 32000-1:2008 Â§7.8 â€” Content streams; Â§8 â€” Graphics; Â§9 â€” Text
-// PHASE: v2.0.0 R1 D3c-2 â€” DisplayList builder
+// SPEC:  PDF 32000-1:2008 §7.8 — Content streams; §8 — Graphics; §9 — Text
+// PHASE: v2.0.0 R1 D3c-2 — DisplayList builder
 
 using System;
 using System.Collections.Generic;
@@ -144,7 +144,7 @@ public static class DisplayListBuilder
         // Path construction (pre-CTM, user-space coords)
         private Path _currentPath;
 
-        // Text state (NOT in q/Q stack â€” these reset on BT)
+        // Text state (NOT in q/Q stack — these reset on BT)
         private Transform _textMatrix;
         private Transform _textLineMatrix;
 
@@ -189,7 +189,7 @@ public static class DisplayListBuilder
             return new PageDisplayList(_ops, pageWidth, pageHeight);
         }
 
-        // â”€â”€ Graphics state operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Graphics state operators ──────────────────────────────────────
 
         /// <inheritdoc />
         public void SaveState()
@@ -246,7 +246,7 @@ public static class DisplayListBuilder
             _state.DashOffset = phase;
         }
 
-        // â”€â”€ Colour operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Colour operators ──────────────────────────────────────────────
 
         /// <inheritdoc />
         public void SetFillGray(double gray)
@@ -313,7 +313,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetColorN(double[] components, bool hasName, bool stroke)
         {
-            // sc / scn / SC / SCN â€” set colour in current colour space.
+            // sc / scn / SC / SCN — set colour in current colour space.
             // We support 1, 3, or 4 numeric operands (DeviceGray/RGB/CMYK).
             // A trailing name operand (Pattern) suppresses validity.
             if (hasName)
@@ -358,7 +358,7 @@ public static class DisplayListBuilder
             }
         }
 
-        // â”€â”€ Path construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Path construction ─────────────────────────────────────────────
 
         /// <inheritdoc />
         public void MoveTo(double x, double y)
@@ -391,7 +391,7 @@ public static class DisplayListBuilder
         {
             if (_currentPath.IsEmpty)
             {
-                return; // Malformed â€” c requires a current point
+                return; // Malformed — c requires a current point
             }
 
             _currentPath.CubicBezierTo(
@@ -403,7 +403,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void CurveToV(double x2, double y2, double x3, double y3)
         {
-            // v x2 y2 x3 y3 â€” Bezier with initial point as first control
+            // v x2 y2 x3 y3 — Bezier with initial point as first control
             if (_currentPath.IsEmpty)
             {
                 return;
@@ -429,7 +429,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void CurveToY(double x1, double y1, double x3, double y3)
         {
-            // y x1 y1 x3 y3 â€” Bezier with final point as second control
+            // y x1 y1 x3 y3 — Bezier with final point as second control
             if (_currentPath.IsEmpty)
             {
                 return;
@@ -452,7 +452,7 @@ public static class DisplayListBuilder
             _currentPath.ClosePath();
         }
 
-        // â”€â”€ Path painting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Path painting ─────────────────────────────────────────────────
 
         /// <inheritdoc />
         public void FillPath(bool evenOdd)
@@ -580,7 +580,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void EndPath()
         {
-            // n â€” no painting, but a pending clip still applies
+            // n — no painting, but a pending clip still applies
             ApplyDeferredClip();
             _currentPath = new Path();
         }
@@ -626,7 +626,7 @@ public static class DisplayListBuilder
             return _state.ActiveClips;
         }
 
-        // â”€â”€ Path geometry helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Path geometry helpers ─────────────────────────────────────────
 
         private static Path TransformPath(Path source, Transform ctm)
         {
@@ -659,7 +659,7 @@ public static class DisplayListBuilder
             return result;
         }
 
-        // â”€â”€ Text operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Text operators ────────────────────────────────────────────────
 
         /// <inheritdoc />
         public void BeginText()
@@ -773,7 +773,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void TextNextLine()
         {
-            // T* â€” move to start of next line: 0 -leading Td
+            // T* — move to start of next line: 0 -leading Td
             Transform t = new Transform(1, 0, 0, 1, 0, -_state.TextLeading);
             _textLineMatrix = t.Multiply(_textLineMatrix);
             _textMatrix = _textLineMatrix;
@@ -792,7 +792,7 @@ public static class DisplayListBuilder
                 else
                 {
                     // Positive displacement = move BACK in text direction.
-                    // Per Â§9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
+                    // Per §9.4.3: tx = -displacement/1000 * fontSize * (Th/100)
                     double disp = element.Adjustment;
                     double tx = -disp / 1000.0 * _state.FontSize * (_state.HorizontalScaling / 100.0);
                     Transform tr = new Transform(1, 0, 0, 1, tx, 0);
@@ -804,7 +804,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void MoveNextLineShowText(byte[] text)
         {
-            // ' â€” move to next line and show text
+            // ' — move to next line and show text
             TextNextLine();
             ShowTextSimple(text);
         }
@@ -812,14 +812,14 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetSpacingMoveNextLineShowText(double wordSpacing, double charSpacing, byte[] text)
         {
-            // " â€” aw ac string â€” set word/char spacing, move to next line, show
+            // " — aw ac string — set word/char spacing, move to next line, show
             _state.WordSpacing = wordSpacing;
             _state.CharacterSpacing = charSpacing;
             TextNextLine();
             ShowTextSimple(text);
         }
 
-        // â”€â”€ Text showing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Text showing ──────────────────────────────────────────────────
 
         /// <inheritdoc />
         public void ShowText(byte[] text)
@@ -1234,7 +1234,7 @@ public static class DisplayListBuilder
             }
         }
 
-        // â”€â”€ Font resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Font resolution ───────────────────────────────────────────────
 
         // Returns a grid-fitted, device-space outline when hinting is enabled
         // and the glyph can be hinted; otherwise null so the caller falls back
@@ -1583,7 +1583,7 @@ public static class DisplayListBuilder
             return stream is null ? null : ContentStreamLoader.Decode(stream);
         }
 
-        // â”€â”€ XObject Do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── XObject Do ────────────────────────────────────────────────────
 
         /// <inheritdoc />
         public void InvokeXObject(string name)
@@ -2013,7 +2013,7 @@ public static class DisplayListBuilder
 
             inner = new PageDisplayList(sub._ops, 0, 0);
 
-            // Composition: form-local Â· outer CTM (row-vector convention)
+            // Composition: form-local · outer CTM (row-vector convention)
             Transform composition = formMatrix.Multiply(_state.Ctm);
 
             _ops.Add(new NestedDisplayListOp(inner, composition, SnapshotClips()));
