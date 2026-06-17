@@ -1,9 +1,9 @@
 {
   "tolerance": 0.02,
   "scenarios": {
-    "raw-text-streams": { "ratio": 0.0577, "quality": 1 },
-    "orphan-objects": { "ratio": 0.0267, "quality": 1 },
-    "raw-rgb-image": { "ratio": 0.2384, "quality": 0.9904 },
-    "mixed": { "ratio": 0.1203, "quality": 0.9904 }
+    "raw-text-streams": { "ratio": 0.0499, "quality": 1 },
+    "orphan-objects": { "ratio": 0.0249, "quality": 1 },
+    "raw-rgb-image": { "ratio": 0.2346, "quality": 0.9904 },
+    "mixed": { "ratio": 0.1176, "quality": 0.9904 }
   }
 }

@@ -66,6 +66,22 @@ StrokeStyle? Stroke
 
 Stroke style (only meaningful when Mode includes stroke).
 
+### `FillOpacity`
+
+```csharp
+double FillOpacity
+```
+
+Constant fill opacity (ExtGState /ca), 0..1. Default 1 (opaque).
+
+### `StrokeOpacity`
+
+```csharp
+double StrokeOpacity
+```
+
+Constant stroke opacity (ExtGState /CA), 0..1. Default 1 (opaque).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_

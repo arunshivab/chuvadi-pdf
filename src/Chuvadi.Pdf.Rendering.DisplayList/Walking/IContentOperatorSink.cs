@@ -310,6 +310,17 @@ internal interface IContentOperatorSink
     {
     }
 
+    // ── External graphics state ───────────────────────────────────────────
+
+    /// <summary>
+    /// gs — apply a named ExtGState from the current resources. The sink
+    /// resolves the named dictionary and applies the entries it interprets
+    /// (for example /ca and /CA constant alpha). PDF 32000-1:2008 §8.4.5.
+    /// </summary>
+    void ApplyExtGState(string name)
+    {
+    }
+
     // ── Fallback ──────────────────────────────────────────────────────────
 
     /// <summary>Any operator the walker does not recognise.</summary>

@@ -513,7 +513,7 @@ public sealed class PageRasterizer
             return;
         }
 
-        CompositeImage(op.Image, buffer, destX, destY - destH, destW, destH, clip);
+        CompositeImage(op.Image, buffer, destX, destY - destH, destW, destH, clip, op.Alpha);
     }
 
     private void PaintNestedOp(
@@ -616,7 +616,7 @@ public sealed class PageRasterizer
     private static void CompositeImage(
         ImageFrame frame, PixelBuffer buffer,
         double x, double y, double w, double h,
-        ClipRegion? clip)
+        ClipRegion? clip, double alpha = 1.0)
     {
         int dstX0 = Math.Max(0, (int)Math.Round(x));
         int dstY0 = Math.Max(0, (int)Math.Round(y));
@@ -650,13 +650,20 @@ public sealed class PageRasterizer
 
                 (byte sb, byte sg, byte sr, byte sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
 
-                if (sa == 255)
+                // Fold the constant ExtGState alpha (/ca) into the per-pixel alpha.
+                int effA = alpha >= 1.0 ? sa : (int)((sa * alpha) + 0.5);
+                if (effA <= 0)
                 {
-                    buffer.SetPixelBgra(px, py, sb, sg, sr, sa);
+                    continue;
                 }
-                else if (sa > 0)
+
+                if (effA >= 255)
                 {
-                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, sa));
+                    buffer.SetPixelBgra(px, py, sb, sg, sr, 255);
+                }
+                else
+                {
+                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA));
                 }
             }
         }

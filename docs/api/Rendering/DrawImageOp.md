@@ -34,6 +34,14 @@ Transform DeviceTransform
 
 Gets the device-placement transform that maps the image's unit square (0,0)–(1,1) into PDF user space.
 
+### `Alpha`
+
+```csharp
+double Alpha
+```
+
+Gets the constant image opacity from ExtGState /ca (0..1). Multiplies the per-pixel alpha (including any /SMask) during compositing.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs)_

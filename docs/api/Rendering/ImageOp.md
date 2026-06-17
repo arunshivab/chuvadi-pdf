@@ -90,6 +90,14 @@ int SoftMaskHeight
 
 Height of `SoftMaskAlpha` in samples.
 
+### `Alpha`
+
+```csharp
+double Alpha
+```
+
+Constant image opacity (ExtGState /ca), 0..1. Default 1 (opaque). Composes with `SoftMaskAlpha` when both are present.
+
 ### `Transform`
 
 ```csharp

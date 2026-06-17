@@ -299,7 +299,10 @@ public static class PdfCompressor
             synthesized &= ~SynthesizedMetadata.Metadata;
         }
 
-        PdfWriter.Write(output, objects, trailer, null, synthesized);
+        // Object streams + a compressed cross-reference stream (PDF 1.5+) give
+        // the largest lossless structural win, so the compressor enables them by
+        // default. Plain document saves via PdfWriter.Write remain classic xref.
+        PdfWriter.Write(output, objects, trailer, null, synthesized, XrefStyle.Stream);
 
         return new CompressionResult
         {
