@@ -21,6 +21,11 @@ internal static class Program
             return CompressionReport.Print();
         }
 
+        if (args.Length > 0 && args[0] == "--compression-scoreboard")
+        {
+            return CompressionReport.PrintScoreboard();
+        }
+
         if (args.Length > 0 && args[0] == "--update-compression-baseline")
         {
             CompressionReport.UpdateBaseline(CompressionReport.ResolveBaselinePath(args));

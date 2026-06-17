@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using Chuvadi.Benchmarks.Compression;
 
@@ -65,5 +66,117 @@ internal static class CompressionReport
     {
         ArgumentNullException.ThrowIfNull(args);
         return args.Length > 1 ? args[1] : DefaultBaselinePath;
+    }
+
+    /// <summary>
+    /// Prints Chuvadi's per-scenario compression ratio alongside the ratios achieved
+    /// by external tools (Ghostscript, qpdf, mutool) on the same corpus. Tools that
+    /// are not installed show "n/a" and are noted as unavailable in the footer, so
+    /// the scoreboard is informative on any machine.
+    /// </summary>
+    public static int PrintScoreboard()
+    {
+        IReadOnlyList<CompressionMeasurement> chuvadi = CompressionMeasure.MeasureAll();
+        IReadOnlyList<ExternalToolResult> external = ExternalToolScoreboard.Measure();
+
+        List<string> toolNames = new List<string>();
+        foreach (ExternalToolResult result in external)
+        {
+            if (!toolNames.Contains(result.ToolName))
+            {
+                toolNames.Add(result.ToolName);
+            }
+        }
+
+        Console.Write($"{"scenario",-20} {"input",10} {"chuvadi",9}");
+        foreach (string toolName in toolNames)
+        {
+            Console.Write($" {toolName,9}");
+        }
+
+        Console.WriteLine();
+
+        foreach (CompressionMeasurement measurement in chuvadi)
+        {
+            Console.Write(
+                $"{measurement.Name,-20} {measurement.InputBytes,10} {measurement.Ratio,9:F4}");
+            foreach (string toolName in toolNames)
+            {
+                ExternalToolResult? result = FindResult(external, measurement.Name, toolName);
+                string cell = result is { Outcome: ExternalToolOutcome.Measured }
+                    ? result.Ratio.ToString("F4", CultureInfo.InvariantCulture)
+                    : "n/a";
+                Console.Write($" {cell,9}");
+            }
+
+            Console.WriteLine();
+        }
+
+        PrintScoreboardFooter(external, toolNames);
+        return 0;
+    }
+
+    private static void PrintScoreboardFooter(
+        IReadOnlyList<ExternalToolResult> external, IReadOnlyList<string> toolNames)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Ratio = output / input (lower is better). 'n/a' = tool unavailable or failed.");
+        foreach (string toolName in toolNames)
+        {
+            string state = StateFor(external, toolName);
+            Console.WriteLine($"  {toolName,-8} {state}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "Chuvadi ratios use the in-process compressor (lossy image recompression on");
+        Console.WriteLine(
+            "image scenarios). External tools use their standard optimize/clean modes;");
+        Console.WriteLine(
+            "Ghostscript recompresses images, while qpdf and mutool stay lossless on them.");
+    }
+
+    private static ExternalToolResult? FindResult(
+        IReadOnlyList<ExternalToolResult> external, string scenario, string toolName)
+    {
+        foreach (ExternalToolResult result in external)
+        {
+            if (result.ScenarioName == scenario && result.ToolName == toolName)
+            {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private static string StateFor(IReadOnlyList<ExternalToolResult> external, string toolName)
+    {
+        bool anyMeasured = false;
+        bool anyAttempted = false;
+        foreach (ExternalToolResult result in external)
+        {
+            if (result.ToolName != toolName)
+            {
+                continue;
+            }
+
+            if (result.Outcome == ExternalToolOutcome.Measured)
+            {
+                anyMeasured = true;
+            }
+
+            if (result.Outcome != ExternalToolOutcome.Unavailable)
+            {
+                anyAttempted = true;
+            }
+        }
+
+        if (anyMeasured)
+        {
+            return "available";
+        }
+
+        return anyAttempted ? "found but failed" : "not installed";
     }
 }
