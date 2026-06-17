@@ -1,8 +1,8 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  Apple TrueType Reference Manual â€” arithmetic, logical, flow control,
+// SPEC:  Apple TrueType Reference Manual — arithmetic, logical, flow control,
 //        DELTA, and the shift/interpolation instructions
-// PHASE: Phase 2 â€” TrueType bytecode hinting (Stages 5 and 6) tests
+// PHASE: Phase 2 — TrueType bytecode hinting (Stages 5 and 6) tests
 
 using Chuvadi.Pdf.Fonts.Rendering.Hinting;
 using FluentAssertions;
@@ -14,7 +14,7 @@ public sealed class HintingArithmeticAndInterpolationTests
 {
     private const int UnitsPerEm = 2048;
 
-    // â”€â”€ Arithmetic / logical / storage programs (PUSHB[1]=0xB1, PUSHB[0]=0xB0) â”€â”€
+    // ── Arithmetic / logical / storage programs (PUSHB[1]=0xB1, PUSHB[0]=0xB0) ──
     private static readonly byte[] AddProg = [0xB1, 30, 12, 0x60];
     private static readonly byte[] SubProg = [0xB1, 50, 12, 0x61];
     private static readonly byte[] MulProg = [0xB1, 128, 192, 0x63];   // 2.0 * 3.0 = 6.0 (26.6)
@@ -36,7 +36,7 @@ public sealed class HintingArithmeticAndInterpolationTests
     private static readonly byte[] RollProg = [0xB2, 1, 2, 3, 0x8A];   // PUSHB[2] 1,2,3; ROLL
     private static readonly byte[] StorageProg = [0xB1, 0, 99, 0x42, 0xB0, 0, 0x43]; // WS s[0]=99; RS s[0]
 
-    // â”€â”€ Flow-control programs (IF=0x58, ELSE=0x1B, EIF=0x59, JMPR=0x1C, JROT=0x78) â”€â”€
+    // ── Flow-control programs (IF=0x58, ELSE=0x1B, EIF=0x59, JMPR=0x1C, JROT=0x78) ──
     private static readonly byte[] IfTrueProg = [0xB0, 1, 0x58, 0xB0, 42, 0x59];
     private static readonly byte[] IfFalseProg = [0xB0, 0, 0x58, 0xB0, 42, 0x59, 0xB0, 7];
     private static readonly byte[] IfElseTrueProg = [0xB0, 1, 0x58, 0xB0, 10, 0x1B, 0xB0, 20, 0x59];
@@ -45,12 +45,12 @@ public sealed class HintingArithmeticAndInterpolationTests
     private static readonly byte[] JmprProg = [0xB0, 3, 0x1C, 0xB0, 99, 0xB0, 7];
     private static readonly byte[] JrotTakenProg = [0xB1, 3, 1, 0x78, 0xB0, 99, 0xB0, 7];
 
-    // â”€â”€ DELTA programs (arg 0x0F = relative ppem 0, magnitude selector 15 â†’ +8 steps) â”€â”€
+    // ── DELTA programs (arg 0x0F = relative ppem 0, magnitude selector 15 → +8 steps) ──
     // At DeltaShift 3 the step is 64>>3 = 8 (26.6); 8 steps = +64 (one pixel).
     private static readonly byte[] DeltaP1Prog = [0xB2, 0, 0x0F, 1, 0x5D];          // pair (point 0, arg 0x0F), count 1
     private static readonly byte[] DeltaC1Prog = [0xB2, 0, 0x0F, 1, 0x73, 0xB0, 0, 0x45]; // DELTAC1 then RCVT[0]
 
-    // â”€â”€ Geometry programs â”€â”€
+    // ── Geometry programs ──
     private static readonly byte[] ShpixProg = [0xB1, 0, 64, 0x38];                 // shift point 0 by +64
     private static readonly byte[] IpProg =
     [
