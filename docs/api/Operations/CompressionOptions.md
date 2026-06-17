@@ -58,6 +58,54 @@ bool RemoveDocumentInfo
 
 Drop the document information dictionary. Off by default.
 
+### `RemoveJavaScript`
+
+```csharp
+bool RemoveJavaScript
+```
+
+Drop document-level JavaScript: the catalog /Names /JavaScript name tree, an /OpenAction that runs a script, and the document /AA additional-actions. Off by default.
+
+### `RemoveAttachments`
+
+```csharp
+bool RemoveAttachments
+```
+
+Drop embedded file attachments: the catalog /Names /EmbeddedFiles name tree, the catalog /AF associated files, and file-attachment annotations. Off by default.
+
+### `RemoveThumbnails`
+
+```csharp
+bool RemoveThumbnails
+```
+
+Drop page thumbnail images (the page /Thumb entry). Off by default.
+
+### `RemovePieceInfo`
+
+```csharp
+bool RemovePieceInfo
+```
+
+Drop application-private data (the /PieceInfo dictionary) on the catalog and pages. Off by default.
+
+### `RemoveStructTree`
+
+```csharp
+bool RemoveStructTree
+```
+
+Drop the logical structure tree (the catalog /StructTreeRoot and /MarkInfo). This removes accessibility tagging and is therefore lossy. Off by default.
+
+### `RemoveAnnotations`
+
+```csharp
+bool RemoveAnnotations
+```
+
+Drop page annotations (the page /Annots array): links, comments, and form field widgets. This is lossy. Off by default.
+
 ### `AllowSignedRewrite`
 
 ```csharp

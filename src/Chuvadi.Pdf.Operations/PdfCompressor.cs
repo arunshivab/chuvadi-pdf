@@ -57,6 +57,42 @@ public sealed record CompressionOptions
     public bool RemoveDocumentInfo { get; init; }
 
     /// <summary>
+    /// Drop document-level JavaScript: the catalog /Names /JavaScript name tree,
+    /// an /OpenAction that runs a script, and the document /AA additional-actions.
+    /// Off by default.
+    /// </summary>
+    public bool RemoveJavaScript { get; init; }
+
+    /// <summary>
+    /// Drop embedded file attachments: the catalog /Names /EmbeddedFiles name
+    /// tree, the catalog /AF associated files, and file-attachment annotations.
+    /// Off by default.
+    /// </summary>
+    public bool RemoveAttachments { get; init; }
+
+    /// <summary>Drop page thumbnail images (the page /Thumb entry). Off by default.</summary>
+    public bool RemoveThumbnails { get; init; }
+
+    /// <summary>
+    /// Drop application-private data (the /PieceInfo dictionary) on the catalog
+    /// and pages. Off by default.
+    /// </summary>
+    public bool RemovePieceInfo { get; init; }
+
+    /// <summary>
+    /// Drop the logical structure tree (the catalog /StructTreeRoot and
+    /// /MarkInfo). This removes accessibility tagging and is therefore lossy.
+    /// Off by default.
+    /// </summary>
+    public bool RemoveStructTree { get; init; }
+
+    /// <summary>
+    /// Drop page annotations (the page /Annots array): links, comments, and form
+    /// field widgets. This is lossy. Off by default.
+    /// </summary>
+    public bool RemoveAnnotations { get; init; }
+
+    /// <summary>
     /// When false (the default), a digitally signed document is not rewritten:
     /// <see cref="PdfCompressor.Compress"/> returns a result whose
     /// <see cref="CompressionResult.SkipReason"/> is
@@ -152,8 +188,10 @@ public sealed record CompressionResult
 /// returned <see cref="CompressionResult.SkipReason"/> says why (see
 /// <see cref="CompressionOptions.AllowSignedRewrite"/> and
 /// <see cref="CompressionOptions.AllowEncryptedRewrite"/> to override).
-/// Object streams and cross-reference streams are a recorded follow-up
-/// (the writer currently emits classic cross-reference tables).
+/// The result is written with an object stream and a compressed cross-reference
+/// stream (PDF 1.5+), the most compact lossless structure. Opt-in flags on
+/// <see cref="CompressionOptions"/> can additionally drop metadata, JavaScript,
+/// attachments, thumbnails, piece-info, the structure tree, and annotations.
 /// </para>
 /// </remarks>
 public static class PdfCompressor
@@ -278,12 +316,21 @@ public static class PdfCompressor
             trailer.Set(PdfName.Intern("ID"), DeepCopy(fileId, remap));
         }
 
-        // ── 5. Optional metadata stripping, then drop orphans ──────
-        if (options.RemoveMetadata)
+        // ── 5. Optional stripping, then drop now-orphaned objects ─────────
+        // Each opt-in flag removes a catalog or page entry; the streams and
+        // dictionaries thereby made unreachable are swept by the garbage
+        // collector that follows. RemoveDocumentInfo needs no strip pass here —
+        // the Info dictionary is simply not collected as a root above.
+        if (StripRequested(options))
         {
-            StripMetadata(objects, trailer);
+            StripCategories(objects, trailer, options);
             GarbageCollect(objects, trailer);
         }
+
+        // Orphans unreachable from the trailer plus anything stripped above.
+        // Captured before deduplication so byte-identical merges are reported
+        // only in DuplicatesRemoved rather than being double-counted here.
+        int objectsRemoved = Math.Max(0, totalObjects - objects.Count);
 
         // ── 6. Merge byte-identical objects, then densify numbering ──────
         PdfDictionary deduped = Deduplicate(objects, trailer, out int duplicatesRemoved);
@@ -306,7 +353,7 @@ public static class PdfCompressor
 
         return new CompressionResult
         {
-            ObjectsRemoved = Math.Max(0, totalObjects - reachable.Count),
+            ObjectsRemoved = objectsRemoved,
             StreamsCompressed = streamsCompressed,
             ImagesRecompressed = imagesRecompressed,
             DuplicatesRemoved = duplicatesRemoved,
@@ -896,25 +943,245 @@ public static class PdfCompressor
         }
     }
 
-    // ── Metadata stripping ────────────────────────────────────────────────
+    // ── Stripping ─────────────────────────────────────────────────────────
 
-    // Removes the catalog /Metadata entry (the document XMP stream). The orphaned
-    // stream is dropped by the subsequent garbage-collect pass.
-    private static void StripMetadata(List<PdfIndirectObject> objects, PdfDictionary trailer)
+    // True when any opt-in strip flag is set and a strip pass is therefore
+    // required. RemoveDocumentInfo is excluded: the Info dictionary is dropped
+    // by omitting it from the reachability roots, not by a strip pass.
+    private static bool StripRequested(CompressionOptions options) =>
+        options.RemoveMetadata
+        || options.RemoveJavaScript
+        || options.RemoveAttachments
+        || options.RemoveThumbnails
+        || options.RemovePieceInfo
+        || options.RemoveStructTree
+        || options.RemoveAnnotations;
+
+    // Removes the requested catalog- and page-level entries. The objects thereby
+    // made unreachable (XMP streams, JavaScript, embedded files, thumbnails,
+    // structure elements, annotations) are dropped by the garbage-collect pass
+    // that follows in Compress.
+    private static void StripCategories(
+        List<PdfIndirectObject> objects, PdfDictionary trailer, CompressionOptions options)
+    {
+        Dictionary<int, PdfPrimitive> byNumber = new(objects.Count);
+        foreach (PdfIndirectObject obj in objects)
+        {
+            byNumber[obj.Id.ObjectNumber] = obj.Value;
+        }
+
+        PdfDictionary? catalog = FindCatalog(objects, trailer);
+        if (catalog is null)
+        {
+            return;
+        }
+
+        // Catalog-level removals.
+        if (options.RemoveMetadata)
+        {
+            catalog.Remove(PdfName.Intern("Metadata"));
+        }
+        if (options.RemoveStructTree)
+        {
+            catalog.Remove(PdfName.Intern("StructTreeRoot"));
+            catalog.Remove(PdfName.Intern("MarkInfo"));
+        }
+        if (options.RemovePieceInfo)
+        {
+            catalog.Remove(PdfName.Intern("PieceInfo"));
+        }
+        if (options.RemoveJavaScript)
+        {
+            StripJavaScript(catalog, byNumber);
+        }
+        if (options.RemoveAttachments)
+        {
+            StripAttachments(catalog, byNumber);
+        }
+
+        // Page-level removals.
+        bool perPage = options.RemoveThumbnails
+            || options.RemovePieceInfo
+            || options.RemoveAnnotations
+            || options.RemoveAttachments;
+        if (!perPage)
+        {
+            return;
+        }
+
+        foreach (PdfDictionary page in EnumeratePageDicts(catalog, byNumber))
+        {
+            if (options.RemoveThumbnails)
+            {
+                page.Remove(PdfName.Intern("Thumb"));
+            }
+            if (options.RemovePieceInfo)
+            {
+                page.Remove(PdfName.Intern("PieceInfo"));
+            }
+            if (options.RemoveAnnotations)
+            {
+                page.Remove(PdfName.Intern("Annots"));
+            }
+            else if (options.RemoveAttachments)
+            {
+                DropFileAttachmentAnnots(page, byNumber);
+            }
+        }
+    }
+
+    // Locates the catalog dictionary in the rewritten object set via the
+    // trailer /Root reference.
+    private static PdfDictionary? FindCatalog(List<PdfIndirectObject> objects, PdfDictionary trailer)
     {
         if (!trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootValue) ||
             rootValue is not PdfReference rootRef)
         {
-            return;
+            return null;
         }
 
         foreach (PdfIndirectObject obj in objects)
         {
             if (obj.Id.ObjectNumber == rootRef.ObjectNumber && obj.Value is PdfDictionary catalog)
             {
-                catalog.Remove(PdfName.Intern("Metadata"));
-                break;
+                return catalog;
             }
+        }
+
+        return null;
+    }
+
+    // Resolves a single indirect reference against the rewritten object set;
+    // returns the primitive unchanged when it is direct or the target is absent.
+    private static PdfPrimitive? ResolveLocal(PdfPrimitive? primitive, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        if (primitive is PdfReference reference &&
+            byNumber.TryGetValue(reference.ObjectNumber, out PdfPrimitive? target))
+        {
+            return target;
+        }
+
+        return primitive;
+    }
+
+    // Fetches dictionary entry <paramref name="key"/> with one level of
+    // reference resolution, or null when absent.
+    private static PdfPrimitive? GetResolved(
+        PdfDictionary dict, PdfName key, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        return dict.TryGetValue(key, out PdfPrimitive? value)
+            ? ResolveLocal(value, byNumber)
+            : null;
+    }
+
+    // Walks the page tree from the catalog /Pages node, yielding each leaf page
+    // dictionary. Internal nodes (those with /Kids) are descended; a visited set
+    // guards against malformed cyclic trees.
+    private static IEnumerable<PdfDictionary> EnumeratePageDicts(
+        PdfDictionary catalog, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        if (GetResolved(catalog, PdfName.Pages, byNumber) is not PdfDictionary pages)
+        {
+            yield break;
+        }
+
+        Stack<PdfDictionary> stack = new();
+        stack.Push(pages);
+        HashSet<PdfDictionary> seen = new();
+        while (stack.Count > 0)
+        {
+            PdfDictionary node = stack.Pop();
+            if (!seen.Add(node))
+            {
+                continue;
+            }
+
+            if (node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsValue) &&
+                ResolveLocal(kidsValue, byNumber) is PdfArray kids)
+            {
+                for (int i = kids.Count - 1; i >= 0; i--)
+                {
+                    if (ResolveLocal(kids[i], byNumber) is PdfDictionary kid)
+                    {
+                        stack.Push(kid);
+                    }
+                }
+            }
+            else
+            {
+                yield return node;
+            }
+        }
+    }
+
+    // Removes document-level JavaScript: the /Names /JavaScript name tree, an
+    // /OpenAction that runs a script, and the document /AA additional-actions.
+    private static void StripJavaScript(PdfDictionary catalog, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        if (GetResolved(catalog, PdfName.Intern("Names"), byNumber) is PdfDictionary names)
+        {
+            names.Remove(PdfName.Intern("JavaScript"));
+        }
+
+        if (GetResolved(catalog, PdfName.Intern("OpenAction"), byNumber) is PdfDictionary action &&
+            GetResolved(action, PdfName.Intern("S"), byNumber) is PdfName verb &&
+            verb.Value == "JavaScript")
+        {
+            catalog.Remove(PdfName.Intern("OpenAction"));
+        }
+
+        catalog.Remove(PdfName.Intern("AA"));
+    }
+
+    // Removes embedded file attachments: the /Names /EmbeddedFiles name tree and
+    // the catalog /AF associated files. File-attachment annotations that point at
+    // those streams are dropped per page in DropFileAttachmentAnnots, so the
+    // embedded streams become unreachable and are swept.
+    private static void StripAttachments(PdfDictionary catalog, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        if (GetResolved(catalog, PdfName.Intern("Names"), byNumber) is PdfDictionary names)
+        {
+            names.Remove(PdfName.Intern("EmbeddedFiles"));
+        }
+
+        catalog.Remove(PdfName.Intern("AF"));
+    }
+
+    // Rewrites a page's /Annots array to exclude file-attachment annotations,
+    // used when attachments are stripped but other annotations are kept.
+    private static void DropFileAttachmentAnnots(PdfDictionary page, Dictionary<int, PdfPrimitive> byNumber)
+    {
+        if (GetResolved(page, PdfName.Intern("Annots"), byNumber) is not PdfArray annots)
+        {
+            return;
+        }
+
+        List<PdfPrimitive> kept = new(annots.Count);
+        for (int i = 0; i < annots.Count; i++)
+        {
+            PdfPrimitive entry = annots[i];
+            if (ResolveLocal(entry, byNumber) is PdfDictionary annot &&
+                GetResolved(annot, PdfName.Intern("Subtype"), byNumber) is PdfName sub &&
+                sub.Value == "FileAttachment")
+            {
+                continue;
+            }
+
+            kept.Add(entry);
+        }
+
+        if (kept.Count == annots.Count)
+        {
+            return;
+        }
+
+        if (kept.Count == 0)
+        {
+            page.Remove(PdfName.Intern("Annots"));
+        }
+        else
+        {
+            page.Set(PdfName.Intern("Annots"), new PdfArray(kept.ToArray()));
         }
     }
 
