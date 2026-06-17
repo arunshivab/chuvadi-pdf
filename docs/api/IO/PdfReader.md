@@ -26,6 +26,14 @@ PdfObjectStore Objects
 
 Gets the lazy object store.
 
+### `Warnings`
+
+```csharp
+IReadOnlyList<string> Warnings
+```
+
+Gets warnings raised while opening the document — for example, page-tree objects recovered from a corrupt cross-reference table. An empty list means the file opened without any structural repair.
+
 ## Methods
 
 ### `Open`

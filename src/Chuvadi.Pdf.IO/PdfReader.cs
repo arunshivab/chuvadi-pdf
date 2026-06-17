@@ -40,6 +40,44 @@ public sealed class PdfReader : IDisposable
         _disposed = false;
         Trailer = trailer;
         Objects = objects;
+        Warnings = RecoverPageTree(objects, trailer);
+    }
+
+    // Validates the page tree at open time and repairs kids whose cross-reference
+    // entry resolves to the wrong object (e.g. a duplicate object number left by
+    // an older writer). Healthy files do no scanning. Recovery never throws: a
+    // file that cannot be validated is left as-is for the normal code path to
+    // report when a page is accessed.
+    private IReadOnlyList<string> RecoverPageTree(PdfObjectStore objects, PdfDictionary trailer)
+    {
+        try
+        {
+            if (trailer.GetAs<PdfPrimitive>(PdfName.Root) is not PdfReference rootRef)
+            {
+                return Array.Empty<string>();
+            }
+
+            if (objects.ResolveById(rootRef.ObjectId) is not PdfDictionary catalog)
+            {
+                return Array.Empty<string>();
+            }
+
+            if (catalog.GetAs<PdfPrimitive>(PdfName.Pages) is not PdfPrimitive pagesPrim)
+            {
+                return Array.Empty<string>();
+            }
+
+            if (objects.Resolve(pagesPrim) is not PdfDictionary pagesRoot)
+            {
+                return Array.Empty<string>();
+            }
+
+            return PageTreeRecovery.Recover(this, objects, pagesRoot);
+        }
+        catch (Exception)
+        {
+            return Array.Empty<string>();
+        }
     }
 
     // ── Factory: synchronous ──────────────────────────────────────────────
@@ -325,6 +363,23 @@ public sealed class PdfReader : IDisposable
 
     /// <summary>Gets the lazy object store.</summary>
     public PdfObjectStore Objects { get; }
+
+    /// <summary>
+    /// Gets warnings raised while opening the document — for example, page-tree
+    /// objects recovered from a corrupt cross-reference table. An empty list
+    /// means the file opened without any structural repair.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; }
+
+    /// <summary>Gets the total length of the underlying file in bytes.</summary>
+    public long FileLength
+    {
+        get
+        {
+            if (_disposed) { throw new ObjectDisposedException(nameof(PdfReader)); }
+            return _stream.Length;
+        }
+    }
 
     /// <summary>Gets the document Catalog dictionary, or null.</summary>
     public PdfDictionary? Catalog

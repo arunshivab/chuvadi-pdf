@@ -150,6 +150,22 @@ template/layout/scripting engine. *Very large — its own multi-stage effort.*
 **18. Type3 fonts.** No `CharProcs`/`d0`/`d1` handling; Type3 text (glyphs defined
 as content streams) does not render. *Medium impact.*
 
+### Input robustness / recovery
+**19. General xref-offset recovery on load.** When a classic xref entry points at
+the wrong byte offset (e.g. a stale offset left by an older writer, or a
+duplicate object number whose xref entry references the wrong copy), the affected
+object resolves to the wrong primitive. The narrow case — a page-tree `/Kids`
+entry that resolves to a non-dictionary — is recovered in-walk and surfaced via
+`PdfDocument.Warnings`/`IsRecovered` (shipped alongside this item's creation;
+reuses `PdfRepairer`'s definition scan, prefers the `/Page` definition). The
+broader, deferred work: validate **any** resolved object against its xref offset
+and fall back to a full-file definition scan when the offset is provably wrong,
+not just for page-tree kids. Lower-risk than auto-`PdfRepairer` on every load;
+should be opt-in or confined to objects that fail a type/role check, so healthy
+files keep the fast strict path. Origin: `MRDDFF.pdf`, a 9-page CV watermarked by
+the old v3.6 stamper, carried a duplicate object 3 (page vs. watermark stream)
+with the xref pointing at the stream; the current writer does not reproduce this.
+
 ---
 
 ## Pre-1.0 housekeeping (separate track)

@@ -62,6 +62,22 @@ PdfReader Reader => _reader
 
 Gets the underlying `PdfReader` for low-level access such as reading raw file bytes for signature byte-range extraction.
 
+### `Warnings`
+
+```csharp
+IReadOnlyList<string> Warnings => _reader.Warnings
+```
+
+Gets warnings raised while opening the document. A non-empty list means the file was structurally repaired during loading — for example, a page-tree object recovered from a corrupt cross-reference table. The document is usable, and writing it back out (merge, reorder, extract, save) emits a clean, repaired file.
+
+### `IsRecovered`
+
+```csharp
+bool IsRecovered => _reader.Warnings.Count > 0
+```
+
+Gets a value indicating whether the document was opened in a repaired state. Equivalent to `Warnings` being non-empty.
+
 ## Methods
 
 ### `Open`
