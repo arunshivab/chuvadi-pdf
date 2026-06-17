@@ -473,6 +473,41 @@ public static class DisplayListBuilder
             EmitXObject(name, _stack.Current);
         }
 
+        // ── IContentOperatorSink — ExtGState ───────────────────────────
+
+        /// <inheritdoc />
+        public void ApplyExtGState(string name)
+        {
+            if (_resources is null) { return; }
+            if (!_resources.TryGetValue(PdfName.Intern("ExtGState"), out PdfPrimitive? egv)) { return; }
+            PdfDictionary? extGStates = _doc.Objects.ResolveAs<PdfDictionary>(egv);
+            if (extGStates is null) { return; }
+            if (!extGStates.TryGetValue(PdfName.Intern(name), out PdfPrimitive? gsRef)) { return; }
+            if (_doc.Objects.Resolve(gsRef) is not PdfDictionary gs) { return; }
+
+            BuilderState s = _stack.Current;
+
+            // /ca — constant non-stroking (fill) alpha; /CA — constant stroking
+            // alpha. PDF 32000-1:2008 §8.4.5, Table 58. Values outside 0..1 are
+            // clamped. Other ExtGState entries are not interpreted here.
+            if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; }
+            if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; }
+        }
+
+        private static bool TryReadAlpha(PdfDictionary extGState, string key, out double value)
+        {
+            value = 1.0;
+            if (!extGState.TryGetValue(PdfName.Intern(key), out PdfPrimitive? prim)) { return false; }
+
+            double raw;
+            if (prim is PdfReal r) { raw = r.Value; }
+            else if (prim is PdfInteger i) { raw = i.Value; }
+            else { return false; }
+
+            value = raw < 0.0 ? 0.0 : (raw > 1.0 ? 1.0 : raw);
+            return true;
+        }
+
         private void EmitPath(BuilderState s, PaintMode mode, FillRule rule)
         {
             if (!s.HasCurrentPath) { return; }
@@ -491,6 +526,8 @@ public static class DisplayListBuilder
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
                 Stroke = stroke,
+                FillOpacity = s.FillAlpha,
+                StrokeOpacity = s.StrokeAlpha,
             });
             s.ResetPath();
         }
@@ -615,6 +652,8 @@ public static class DisplayListBuilder
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
                 Style = s.Style,
+                FillOpacity = s.FillAlpha,
+                StrokeOpacity = s.StrokeAlpha,
             });
 
             // Advance text matrix by the total advance of this run.
@@ -826,6 +865,8 @@ public static class DisplayListBuilder
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
                 Style = s.Style,
+                FillOpacity = s.FillAlpha,
+                StrokeOpacity = s.StrokeAlpha,
             });
 
             AffineMatrix step = new(1, 0, 0, 1, cursorX, 0);
@@ -1155,6 +1196,7 @@ public static class DisplayListBuilder
                 SoftMaskAlpha = softMaskAlpha,
                 SoftMaskWidth = softMaskWidth,
                 SoftMaskHeight = softMaskHeight,
+                Alpha = s.FillAlpha,
                 Transform = s.Ctm,
             });
         }

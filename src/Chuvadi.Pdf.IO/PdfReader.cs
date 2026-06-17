@@ -286,6 +286,17 @@ public sealed class PdfReader : IDisposable
                 return loaded;
             }
 
+            // Objects stored inside an object stream are not encrypted
+            // individually (ISO 32000-1 §7.6): the container stream is encrypted
+            // as a whole and was already decrypted when it was loaded above, so
+            // the extracted value is already plaintext. Decrypting it a second
+            // time would corrupt it.
+            if (xref.TryGet(id.ObjectNumber, out XrefEntry compressedEntry)
+                && compressedEntry.IsCompressed)
+            {
+                return loaded;
+            }
+
             PdfPrimitive decryptedValue = EncryptionVisitor.Transform(
                 loaded.Value,
                 id.ObjectNumber,

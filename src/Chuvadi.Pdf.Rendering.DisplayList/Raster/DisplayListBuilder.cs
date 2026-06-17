@@ -473,12 +473,57 @@ public static class DisplayListBuilder
             _clipRule = evenOdd ? FillRule.EvenOdd : FillRule.NonZeroWinding;
         }
 
+        // ── IContentOperatorSink — ExtGState ───────────────────────────
+
+        /// <inheritdoc />
+        public void ApplyExtGState(string name)
+        {
+            if (_resources is null) { return; }
+            if (!_resources.TryGetValue(PdfName.Intern("ExtGState"), out PdfPrimitive? egv)) { return; }
+            PdfDictionary? extGStates = _objects.ResolveAs<PdfDictionary>(egv);
+            if (extGStates is null) { return; }
+            if (!extGStates.TryGetValue(PdfName.Intern(name), out PdfPrimitive? gsRef)) { return; }
+            if (_objects.Resolve(gsRef) is not PdfDictionary gs) { return; }
+
+            // /ca = constant non-stroking (fill) alpha, /CA = constant stroking
+            // alpha (PDF 32000-1:2008 §8.4.5, Table 58). Out-of-range values clamp.
+            if (TryReadAlpha(gs, "ca", out double fillAlpha)) { _state.FillAlpha = fillAlpha; }
+            if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { _state.StrokeAlpha = strokeAlpha; }
+        }
+
+        private static bool TryReadAlpha(PdfDictionary extGState, string key, out double value)
+        {
+            value = 1.0;
+            if (!extGState.TryGetValue(PdfName.Intern(key), out PdfPrimitive? prim)) { return false; }
+
+            double raw;
+            if (prim is PdfReal r) { raw = r.Value; }
+            else if (prim is PdfInteger i) { raw = i.Value; }
+            else { return false; }
+
+            value = raw < 0.0 ? 0.0 : (raw > 1.0 ? 1.0 : raw);
+            return true;
+        }
+
+        // Paint colours with the constant ExtGState alpha (/ca, /CA) folded in.
+        private ColorF EffectiveFill => ApplyAlpha(_state.FillColor, _state.FillAlpha);
+
+        private ColorF EffectiveStroke => ApplyAlpha(_state.StrokeColor, _state.StrokeAlpha);
+
+        private static ColorF ApplyAlpha(ColorF color, double alpha)
+        {
+            if (alpha >= 1.0) { return color; }
+            double clamped = alpha < 0.0 ? 0.0 : alpha;
+            ColorF rgb = color.ToRgb();
+            return ColorF.FromRgb(rgb.R, rgb.G, rgb.B, rgb.Alpha * (float)clamped);
+        }
+
         private void OpFill(FillRule rule)
         {
             if (_state.FillValid && !_currentPath.IsEmpty)
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
-                _ops.Add(new FillPathOp(transformed, _state.FillColor, rule, SnapshotClips()));
+                _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()));
             }
 
             ApplyDeferredClip();
@@ -518,7 +563,7 @@ public static class DisplayListBuilder
 
                 if (_state.FillValid)
                 {
-                    _ops.Add(new FillPathOp(transformed, _state.FillColor, rule, snapshot));
+                    _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot));
                 }
 
                 if (_state.StrokeValid)
@@ -566,7 +611,7 @@ public static class DisplayListBuilder
                 MiterLimit = _state.MiterLimit,
                 DashPattern = _state.DashPattern,
                 DashOffset = _state.DashOffset,
-                Color = _state.StrokeColor,
+                Color = EffectiveStroke,
             };
         }
 
@@ -846,7 +891,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
                     }
 
                     double programAdvance = hintedGlyph is not null && !_lightHinting
@@ -870,7 +915,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
                     }
 
                     advance = ResolveSimpleAdvance(code, std14.GetAdvanceWidth(ch, _state.FontSize));
@@ -890,7 +935,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
                     }
 
                     advance = ResolveSimpleAdvance(code, adv);
@@ -1175,7 +1220,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, _state.FillColor, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
                     }
 
                     advance = hintedGlyph is not null && !_lightHinting
@@ -1669,7 +1714,7 @@ public static class DisplayListBuilder
 
             ApplySoftMask(xobjStream, frame);
 
-            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips()));
+            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha));
         }
 
         // Converts decoded raw samples into an ImageFrame for the cases the

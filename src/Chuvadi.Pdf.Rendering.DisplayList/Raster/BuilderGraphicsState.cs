@@ -117,6 +117,12 @@ internal sealed class BuilderGraphicsState
     /// </summary>
     public List<ClipPath> ActiveClips { get; set; } = new List<ClipPath>();
 
+    /// <summary>Constant non-stroking (fill) alpha from ExtGState /ca. 1 = opaque.</summary>
+    public double FillAlpha { get; set; } = 1.0;
+
+    /// <summary>Constant stroking alpha from ExtGState /CA. 1 = opaque.</summary>
+    public double StrokeAlpha { get; set; } = 1.0;
+
     /// <summary>
     /// Returns a deep copy of this state suitable for pushing onto the
     /// q/Q stack. The clip list is defensively copied; primitive fields
@@ -148,6 +154,8 @@ internal sealed class BuilderGraphicsState
             TextLeading = TextLeading,
             TextRise = TextRise,
             TextRenderingMode = TextRenderingMode,
+            FillAlpha = FillAlpha,
+            StrokeAlpha = StrokeAlpha,
             ActiveClips = new List<ClipPath>(ActiveClips),
         };
     }

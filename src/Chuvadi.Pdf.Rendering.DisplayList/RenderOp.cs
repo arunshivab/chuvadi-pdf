@@ -97,6 +97,16 @@ public sealed class PathOp : RenderOp
 
     /// <summary>Stroke style (only meaningful when Mode includes stroke).</summary>
     public StrokeStyle? Stroke { get; init; }
+
+    /// <summary>
+    /// Constant fill opacity (ExtGState /ca), 0..1. Default 1 (opaque).
+    /// </summary>
+    public double FillOpacity { get; init; } = 1.0;
+
+    /// <summary>
+    /// Constant stroke opacity (ExtGState /CA), 0..1. Default 1 (opaque).
+    /// </summary>
+    public double StrokeOpacity { get; init; } = 1.0;
 }
 
 /// <summary>Rendering mode for a <see cref="TextOp"/> (PDF §9.3.6).</summary>
@@ -160,6 +170,16 @@ public sealed class TextOp : RenderOp
 
     /// <summary>Resolved presentation style (family, weight, slant).</summary>
     public FontStyle Style { get; init; } = FontStyle.Default;
+
+    /// <summary>
+    /// Constant fill opacity (ExtGState /ca), 0..1. Default 1 (opaque).
+    /// </summary>
+    public double FillOpacity { get; init; } = 1.0;
+
+    /// <summary>
+    /// Constant stroke opacity (ExtGState /CA), 0..1. Default 1 (opaque).
+    /// </summary>
+    public double StrokeOpacity { get; init; } = 1.0;
 }
 
 /// <summary>Raster format of image pixel data.</summary>
@@ -208,6 +228,12 @@ public sealed class ImageOp : RenderOp
 
     /// <summary>Height of <see cref="SoftMaskAlpha"/> in samples.</summary>
     public int SoftMaskHeight { get; init; }
+
+    /// <summary>
+    /// Constant image opacity (ExtGState /ca), 0..1. Default 1 (opaque).
+    /// Composes with <see cref="SoftMaskAlpha"/> when both are present.
+    /// </summary>
+    public double Alpha { get; init; } = 1.0;
 
     /// <summary>
     /// Transformation matrix placing the image. The unit-square at (0,0)-(1,1)

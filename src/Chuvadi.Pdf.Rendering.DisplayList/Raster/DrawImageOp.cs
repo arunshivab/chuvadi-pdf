@@ -45,17 +45,22 @@ public sealed class DrawImageOp : RenderOp
     /// <param name="clips">
     /// Clip paths active when this op was emitted. Null or empty means no clip.
     /// </param>
+    /// <param name="alpha">
+    /// Constant image opacity from ExtGState /ca, 0..1. Default 1 (opaque).
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="image"/> is null.
     /// </exception>
     public DrawImageOp(
         ImageFrame image,
         Transform deviceTransform,
-        IReadOnlyList<ClipPath>? clips = null)
+        IReadOnlyList<ClipPath>? clips = null,
+        double alpha = 1.0)
         : base(clips)
     {
         Image = image ?? throw new ArgumentNullException(nameof(image));
         DeviceTransform = deviceTransform;
+        Alpha = alpha < 0.0 ? 0.0 : (alpha > 1.0 ? 1.0 : alpha);
     }
 
     /// <summary>Gets the decoded image frame (BGRA pixels regardless of source format).</summary>
@@ -66,4 +71,10 @@ public sealed class DrawImageOp : RenderOp
     /// square (0,0)–(1,1) into PDF user space.
     /// </summary>
     public Transform DeviceTransform { get; }
+
+    /// <summary>
+    /// Gets the constant image opacity from ExtGState /ca (0..1). Multiplies
+    /// the per-pixel alpha (including any /SMask) during compositing.
+    /// </summary>
+    public double Alpha { get; }
 }

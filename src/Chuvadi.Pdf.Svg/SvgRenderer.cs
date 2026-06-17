@@ -367,6 +367,39 @@ public sealed class SvgRenderer
     /// method handles all other paths (strokes, fill+stroke, non-rect
     /// geometries, and the eventual emission of a merged rectangle).
     /// </summary>
+    // Appends an attribute to a builder, inserting a separating space when the
+    // builder already holds one or more attributes.
+    private static void AppendAttr(StringBuilder attrs, string attr)
+    {
+        if (attrs.Length > 0) { attrs.Append(' '); }
+        attrs.Append(attr);
+    }
+
+    // Formats an opacity value (0..1) for an SVG attribute.
+    private static string FormatOpacity(double value)
+    {
+        double clamped = value < 0.0 ? 0.0 : (value > 1.0 ? 1.0 : value);
+        return clamped.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    // Builds the fill-opacity/stroke-opacity attributes for a text op, or null
+    // when both are fully opaque.
+    private static string? TextOpacityAttrs(TextOp op)
+    {
+        StringBuilder attrs = new();
+        if (op.FillOpacity < 1.0)
+        {
+            AppendAttr(attrs, $"fill-opacity=\"{FormatOpacity(op.FillOpacity)}\"");
+        }
+
+        if (op.StrokeOpacity < 1.0)
+        {
+            AppendAttr(attrs, $"stroke-opacity=\"{FormatOpacity(op.StrokeOpacity)}\"");
+        }
+
+        return attrs.Length > 0 ? attrs.ToString() : null;
+    }
+
     private void EmitPath(PathOp op, SvgWriter w)
     {
         bool fill = op.Mode is PaintMode.Fill or PaintMode.FillAndStroke;
@@ -376,7 +409,7 @@ public sealed class SvgRenderer
         double strokeWidth = op.Stroke?.LineWidth ?? 0;
         string fillRule = op.FillRule == FillRule.EvenOdd ? "evenodd" : "nonzero";
 
-        string? extra = null;
+        StringBuilder attrs = new();
         if (stroke && op.Stroke?.DashArray is { Length: > 0 } da)
         {
             StringBuilder ds = new();
@@ -385,8 +418,20 @@ public sealed class SvgRenderer
                 if (i > 0) { ds.Append(','); }
                 ds.Append(da[i].ToString("0.##", CultureInfo.InvariantCulture));
             }
-            extra = $"stroke-dasharray=\"{ds}\"";
+            AppendAttr(attrs, $"stroke-dasharray=\"{ds}\"");
         }
+
+        if (fill && op.FillOpacity < 1.0)
+        {
+            AppendAttr(attrs, $"fill-opacity=\"{FormatOpacity(op.FillOpacity)}\"");
+        }
+
+        if (stroke && op.StrokeOpacity < 1.0)
+        {
+            AppendAttr(attrs, $"stroke-opacity=\"{FormatOpacity(op.StrokeOpacity)}\"");
+        }
+
+        string? extra = attrs.Length > 0 ? attrs.ToString() : null;
 
         string d;
         if (fill && !stroke
@@ -446,6 +491,10 @@ public sealed class SvgRenderer
         bool fill = op.Mode is PaintMode.Fill or PaintMode.FillAndStroke;
         bool stroke = op.Mode is PaintMode.Stroke or PaintMode.FillAndStroke;
         if (!fill || stroke) { return false; }
+
+        // Translucent fills go through the unbuffered path so EmitPath can emit
+        // fill-opacity; the rect-merge fast path carries no opacity.
+        if (op.FillOpacity < 1.0) { return false; }
         if (!TryGetAxisAlignedRectangle(op.Geometry,
             out double minX, out double minY, out double maxX, out double maxY))
         {
@@ -603,6 +652,7 @@ public sealed class SvgRenderer
         string family = ResolveFamily(op.BaseFont, familyByBaseFont);
         string fill = SrgbCss(op.FillColor);
         (string? fontWeight, string? fontStyle) = ResolveStyleHints(op.Style);
+        string? textExtra = TextOpacityAttrs(op);
 
         // v2.1.3 — embedded fonts carry authoritative glyph advances in hmtx;
         // emitting per-glyph X attributes would force the browser to override
@@ -613,12 +663,12 @@ public sealed class SvgRenderer
         if (!hasEmbeddedFont && allSingleChar && xPositions.Count == text.Length)
         {
             w.EmitText(text, xPositions, 0, family, op.FontSize, fill, transform,
-                fontWeight: fontWeight, fontStyle: fontStyle);
+                fontWeight: fontWeight, fontStyle: fontStyle, extraAttrs: textExtra);
         }
         else
         {
             w.EmitText(text, 0, 0, family, op.FontSize, fill, transform,
-                fontWeight: fontWeight, fontStyle: fontStyle);
+                fontWeight: fontWeight, fontStyle: fontStyle, extraAttrs: textExtra);
         }
 
         double runLength = 0;
@@ -640,7 +690,10 @@ public sealed class SvgRenderer
         AffineMatrix combined = localFlip.Multiply(op.Transform);
         string transform = combined.ToSvgMatrix();
 
-        w.OpenGroup(transform);
+        string? groupExtra = op.Alpha < 1.0
+            ? $"opacity=\"{FormatOpacity(op.Alpha)}\""
+            : null;
+        w.OpenGroup(transform, extraAttrs: groupExtra);
         // v2.1.4: PDF places images in a unit square at (0,0)-(1,1); the
         // CTM (already applied via the group transform above) encodes the
         // destination width and height. preserveAspectRatio="none" tells

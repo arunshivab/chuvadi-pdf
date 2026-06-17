@@ -145,7 +145,7 @@ internal sealed class SvgWriter
     /// </remarks>
     internal void EmitText(string content, double x, double y, string fontFamily,
         double fontSize, string fill, string? transform = null,
-        string? fontWeight = null, string? fontStyle = null)
+        string? fontWeight = null, string? fontStyle = null, string? extraAttrs = null)
     {
         _body.Append("<text");
         if (transform is not null)
@@ -166,6 +166,7 @@ internal sealed class SvgWriter
             _body.Append(" font-style=\"").Append(EscapeXml(fontStyle)).Append('"');
         }
         _body.Append(" fill=\"").Append(EscapeXml(fill)).Append('"');
+        if (extraAttrs is not null) { _body.Append(' ').Append(extraAttrs); }
         _body.Append(" xml:space=\"preserve\"");
         _body.Append('>').Append(EscapeXml(content)).Append("</text>");
     }
@@ -194,7 +195,7 @@ internal sealed class SvgWriter
     /// </remarks>
     internal void EmitText(string content, IReadOnlyList<double> xPositions, double y,
         string fontFamily, double fontSize, string fill, string? transform = null,
-        string? fontWeight = null, string? fontStyle = null)
+        string? fontWeight = null, string? fontStyle = null, string? extraAttrs = null)
     {
         _body.Append("<text");
         if (transform is not null)
@@ -220,6 +221,7 @@ internal sealed class SvgWriter
             _body.Append(" font-style=\"").Append(EscapeXml(fontStyle)).Append('"');
         }
         _body.Append(" fill=\"").Append(EscapeXml(fill)).Append('"');
+        if (extraAttrs is not null) { _body.Append(' ').Append(extraAttrs); }
         _body.Append(" xml:space=\"preserve\"");
         _body.Append('>').Append(EscapeXml(content)).Append("</text>");
     }

@@ -322,6 +322,7 @@ python tools/gen_api_docs.py
 | [PdfWriter](IO/PdfWriter.md) | class | Writes a complete PDF file to an output stream. |
 | [RepairReport](IO/RepairReport.md) | class | Describes what `PdfRepairer` did while reconstructing a damaged PDF. |
 | [SynthesizedMetadata](IO/SynthesizedMetadata.md) | enum | — |
+| [XrefStyle](IO/XrefStyle.md) | enum | Selects the cross-reference format `PdfWriter` writes. |
 
 ## Chuvadi.Pdf.Images
 

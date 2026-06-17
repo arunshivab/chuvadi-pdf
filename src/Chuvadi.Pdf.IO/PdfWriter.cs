@@ -13,6 +13,7 @@ using System.Text;
 using System.Security.Cryptography;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Encryption;
+using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.IO;
@@ -103,12 +104,22 @@ public static class PdfWriter
     /// <see cref="SynthesizedMetadata.All"/>, matching the standard behaviour;
     /// reduce it to suppress synthesis of /Info and/or /Metadata.
     /// </param>
+    /// <param name="xrefStyle">
+    /// The cross-reference format to emit. Defaults to
+    /// <see cref="XrefStyle.Classic"/> (a plaintext cross-reference table).
+    /// <see cref="XrefStyle.Stream"/> packs eligible objects into object
+    /// streams and writes a compressed cross-reference stream, producing a
+    /// smaller file (PDF 1.5+). Object streams compose with encryption: each
+    /// container is encrypted as a whole and the cross-reference stream is left
+    /// unencrypted, per ISO 32000-1 §7.6.
+    /// </param>
     public static void Write(
         Stream output,
         IEnumerable<PdfIndirectObject> objects,
         PdfDictionary trailer,
         EncryptionOptions? encryption,
-        SynthesizedMetadata synthesized = SynthesizedMetadata.All)
+        SynthesizedMetadata synthesized = SynthesizedMetadata.All,
+        XrefStyle xrefStyle = XrefStyle.Classic)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(objects);
@@ -162,6 +173,14 @@ public static class PdfWriter
             trailer.Set(PdfName.Intern("Encrypt"), new PdfReference(encryptId));
             encryptor = new Encryptor(encryption.FileKey, encryption.Algorithm);
             encryptMetadata = encryption.EncryptMetadata;
+        }
+
+        if (xrefStyle == XrefStyle.Stream)
+        {
+            WriteObjectStreamBody(
+                output, sortedObjects, trailer, maxObjectNumber,
+                encryptor, encryptObjectNumber, encryptMetadata);
+            return;
         }
 
         XrefTable xref = new XrefTable();
@@ -683,5 +702,329 @@ public static class PdfWriter
     {
         byte[] bytes = Encoding.ASCII.GetBytes(text);
         output.Write(bytes, 0, bytes.Length);
+    }
+
+    // ── Object streams + cross-reference stream (PDF 1.5+, §7.5.7 / §7.5.8) ──
+
+    // Maximum objects packed into a single object stream. Chunking keeps each
+    // /ObjStm container a manageable size, matching common producers (Acrobat,
+    // qpdf) rather than emitting one monolithic stream.
+    private const int MaxObjectsPerObjectStream = 200;
+
+    private static readonly DeflateFilter FlateFilter = new DeflateFilter();
+
+    // Writes the body (objects, object streams, and cross-reference stream) in
+    // PDF 1.5+ form. The PDF header has already been written; encryption setup
+    // (the /Encrypt object and the encryptor) has already been performed by the
+    // caller. Object streams compose with encryption: each container is
+    // encrypted as a whole and the objects packed inside it are never encrypted
+    // individually; the /Encrypt dictionary and the cross-reference stream are
+    // left unencrypted (ISO 32000-1 §7.6).
+    private static void WriteObjectStreamBody(
+        Stream output,
+        List<PdfIndirectObject> sortedObjects,
+        PdfDictionary trailer,
+        int maxObjectNumber,
+        Encryptor? encryptor,
+        int encryptObjectNumber,
+        bool encryptMetadata)
+    {
+        // Partition: streams, any non-zero-generation object, and the /Encrypt
+        // dictionary must be written as direct indirect objects; everything else
+        // (plain dictionaries, arrays, and scalars at generation 0) is eligible
+        // to be packed into an object stream (§7.5.7).
+        List<PdfIndirectObject> direct = new List<PdfIndirectObject>();
+        List<PdfIndirectObject> compressible = new List<PdfIndirectObject>();
+        foreach (PdfIndirectObject obj in sortedObjects)
+        {
+            if (obj.Id.ObjectNumber == encryptObjectNumber
+                || obj.Id.Generation != 0
+                || obj.Value is PdfStream)
+            {
+                direct.Add(obj);
+            }
+            else
+            {
+                compressible.Add(obj);
+            }
+        }
+
+        // Pack compressible objects into chunked /ObjStm containers, each a new
+        // direct stream object numbered above the input's maximum. Each packed
+        // object records its (container number, index-in-stream) for its type-2
+        // cross-reference entry.
+        int nextObjectNumber = maxObjectNumber;
+        Dictionary<int, CompressedLocation> compressedLocations =
+            new Dictionary<int, CompressedLocation>();
+        List<PdfIndirectObject> containers = new List<PdfIndirectObject>();
+
+        for (int start = 0; start < compressible.Count; start += MaxObjectsPerObjectStream)
+        {
+            int count = Math.Min(MaxObjectsPerObjectStream, compressible.Count - start);
+            nextObjectNumber++;
+            int containerNumber = nextObjectNumber;
+            containers.Add(BuildObjectStream(
+                compressible, start, count, containerNumber, compressedLocations));
+        }
+
+        // The cross-reference stream is itself an indirect object, numbered last.
+        nextObjectNumber++;
+        int xrefObjectNumber = nextObjectNumber;
+
+        // Write all direct objects plus the containers in ascending object-number
+        // order, recording byte offsets. Streams (including containers) are
+        // encrypted as whole objects when encryption is active.
+        List<PdfIndirectObject> directAndContainers = new List<PdfIndirectObject>(direct);
+        directAndContainers.AddRange(containers);
+        directAndContainers.Sort((a, b) => a.Id.ObjectNumber.CompareTo(b.Id.ObjectNumber));
+
+        Dictionary<int, long> offsets = new Dictionary<int, long>();
+        foreach (PdfIndirectObject obj in directAndContainers)
+        {
+            long offset = output.Position;
+            PdfIndirectObject toWrite = obj;
+
+            if (encryptor is not null && obj.Id.ObjectNumber != encryptObjectNumber)
+            {
+                PdfPrimitive encryptedValue = EncryptionVisitor.Transform(
+                    obj.Value,
+                    obj.Id.ObjectNumber,
+                    obj.Id.Generation,
+                    encryptor.Encrypt,
+                    skipMetadataEncryption: !encryptMetadata);
+                toWrite = new PdfIndirectObject(obj.Id, encryptedValue);
+            }
+
+            WriteIndirectObject(output, toWrite);
+            offsets[obj.Id.ObjectNumber] = offset;
+        }
+
+        // The cross-reference stream begins at the current position and is its
+        // own in-use entry.
+        long xrefOffset = output.Position;
+        offsets[xrefObjectNumber] = xrefOffset;
+
+        // Build cross-reference entries in ascending object-number order: object 0
+        // is the free-list head, written objects are in-use (type 1), and packed
+        // objects are compressed (type 2).
+        List<int> presentNumbers = new List<int> { 0 };
+        foreach (int number in offsets.Keys)
+        {
+            presentNumbers.Add(number);
+        }
+
+        foreach (int number in compressedLocations.Keys)
+        {
+            presentNumbers.Add(number);
+        }
+
+        presentNumbers.Sort();
+
+        long maxOffset = xrefOffset;
+        int maxField2 = 0;
+        int maxField3 = 65535; // object 0's generation (free-list head)
+        List<XrefEntry> entries = new List<XrefEntry>(presentNumbers.Count);
+        foreach (int number in presentNumbers)
+        {
+            if (number == 0)
+            {
+                entries.Add(XrefEntry.Free(0, 65535, 0));
+                continue;
+            }
+
+            if (offsets.TryGetValue(number, out long offset))
+            {
+                entries.Add(new XrefEntry(number, 0, offset));
+                if (offset > maxOffset)
+                {
+                    maxOffset = offset;
+                }
+            }
+            else
+            {
+                CompressedLocation location = compressedLocations[number];
+                entries.Add(XrefEntry.Compressed(number, location.Container, location.Index));
+                if (location.Container > maxField2)
+                {
+                    maxField2 = location.Container;
+                }
+
+                if (location.Index > maxField3)
+                {
+                    maxField3 = location.Index;
+                }
+            }
+        }
+
+        if (maxOffset > maxField2)
+        {
+            maxField2 = (int)maxOffset;
+        }
+
+        int w2 = ByteWidth(maxField2);
+        int w3 = Math.Max(2, ByteWidth(maxField3));
+
+        XrefStreamTable xrefStreamTable = new XrefStreamTable();
+        foreach (XrefEntry entry in entries)
+        {
+            xrefStreamTable.Add(entry);
+        }
+
+        byte[] encoded = xrefStreamTable.Encode(1, w2, w3);
+        byte[] compressed = FlateEncode(encoded);
+
+        PdfDictionary xrefDict = new PdfDictionary();
+        xrefDict.Set(PdfName.Type, PdfName.Intern("XRef"));
+        xrefDict.Set(PdfName.Size, xrefObjectNumber + 1);
+        xrefDict.Set(PdfName.Intern("W"), new PdfArray(
+        [
+            new PdfInteger(1),
+            new PdfInteger(w2),
+            new PdfInteger(w3),
+        ]));
+        xrefDict.Set(PdfName.Intern("Index"), BuildIndexArray(presentNumbers));
+        CopyTrailerEntry(trailer, xrefDict, PdfName.Root);
+        CopyTrailerEntry(trailer, xrefDict, PdfName.Intern("Info"));
+        CopyTrailerEntry(trailer, xrefDict, PdfName.Intern("ID"));
+        CopyTrailerEntry(trailer, xrefDict, PdfName.Intern("Encrypt"));
+        xrefDict.Set(PdfName.Filter, PdfName.FlateDecode);
+        xrefDict.Set(PdfName.Length, compressed.Length);
+
+        // The cross-reference stream is never encrypted (§7.6): write it directly.
+        WriteIndirectObject(
+            output,
+            new PdfIndirectObject(
+                new PdfObjectId(xrefObjectNumber, 0), new PdfStream(xrefDict, compressed)));
+
+        string startxref = $"startxref\n{xrefOffset}\n%%EOF\n";
+        byte[] startxrefBytes = Encoding.ASCII.GetBytes(startxref);
+        output.Write(startxrefBytes, 0, startxrefBytes.Length);
+    }
+
+    // Builds one /ObjStm container holding the objects compressible[start ..
+    // start+count). Returns the container as a direct stream object and records
+    // each packed object's location in compressedLocations.
+    private static PdfIndirectObject BuildObjectStream(
+        List<PdfIndirectObject> compressible,
+        int start,
+        int count,
+        int containerNumber,
+        Dictionary<int, CompressedLocation> compressedLocations)
+    {
+        // §7.5.7 content layout: N "objNum offset" header pairs (offsets relative
+        // to /First) followed by the bare object values concatenated.
+        using MemoryStream payload = new MemoryStream();
+        StringBuilder header = new StringBuilder();
+        for (int i = 0; i < count; i++)
+        {
+            PdfIndirectObject inner = compressible[start + i];
+            long offsetInPayload = payload.Position;
+            header.Append(inner.Id.ObjectNumber.ToString(CultureInfo.InvariantCulture));
+            header.Append(' ');
+            header.Append(offsetInPayload.ToString(CultureInfo.InvariantCulture));
+            header.Append(' ');
+
+            WriteValue(payload, inner.Value);
+            payload.WriteByte((byte)'\n');
+
+            compressedLocations[inner.Id.ObjectNumber] =
+                new CompressedLocation(containerNumber, i);
+        }
+
+        byte[] headerBytes = Encoding.ASCII.GetBytes(header.ToString());
+        int first = headerBytes.Length;
+        byte[] payloadBytes = payload.ToArray();
+
+        byte[] content = new byte[first + payloadBytes.Length];
+        Array.Copy(headerBytes, 0, content, 0, first);
+        Array.Copy(payloadBytes, 0, content, first, payloadBytes.Length);
+
+        byte[] compressed = FlateEncode(content);
+
+        PdfDictionary dict = new PdfDictionary();
+        dict.Set(PdfName.Type, PdfName.Intern("ObjStm"));
+        dict.Set(PdfName.Intern("N"), count);
+        dict.Set(PdfName.Intern("First"), first);
+        dict.Set(PdfName.Filter, PdfName.FlateDecode);
+        dict.Set(PdfName.Length, compressed.Length);
+
+        return new PdfIndirectObject(
+            new PdfObjectId(containerNumber, 0), new PdfStream(dict, compressed));
+    }
+
+    // Builds the /Index array for a cross-reference stream from the sorted set of
+    // present object numbers, grouping consecutive numbers into subsections.
+    private static PdfArray BuildIndexArray(List<int> sortedNumbers)
+    {
+        List<PdfPrimitive> items = new List<PdfPrimitive>();
+        int i = 0;
+        while (i < sortedNumbers.Count)
+        {
+            int runStart = sortedNumbers[i];
+            int runCount = 1;
+            while (i + 1 < sortedNumbers.Count
+                && sortedNumbers[i + 1] == sortedNumbers[i] + 1)
+            {
+                runCount++;
+                i++;
+            }
+
+            items.Add(new PdfInteger(runStart));
+            items.Add(new PdfInteger(runCount));
+            i++;
+        }
+
+        return new PdfArray(items);
+    }
+
+    private static void CopyTrailerEntry(PdfDictionary source, PdfDictionary target, PdfName key)
+    {
+        if (source.TryGetValue(key, out PdfPrimitive? value))
+        {
+            target.Set(key, value);
+        }
+    }
+
+    private static byte[] FlateEncode(byte[] data)
+    {
+        using MemoryStream input = new MemoryStream(data, writable: false);
+        using MemoryStream output = new MemoryStream();
+        FlateFilter.Encode(input, output);
+        return output.ToArray();
+    }
+
+    private static int ByteWidth(int value)
+    {
+        if (value <= 0xFF)
+        {
+            return 1;
+        }
+
+        if (value <= 0xFFFF)
+        {
+            return 2;
+        }
+
+        if (value <= 0xFFFFFF)
+        {
+            return 3;
+        }
+
+        return 4;
+    }
+
+    // The location of an object packed inside an object stream: the container's
+    // object number and the zero-based index of the object within it.
+    private readonly struct CompressedLocation
+    {
+        public CompressedLocation(int container, int index)
+        {
+            Container = container;
+            Index = index;
+        }
+
+        public int Container { get; }
+
+        public int Index { get; }
     }
 }

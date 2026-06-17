@@ -19,6 +19,10 @@ internal sealed class BuilderState
     internal double[]? DashArray { get; set; }
     internal double DashPhase { get; set; }
 
+    // Constant alpha from ExtGState (/ca fill, /CA stroke). 1.0 = opaque.
+    internal double FillAlpha { get; set; } = 1.0;
+    internal double StrokeAlpha { get; set; } = 1.0;
+
     // Text state
     internal AffineMatrix TextMatrix { get; set; } = AffineMatrix.Identity;
     internal AffineMatrix TextLineMatrix { get; set; } = AffineMatrix.Identity;
@@ -82,6 +86,8 @@ internal sealed class BuilderState
         MiterLimit = MiterLimit,
         DashArray = DashArray,
         DashPhase = DashPhase,
+        FillAlpha = FillAlpha,
+        StrokeAlpha = StrokeAlpha,
         TextMatrix = TextMatrix,
         TextLineMatrix = TextLineMatrix,
         FontKey = FontKey,

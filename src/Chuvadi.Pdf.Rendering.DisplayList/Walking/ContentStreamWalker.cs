@@ -396,10 +396,21 @@ internal static class ContentStreamWalker
                 }
                 break;
 
+            // ── ExtGState ─────────────────────────────────────────────────
+            case "gs":
+                if (operands.Count > 0)
+                {
+                    string gsName = ContentStrings.ExtractName(operands[0]);
+                    if (gsName.Length > 0)
+                    {
+                        sink.ApplyExtGState(gsName);
+                    }
+                }
+                break;
+
             // ── Recognised no-ops (both builders ignore these) ────────────
             case "i":      // flatness — visual hint
             case "ri":     // rendering intent
-            case "gs":     // ExtGState
             case "sh":     // shading paint
             case "BMC":    // marked content
             case "BDC":
