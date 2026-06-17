@@ -8,6 +8,7 @@
 // High-level document model over a PdfReader.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -468,6 +469,21 @@ public sealed class PdfDocument : IDisposable
     /// reading raw file bytes for signature byte-range extraction.
     /// </summary>
     public PdfReader Reader => _reader;
+
+    /// <summary>
+    /// Gets warnings raised while opening the document. A non-empty list means
+    /// the file was structurally repaired during loading — for example, a
+    /// page-tree object recovered from a corrupt cross-reference table. The
+    /// document is usable, and writing it back out (merge, reorder, extract,
+    /// save) emits a clean, repaired file.
+    /// </summary>
+    public IReadOnlyList<string> Warnings => _reader.Warnings;
+
+    /// <summary>
+    /// Gets a value indicating whether the document was opened in a repaired
+    /// state. Equivalent to <see cref="Warnings"/> being non-empty.
+    /// </summary>
+    public bool IsRecovered => _reader.Warnings.Count > 0;
 
     // ── IDisposable ───────────────────────────────────────────────────────
 
