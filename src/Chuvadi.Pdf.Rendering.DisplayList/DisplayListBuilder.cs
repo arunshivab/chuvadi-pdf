@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Primitives;
@@ -65,6 +66,8 @@ public static class DisplayListBuilder
         private readonly HashSet<(DiagnosticKind, string)> _diagnosticKeys = new();
 
         private PdfDictionary? _resources;
+        private int _formDepth;
+        private const int MaxFormDepth = 12;
 
         // ── v2.1.2: gap-tracking for word-boundary space insertion ───────────
         //
@@ -492,6 +495,83 @@ public static class DisplayListBuilder
             // clamped. Other ExtGState entries are not interpreted here.
             if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; }
             if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; }
+        }
+
+        // ── IContentOperatorSink — Shading ─────────────────────────────────
+
+        /// <inheritdoc />
+        public void PaintShading(string name)
+        {
+            if (_resources is null) { return; }
+            if (!_resources.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shv)) { return; }
+            PdfDictionary? shadings = _doc.Objects.ResolveAs<PdfDictionary>(shv);
+            if (shadings is null) { return; }
+            if (!shadings.TryGetValue(PdfName.Intern(name), out PdfPrimitive? shadingRef)) { return; }
+
+            PdfShading shading;
+            try
+            {
+                shading = PdfShading.Parse(shadingRef, _doc.Objects);
+            }
+            catch (ContentException)
+            {
+                // Unsupported shading type (e.g. mesh shadings 4-7) — skip the
+                // paint rather than failing the whole page.
+                return;
+            }
+
+            // The CTM at the sh operator maps shading space to page space. Path
+            // coordinates in this builder are already baked to page space, so the
+            // gradient geometry must be too.
+            AffineMatrix ctm = _stack.Current.Ctm;
+            (double ox, double oy) = ctm.Apply(0.0, 0.0);
+            (double ux, double uy) = ctm.Apply(1.0, 0.0);
+            double scale = Math.Sqrt(((ux - ox) * (ux - ox)) + ((uy - oy) * (uy - oy)));
+
+            double[] coords = shading.Coords;
+            (double x0, double y0) = ctm.Apply(coords[0], coords[1]);
+
+            const int sampleCount = 16;
+            List<ShadingStop> stops = new(sampleCount + 1);
+            for (int i = 0; i <= sampleCount; i++)
+            {
+                double t = (double)i / sampleCount;
+                (double r, double g, double b) = shading.EvaluateRgb(t);
+                stops.Add(new ShadingStop(t, r, g, b));
+            }
+
+            if (shading.IsRadial)
+            {
+                (double rx1, double ry1) = ctm.Apply(coords[3], coords[4]);
+                _ops.Add(new ShadingOp
+                {
+                    IsRadial = true,
+                    X0 = x0,
+                    Y0 = y0,
+                    R0 = coords[2] * scale,
+                    X1 = rx1,
+                    Y1 = ry1,
+                    R1 = coords[5] * scale,
+                    ExtendStart = shading.ExtendStart,
+                    ExtendEnd = shading.ExtendEnd,
+                    Stops = stops,
+                });
+            }
+            else
+            {
+                (double ax1, double ay1) = ctm.Apply(coords[2], coords[3]);
+                _ops.Add(new ShadingOp
+                {
+                    IsRadial = false,
+                    X0 = x0,
+                    Y0 = y0,
+                    X1 = ax1,
+                    Y1 = ay1,
+                    ExtendStart = shading.ExtendStart,
+                    ExtendEnd = shading.ExtendEnd,
+                    Stops = stops,
+                });
+            }
         }
 
         private static bool TryReadAlpha(PdfDictionary extGState, string key, out double value)
@@ -1104,6 +1184,56 @@ public static class DisplayListBuilder
             return null;
         }
 
+        // Renders a form XObject by walking its content stream through this
+        // builder with the form's /Matrix concatenated onto the CTM and its
+        // own /Resources in scope (falling back to the page's when absent).
+        // A depth guard stops cyclic references from recursing without bound.
+        private void EmitFormXObject(PdfStream formStream)
+        {
+            if (_formDepth >= MaxFormDepth) { return; }
+
+            byte[] formContent;
+            try
+            {
+                formContent = ContentStreamLoader.Decode(formStream);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (formContent.Length == 0) { return; }
+
+            double a = 1.0, b = 0.0, c = 0.0, d = 1.0, e = 0.0, f = 0.0;
+            if (formStream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mp)
+                && _doc.Objects.ResolveAs<PdfArray>(mp) is PdfArray arr && arr.Count >= 6)
+            {
+                a = NumberOf(arr[0]);
+                b = NumberOf(arr[1]);
+                c = NumberOf(arr[2]);
+                d = NumberOf(arr[3]);
+                e = NumberOf(arr[4]);
+                f = NumberOf(arr[5]);
+            }
+
+            PdfDictionary? formResources = _resources;
+            if (formStream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
+                && _doc.Objects.ResolveAs<PdfDictionary>(rp) is PdfDictionary resolved)
+            {
+                formResources = resolved;
+            }
+
+            PdfDictionary? savedResources = _resources;
+            SaveState();
+            ConcatMatrix(a, b, c, d, e, f);
+            _resources = formResources;
+            _formDepth++;
+            ContentStreamWalker.Walk(formContent, this);
+            _formDepth--;
+            _resources = savedResources;
+            RestoreState();
+        }
+
         private void EmitXObject(string name, BuilderState s)
         {
             if (_resources is null) { return; }
@@ -1116,7 +1246,18 @@ public static class DisplayListBuilder
             if (!xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? imgRef)) { return; }
             if (_doc.Objects.Resolve(imgRef) is not PdfStream stream) { return; }
             if (!stream.Dictionary.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? sub)
-                || sub is not PdfName subName || subName.Value != "Image")
+                || sub is not PdfName subName)
+            {
+                return;
+            }
+
+            if (subName.Value == "Form")
+            {
+                EmitFormXObject(stream);
+                return;
+            }
+
+            if (subName.Value != "Image")
             {
                 return;
             }
@@ -1176,6 +1317,20 @@ public static class DisplayListBuilder
                             softMaskAlpha = smPixels;
                             softMaskWidth = smWidth;
                             softMaskHeight = smHeight;
+
+                            // /Matte: the base image's colour samples are
+                            // pre-blended (pre-multiplied) against this matte
+                            // colour (PDF 32000-1:2008 §11.6.5.3). Recover the
+                            // true colour c = (c' - m)/alpha + m before the
+                            // straight-alpha PNG is built, or colours render
+                            // wrong (washed/shifted toward the matte).
+                            double[]? matte = ReadMatte(smStream.Dictionary);
+                            if (matte is not null)
+                            {
+                                UnpremultiplyMatte(
+                                    pixelData, width, height,
+                                    softMaskAlpha, smWidth, smHeight, matte);
+                            }
                         }
                     }
                     catch
@@ -1199,6 +1354,81 @@ public static class DisplayListBuilder
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
             });
+        }
+
+        // Reads a soft mask's /Matte colour (the premultiply background) as
+        // components in [0, 1], or null when absent.
+        private static double[]? ReadMatte(PdfDictionary smDict)
+        {
+            if (!smDict.TryGetValue(PdfName.Intern("Matte"), out PdfPrimitive? value)
+                || value is not PdfArray array || array.Count == 0)
+            {
+                return null;
+            }
+
+            double[] matte = new double[array.Count];
+            for (int i = 0; i < array.Count; i++)
+            {
+                matte[i] = NumberOf(array[i]);
+            }
+            return matte;
+        }
+
+        // Un-premultiplies matte-blended colour samples in place: recovers
+        // c = (c' - m)/alpha + m per channel, using the soft-mask alpha
+        // (nearest-sampled when its resolution differs from the base image).
+        private static void UnpremultiplyMatte(
+            byte[] pixelData, int width, int height,
+            byte[] alpha, int alphaWidth, int alphaHeight, double[] matte)
+        {
+            if (width <= 0 || height <= 0 || alphaWidth <= 0 || alphaHeight <= 0)
+            {
+                return;
+            }
+
+            long pixels = (long)width * height;
+            int components = (int)(pixelData.Length / pixels);
+            if (components <= 0 || matte.Length < components)
+            {
+                return;
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                int ay = (int)((long)y * alphaHeight / height);
+                for (int x = 0; x < width; x++)
+                {
+                    int ax = (int)((long)x * alphaWidth / width);
+                    int aIndex = (ay * alphaWidth) + ax;
+                    if (aIndex < 0 || aIndex >= alpha.Length)
+                    {
+                        continue;
+                    }
+
+                    double a = alpha[aIndex] / 255.0;
+                    if (a <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    int baseIndex = (int)(((long)y * width + x) * components);
+                    for (int c = 0; c < components; c++)
+                    {
+                        int idx = baseIndex + c;
+                        if (idx >= pixelData.Length)
+                        {
+                            break;
+                        }
+
+                        double cprime = pixelData[idx] / 255.0;
+                        double m = matte[c];
+                        double recovered = ((cprime - m) / a) + m;
+                        if (recovered < 0.0) { recovered = 0.0; }
+                        if (recovered > 1.0) { recovered = 1.0; }
+                        pixelData[idx] = (byte)Math.Round(recovered * 255.0);
+                    }
+                }
+            }
         }
 
         // True when /Decode is [1 0] for a single-component image (inverts samples).

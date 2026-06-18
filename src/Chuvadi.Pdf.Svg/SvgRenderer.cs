@@ -96,6 +96,9 @@ public sealed class SvgRenderer
 {
     private readonly SvgExportOptions _opts;
 
+    // Monotonic counter for unique gradient ids within an SVG document.
+    private int _gradientSeq;
+
     // v2.1.2 snap-tolerance parameters.
     private const double KerningGapMinFraction = 0.2;
     private const double KerningGapMaxFactor = 2.0;
@@ -279,17 +282,86 @@ public sealed class SvgRenderer
                         w.CloseGroup();
                     }
                     break;
+                case ShadingOp sh:
+                    FlushPendingFillRect(ref pendingFillRect, w);
+                    EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
+                    break;
                 default: break;
             }
         }
-
-        // Flush any final pending rectangle before closing the root group.
         FlushPendingFillRect(ref pendingFillRect, w);
 
         int rootClipsToClose = clipsOpenedPerScope.Pop();
         for (int i = 0; i < rootClipsToClose; i++) { w.CloseGroup(); }
         w.CloseGroup();
         return w.ToSvgString();
+    }
+
+    // ── Shading ──────────────────────────────────────────────────────────
+
+    // Emits an axial or radial gradient definition and fills the current clip
+    // region (bounded by any open clip-path groups) with it. Geometry is in page
+    // space; the page-flip group applies equally to the rect and the gradient
+    // coordinates, so they stay aligned.
+    private void EmitShading(ShadingOp s, SvgWriter w, double pageWidth, double pageHeight)
+    {
+        if (s.Stops.Count == 0)
+        {
+            return;
+        }
+
+        string id = "sh" + _gradientSeq.ToString(CultureInfo.InvariantCulture);
+        _gradientSeq++;
+
+        StringBuilder def = new();
+        if (s.IsRadial)
+        {
+            def.Append("<radialGradient id=\"").Append(id)
+               .Append("\" gradientUnits=\"userSpaceOnUse\" spreadMethod=\"pad\"");
+            def.AppendFormat(CultureInfo.InvariantCulture,
+                " cx=\"{0}\" cy=\"{1}\" r=\"{2}\" fx=\"{3}\" fy=\"{4}\" fr=\"{5}\">",
+                Num(s.X1), Num(s.Y1), Num(s.R1), Num(s.X0), Num(s.Y0), Num(s.R0));
+        }
+        else
+        {
+            def.Append("<linearGradient id=\"").Append(id)
+               .Append("\" gradientUnits=\"userSpaceOnUse\" spreadMethod=\"pad\"");
+            def.AppendFormat(CultureInfo.InvariantCulture,
+                " x1=\"{0}\" y1=\"{1}\" x2=\"{2}\" y2=\"{3}\">",
+                Num(s.X0), Num(s.Y0), Num(s.X1), Num(s.Y1));
+        }
+
+        foreach (ShadingStop stop in s.Stops)
+        {
+            def.AppendFormat(CultureInfo.InvariantCulture,
+                "<stop offset=\"{0}\" stop-color=\"{1}\"/>",
+                Num(stop.Offset), RgbHex(stop.R, stop.G, stop.B));
+        }
+
+        def.Append(s.IsRadial ? "</radialGradient>" : "</linearGradient>");
+        w.AddGradientDef(def.ToString());
+
+        string rect = string.Format(CultureInfo.InvariantCulture,
+            "M 0 0 L {0} 0 L {0} {1} L 0 {1} Z", Num(pageWidth), Num(pageHeight));
+        w.EmitPath(rect, "url(#" + id + ")", null, 0);
+    }
+
+    private static string Num(double value) =>
+        value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string RgbHex(double r, double g, double b)
+    {
+        int ri = ToByte(r);
+        int gi = ToByte(g);
+        int bi = ToByte(b);
+        return string.Format(CultureInfo.InvariantCulture, "#{0:x2}{1:x2}{2:x2}", ri, gi, bi);
+    }
+
+    private static int ToByte(double v)
+    {
+        if (v < 0.0) { v = 0.0; }
+        if (v > 1.0) { v = 1.0; }
+        return (int)System.Math.Round(v * 255.0);
     }
 
     // ── Font registry ────────────────────────────────────────────────────

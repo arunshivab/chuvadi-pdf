@@ -1860,6 +1860,10 @@ public static class DisplayListBuilder
             int fw = frame.Width;
             int fh = frame.Height;
 
+            // /Matte: base colour samples are pre-multiplied against this colour
+            // (PDF 32000-1:2008 §11.6.5.3). Recover c = (c' - m)/alpha + m.
+            double[]? matte = ReadMatteEntry(smStream.Dictionary);
+
             for (int y = 0; y < fh; y++)
             {
                 int sy = smHeight == fh ? y : (int)((long)y * smHeight / fh);
@@ -1883,9 +1887,45 @@ public static class DisplayListBuilder
                     }
 
                     (byte b, byte g, byte r, byte _) = frame.Pixels.GetPixelBgra(x, y);
+
+                    if (matte is not null && alpha > 0 && matte.Length >= 3)
+                    {
+                        double a = alpha / 255.0;
+                        r = Unpremultiply(r, matte[0], a);
+                        g = Unpremultiply(g, matte[1], a);
+                        b = Unpremultiply(b, matte[2], a);
+                    }
+
                     frame.Pixels.SetPixelBgra(x, y, b, g, r, alpha);
                 }
             }
+        }
+
+        // Recovers a single matte-premultiplied colour channel:
+        // c = (c' - m)/alpha + m, clamped to [0, 1] and scaled back to a byte.
+        private static byte Unpremultiply(byte sample, double matte, double alpha)
+        {
+            double recovered = (((sample / 255.0) - matte) / alpha) + matte;
+            if (recovered < 0.0) { recovered = 0.0; }
+            if (recovered > 1.0) { recovered = 1.0; }
+            return (byte)Math.Round(recovered * 255.0);
+        }
+
+        // Reads a soft mask's /Matte colour as components in [0, 1], or null.
+        private static double[]? ReadMatteEntry(PdfDictionary smDict)
+        {
+            if (!smDict.TryGetValue(PdfName.Intern("Matte"), out PdfPrimitive? value)
+                || value is not PdfArray array || array.Count == 0)
+            {
+                return null;
+            }
+
+            double[] matte = new double[array.Count];
+            for (int i = 0; i < array.Count; i++)
+            {
+                matte[i] = PdfReal.ToDouble(array[i]);
+            }
+            return matte;
         }
 
         // Number of colour components implied by /ColorSpace: DeviceGray and

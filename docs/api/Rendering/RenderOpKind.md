@@ -19,6 +19,7 @@ public enum RenderOpKind
 | `Transform` | `TransformOp`. |
 | `Opacity` | `OpacityOp`. |
 | `BlendMode` | `BlendModeOp`. |
+| `Shading` | `ShadingOp`. |
 
 ---
 

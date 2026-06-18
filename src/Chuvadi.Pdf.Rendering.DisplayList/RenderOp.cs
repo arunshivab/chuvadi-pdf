@@ -30,6 +30,8 @@ public enum RenderOpKind
     Opacity = 5,
     /// <summary><see cref="BlendModeOp"/>.</summary>
     BlendMode = 6,
+    /// <summary><see cref="ShadingOp"/>.</summary>
+    Shading = 7,
 }
 
 /// <summary>Line cap style (PDF §8.4.3.3).</summary>
@@ -324,4 +326,74 @@ public sealed class BlendModeOp : RenderOp
 
     /// <summary>Blend mode (only meaningful on push).</summary>
     public PdfBlendMode Mode { get; init; } = PdfBlendMode.Normal;
+}
+
+/// <summary>A single colour stop of a shading gradient.</summary>
+public readonly struct ShadingStop
+{
+    /// <summary>Creates a gradient stop.</summary>
+    /// <param name="offset">Normalised position along the axis in [0, 1].</param>
+    /// <param name="r">Red in [0, 1].</param>
+    /// <param name="g">Green in [0, 1].</param>
+    /// <param name="b">Blue in [0, 1].</param>
+    public ShadingStop(double offset, double r, double g, double b)
+    {
+        Offset = offset;
+        R = r;
+        G = g;
+        B = b;
+    }
+
+    /// <summary>Normalised position along the axis in [0, 1].</summary>
+    public double Offset { get; }
+
+    /// <summary>Red in [0, 1].</summary>
+    public double R { get; }
+
+    /// <summary>Green in [0, 1].</summary>
+    public double G { get; }
+
+    /// <summary>Blue in [0, 1].</summary>
+    public double B { get; }
+}
+
+/// <summary>
+/// Paints an axial or radial shading (the <c>sh</c> operator). Coordinates and
+/// radii are in page space (the CTM at the <c>sh</c> operator has already been
+/// applied); the renderer fills the current clip region with the gradient.
+/// </summary>
+public sealed class ShadingOp : RenderOp
+{
+    /// <inheritdoc />
+    public override RenderOpKind Kind => RenderOpKind.Shading;
+
+    /// <summary>True for a radial shading; false for axial (linear).</summary>
+    public required bool IsRadial { get; init; }
+
+    /// <summary>Start point x in page space (axial/radial circle 0 centre).</summary>
+    public double X0 { get; init; }
+
+    /// <summary>Start point y in page space.</summary>
+    public double Y0 { get; init; }
+
+    /// <summary>End point x in page space (axial/radial circle 1 centre).</summary>
+    public double X1 { get; init; }
+
+    /// <summary>End point y in page space.</summary>
+    public double Y1 { get; init; }
+
+    /// <summary>Radius of circle 0 in page space (radial only).</summary>
+    public double R0 { get; init; }
+
+    /// <summary>Radius of circle 1 in page space (radial only).</summary>
+    public double R1 { get; init; }
+
+    /// <summary>Whether the shading extends beyond the start of the axis.</summary>
+    public bool ExtendStart { get; init; }
+
+    /// <summary>Whether the shading extends beyond the end of the axis.</summary>
+    public bool ExtendEnd { get; init; }
+
+    /// <summary>The sampled gradient stops, in increasing offset order.</summary>
+    public IReadOnlyList<ShadingStop> Stops { get; init; } = System.Array.Empty<ShadingStop>();
 }
