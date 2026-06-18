@@ -1255,6 +1255,19 @@ public static class DisplayListBuilder
                             softMaskWidth = smWidth;
                             softMaskHeight = smHeight;
 
+                            // /Matte: the base image's colour samples are
+                            // pre-blended (pre-multiplied) against this matte
+                            // colour (PDF 32000-1:2008 §11.6.5.3). Recover the
+                            // true colour c = (c' - m)/alpha + m before the
+                            // straight-alpha PNG is built, or colours render
+                            // wrong (washed/shifted toward the matte).
+                            double[]? matte = ReadMatte(smStream.Dictionary);
+                            if (matte is not null)
+                            {
+                                UnpremultiplyMatte(
+                                    pixelData, width, height,
+                                    softMaskAlpha, smWidth, smHeight, matte);
+                            }
                         }
                     }
                     catch
@@ -1278,6 +1291,81 @@ public static class DisplayListBuilder
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
             });
+        }
+
+        // Reads a soft mask's /Matte colour (the premultiply background) as
+        // components in [0, 1], or null when absent.
+        private static double[]? ReadMatte(PdfDictionary smDict)
+        {
+            if (!smDict.TryGetValue(PdfName.Intern("Matte"), out PdfPrimitive? value)
+                || value is not PdfArray array || array.Count == 0)
+            {
+                return null;
+            }
+
+            double[] matte = new double[array.Count];
+            for (int i = 0; i < array.Count; i++)
+            {
+                matte[i] = NumberOf(array[i]);
+            }
+            return matte;
+        }
+
+        // Un-premultiplies matte-blended colour samples in place: recovers
+        // c = (c' - m)/alpha + m per channel, using the soft-mask alpha
+        // (nearest-sampled when its resolution differs from the base image).
+        private static void UnpremultiplyMatte(
+            byte[] pixelData, int width, int height,
+            byte[] alpha, int alphaWidth, int alphaHeight, double[] matte)
+        {
+            if (width <= 0 || height <= 0 || alphaWidth <= 0 || alphaHeight <= 0)
+            {
+                return;
+            }
+
+            long pixels = (long)width * height;
+            int components = (int)(pixelData.Length / pixels);
+            if (components <= 0 || matte.Length < components)
+            {
+                return;
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                int ay = (int)((long)y * alphaHeight / height);
+                for (int x = 0; x < width; x++)
+                {
+                    int ax = (int)((long)x * alphaWidth / width);
+                    int aIndex = (ay * alphaWidth) + ax;
+                    if (aIndex < 0 || aIndex >= alpha.Length)
+                    {
+                        continue;
+                    }
+
+                    double a = alpha[aIndex] / 255.0;
+                    if (a <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    int baseIndex = (int)(((long)y * width + x) * components);
+                    for (int c = 0; c < components; c++)
+                    {
+                        int idx = baseIndex + c;
+                        if (idx >= pixelData.Length)
+                        {
+                            break;
+                        }
+
+                        double cprime = pixelData[idx] / 255.0;
+                        double m = matte[c];
+                        double recovered = ((cprime - m) / a) + m;
+                        if (recovered < 0.0) { recovered = 0.0; }
+                        if (recovered > 1.0) { recovered = 1.0; }
+                        pixelData[idx] = (byte)Math.Round(recovered * 255.0);
+                    }
+                }
+            }
         }
 
         // True when /Decode is [1 0] for a single-component image (inverts samples).
