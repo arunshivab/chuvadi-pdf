@@ -145,6 +145,18 @@ public static class Redactor
             originals[i] = LoadContentBytes(work[i].Page, document.Objects, pipeline);
         }
 
+        // Build the form-redaction registry: walk each page (and nested forms)
+        // to record where every form XObject is placed, so its own content
+        // stream can be rewritten. Text inside a form is otherwise never removed
+        // — the form is only covered by the overlay, leaving it copyable.
+        RedactRun run = new RedactRun(document.Objects, pipeline);
+        for (int i = 0; i < work.Count; i++)
+        {
+            CollectForms(
+                originals[i], PageContexts(work[i].Rects), run,
+                work[i].Page.Resources, new HashSet<int>(), 0);
+        }
+
         // Phase 2 (parallel-capable) — the redaction interpreter and overlay
         // generation are pure functions of the page bytes and rectangles, with
         // no shared state, so they can run concurrently. Opt-in via
@@ -156,7 +168,7 @@ public static class Redactor
         {
             for (int i = 0; i < work.Count; i++)
             {
-                redactedBytes[i] = RewriteContent(originals[i], work[i].Rects);
+                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects), run, work[i].Page.Resources);
                 overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
             }
         }
@@ -171,7 +183,7 @@ public static class Redactor
 
             Parallel.For(0, work.Count, parallelOptions, i =>
             {
-                redactedBytes[i] = RewriteContent(originals[i], work[i].Rects);
+                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects), run, work[i].Page.Resources);
                 overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
             });
         }
@@ -202,6 +214,9 @@ public static class Redactor
             allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
             rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
         }
+
+        RewriteCollectedForms(run, allObjects, removedContentStreamNums);
+
 
         // Copy untouched objects (excluding modified pages and replaced content streams)
         foreach (PdfIndirectObject obj in document.Objects.Objects)
@@ -258,7 +273,8 @@ public static class Redactor
 
     // ── Content stream rewriter ───────────────────────────────────────────
 
-    private static byte[] RewriteContent(byte[] content, List<RectangleF> rects)
+    private static byte[] RewriteContent(
+        byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources)
     {
         using (MemoryStream input = new MemoryStream(content))
         using (MemoryStream output = new MemoryStream())
@@ -308,13 +324,13 @@ public static class Redactor
                 // redaction from the CTM (it paints the unit square, like Do).
                 if (token.RawText == "BI")
                 {
-                    HandleInlineImage(tok, content, output, state, rects, token.ByteOffset);
+                    HandleInlineImage(tok, content, output, state, contexts, token.ByteOffset);
                     pendingOperands.Clear();
                     continue;
                 }
 
                 string op = token.RawText;
-                bool drop = ProcessOperator(op, pendingOperands, state, rects);
+                bool drop = ProcessOperator(op, pendingOperands, state, contexts, run, resources);
 
                 if (!drop)
                 {
@@ -336,7 +352,7 @@ public static class Redactor
     /// </summary>
     private static bool ProcessOperator(
         string op, List<PdfToken> operands,
-        RedactState state, List<RectangleF> rects)
+        RedactState state, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources)
     {
         switch (op)
         {
@@ -356,14 +372,14 @@ public static class Redactor
 
             // ── Text-showing operators ─────────────────────────────────────
             case "Tj":
-                return ShouldRedactTj(operands, state, rects);
+                return ShouldRedactTj(operands, state, contexts);
 
             case "TJ":
-                return ShouldRedactTJ(operands, state, rects);
+                return ShouldRedactTJ(operands, state, contexts);
 
             case "'":
                 state.NextLine();
-                return ShouldRedactTj(operands, state, rects);
+                return ShouldRedactTj(operands, state, contexts);
 
             case "\"":
                 // " : aw ac string '
@@ -372,17 +388,18 @@ public static class Redactor
                     state.NextLine();
                     // Pass only the string operand to detection
                     List<PdfToken> stringOnly = new List<PdfToken> { operands[2] };
-                    return ShouldRedactTj(stringOnly, state, rects);
+                    return ShouldRedactTj(stringOnly, state, contexts);
                 }
                 return false;
 
-            // ── Image / XObject painting (Phase 1.1.3) ─────────────────────
+            // ── Image / form XObject painting ──────────────────────────────
             case "Do":
-                // Paints the XObject named by the operand at the current CTM.
-                // The image (or form) occupies the unit square [0,1]×[0,1] in
-                // its local space. We compute the device-space bounding box of
-                // the four corners and drop the Do if any rect intersects.
-                return ShouldRedactImageAtCtm(state, rects);
+                // A form XObject's text is redacted inside its own content stream
+                // (collected and rewritten separately), so the Do is kept. An
+                // image XObject is dropped when its placement intersects a rect.
+                return IsFormXObject(operands, run, resources)
+                    ? false
+                    : ShouldRedactImageAtCtm(state, contexts);
 
             default:
                 return false;
@@ -401,7 +418,7 @@ public static class Redactor
     /// </summary>
     private static void HandleInlineImage(
         PdfTokenizer tok, byte[] content, MemoryStream output,
-        RedactState state, List<RectangleF> rects, long biStart)
+        RedactState state, IReadOnlyList<RedactContext> contexts, long biStart)
     {
         // Read the inline-image dictionary tokens until the ID keyword; the
         // binary image data begins immediately after it.
@@ -423,7 +440,7 @@ public static class Redactor
 
         int eiEnd = FindInlineImageEnd(content, (int)tok.Position);
 
-        if (!ShouldRedactImageAtCtm(state, rects))
+        if (!ShouldRedactImageAtCtm(state, contexts))
         {
             output.Write(content, (int)biStart, eiEnd - (int)biStart);
             output.WriteByte((byte)'\n');
@@ -455,34 +472,44 @@ public static class Redactor
     private static bool IsWhitespaceByte(byte b) =>
         b == 0x00 || b == 0x09 || b == 0x0A || b == 0x0C || b == 0x0D || b == 0x20;
 
-    private static bool ShouldRedactImageAtCtm(RedactState state, List<RectangleF> rects)
+    private static bool ShouldRedactImageAtCtm(RedactState state, IReadOnlyList<RedactContext> contexts)
     {
-        if (rects.Count == 0)
-        {
-            return false;
-        }
-
         // Four corners of the unit square in local space.
         PointF tl = state.Ctm.TransformPoint(new PointF(0, 0));
         PointF tr = state.Ctm.TransformPoint(new PointF(1, 0));
         PointF bl = state.Ctm.TransformPoint(new PointF(0, 1));
         PointF br = state.Ctm.TransformPoint(new PointF(1, 1));
 
-        double minX = Math.Min(Math.Min(tl.X, tr.X), Math.Min(bl.X, br.X));
-        double maxX = Math.Max(Math.Max(tl.X, tr.X), Math.Max(bl.X, br.X));
-        double minY = Math.Min(Math.Min(tl.Y, tr.Y), Math.Min(bl.Y, br.Y));
-        double maxY = Math.Max(Math.Max(tl.Y, tr.Y), Math.Max(bl.Y, br.Y));
-
-        foreach (RectangleF r in rects)
+        for (int c = 0; c < contexts.Count; c++)
         {
-            double rMinX = r.X;
-            double rMaxX = r.X + r.Width;
-            double rMinY = r.Y;
-            double rMaxY = r.Y + r.Height;
-
-            if (minX < rMaxX && maxX > rMinX && minY < rMaxY && maxY > rMinY)
+            RedactContext context = contexts[c];
+            if (context.Rects.Count == 0)
             {
-                return true;
+                continue;
+            }
+
+            // Map the local-space corners into this context's page device space.
+            PointF dtl = context.BaseCtm.TransformPoint(tl);
+            PointF dtr = context.BaseCtm.TransformPoint(tr);
+            PointF dbl = context.BaseCtm.TransformPoint(bl);
+            PointF dbr = context.BaseCtm.TransformPoint(br);
+
+            double minX = Math.Min(Math.Min(dtl.X, dtr.X), Math.Min(dbl.X, dbr.X));
+            double maxX = Math.Max(Math.Max(dtl.X, dtr.X), Math.Max(dbl.X, dbr.X));
+            double minY = Math.Min(Math.Min(dtl.Y, dtr.Y), Math.Min(dbl.Y, dbr.Y));
+            double maxY = Math.Max(Math.Max(dtl.Y, dtr.Y), Math.Max(dbl.Y, dbr.Y));
+
+            foreach (RectangleF r in context.Rects)
+            {
+                double rMinX = r.X;
+                double rMaxX = r.X + r.Width;
+                double rMinY = r.Y;
+                double rMaxY = r.Y + r.Height;
+
+                if (minX < rMaxX && maxX > rMinX && minY < rMaxY && maxY > rMinY)
+                {
+                    return true;
+                }
             }
         }
 
@@ -556,7 +583,7 @@ public static class Redactor
     // ── Text redaction decisions ──────────────────────────────────────────
 
     private static bool ShouldRedactTj(
-        List<PdfToken> operands, RedactState state, List<RectangleF> rects)
+        List<PdfToken> operands, RedactState state, IReadOnlyList<RedactContext> contexts)
     {
         if (operands.Count == 0)
         {
@@ -572,11 +599,11 @@ public static class Redactor
         }
 
         string text = ExtractString(stringToken);
-        return IsTextInRedactRect(text, state, rects);
+        return IsTextInRedactRect(text, state, contexts);
     }
 
     private static bool ShouldRedactTJ(
-        List<PdfToken> operands, RedactState state, List<RectangleF> rects)
+        List<PdfToken> operands, RedactState state, IReadOnlyList<RedactContext> contexts)
     {
         // TJ: array of strings and kerning numbers.
         // Conservative: if ANY string in the array is in a redaction rect, drop the entire TJ.
@@ -605,7 +632,7 @@ public static class Redactor
             {
                 string s = ExtractString(t);
 
-                if (IsTextInRedactRect(s, state, rects))
+                if (IsTextInRedactRect(s, state, contexts))
                 {
                     return true; // drop entire TJ
                 }
@@ -616,7 +643,7 @@ public static class Redactor
     }
 
     private static bool IsTextInRedactRect(
-        string text, RedactState state, List<RectangleF> rects)
+        string text, RedactState state, IReadOnlyList<RedactContext> contexts)
     {
         if (string.IsNullOrEmpty(text) || state.FontSize <= 0)
         {
@@ -629,27 +656,282 @@ public static class Redactor
         double width = text.Length * state.FontSize * 0.6;
         double height = state.FontSize;
 
-        // Origin: TextX/TextY in text space; transform by CTM (text matrix is already
-        // applied via TextX/TextY tracking for simple cases)
-        Transform combined = state.TextMatrix.Multiply(state.Ctm);
-        PointF originDev = combined.TransformPoint(new PointF(state.TextX, state.TextY));
-        PointF endDev = combined.TransformPoint(
-            new PointF(state.TextX + width, state.TextY + height));
+        // Local-space placement (text matrix × current CTM). For a form being
+        // rewritten this is form-local; each context's BaseCtm then maps it into
+        // the page device space where the rectangles live.
+        Transform local = state.TextMatrix.Multiply(state.Ctm);
 
-        RectangleF textBox = RectangleF.FromCorners(
-            originDev.X, originDev.Y, endDev.X, endDev.Y);
-
-        foreach (RectangleF r in rects)
+        for (int c = 0; c < contexts.Count; c++)
         {
-            RectangleF intersection = textBox.Intersect(r);
+            RedactContext context = contexts[c];
+            Transform combined = local.Multiply(context.BaseCtm);
+            PointF originDev = combined.TransformPoint(new PointF(state.TextX, state.TextY));
+            PointF endDev = combined.TransformPoint(
+                new PointF(state.TextX + width, state.TextY + height));
 
-            if (!intersection.IsEmpty)
+            RectangleF textBox = RectangleF.FromCorners(
+                originDev.X, originDev.Y, endDev.X, endDev.Y);
+
+            for (int r = 0; r < context.Rects.Count; r++)
             {
-                return true;
+                if (!textBox.Intersect(context.Rects[r]).IsEmpty)
+                {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    // ── Form XObject resolution and collection ────────────────────────────
+
+    // Wraps a page's rectangles as a single identity-placed redaction context.
+    private static List<RedactContext> PageContexts(List<RectangleF> rects)
+    {
+        return new List<RedactContext> { new RedactContext(Transform.Identity, rects) };
+    }
+
+    // True when the XObject named by the Do operand resolves to a form.
+    private static bool IsFormXObject(List<PdfToken> operands, RedactRun run, PdfDictionary? resources)
+    {
+        (int ObjNum, PdfStream Stream)? resolved = ResolveXObjectRef(operands, resources, run.Store);
+        return resolved is not null && IsForm(resolved.Value.Stream);
+    }
+
+    private static bool IsForm(PdfStream stream)
+    {
+        return stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? subtype)
+            && subtype is PdfName name
+            && name.Value == "Form";
+    }
+
+    // Resolves the XObject named by the trailing Do operand to its object number
+    // and stream, or null when it cannot be resolved to an indirect stream.
+    private static (int ObjNum, PdfStream Stream)? ResolveXObjectRef(
+        List<PdfToken> operands, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (resources is null || operands.Count == 0)
+        {
+            return null;
+        }
+
+        PdfToken nameToken = operands[operands.Count - 1];
+        if (nameToken.Type != PdfTokenType.Name)
+        {
+            return null;
+        }
+
+        string name = nameToken.RawText.TrimStart('/');
+
+        if (!resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xobjValue) ||
+            store.Resolve(xobjValue) is not PdfDictionary xobjects)
+        {
+            return null;
+        }
+
+        if (!xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry))
+        {
+            return null;
+        }
+
+        int objNum = entry is PdfReference reference ? reference.ObjectNumber : -1;
+        if (store.Resolve(entry) is not PdfStream stream)
+        {
+            return null;
+        }
+
+        return (objNum, stream);
+    }
+
+    private static Transform GetFormMatrix(PdfStream form, PdfObjectStore store)
+    {
+        if (form.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? value) &&
+            store.Resolve(value) is PdfArray array && array.Count >= 6)
+        {
+            return new Transform(
+                PdfReal.ToDouble(store.Resolve(array[0])), PdfReal.ToDouble(store.Resolve(array[1])),
+                PdfReal.ToDouble(store.Resolve(array[2])), PdfReal.ToDouble(store.Resolve(array[3])),
+                PdfReal.ToDouble(store.Resolve(array[4])), PdfReal.ToDouble(store.Resolve(array[5])));
+        }
+
+        return Transform.Identity;
+    }
+
+    private static PdfDictionary? ResolveFormResources(
+        PdfStream form, PdfDictionary? parentResources, PdfObjectStore store)
+    {
+        if (form.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? value) &&
+            store.Resolve(value) is PdfDictionary resources)
+        {
+            return resources;
+        }
+
+        return parentResources;
+    }
+
+    // Walks a content stream tracking the CTM and, at each form Do, records the
+    // form's absolute placement (and the page rects) so its own content stream
+    // can later be rewritten. Recurses into nested forms with a cycle guard.
+    private static void CollectForms(
+        byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run,
+        PdfDictionary? resources, HashSet<int> activeStack, int depth)
+    {
+        if (depth > 32)
+        {
+            return;
+        }
+
+        using (MemoryStream input = new MemoryStream(content))
+        using (PdfTokenizer tok = new PdfTokenizer(input))
+        {
+            RedactState state = new RedactState();
+            List<PdfToken> pending = new List<PdfToken>();
+
+            while (true)
+            {
+                PdfToken token = tok.Read();
+                if (token.IsEndOfStream)
+                {
+                    break;
+                }
+
+                if (token.Type == PdfTokenType.ArrayStart)
+                {
+                    pending.Add(token);
+                    while (true)
+                    {
+                        PdfToken inner = tok.Read();
+                        pending.Add(inner);
+                        if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
+                        {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                if (token.Type != PdfTokenType.Keyword)
+                {
+                    pending.Add(token);
+                    continue;
+                }
+
+                string op = token.RawText;
+                if (op == "BI")
+                {
+                    SkipInlineImage(tok, content);
+                    pending.Clear();
+                    continue;
+                }
+
+                switch (op)
+                {
+                    case "q": state.PushGraphicsState(); break;
+                    case "Q": state.PopGraphicsState(); break;
+                    case "cm": ApplyCm(pending, state); break;
+                    case "Do": CollectFormDo(pending, state, contexts, run, resources, activeStack, depth); break;
+                    default: break;
+                }
+
+                pending.Clear();
+            }
+        }
+    }
+
+    private static void CollectFormDo(
+        List<PdfToken> operands, RedactState state, IReadOnlyList<RedactContext> contexts,
+        RedactRun run, PdfDictionary? resources, HashSet<int> activeStack, int depth)
+    {
+        (int ObjNum, PdfStream Stream)? resolved = ResolveXObjectRef(operands, resources, run.Store);
+        if (resolved is null)
+        {
+            return;
+        }
+
+        int objNum = resolved.Value.ObjNum;
+        PdfStream stream = resolved.Value.Stream;
+        if (objNum < 0 || !IsForm(stream))
+        {
+            return;
+        }
+
+        Transform formMatrix = GetFormMatrix(stream, run.Store);
+        List<RedactContext> formContexts = new List<RedactContext>(contexts.Count);
+        foreach (RedactContext ctx in contexts)
+        {
+            Transform baseCtm = formMatrix.Multiply(state.Ctm).Multiply(ctx.BaseCtm);
+            formContexts.Add(new RedactContext(baseCtm, ctx.Rects));
+        }
+
+        lock (run.Sync)
+        {
+            if (!run.FormInvocations.TryGetValue(objNum, out List<RedactContext>? list))
+            {
+                list = new List<RedactContext>();
+                run.FormInvocations[objNum] = list;
+            }
+            list.AddRange(formContexts);
+        }
+
+        if (activeStack.Contains(objNum))
+        {
+            return;
+        }
+
+        activeStack.Add(objNum);
+        byte[] formBytes = DecodeStream(stream, run.Pipeline);
+        PdfDictionary? formResources = ResolveFormResources(stream, resources, run.Store);
+        CollectForms(formBytes, formContexts, run, formResources, activeStack, depth + 1);
+        activeStack.Remove(objNum);
+    }
+
+    // Consumes an inline image during collection (no output needed).
+    private static void SkipInlineImage(PdfTokenizer tok, byte[] content)
+    {
+        while (true)
+        {
+            PdfToken t = tok.Read();
+            if (t.IsEndOfStream)
+            {
+                return;
+            }
+            if (t.Type == PdfTokenType.Keyword && t.RawText == "ID")
+            {
+                break;
+            }
+        }
+
+        int eiEnd = FindInlineImageEnd(content, (int)tok.Position);
+        tok.Seek(eiEnd);
+    }
+
+    // Rewrites every collected form XObject's content stream in place (same
+    // object id), removing in-rect text under any of its placements, and marks
+    // the original for exclusion so no unredacted copy survives in the output.
+    private static void RewriteCollectedForms(
+        RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
+    {
+        foreach (KeyValuePair<int, List<RedactContext>> kvp in run.FormInvocations)
+        {
+            int objNum = kvp.Key;
+            if (run.Store.ResolveById(new PdfObjectId(objNum, 0)) is not PdfStream form)
+            {
+                continue;
+            }
+
+            byte[] formBytes = DecodeStream(form, run.Pipeline);
+            PdfDictionary? formResources = ResolveFormResources(form, null, run.Store);
+            byte[] redacted = RewriteContent(formBytes, kvp.Value, run, formResources);
+
+            PdfDictionary newDict = CopyDictionary(form.Dictionary);
+            newDict.Remove(PdfName.Intern("Filter"));
+            newDict.Remove(PdfName.Intern("DecodeParms"));
+            newDict.Set(PdfName.Length, redacted.Length);
+
+            allObjects.Add(new PdfIndirectObject(new PdfObjectId(objNum, 0), new PdfStream(newDict, redacted)));
+            excluded.Add(objNum);
+        }
     }
 
     // ── Overlay generation ────────────────────────────────────────────────
@@ -1037,4 +1319,57 @@ internal sealed class RedactState
         TextX = TextLineX;
         TextY = TextLineY;
     }
+}
+
+/// <summary>
+/// A redaction context: text or images are removed when, after mapping by
+/// <see cref="BaseCtm"/> into page device space, they intersect any of
+/// <see cref="Rects"/>. Page content uses the identity transform; a form's
+/// content uses the form's absolute placement.
+/// </summary>
+internal readonly struct RedactContext
+{
+    /// <summary>Initialises a redaction context.</summary>
+    /// <param name="baseCtm">Maps local content space into page device space.</param>
+    /// <param name="rects">Redaction rectangles in page device space.</param>
+    public RedactContext(Transform baseCtm, List<RectangleF> rects)
+    {
+        BaseCtm = baseCtm;
+        Rects = rects;
+    }
+
+    /// <summary>Transform from local content space into page device space.</summary>
+    public Transform BaseCtm { get; }
+
+    /// <summary>Redaction rectangles in page device space.</summary>
+    public List<RectangleF> Rects { get; }
+}
+
+/// <summary>
+/// Shared state for one redaction pass: the object store and filter pipeline,
+/// plus the registry mapping each form XObject's object number to the placements
+/// at which it is invoked (collected across all pages and nested forms).
+/// </summary>
+internal sealed class RedactRun
+{
+    /// <summary>Initialises a redaction run.</summary>
+    /// <param name="store">The source object store.</param>
+    /// <param name="pipeline">The filter pipeline used to decode streams.</param>
+    public RedactRun(PdfObjectStore store, FilterPipeline pipeline)
+    {
+        Store = store;
+        Pipeline = pipeline;
+    }
+
+    /// <summary>The source object store.</summary>
+    public PdfObjectStore Store { get; }
+
+    /// <summary>The filter pipeline used to decode form content streams.</summary>
+    public FilterPipeline Pipeline { get; }
+
+    /// <summary>Form object number to the placements at which it is invoked.</summary>
+    public Dictionary<int, List<RedactContext>> FormInvocations { get; } = new();
+
+    /// <summary>Guards <see cref="FormInvocations"/> during parallel collection.</summary>
+    public object Sync { get; } = new();
 }
