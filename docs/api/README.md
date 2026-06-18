@@ -89,6 +89,8 @@ python tools/gen_api_docs.py
 | [ContentStreamParser](Content/ContentStreamParser.md) | class | Parses a PDF content stream and extracts text fragments with their approximate positions. |
 | [GraphicsState](Content/GraphicsState.md) | class | Represents the graphics and text state at a point in content stream processing. |
 | [Matrix3x3](Content/Matrix3x3.md) | struct | A 3x3 matrix used for 2D affine transformations in PDF user space. |
+| [PdfFunction](Content/PdfFunction.md) | class | A PDF function (PDF 32000-1:2008 §7.10): a mapping from an `InputCount`-dimensional input to an `OutputCount`-dimensional output. |
+| [PdfShading](Content/PdfShading.md) | class | An axial (Type 2) or radial (Type 3) shading (PDF 32000-1:2008 §8.7.4.5). |
 | [TextFragment](Content/TextFragment.md) | class | A piece of text extracted from a PDF content stream, together with its approximate position in user space. |
 
 ## Chuvadi.Cryptography
@@ -480,6 +482,8 @@ python tools/gen_api_docs.py
 | [ScanlineRasterizer](Rendering/ScanlineRasterizer.md) | class | Fills vector paths into a `PixelBuffer` using a scanline edge-crossing algorithm. |
 | [SearchMatch](Rendering/SearchMatch.md) | class | A search match against the logical text of a page. |
 | [SearchOptions](Rendering/SearchOptions.md) | class | Options controlling a search. |
+| [ShadingOp](Rendering/ShadingOp.md) | class | Paints an axial or radial shading (the `sh` operator). |
+| [ShadingStop](Rendering/ShadingStop.md) | struct | A single colour stop of a shading gradient. |
 | [StrokeExpander](Rendering/StrokeExpander.md) | class | Converts a stroked path into a filled path by expanding each segment by half the stroke width on each side. |
 | [StrokePathOp](Rendering/StrokePathOp.md) | class | Strokes a path with the supplied `StrokeStyle`. |
 | [TextDirection](Rendering/TextDirection.md) | enum | Reading direction of a `TextRun`. |

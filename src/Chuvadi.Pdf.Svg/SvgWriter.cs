@@ -280,6 +280,13 @@ internal sealed class SvgWriter
             .Append(EscapeCssString(format)).Append("\");}");
     }
 
+    /// <summary>Appends a pre-built gradient (or other) definition into &lt;defs&gt;.</summary>
+    /// <param name="defXml">The complete definition element XML.</param>
+    internal void AddGradientDef(string defXml)
+    {
+        _defs.Append(defXml);
+    }
+
     internal string ToSvgString()
     {
         StringBuilder result = new();

@@ -321,6 +321,15 @@ internal interface IContentOperatorSink
     {
     }
 
+    /// <summary>
+    /// Paints a shading (the <c>sh</c> operator), named in /Resources /Shading,
+    /// across the current clip region. The default implementation is a no-op.
+    /// </summary>
+    /// <param name="name">The shading resource name.</param>
+    void PaintShading(string name)
+    {
+    }
+
     // ── Fallback ──────────────────────────────────────────────────────────
 
     /// <summary>Any operator the walker does not recognise.</summary>

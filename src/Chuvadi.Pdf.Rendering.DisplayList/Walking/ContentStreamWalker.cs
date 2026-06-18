@@ -409,9 +409,15 @@ internal static class ContentStreamWalker
                 break;
 
             // ── Recognised no-ops (both builders ignore these) ────────────
+            case "sh":     // shading paint
+                if (operands.Count > 0)
+                {
+                    sink.PaintShading(ContentStrings.ExtractName(operands[0]));
+                }
+                break;
+
             case "i":      // flatness — visual hint
             case "ri":     // rendering intent
-            case "sh":     // shading paint
             case "BMC":    // marked content
             case "BDC":
             case "EMC":

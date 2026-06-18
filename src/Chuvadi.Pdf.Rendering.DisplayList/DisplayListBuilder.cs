@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Primitives;
@@ -492,6 +493,83 @@ public static class DisplayListBuilder
             // clamped. Other ExtGState entries are not interpreted here.
             if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; }
             if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; }
+        }
+
+        // ── IContentOperatorSink — Shading ─────────────────────────────────
+
+        /// <inheritdoc />
+        public void PaintShading(string name)
+        {
+            if (_resources is null) { return; }
+            if (!_resources.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shv)) { return; }
+            PdfDictionary? shadings = _doc.Objects.ResolveAs<PdfDictionary>(shv);
+            if (shadings is null) { return; }
+            if (!shadings.TryGetValue(PdfName.Intern(name), out PdfPrimitive? shadingRef)) { return; }
+
+            PdfShading shading;
+            try
+            {
+                shading = PdfShading.Parse(shadingRef, _doc.Objects);
+            }
+            catch (ContentException)
+            {
+                // Unsupported shading type (e.g. mesh shadings 4-7) — skip the
+                // paint rather than failing the whole page.
+                return;
+            }
+
+            // The CTM at the sh operator maps shading space to page space. Path
+            // coordinates in this builder are already baked to page space, so the
+            // gradient geometry must be too.
+            AffineMatrix ctm = _stack.Current.Ctm;
+            (double ox, double oy) = ctm.Apply(0.0, 0.0);
+            (double ux, double uy) = ctm.Apply(1.0, 0.0);
+            double scale = Math.Sqrt(((ux - ox) * (ux - ox)) + ((uy - oy) * (uy - oy)));
+
+            double[] coords = shading.Coords;
+            (double x0, double y0) = ctm.Apply(coords[0], coords[1]);
+
+            const int sampleCount = 16;
+            List<ShadingStop> stops = new(sampleCount + 1);
+            for (int i = 0; i <= sampleCount; i++)
+            {
+                double t = (double)i / sampleCount;
+                (double r, double g, double b) = shading.EvaluateRgb(t);
+                stops.Add(new ShadingStop(t, r, g, b));
+            }
+
+            if (shading.IsRadial)
+            {
+                (double rx1, double ry1) = ctm.Apply(coords[3], coords[4]);
+                _ops.Add(new ShadingOp
+                {
+                    IsRadial = true,
+                    X0 = x0,
+                    Y0 = y0,
+                    R0 = coords[2] * scale,
+                    X1 = rx1,
+                    Y1 = ry1,
+                    R1 = coords[5] * scale,
+                    ExtendStart = shading.ExtendStart,
+                    ExtendEnd = shading.ExtendEnd,
+                    Stops = stops,
+                });
+            }
+            else
+            {
+                (double ax1, double ay1) = ctm.Apply(coords[2], coords[3]);
+                _ops.Add(new ShadingOp
+                {
+                    IsRadial = false,
+                    X0 = x0,
+                    Y0 = y0,
+                    X1 = ax1,
+                    Y1 = ay1,
+                    ExtendStart = shading.ExtendStart,
+                    ExtendEnd = shading.ExtendEnd,
+                    Stops = stops,
+                });
+            }
         }
 
         private static bool TryReadAlpha(PdfDictionary extGState, string key, out double value)
@@ -1176,6 +1254,7 @@ public static class DisplayListBuilder
                             softMaskAlpha = smPixels;
                             softMaskWidth = smWidth;
                             softMaskHeight = smHeight;
+
                         }
                     }
                     catch
