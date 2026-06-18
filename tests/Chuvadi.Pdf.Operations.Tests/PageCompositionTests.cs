@@ -151,6 +151,117 @@ public sealed class PageCompositionTests
         }
     }
 
+    [Fact]
+    public void Stamp_OnAlreadyStampedPage_KeepsBothOverlays()
+    {
+        using MemoryStream targetStream = BuildTextPdf("BASEPAGE");
+        using MemoryStream firstStream = BuildTextPdf("FIRSTMARK");
+        using MemoryStream secondStream = BuildTextPdf("SECONDMARK");
+
+        // First stamp onto the base page.
+        using MemoryStream onceBytes = new MemoryStream();
+        using (PdfDocument target = OpenPdf(targetStream))
+        using (PdfDocument first = OpenPdf(firstStream))
+        {
+            PageStamper.Place(onceBytes, target, 0, first, 0,
+                Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        // Re-stamp the already-stamped bytes with a second overlay.
+        using MemoryStream twiceBytes = new MemoryStream();
+        using (PdfDocument stampedOnce = OpenPdf(onceBytes))
+        using (PdfDocument second = OpenPdf(secondStream))
+        {
+            PageStamper.Place(twiceBytes, stampedOnce, 0, second, 0,
+                Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        using PdfDocument result = OpenPdf(twiceBytes);
+        TextExtractor extractor = new TextExtractor(result.Objects);
+        string text = extractor.ExtractText(result.Pages[0]);
+        text.Should().Contain("BASEPAGE", "original content is preserved");
+        text.Should().Contain("FIRSTMARK", "the first overlay must survive re-stamping");
+        text.Should().Contain("SECONDMARK", "the second overlay is added");
+
+        // The two stamp forms must occupy distinct resource names, not collide.
+        PdfDictionary xobjects = XObjectsOf(result, 0);
+        xobjects.ContainsKey(PdfName.Intern("CvStamp0")).Should().BeTrue();
+        xobjects.ContainsKey(PdfName.Intern("CvStamp1")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void RemoveStamp_DropsOnlyThatStamp_KeepsOthers()
+    {
+        using MemoryStream targetStream = BuildTextPdf("BASEPAGE");
+        using MemoryStream keepStream = BuildTextPdf("KEEPMARK");
+        using MemoryStream dropStream = BuildTextPdf("DROPMARK");
+
+        using MemoryStream onceBytes = new MemoryStream();
+        using (PdfDocument target = OpenPdf(targetStream))
+        using (PdfDocument keep = OpenPdf(keepStream))
+        {
+            PageStamper.Place(onceBytes, target, 0, keep, 0,
+                Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        using MemoryStream twiceBytes = new MemoryStream();
+        using (PdfDocument stampedOnce = OpenPdf(onceBytes))
+        using (PdfDocument drop = OpenPdf(dropStream))
+        {
+            PageStamper.Place(twiceBytes, stampedOnce, 0, drop, 0,
+                Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        using MemoryStream removedBytes = new MemoryStream();
+        using (PdfDocument twoStamped = OpenPdf(twiceBytes))
+        {
+            PageStamper.RemoveStamp(removedBytes, twoStamped, 0, "CvStamp1");
+        }
+
+        using PdfDocument result = OpenPdf(removedBytes);
+        TextExtractor extractor = new TextExtractor(result.Objects);
+        string text = extractor.ExtractText(result.Pages[0]);
+        text.Should().Contain("BASEPAGE", "original content is preserved");
+        text.Should().Contain("KEEPMARK", "the other stamp is preserved");
+        text.Should().NotContain("DROPMARK", "the removed stamp is gone");
+
+        PdfDictionary xobjects = XObjectsOf(result, 0);
+        xobjects.ContainsKey(PdfName.Intern("CvStamp0")).Should().BeTrue();
+        xobjects.ContainsKey(PdfName.Intern("CvStamp1")).Should()
+            .BeFalse("the removed stamp's resource entry is gone");
+    }
+
+    [Fact]
+    public void ReplaceStamp_RemovesOldTextAndAddsNew()
+    {
+        using MemoryStream targetStream = BuildTextPdf("BASEPAGE");
+        using MemoryStream oldStream = BuildTextPdf("OLDTEXT");
+        using MemoryStream newStream = BuildTextPdf("NEWTEXT");
+
+        using MemoryStream stampedBytes = new MemoryStream();
+        using (PdfDocument target = OpenPdf(targetStream))
+        using (PdfDocument old = OpenPdf(oldStream))
+        {
+            PageStamper.Place(stampedBytes, target, 0, old, 0,
+                Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        using MemoryStream replacedBytes = new MemoryStream();
+        using (PdfDocument stamped = OpenPdf(stampedBytes))
+        using (PdfDocument replacement = OpenPdf(newStream))
+        {
+            PageStamper.ReplaceStamp(replacedBytes, stamped, 0, "CvStamp0",
+                replacement, 0, Transform.CreateScale(0.25), StampPlacement.Overlay);
+        }
+
+        using PdfDocument result = OpenPdf(replacedBytes);
+        TextExtractor extractor = new TextExtractor(result.Objects);
+        string text = extractor.ExtractText(result.Pages[0]);
+        text.Should().Contain("BASEPAGE", "original content is preserved");
+        text.Should().NotContain("OLDTEXT", "the replaced stamp's text is gone");
+        text.Should().Contain("NEWTEXT", "the replacement text is present");
+    }
+
     // ── Placement ───────────────────────────────────────────────────────────
 
     [Fact]
