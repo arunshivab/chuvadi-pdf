@@ -69,6 +69,54 @@ public static class PageStamper
         Place(output, target, all, source, sourcePageIndex, transform, placement);
     }
 
+    /// <summary>
+    /// Removes a previously placed stamp from a target page by its resource
+    /// name (for example "CvStamp0"), dropping both the stamp's content-stream
+    /// invocation and its XObject resource entry. Original page content and any
+    /// other stamps are preserved. The now-orphaned form object is left in the
+    /// file; it is collected if the document is later optimized.
+    /// </summary>
+    public static void RemoveStamp(
+        Stream output,
+        PdfDocument target,
+        int targetPageIndex,
+        string stampName)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(stampName);
+
+        StampDocument document = new StampDocument(target);
+        document.AddRemoval(targetPageIndex, stampName);
+        document.Write(output);
+    }
+
+    /// <summary>
+    /// Replaces a stamp on a target page in a single pass: removes the stamp
+    /// named <paramref name="stampName"/> and places <paramref name="source"/>
+    /// in its stead. The replacement receives a fresh, non-colliding name.
+    /// </summary>
+    public static void ReplaceStamp(
+        Stream output,
+        PdfDocument target,
+        int targetPageIndex,
+        string stampName,
+        PdfDocument source,
+        int sourcePageIndex,
+        Transform transform,
+        StampPlacement placement = StampPlacement.Overlay)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(stampName);
+        ArgumentNullException.ThrowIfNull(source);
+
+        StampDocument document = new StampDocument(target);
+        document.AddRemoval(targetPageIndex, stampName);
+        document.AddStamp(targetPageIndex, source, sourcePageIndex, transform, placement);
+        document.Write(output);
+    }
+
     /// <summary>Stamps a source page onto a set of target pages.</summary>
     public static void Place(
         Stream output,
@@ -103,6 +151,8 @@ public static class PageStamper
         private readonly PdfDocument _target;
         private readonly List<PdfIndirectObject> _extraObjects = new List<PdfIndirectObject>();
         private readonly Dictionary<int, List<Stamp>> _pageStamps = new Dictionary<int, List<Stamp>>();
+        private readonly Dictionary<int, HashSet<string>> _pageRemovals =
+            new Dictionary<int, HashSet<string>>();
         private readonly Dictionary<(PdfDocument Src, int Index), PdfObjectId> _importedForms =
             new Dictionary<(PdfDocument, int), PdfObjectId>();
 
@@ -154,6 +204,17 @@ public static class PageStamper
             }
 
             stamps.Add(new Stamp(formId, transform, placement));
+        }
+
+        internal void AddRemoval(int targetPageIndex, string stampName)
+        {
+            if (!_pageRemovals.TryGetValue(targetPageIndex, out HashSet<string>? names))
+            {
+                names = new HashSet<string>(StringComparer.Ordinal);
+                _pageRemovals[targetPageIndex] = names;
+            }
+
+            names.Add(stampName);
         }
 
         // Imports a source page as a form XObject once; subsequent stamps of the
@@ -239,15 +300,29 @@ public static class PageStamper
 
             Dictionary<int, PdfObjectId> pageIds = BuildPageIdMap();
 
-            foreach (KeyValuePair<int, List<Stamp>> entry in _pageStamps)
+            HashSet<int> pagesToModify = new HashSet<int>();
+            foreach (int pageIndex in _pageStamps.Keys)
             {
-                if (!pageIds.TryGetValue(entry.Key, out PdfObjectId pageId))
+                pagesToModify.Add(pageIndex);
+            }
+
+            foreach (int pageIndex in _pageRemovals.Keys)
+            {
+                pagesToModify.Add(pageIndex);
+            }
+
+            foreach (int pageIndex in pagesToModify)
+            {
+                if (!pageIds.TryGetValue(pageIndex, out PdfObjectId pageId))
                 {
                     continue;
                 }
 
-                PdfPage page = _target.Pages[entry.Key];
-                PdfDictionary modified = BuildModifiedPage(page, entry.Value);
+                _pageStamps.TryGetValue(pageIndex, out List<Stamp>? stamps);
+                _pageRemovals.TryGetValue(pageIndex, out HashSet<string>? removals);
+                PdfPage page = _target.Pages[pageIndex];
+                PdfDictionary modified = BuildModifiedPage(
+                    page, stamps ?? new List<Stamp>(), removals);
                 allObjects.Add(new PdfIndirectObject(pageId, modified));
                 modifiedPageNumbers.Add(pageId.ObjectNumber);
             }
@@ -265,7 +340,8 @@ public static class PageStamper
             PdfWriter.Write(output, allObjects, BuildTrailer());
         }
 
-        private PdfDictionary BuildModifiedPage(PdfPage page, List<Stamp> stamps)
+        private PdfDictionary BuildModifiedPage(
+            PdfPage page, List<Stamp> stamps, HashSet<string>? removals)
         {
             PdfDictionary pageDict = ObjectImporter.CopyDictionary(page.Dictionary);
 
@@ -288,19 +364,51 @@ public static class PageStamper
                 }
             }
 
+            // Drop the content-stream invocations of any removed stamps.
+            if (removals is not null && removals.Count > 0)
+            {
+                List<PdfPrimitive> kept = new List<PdfPrimitive>(existingContent.Count);
+                foreach (PdfPrimitive contentRef in existingContent)
+                {
+                    if (!InvokesRemovedStamp(contentRef, removals))
+                    {
+                        kept.Add(contentRef);
+                    }
+                }
+
+                existingContent = kept;
+            }
+
             // Resource names for the stamped forms, unique within this page.
             PdfDictionary resources = page.Resources is not null
                 ? ObjectImporter.CopyDictionary(page.Resources)
                 : new PdfDictionary();
             PdfDictionary xobjects = GetOrCreateSubdict(resources, "XObject");
 
+            // Drop the XObject resource entries of any removed stamps.
+            if (removals is not null)
+            {
+                foreach (string removedName in removals)
+                {
+                    xobjects.Remove(PdfName.Intern(removedName));
+                }
+            }
+
             PdfArray underlays = new PdfArray([]);
             PdfArray overlays = new PdfArray([]);
+
+            // Continue the CvStamp counter past any stamp forms already present
+            // in this page's XObject resources. Re-stamping an already-stamped
+            // page must add new names (CvStamp1, CvStamp2, ...) rather than
+            // reusing CvStamp0, which would overwrite the existing resource
+            // entry and silently drop the earlier overlay.
+            int baseIndex = NextFreeStampIndex(xobjects);
 
             for (int i = 0; i < stamps.Count; i++)
             {
                 Stamp stamp = stamps[i];
-                string name = "CvStamp" + i.ToString(CultureInfo.InvariantCulture);
+                string name = "CvStamp"
+                    + (baseIndex + i).ToString(CultureInfo.InvariantCulture);
                 xobjects.Set(PdfName.Intern(name), new PdfReference(stamp.FormId));
 
                 byte[] op = BuildStampOperators(stamp.Transform, name);
@@ -347,6 +455,62 @@ public static class PageStamper
 
             pageDict.Set(PdfName.Contents, newContents);
             return pageDict;
+        }
+
+        // True when a page content-stream reference is the unfiltered overlay
+        // that invokes one of the removed stamps (q ... cm /CvStampN Do Q).
+        private bool InvokesRemovedStamp(PdfPrimitive contentRef, HashSet<string> removals)
+        {
+            if (_target.Objects.Resolve(contentRef) is not PdfStream stream)
+            {
+                return false;
+            }
+
+            // Stamp overlays are tiny, unfiltered ASCII streams; a filtered
+            // stream is original page content, never a stamp overlay.
+            if (stream.Dictionary.ContainsKey(PdfName.Filter))
+            {
+                return false;
+            }
+
+            string text = Encoding.ASCII.GetString(stream.RawBytes);
+            foreach (string name in removals)
+            {
+                if (text.Contains("/" + name + " Do", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Returns the smallest index N such that "CvStampN" is not already a
+        // key in the given XObject resource dictionary, so newly added stamp
+        // forms never collide with stamps from a previous Place call.
+        private static int NextFreeStampIndex(PdfDictionary xobjects)
+        {
+            int next = 0;
+            foreach (PdfName key in xobjects.Keys)
+            {
+                string value = key.Value;
+                if (!value.StartsWith("CvStamp", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (int.TryParse(
+                        value.AsSpan(7),
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out int index)
+                    && index >= next)
+                {
+                    next = index + 1;
+                }
+            }
+
+            return next;
         }
 
         private static byte[] BuildStampOperators(Transform t, string name)
