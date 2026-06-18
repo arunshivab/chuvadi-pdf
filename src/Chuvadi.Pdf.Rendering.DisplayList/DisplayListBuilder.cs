@@ -66,6 +66,8 @@ public static class DisplayListBuilder
         private readonly HashSet<(DiagnosticKind, string)> _diagnosticKeys = new();
 
         private PdfDictionary? _resources;
+        private int _formDepth;
+        private const int MaxFormDepth = 12;
 
         // ── v2.1.2: gap-tracking for word-boundary space insertion ───────────
         //
@@ -1182,6 +1184,56 @@ public static class DisplayListBuilder
             return null;
         }
 
+        // Renders a form XObject by walking its content stream through this
+        // builder with the form's /Matrix concatenated onto the CTM and its
+        // own /Resources in scope (falling back to the page's when absent).
+        // A depth guard stops cyclic references from recursing without bound.
+        private void EmitFormXObject(PdfStream formStream)
+        {
+            if (_formDepth >= MaxFormDepth) { return; }
+
+            byte[] formContent;
+            try
+            {
+                formContent = ContentStreamLoader.Decode(formStream);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (formContent.Length == 0) { return; }
+
+            double a = 1.0, b = 0.0, c = 0.0, d = 1.0, e = 0.0, f = 0.0;
+            if (formStream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mp)
+                && _doc.Objects.ResolveAs<PdfArray>(mp) is PdfArray arr && arr.Count >= 6)
+            {
+                a = NumberOf(arr[0]);
+                b = NumberOf(arr[1]);
+                c = NumberOf(arr[2]);
+                d = NumberOf(arr[3]);
+                e = NumberOf(arr[4]);
+                f = NumberOf(arr[5]);
+            }
+
+            PdfDictionary? formResources = _resources;
+            if (formStream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
+                && _doc.Objects.ResolveAs<PdfDictionary>(rp) is PdfDictionary resolved)
+            {
+                formResources = resolved;
+            }
+
+            PdfDictionary? savedResources = _resources;
+            SaveState();
+            ConcatMatrix(a, b, c, d, e, f);
+            _resources = formResources;
+            _formDepth++;
+            ContentStreamWalker.Walk(formContent, this);
+            _formDepth--;
+            _resources = savedResources;
+            RestoreState();
+        }
+
         private void EmitXObject(string name, BuilderState s)
         {
             if (_resources is null) { return; }
@@ -1194,7 +1246,18 @@ public static class DisplayListBuilder
             if (!xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? imgRef)) { return; }
             if (_doc.Objects.Resolve(imgRef) is not PdfStream stream) { return; }
             if (!stream.Dictionary.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? sub)
-                || sub is not PdfName subName || subName.Value != "Image")
+                || sub is not PdfName subName)
+            {
+                return;
+            }
+
+            if (subName.Value == "Form")
+            {
+                EmitFormXObject(stream);
+                return;
+            }
+
+            if (subName.Value != "Image")
             {
                 return;
             }
