@@ -112,6 +112,10 @@ public static class Redactor
         List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
         HashSet<int> rewrittenPageNums = new HashSet<int>();
         HashSet<int> removedContentStreamNums = new HashSet<int>();
+        HashSet<int> redactedAnnotRefs = new HashSet<int>();
+        HashSet<int> annotRemovalCandidates = new HashSet<int>();
+        Dictionary<int, PdfDictionary> rewrittenFieldObjects =
+            new Dictionary<int, PdfDictionary>();
 
         int nextObjectNum = FindNextObjectNumber(document);
 
@@ -206,6 +210,10 @@ public static class Redactor
                 overlayId, new PdfStream(overlayDict, overlayBytes[i])));
 
             PdfDictionary modifiedPage = CopyDictionary(work[i].Page.Dictionary);
+            RedactAnnotations(
+                modifiedPage, work[i].Page, work[i].Rects,
+                document.Objects, redactedAnnotRefs, annotRemovalCandidates,
+                rewrittenFieldObjects);
             PdfArray contents = new PdfArray([
                 new PdfReference(redactedId),
                 new PdfReference(overlayId),
@@ -217,6 +225,30 @@ public static class Redactor
 
         RewriteCollectedForms(run, allObjects, removedContentStreamNums);
 
+        // Physically remove redacted annotations and any sub-objects they solely
+        // own (action dictionaries holding /URI, appearance streams), so a
+        // redacted link's target or a note's text cannot be recovered. An object
+        // still reachable from the catalog without passing through a redacted
+        // annotation is shared and is kept.
+        HashSet<int> removedAnnotationNums = new HashSet<int>();
+        if (redactedAnnotRefs.Count > 0)
+        {
+            HashSet<int> survivors = new HashSet<int>(redactedAnnotRefs);
+            PdfDictionary? catalog = FindCatalog(document);
+            if (catalog is not null)
+            {
+                Visit(document.Objects, catalog, survivors);
+            }
+
+            survivors.ExceptWith(redactedAnnotRefs);
+            foreach (int candidate in annotRemovalCandidates)
+            {
+                if (!survivors.Contains(candidate))
+                {
+                    removedAnnotationNums.Add(candidate);
+                }
+            }
+        }
 
         // Copy untouched objects (excluding modified pages and replaced content streams)
         foreach (PdfIndirectObject obj in document.Objects.Objects)
@@ -228,6 +260,17 @@ public static class Redactor
 
             if (removedContentStreamNums.Contains(obj.Id.ObjectNumber))
             {
+                continue;
+            }
+
+            if (removedAnnotationNums.Contains(obj.Id.ObjectNumber))
+            {
+                continue;
+            }
+
+            if (rewrittenFieldObjects.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? rewrittenField))
+            {
+                allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenField));
                 continue;
             }
 
@@ -282,6 +325,7 @@ public static class Redactor
         {
             RedactState state = new RedactState();
             List<PdfToken> pendingOperands = new List<PdfToken>();
+            PathAccumulator path = new PathAccumulator();
 
             while (true)
             {
@@ -330,6 +374,58 @@ public static class Redactor
                 }
 
                 string op = token.RawText;
+
+                // Path construction: buffer the operator instead of emitting it,
+                // accumulating the path's bounding box, so the whole path can be
+                // dropped at its paint operator if it lies in a redaction region.
+                if (IsPathConstructionOp(op))
+                {
+                    AccumulatePathBox(op, pendingOperands, state, path);
+                    path.Buffer.Add((new List<PdfToken>(pendingOperands), op));
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                if (op == "W" || op == "W*")
+                {
+                    // A clipping path draws nothing and must be preserved
+                    // (dropping a clip could expose content), so flag and keep it.
+                    path.HasClip = true;
+                    path.Buffer.Add((new List<PdfToken>(pendingOperands), op));
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                if (IsPathPaintOp(op))
+                {
+                    // "n" paints nothing, so it never leaks; a clipped path is
+                    // preserved. Otherwise drop the path when it hits a region.
+                    bool dropPath = path.Active
+                        && !path.HasClip
+                        && op != "n"
+                        && PathBoxIntersects(path, contexts);
+
+                    if (!dropPath)
+                    {
+                        FlushPath(output, path);
+                        WriteTokens(output, pendingOperands);
+                        byte[] paintBytes = Encoding.Latin1.GetBytes(op + "\n");
+                        output.Write(paintBytes, 0, paintBytes.Length);
+                    }
+
+                    path.Reset();
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                // A non-path operator while a path is buffered (unusual in valid
+                // content): emit the buffered path verbatim before handling it.
+                if (path.Buffer.Count > 0)
+                {
+                    FlushPath(output, path);
+                    path.Reset();
+                }
+
                 bool drop = ProcessOperator(op, pendingOperands, state, contexts, run, resources);
 
                 if (!drop)
@@ -340,6 +436,12 @@ public static class Redactor
                 }
 
                 pendingOperands.Clear();
+            }
+
+            // Flush any path left unterminated at end of stream.
+            if (path.Buffer.Count > 0)
+            {
+                FlushPath(output, path);
             }
 
             return output.ToArray();
@@ -471,6 +573,184 @@ public static class Redactor
 
     private static bool IsWhitespaceByte(byte b) =>
         b == 0x00 || b == 0x09 || b == 0x0A || b == 0x0C || b == 0x0D || b == 0x20;
+
+    private static bool IsPathConstructionOp(string op)
+    {
+        return op == "m" || op == "l" || op == "c" || op == "v"
+            || op == "y" || op == "re" || op == "h";
+    }
+
+    private static bool IsPathPaintOp(string op)
+    {
+        return op == "f" || op == "F" || op == "f*" || op == "S" || op == "s"
+            || op == "B" || op == "B*" || op == "b" || op == "b*" || op == "n";
+    }
+
+    // Expands the buffered path's bounding box (in path/user space, via the
+    // current CTM) with the points contributed by a construction operator.
+    private static void AccumulatePathBox(
+        string op, List<PdfToken> operands, RedactState state, PathAccumulator path)
+    {
+        switch (op)
+        {
+            case "m":
+            case "l":
+                if (operands.Count >= 2)
+                {
+                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
+                }
+                break;
+
+            case "c":
+                if (operands.Count >= 6)
+                {
+                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
+                    path.AddPoint(ParseDouble(operands[2]), ParseDouble(operands[3]), state);
+                    path.AddPoint(ParseDouble(operands[4]), ParseDouble(operands[5]), state);
+                }
+                break;
+
+            case "v":
+            case "y":
+                if (operands.Count >= 4)
+                {
+                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
+                    path.AddPoint(ParseDouble(operands[2]), ParseDouble(operands[3]), state);
+                }
+                break;
+
+            case "re":
+                if (operands.Count >= 4)
+                {
+                    double x = ParseDouble(operands[0]);
+                    double y = ParseDouble(operands[1]);
+                    double w = ParseDouble(operands[2]);
+                    double h = ParseDouble(operands[3]);
+                    path.AddPoint(x, y, state);
+                    path.AddPoint(x + w, y + h, state);
+                }
+                break;
+
+            case "h":
+                // "h" closes the subpath and adds no new points.
+                break;
+        }
+    }
+
+    // True when the buffered path's bounding box, mapped into a context's page
+    // device space, overlaps a redaction rectangle. Mirrors the image test.
+    private static bool PathBoxIntersects(PathAccumulator path, IReadOnlyList<RedactContext> contexts)
+    {
+        if (!path.Active)
+        {
+            return false;
+        }
+
+        PointF c00 = new PointF(path.MinX, path.MinY);
+        PointF c10 = new PointF(path.MaxX, path.MinY);
+        PointF c01 = new PointF(path.MinX, path.MaxY);
+        PointF c11 = new PointF(path.MaxX, path.MaxY);
+
+        for (int c = 0; c < contexts.Count; c++)
+        {
+            RedactContext context = contexts[c];
+            if (context.Rects.Count == 0)
+            {
+                continue;
+            }
+
+            PointF d00 = context.BaseCtm.TransformPoint(c00);
+            PointF d10 = context.BaseCtm.TransformPoint(c10);
+            PointF d01 = context.BaseCtm.TransformPoint(c01);
+            PointF d11 = context.BaseCtm.TransformPoint(c11);
+
+            double minX = Math.Min(Math.Min(d00.X, d10.X), Math.Min(d01.X, d11.X));
+            double maxX = Math.Max(Math.Max(d00.X, d10.X), Math.Max(d01.X, d11.X));
+            double minY = Math.Min(Math.Min(d00.Y, d10.Y), Math.Min(d01.Y, d11.Y));
+            double maxY = Math.Max(Math.Max(d00.Y, d10.Y), Math.Max(d01.Y, d11.Y));
+
+            foreach (RectangleF r in context.Rects)
+            {
+                if (minX < r.X + r.Width && maxX > r.X
+                    && minY < r.Y + r.Height && maxY > r.Y)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static void FlushPath(MemoryStream output, PathAccumulator path)
+    {
+        foreach ((List<PdfToken> operands, string op) in path.Buffer)
+        {
+            WriteTokens(output, operands);
+            byte[] bytes = Encoding.Latin1.GetBytes(op + "\n");
+            output.Write(bytes, 0, bytes.Length);
+        }
+    }
+
+    // Buffers a path's construction operators and tracks its user-space bounding
+    // box so a painted path inside a redaction region can be dropped wholesale.
+    private sealed class PathAccumulator
+    {
+        public bool Active { get; private set; }
+
+        public bool HasClip { get; set; }
+
+        public double MinX { get; private set; }
+
+        public double MinY { get; private set; }
+
+        public double MaxX { get; private set; }
+
+        public double MaxY { get; private set; }
+
+        public List<(List<PdfToken> Operands, string Op)> Buffer { get; } =
+            new List<(List<PdfToken> Operands, string Op)>();
+
+        public void AddPoint(double x, double y, RedactState state)
+        {
+            PointF p = state.Ctm.TransformPoint(new PointF(x, y));
+            if (!Active)
+            {
+                MinX = MaxX = p.X;
+                MinY = MaxY = p.Y;
+                Active = true;
+                return;
+            }
+
+            if (p.X < MinX)
+            {
+                MinX = p.X;
+            }
+
+            if (p.X > MaxX)
+            {
+                MaxX = p.X;
+            }
+
+            if (p.Y < MinY)
+            {
+                MinY = p.Y;
+            }
+
+            if (p.Y > MaxY)
+            {
+                MaxY = p.Y;
+            }
+        }
+
+        public void Reset()
+        {
+            Active = false;
+            HasClip = false;
+            MinX = MinY = MaxX = MaxY = 0;
+            Buffer.Clear();
+        }
+    }
 
     private static bool ShouldRedactImageAtCtm(RedactState state, IReadOnlyList<RedactContext> contexts)
     {
@@ -1163,6 +1443,256 @@ public static class Redactor
         {
             Visit(store, stream.Dictionary, visited);
         }
+    }
+
+    // ── Annotation redaction (R1) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Redacts in-region annotations on a page. Widget (form-field) annotations
+    /// have their field value stripped and any indirect value/appearance objects
+    /// physically removed, while the field object itself is kept (still
+    /// referenced by the AcroForm tree) but emptied. Every other annotation
+    /// whose /Rect intersects a region is dropped from /Annots and recorded,
+    /// with the sub-objects it owns, for physical removal.
+    /// </summary>
+    private static void RedactAnnotations(
+        PdfDictionary modifiedPage,
+        PdfPage page,
+        List<RectangleF> rects,
+        PdfObjectStore store,
+        HashSet<int> redactedAnnotRefs,
+        HashSet<int> removalCandidates,
+        Dictionary<int, PdfDictionary> rewrittenFieldObjects)
+    {
+        if (!page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsPrim))
+        {
+            return;
+        }
+
+        if (store.Resolve(annotsPrim) is not PdfArray annots)
+        {
+            return;
+        }
+
+        PdfArray kept = new PdfArray();
+        for (int i = 0; i < annots.Count; i++)
+        {
+            PdfPrimitive entry = annots[i];
+            if (store.Resolve(entry) is not PdfDictionary annot)
+            {
+                kept.Add(entry);
+                continue;
+            }
+
+            if (!TryGetAnnotationRect(annot, store, out RectangleF annotRect)
+                || !IntersectsAnyRect(annotRect, rects))
+            {
+                kept.Add(entry);
+                continue;
+            }
+
+            if (IsWidgetAnnotation(annot))
+            {
+                // Strip the form-field value; drop the widget from /Annots but
+                // keep the (now-emptied) field object for AcroForm consistency.
+                RedactWidgetValue(
+                    annot, entry, store,
+                    redactedAnnotRefs, removalCandidates, rewrittenFieldObjects);
+            }
+            else if (entry is PdfReference reference)
+            {
+                int num = reference.ObjectId.ObjectNumber;
+                redactedAnnotRefs.Add(num);
+                removalCandidates.Add(num);
+                Visit(store, annot, removalCandidates);
+            }
+        }
+
+        if (kept.Count > 0)
+        {
+            modifiedPage.Set(PdfName.Intern("Annots"), kept);
+        }
+        else
+        {
+            modifiedPage.Remove(PdfName.Intern("Annots"));
+        }
+    }
+
+    // Form-field value keys to strip from a redacted widget and its parent
+    // field. /V and /DV are the value; /AP, /AS render it; /RV, /I, /TU may
+    // echo it. Field structure (/FT, /T, /Kids, /Parent) is kept.
+    private static readonly string[] SensitiveFieldKeys =
+        new[] { "V", "DV", "AP", "AS", "RV", "I", "TU" };
+
+    /// <summary>
+    /// Strips the value of the form field reached through a redacted widget:
+    /// the widget itself (merged field/widget) and every value-bearing ancestor
+    /// found via /Parent. The objects are rewritten without their value keys and
+    /// any indirect value/appearance objects are queued for physical removal.
+    /// </summary>
+    private static void RedactWidgetValue(
+        PdfDictionary widget,
+        PdfPrimitive widgetEntry,
+        PdfObjectStore store,
+        HashSet<int> redactedRefs,
+        HashSet<int> removalCandidates,
+        Dictionary<int, PdfDictionary> rewrittenFieldObjects)
+    {
+        if (widgetEntry is PdfReference widgetRef)
+        {
+            StripFieldValue(
+                widgetRef.ObjectId.ObjectNumber, widget, store,
+                redactedRefs, removalCandidates, rewrittenFieldObjects);
+        }
+
+        // Walk /Parent so a split field (value on the parent, /Rect on the
+        // widget) also has its value cleared. Guard against /Parent cycles.
+        PdfPrimitive? current = widget.TryGetValue(PdfName.Intern("Parent"), out PdfPrimitive? parent)
+            ? parent
+            : null;
+        HashSet<int> seen = new HashSet<int>();
+        while (current is PdfReference parentRef && seen.Add(parentRef.ObjectId.ObjectNumber))
+        {
+            if (store.Resolve(parentRef) is not PdfDictionary parentField)
+            {
+                break;
+            }
+
+            StripFieldValue(
+                parentRef.ObjectId.ObjectNumber, parentField, store,
+                redactedRefs, removalCandidates, rewrittenFieldObjects);
+
+            current = parentField.TryGetValue(PdfName.Intern("Parent"), out PdfPrimitive? grandParent)
+                ? grandParent
+                : null;
+        }
+    }
+
+    private static void StripFieldValue(
+        int objectNumber,
+        PdfDictionary source,
+        PdfObjectStore store,
+        HashSet<int> redactedRefs,
+        HashSet<int> removalCandidates,
+        Dictionary<int, PdfDictionary> rewrittenFieldObjects)
+    {
+        PdfDictionary target = rewrittenFieldObjects.TryGetValue(objectNumber, out PdfDictionary? existing)
+            ? existing
+            : CopyDictionary(source);
+
+        bool changed = false;
+        for (int i = 0; i < SensitiveFieldKeys.Length; i++)
+        {
+            PdfName key = PdfName.Intern(SensitiveFieldKeys[i]);
+            if (target.TryGetValue(key, out PdfPrimitive? value))
+            {
+                // Queue indirect value/appearance objects for physical removal,
+                // then drop the key so the inline value is gone from the field.
+                CollectIndirectRefs(value, store, redactedRefs, removalCandidates);
+                target.Remove(key);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            rewrittenFieldObjects[objectNumber] = target;
+        }
+    }
+
+    // Walks a stripped value, queuing any indirect object it references (and the
+    // objects those own) for physical removal. Pre-seeding redactedRefs makes
+    // the later survivor walk stop at these nodes so an object reachable only
+    // through the stripped value is removed while a shared one is kept.
+    private static void CollectIndirectRefs(
+        PdfPrimitive value,
+        PdfObjectStore store,
+        HashSet<int> redactedRefs,
+        HashSet<int> removalCandidates)
+    {
+        if (value is PdfReference reference)
+        {
+            int num = reference.ObjectId.ObjectNumber;
+            redactedRefs.Add(num);
+            removalCandidates.Add(num);
+            Visit(store, store.Resolve(reference), removalCandidates);
+            return;
+        }
+
+        if (value is PdfArray array)
+        {
+            for (int i = 0; i < array.Count; i++)
+            {
+                CollectIndirectRefs(array[i], store, redactedRefs, removalCandidates);
+            }
+            return;
+        }
+
+        if (value is PdfDictionary dict)
+        {
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+            {
+                CollectIndirectRefs(entry.Value, store, redactedRefs, removalCandidates);
+            }
+        }
+    }
+
+    private static bool IsWidgetAnnotation(PdfDictionary annot)
+    {
+        return annot.TryGetValue(PdfName.Subtype, out PdfPrimitive? subtype)
+            && subtype is PdfName name
+            && name.Value == "Widget";
+    }
+
+    private static bool TryGetAnnotationRect(
+        PdfDictionary annot, PdfObjectStore store, out RectangleF rect)
+    {
+        rect = RectangleF.Zero;
+        if (!annot.TryGetValue(PdfName.Intern("Rect"), out PdfPrimitive? rectPrim))
+        {
+            return false;
+        }
+
+        if (store.Resolve(rectPrim) is not PdfArray array || array.Count < 4)
+        {
+            return false;
+        }
+
+        double x1 = PdfReal.ToDouble(store.Resolve(array[0]));
+        double y1 = PdfReal.ToDouble(store.Resolve(array[1]));
+        double x2 = PdfReal.ToDouble(store.Resolve(array[2]));
+        double y2 = PdfReal.ToDouble(store.Resolve(array[3]));
+        rect = RectangleF.FromCorners(x1, y1, x2, y2);
+        return true;
+    }
+
+    private static bool IntersectsAnyRect(RectangleF rect, List<RectangleF> rects)
+    {
+        for (int i = 0; i < rects.Count; i++)
+        {
+            if (!rect.Intersect(rects[i]).IsEmpty)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static PdfDictionary? FindCatalog(PdfDocument document)
+    {
+        foreach (PdfIndirectObject obj in document.Objects.Objects)
+        {
+            if (obj.Value is PdfDictionary dict
+                && dict.TryGetValue(PdfName.Type, out PdfPrimitive? type)
+                && type is PdfName name
+                && name.Value == "Catalog")
+            {
+                return dict;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
