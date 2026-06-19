@@ -24,7 +24,14 @@ public sealed class RedactionRect
     /// </summary>
     /// <param name="pageIndex">Zero-based page index.</param>
     /// <param name="bounds">Rectangle in PDF user space, bottom-left origin.</param>
-    public RedactionRect(int pageIndex, RectangleF bounds)
+    /// <param name="replacementText">
+    /// Optional text drawn in place of the removed glyphs, in the same font.
+    /// When supplied, the matched glyphs are physically removed and this string
+    /// is rendered in the gap they left, and no opaque box is painted over the
+    /// region. The replacement must be no wider than the removed span; a wider
+    /// replacement is rejected with a <see cref="RedactionException"/>.
+    /// </param>
+    public RedactionRect(int pageIndex, RectangleF bounds, string? replacementText = null)
     {
         if (pageIndex < 0)
         {
@@ -34,6 +41,7 @@ public sealed class RedactionRect
 
         PageIndex = pageIndex;
         Bounds = bounds;
+        ReplacementText = replacementText;
     }
 
     /// <summary>Gets the zero-based page index targeted by this redaction.</summary>
@@ -41,4 +49,10 @@ public sealed class RedactionRect
 
     /// <summary>Gets the rectangle to redact, in PDF user space.</summary>
     public RectangleF Bounds { get; }
+
+    /// <summary>
+    /// Gets the optional in-place replacement text for this region, or
+    /// <see langword="null"/> to remove the glyphs and paint an opaque box.
+    /// </summary>
+    public string? ReplacementText { get; }
 }
