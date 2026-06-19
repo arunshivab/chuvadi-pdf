@@ -10,6 +10,34 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.14.0] - 2026-06-19
+
+### Added
+- Glyph-level text redaction: a redaction overlapping part of a Tj run now
+  removes only the matched glyphs and keeps neighbours in their exact
+  positions, instead of dropping the whole operator. (#118)
+- In-place redaction replacement: `RedactionRect.ReplacementText` draws a
+  replacement in the removed span (no box over it); a replacement wider than
+  the span is rejected with `RedactionException`. (#118)
+- `Standard14GlyphWidths`: accurate per-glyph Standard-14 widths promoted to a
+  public type in `Chuvadi.Pdf.Fonts.Rendering`. (#118)
+- Checksum-validated redaction patterns: `PatternRule.Validator` plus
+  `PatternValidators` (Luhn, Verhoeff, IBAN mod-97, ABA routing, NPI), new
+  `CommonPatterns` (India PAN/Aadhaar, IBAN, ABA, SWIFT, EIN, ITIN, NPI, IPv4),
+  a `LabeledValue` matcher, and ready-to-use `PatternSets`
+  (Financial/Medical/GeneralPii). (#119)
+- Redaction R1: physical removal of in-region annotations and their link URLs,
+  form-field values, and vector graphics. (#117)
+- PageStamper lifecycle: scan-and-continue stamp naming (fixes silent data loss
+  on re-stamp), plus `RemoveStamp` and `ReplaceStamp`. (#116)
+- Rendering Phase 2: PDF function and shading evaluators (axial/radial, the `sh`
+  operator) in the SVG sink, and form XObject rendering. New public
+  `PdfFunction`, `PdfShading`, `ShadingOp`, `ShadingStop`. (#115)
+
+### Fixed
+- SVG/raster rendering: un-premultiply image SMask `/Matte`. (#115)
+
+---
 ## [3.9.0] - 2026-06-15
 
 ### Fixed
