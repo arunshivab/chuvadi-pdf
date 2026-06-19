@@ -14,7 +14,7 @@ Use this when the exact rectangles aren't known up front (e.g., "redact every SS
 
 ## Constructors
 
-### `PatternRule(string pattern, int[]? pageIndices = null)`
+### `PatternRule(string pattern, int[]? pageIndices = null, Func<string, bool>? validator = null)`
 
 Initialises a new `PatternRule`.
 
@@ -22,8 +22,9 @@ Initialises a new `PatternRule`.
 
 - `pattern` — The regex pattern. Must compile against the .NET regex flavour. Matching is case-sensitive by default; pass an already-compiled `Regex` via the other constructor to override.
 - `pageIndices` — Optional list of zero-based page indices to restrict the rule to. When null, applies to all pages.
+- `validator` — Optional post-match predicate, run on each regex match's text. When it returns `false` the match is not redacted. Use this to reject false positives via a checksum (e.g. `PatternValidators`).
 
-### `PatternRule(Regex regex, int[]? pageIndices = null)`
+### `PatternRule(Regex regex, int[]? pageIndices = null, Func<string, bool>? validator = null)`
 
 Initialises a new `PatternRule` from a pre-compiled regex.
 
@@ -44,6 +45,14 @@ int[]? PageIndices
 ```
 
 Gets the page indices this rule applies to, or null for all pages.
+
+### `Validator`
+
+```csharp
+Func<string, bool>? Validator
+```
+
+Gets the optional post-match validator, or `null` to redact every regex match unconditionally.
 
 ## Methods
 

@@ -86,6 +86,13 @@ internal static class PatternMatcher
 
             foreach (Match match in matches)
             {
+                // A rule may carry a post-match validator (e.g. a checksum) that
+                // rejects false regex hits; skip matches it declines.
+                if (rule.Validator is not null && !rule.Validator(match.Value))
+                {
+                    continue;
+                }
+
                 int start = match.Index;
                 int end = match.Index + match.Length;
 
