@@ -428,6 +428,8 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [CommonPatterns](Redaction/CommonPatterns.md) | class | Pre-built regex strings for common PHI / PII tokens. |
 | [PatternRule](Redaction/PatternRule.md) | class | A regex pattern that locates text to redact, with optional per-page filtering. |
+| [PatternSets](Redaction/PatternSets.md) | class | Curated groups of `PatternRule` with checksum validators already attached, for common redaction scenarios. |
+| [PatternValidators](Redaction/PatternValidators.md) | class | Reusable checksum validators for `PatternRule` post-match predicates. |
 | [RedactionException](Redaction/RedactionException.md) | class | Thrown when a redaction operation fails. |
 | [RedactionOptions](Redaction/RedactionOptions.md) | class | Top-level configuration for a redaction operation. |
 | [RedactionRect](Redaction/RedactionRect.md) | class | One rectangle of content to permanently remove from a PDF page. |

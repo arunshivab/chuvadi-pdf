@@ -31,7 +31,12 @@ public sealed class PatternRule
     /// Optional list of zero-based page indices to restrict the rule to.
     /// When null, applies to all pages.
     /// </param>
-    public PatternRule(string pattern, int[]? pageIndices = null)
+    /// <param name="validator">
+    /// Optional post-match predicate, run on each regex match's text. When it
+    /// returns <see langword="false"/> the match is not redacted. Use this to
+    /// reject false positives via a checksum (e.g. <see cref="PatternValidators"/>).
+    /// </param>
+    public PatternRule(string pattern, int[]? pageIndices = null, Func<string, bool>? validator = null)
     {
         if (pattern is null)
         {
@@ -40,13 +45,15 @@ public sealed class PatternRule
 
         Regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
         PageIndices = pageIndices;
+        Validator = validator;
     }
 
     /// <summary>Initialises a new <see cref="PatternRule"/> from a pre-compiled regex.</summary>
-    public PatternRule(Regex regex, int[]? pageIndices = null)
+    public PatternRule(Regex regex, int[]? pageIndices = null, Func<string, bool>? validator = null)
     {
         Regex = regex ?? throw new ArgumentNullException(nameof(regex));
         PageIndices = pageIndices;
+        Validator = validator;
     }
 
     /// <summary>Gets the compiled regex.</summary>
@@ -56,6 +63,12 @@ public sealed class PatternRule
     /// Gets the page indices this rule applies to, or null for all pages.
     /// </summary>
     public int[]? PageIndices { get; }
+
+    /// <summary>
+    /// Gets the optional post-match validator, or <see langword="null"/> to
+    /// redact every regex match unconditionally.
+    /// </summary>
+    public Func<string, bool>? Validator { get; }
 
     /// <summary>Returns true if this rule applies to the given zero-based page index.</summary>
     public bool AppliesToPage(int pageIndex)
