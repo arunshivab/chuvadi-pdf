@@ -6,7 +6,8 @@
 > against the code on `main` at v3.11.1**. Hand this whole file to a new chat as the
 > starting context.
 >
-> **Status verification date:** 2026-06-17, against `main` @ commit `0247bc0` (v3.11.1).
+> **Status verification date:** 2026-06-20, re-verified against `main` @ **v3.14.0**
+> (the v3.11.1 statuses below were refreshed for items advanced by PRs #110–#119).
 > Each item is tagged ✅ DONE / 🟡 PARTIAL / ❌ NOT DONE / ⚠️ VERIFY. "VERIFY" means the
 > previous session inferred status but did not fully confirm in code — re-check before
 > trusting.
@@ -195,7 +196,8 @@ technical debt is resolved.
 `CompressionSkipReason.Signed` / `.Encrypted` and nothing is written. Rationale: rewriting
 invalidates signatures and emits decrypted content.
 
-**4. [CMP] Benchmark harness + corpus (size/SSIM vs Acrobat/Ghostscript/qpdf/MRC)** — 🟡 **PARTIAL**
+**4. [CMP] Benchmark harness + corpus (size/SSIM vs Acrobat/Ghostscript/qpdf/MRC)** — ✅ **DONE** (v3.12.0, #110)
+*v3.14.0 update: the external-tool scoreboard IS now wired — `ExternalToolScoreboard.Measure()` runs Ghostscript / qpdf / mutool over the corpus (`benchmarks/Chuvadi.Benchmarks/CompressionReport.cs`).*
 `benchmarks/Chuvadi.Benchmarks.Compression/` exists with `Ssim.cs`, `CompressionCorpus.cs`,
 `CompressionBaseline.cs`, `CompressionMeasure.cs`, and a `compression-baseline.json`. **The
 external-tool comparison (vs Acrobat / Ghostscript / qpdf / an MRC tool) is NOT wired** —
@@ -204,7 +206,8 @@ later compression items can be measured against real-world baselines.*
 
 ### PHASE 1 — Lossless compression core (safe, universal, no quality loss)
 
-**5. [CMP] Object streams + compressed xref — WRITING** — ❌ **NOT DONE**
+**5. [CMP] Object streams + compressed xref — WRITING** — ✅ **DONE** (v3.12.0, #111)
+*v3.14.0 update: `PdfWriter.Write(..., XrefStyle.Stream)` packs compressible objects into `/ObjStm` containers with a cross-reference stream (`src/Chuvadi.Pdf.IO/XrefStyle.cs`, `PdfWriter.WriteObjectStreamBody`). The highest-leverage lossless win has shipped.*
 `PdfWriter` still emits classic cross-reference tables. `PdfCompressor` doc comment explicitly
 calls object/xref-stream writing a "recorded follow-up." **Reading already shipped (v2.1.7).**
 This is the highest-leverage lossless win and the natural first build after the Phase-0
@@ -229,7 +232,8 @@ Huffman (~85-90% of zlib ratios); see also BACKLOG "Dynamic-Huffman DEFLATE."
 `src/Chuvadi.Pdf.Operations/ContentStreamMinifier.cs`
 (`CompressionResult.ContentStreamsMinified`). Whitespace/comment minification.
 
-**10. [CMP] Granular stripping (metadata/JS/attachments/Thumb/PieceInfo; optional struct-tree/annots)** — 🟡 **PARTIAL**
+**10. [CMP] Granular stripping (metadata/JS/attachments/Thumb/PieceInfo; optional struct-tree/annots)** — ✅ **DONE** (v3.13.1, #113)
+*v3.14.0 update: `PdfCompressor` now exposes `RemoveJavaScript`, `RemoveAttachments`, `RemoveThumbnails`, `RemovePieceInfo`, `RemoveStructTree` (in addition to metadata/info).*
 `PdfCompressor` has `RemoveMetadata` and `RemoveDocumentInfo`. JavaScript, attachments,
 `/Thumb`, `/PieceInfo`, struct-tree, and annotation stripping are **not confirmed** — likely
 not yet implemented. *Remaining work: the granular per-category strip flags.*
@@ -240,12 +244,14 @@ not yet implemented. *Remaining work: the granular per-category strip flags.*
 > (BACKLOG.md items ~11–18). They were surfaced by a code-survey conformance audit
 > (`docs/CONFORMANCE-AUDIT.md`, 2026-06-15). Ordered by real-world impact.
 
-**11. [BL] Shadings / gradients (`sh`)** — ❌ **NOT DONE**
+**11. [BL] Shadings / gradients (`sh`)** — 🟡 **PARTIAL** (v3.14.0, #115)
+*v3.14.0 update: PDF function + shading evaluators (axial/radial, `sh`) implemented in the **SVG sink** (`PdfFunction`, `PdfShading`, `ShadingOp`). The **raster sink still defers `sh`** (Raster/DisplayListBuilder.cs:42). Remaining: raster shadings + ShadingTypes 4–7.*
 `sh` is a recognised no-op; no ShadingType 1–7. Gradient fills/backgrounds render blank.
 Start with axial (type 2) + radial (type 3), then function-based (1), then mesh (4–7).
 *High impact.*
 
-**12. [BL] ExtGState transparency (`gs`)** — ❌ **NOT DONE**
+**12. [BL] ExtGState transparency (`gs`)** — 🟡 **PARTIAL** (v3.12.0, #111)
+*v3.14.0 update: constant alpha `/ca` `/CA` is applied in the raster sink (`ApplyExtGState` → FillAlpha/StrokeAlpha). Still missing: blend modes (`/BM`), soft masks in an ExtGState (`/SMask` in `gs`), and transparency groups.*
 `gs` is a no-op, so constant alpha (`ca`/`CA`), blend modes (`BM`), ExtGState soft masks, and
 transparency groups are ignored — everything paints fully opaque/Normal. (Image `/SMask` is
 separate and already handled.) *High impact.*
@@ -387,21 +393,76 @@ Acceptance:
 
 ---
 
+## Item 37 — Image alpha round-trip audit  [Phase: completeness]
+
+Status: ✅ DONE (this session). No code change required — alpha is handled on
+every image path; the gap was a missing test, now added.
+
+Findings (verified against `main`):
+- Embed: `ImageEmbedder` carries a source alpha channel as a DeviceGray /SMask
+  image (FlateDecode raw samples or DCTDecode passthrough; no hex encoding).
+  Covered by `ImageAuthoringTests.DrawImage_RgbaPng_EmitsSoftMask` (+ siblings).
+- SVG sink: image /SMask and /Matte applied. Covered by `ImageSoftMaskTests`
+  and `ImageMatteTests`.
+- Raster sink: `DisplayListBuilder.ApplySoftMask` reads the image /SMask into
+  per-pixel alpha; `PageRasterizer.CompositeImage` blends it (and folds the
+  ExtGState /ca in). This path had NO test — closed by the new
+  `RasterImageSoftMaskTests.ImageSoftMask_TransparentSamples_ShowBackground`
+  (negative-checked: disabling the SMask lookup makes it fail).
+
+## Item 38 — CMYK image support  [Phase 2 — rendering completeness, pairs with #13]
+
+Status: ❌ NOT DONE.
+
+Today every embedded image is forced to DeviceRGB/DeviceGray: a CMYK or YCCK
+JPEG is decoded and re-embedded as RGB (`ImageEmbedder`,
+`BuildFromFrame(JpegDecoder.Decode(...))`), and there is no DeviceCMYK raw-sample
+path. CMYK to RGB is lossy and wrong for print/prepress — the exact ink values
+are discarded.
+
+Scope:
+- Embed: preserve DeviceCMYK images — CMYK JPEG (4-component) passthrough under
+  DCTDecode with /ColorSpace /DeviceCMYK and the Adobe-inversion /Decode when
+  present; raw DeviceCMYK samples under FlateDecode.
+- Decode/render: CMYK-to-output conversion in the raster and SVG sinks (and the
+  image decoders) so CMYK images display.
+- Pairs with item 13 (non-device colorspaces) for ICCBased-CMYK.
+
+Acceptance:
+- A CMYK JPEG embeds as DeviceCMYK (no RGB round-trip), round-trips, and renders
+  with colours matching a reference decoder.
+
+---
+
 ## 5. Status summary
 
 | Phase | Items | Done | Partial | Not done |
 |-------|-------|------|---------|----------|
-| 0 — Cleanup + foundations | 1–4 | 1,2,3 | 4 | — |
-| 1 — Lossless compression | 5–10 | 7,9 | 6,10 | 5,8 |
-| 2 — Rendering completeness | 11–17 | — | — | 11,12,13,14,15,16,17 |
+| 0 — Cleanup + foundations | 1–4 | 1,2,3,4 | — | — |
+| 1 — Lossless compression | 5–10 | 5,7,9,10 | 6 | 8 |
+| 2 — Rendering completeness | 11–17, **38** | — | 11,12 | 13,14,15,16,17,**38** |
 | 3 — Image recoding | 18–20 | 18 | — | 19,20 |
 | 4 — Codecs | 21–27 | 21,27 | — | 22,23,24,25,26 |
 | 5 — Research-grade | 28–31 | 28 | — | 29,30,31 |
-| 6 — Perceptual/delivery | 32–35 | 33(lin.),35 | 33(PDF/A) | 29-dep,32,34 |
+| 6 — Perceptual/delivery | 32–35 | 33(lin.),35 | 33(PDF/A) | 32,34 |
+| Completeness (added) | 37–38 | 37 | — | 38 |
 
-**Done (10):** 1, 2, 3, 7, 9, 18, 21, 27, 28, 35 (+ linearization half of 33).
-**Partial (4):** 4, 6, 10, 33 (PDF/A side open).
-**Not done (21):** 5, 8, 11, 12, 13, 14, 15, 16, 17, 19, 20, 22, 23, 24, 25, 26, 29, 30, 31, 32, 34.
+**Done (14):** 1, 2, 3, 4, 5, 7, 9, 10, 18, 21, 27, 28, 35, 37 (+ linearization half of 33).
+**Partial (4):** 6, 11, 12, 33 (PDF/A side open).
+**Not done (19):** 8, 13, 14, 15, 16, 17, 19, 20, 22, 23, 24, 25, 26, 29, 30, 31, 32, 34, 38.
+**Deferred (1):** 36 (watermark custom-font — needs a licensable .ttf).
+
+> **Moved since the v3.11.1 snapshot (PRs #110–#119):** #4 and #5 → DONE (external
+> scoreboard #110; `/ObjStm` + xref-stream writing #111), #10 → DONE (granular strip
+> flags #113), #11 → PARTIAL (SVG `sh` #115; raster still deferred), #12 → PARTIAL
+> (constant `/ca` `/CA` #111). **Phase 1 lossless is effectively complete (only #8 +
+> the #6 flattening tail remain); Phase 2 rendering completeness is now the frontier.**
+>
+> **Out-of-roadmap stream — Redaction (shipped, not one of the 38):** physical
+> annotation/form/vector redaction (R1, #117), the form-XObject text-leak fix (#114),
+> glyph-level over-removal fix + in-place replacement (#118), and checksum-validated
+> patterns/sets (#119). Tracked here for completeness; it was consumer-driven, outside
+> the compression/rendering plan.
 
 **Where the open work concentrates:** the **compression workstream** (Phase 1 finish + Phase 3
 + Phase 4 codecs + MRC) and the **rendering-conformance backlog** (Phase 2). The library's
@@ -411,20 +472,38 @@ foundational, font, and authoring layers are mature.
 
 ## 6. Recommended next pickup order
 
-Respecting the plan's own dependency ordering, the highest-leverage sequence is:
+> **Refreshed at v3.14.0.** The original plan's first three steps (#4, #5, #10) have all
+> shipped, so the sequence below picks up from the new frontier.
 
-1. **Finish #4** (external-tool benchmark scoreboard) — gives every later compression item a
-   real-world measuring stick. Small.
-2. **#5 (object-stream + compressed-xref writing)** — the biggest universal lossless win;
-   safe; reading already exists. Touches `PdfWriter`/`PdfCompressor`.
-3. **#6 + #10** (finish GC/flattening + granular stripping) — round out lossless Phase 1.
-4. Then either **branch into Phase 2 rendering conformance** (#11 shadings, #12 transparency —
-   highest user-visible impact) **or** continue the **image-recoding compression chain**
-   (#19 → #20 → #21 detection), depending on whether Arun prioritizes render fidelity or file
-   size next.
+**Phase 1 (lossless) — essentially complete.** Only two tails remain, both optional polish:
+- **#8** max-level lossless re-deflate (dynamic-Huffman DEFLATE / zopfli-class) — from-scratch
+  per B01. The current fixed-Huffman deflater is ~85–90% of zlib ratios.
+- **#6** finish/verify incremental-update flattening (orphan sweep exists; full update-section
+  collapse not confirmed).
 
-The research-grade items (#22 JBIG2, #24 JPX, #29 MRC, #30 Indic, #31 XFA) are each their own
+**Phase 2 (rendering & parsing completeness) — now the main frontier, highest user-visible
+impact.** Suggested order, grouping the colorspace work together:
+1. **#13 non-device colorspaces + #38 CMYK image support** — do these together. They share the
+   decode/render colorspace plumbing: #13 brings ICCBased/Separation/Indexed/CalRGB/Lab and
+   DeviceCMYK *fills*; **#38 makes images carry DeviceCMYK end-to-end** (CMYK-JPEG passthrough,
+   raw CMYK samples, Adobe `/Decode`, and CMYK→output conversion in the sinks) instead of the
+   current lossy RGB re-embed. **#38 is filed under Phase 2 (completeness), paired with #13.**
+2. **#14 SVG `cs`/`scn` colorspace operators** — pairs with #13 on the SVG side.
+3. **#11 raster shadings** — finish the `sh` path the raster sink still defers (SVG shipped in
+   #115); then ShadingTypes 4–7.
+4. **#12 transparency** — blend modes (`/BM`), soft masks in an ExtGState, transparency groups
+   (constant `/ca` `/CA` already done).
+5. **#16 SVG ImageMask**, **#17 annotation appearance streams (`/AP /N`)**.
+
+**Then** either the image-recoding compression chain (**#19 → #20**) for file-size wins, or the
+research-grade items.
+
+The research-grade items (**#22 JBIG2, #24 JPX, #29 MRC, #30 Indic, #31 XFA**) are each their own
 multi-round effort and should be scheduled deliberately, not picked up casually.
+
+**My recommendation:** start the **#13 + #38 colorspace/CMYK pair** — it's the most coherent next
+unit (one body of colorspace work, high fidelity payoff for print/prepress consumers), and it
+unblocks #14.
 
 ---
 
