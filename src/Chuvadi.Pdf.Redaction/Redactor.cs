@@ -15,6 +15,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
+using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
@@ -90,8 +91,11 @@ public static class Redactor
             }
         }
 
-        // Group rectangles by page
+        // Group rectangles by page (with a parallel list of optional
+        // in-place replacement strings, same index order as the rectangles).
         Dictionary<int, List<RectangleF>> byPage = new Dictionary<int, List<RectangleF>>();
+        Dictionary<int, List<string?>> byPageReplacements =
+            new Dictionary<int, List<string?>>();
 
         foreach (RedactionRect rect in allRects)
         {
@@ -99,9 +103,11 @@ public static class Redactor
             {
                 list = new List<RectangleF>();
                 byPage[rect.PageIndex] = list;
+                byPageReplacements[rect.PageIndex] = new List<string?>();
             }
 
             list.Add(rect.Bounds);
+            byPageReplacements[rect.PageIndex].Add(rect.ReplacementText);
         }
 
         FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
@@ -136,7 +142,7 @@ public static class Redactor
             }
 
             PdfPage page = document.Pages[pageIndex];
-            work.Add(new RedactionWork(pageId, page, kvp.Value));
+            work.Add(new RedactionWork(pageId, page, kvp.Value, byPageReplacements[pageIndex]));
         }
 
         // Phase 1 (serial) — touches the lazy object store, which is NOT
@@ -157,7 +163,7 @@ public static class Redactor
         for (int i = 0; i < work.Count; i++)
         {
             CollectForms(
-                originals[i], PageContexts(work[i].Rects), run,
+                originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
                 work[i].Page.Resources, new HashSet<int>(), 0);
         }
 
@@ -172,8 +178,8 @@ public static class Redactor
         {
             for (int i = 0; i < work.Count; i++)
             {
-                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
+                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor);
             }
         }
         else
@@ -187,8 +193,8 @@ public static class Redactor
 
             Parallel.For(0, work.Count, parallelOptions, i =>
             {
-                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, options.OverlayColor);
+                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor);
             });
         }
 
@@ -300,11 +306,13 @@ public static class Redactor
     /// </summary>
     private readonly struct RedactionWork
     {
-        public RedactionWork(PdfObjectId pageId, PdfPage page, List<RectangleF> rects)
+        public RedactionWork(
+            PdfObjectId pageId, PdfPage page, List<RectangleF> rects, List<string?> replacements)
         {
             PageId = pageId;
             Page = page;
             Rects = rects;
+            Replacements = replacements;
         }
 
         public PdfObjectId PageId { get; }
@@ -312,6 +320,8 @@ public static class Redactor
         public PdfPage Page { get; }
 
         public List<RectangleF> Rects { get; }
+
+        public List<string?> Replacements { get; }
     }
 
     // ── Content stream rewriter ───────────────────────────────────────────
@@ -426,6 +436,16 @@ public static class Redactor
                     path.Reset();
                 }
 
+                // Glyph-level text redaction: rebuild a Tj so only the
+                // in-region glyphs are removed, keeping neighbours in place.
+                // TJ/'/" remain whole-operator (still secure) for now.
+                if (op == "Tj")
+                {
+                    EmitRedactedText(output, pendingOperands, state, contexts);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
                 bool drop = ProcessOperator(op, pendingOperands, state, contexts, run, resources);
 
                 if (!drop)
@@ -466,7 +486,7 @@ public static class Redactor
             // ── Text state ─────────────────────────────────────────────────
             case "BT": state.BeginText(); return false;
             case "ET": state.EndText(); return false;
-            case "Tf": ApplyTf(operands, state); return false;
+            case "Tf": ApplyTf(operands, state, resources, run.Store); return false;
             case "Td": ApplyTd(operands, state); return false;
             case "TD": ApplyTD(operands, state); return false;
             case "Tm": ApplyTm(operands, state); return false;
@@ -812,12 +832,70 @@ public static class Redactor
         state.Ctm = ctm.Multiply(state.Ctm);
     }
 
-    private static void ApplyTf(List<PdfToken> operands, RedactState state)
+    private static void ApplyTf(
+        List<PdfToken> operands, RedactState state, PdfDictionary? resources, PdfObjectStore store)
     {
         if (operands.Count >= 2)
         {
             state.FontSize = ParseDouble(operands[1]);
+            state.GlyphWidths = BuildGlyphWidths(operands[0], resources, store);
         }
+    }
+
+    // Builds a per-byte-code width table (1/1000 em) for the font named by the
+    // Tf operand: from the font's /Widths array when present, otherwise from the
+    // Standard-14 metrics for a base-14 font. Returns null when widths are
+    // unknown so the caller falls back to an estimate.
+    private static int[]? BuildGlyphWidths(
+        PdfToken nameToken, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (resources is null || nameToken.Type != PdfTokenType.Name)
+        {
+            return null;
+        }
+
+        string fontName = nameToken.RawText.TrimStart('/');
+
+        if (!resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDictValue)
+            || store.Resolve(fontDictValue) is not PdfDictionary fonts
+            || !fonts.TryGetValue(PdfName.Intern(fontName), out PdfPrimitive? fontEntry)
+            || store.Resolve(fontEntry) is not PdfDictionary font)
+        {
+            return null;
+        }
+
+        int[] widths = new int[256];
+
+        if (font.TryGetValue(PdfName.Intern("Widths"), out PdfPrimitive? widthsValue)
+            && store.Resolve(widthsValue) is PdfArray widthsArray
+            && font.TryGetValue(PdfName.Intern("FirstChar"), out PdfPrimitive? firstCharValue))
+        {
+            int firstChar = (int)PdfReal.ToDouble(store.Resolve(firstCharValue));
+            for (int i = 0; i < widthsArray.Count; i++)
+            {
+                int code = firstChar + i;
+                if (code >= 0 && code < 256)
+                {
+                    widths[code] = (int)PdfReal.ToDouble(store.Resolve(widthsArray[i]));
+                }
+            }
+
+            return widths;
+        }
+
+        if (font.TryGetValue(PdfName.Intern("BaseFont"), out PdfPrimitive? baseFontValue)
+            && store.Resolve(baseFontValue) is PdfName baseFontName
+            && Standard14GlyphWidths.IsStandard14(baseFontName.Value))
+        {
+            for (int code = 0; code < 256; code++)
+            {
+                widths[code] = Standard14GlyphWidths.Width(baseFontName.Value, (char)code);
+            }
+
+            return widths;
+        }
+
+        return null;
     }
 
     private static void ApplyTd(List<PdfToken> operands, RedactState state)
@@ -922,6 +1000,242 @@ public static class Redactor
         return false;
     }
 
+    // Width of a decoded string in user space (before font size scaling is
+    // applied by the caller's transform): sums per-byte glyph advances when the
+    // active font's widths are known, otherwise a Helvetica-baseline estimate.
+    private static double MeasureTextWidth(string text, RedactState state)
+    {
+        if (state.GlyphWidths is int[] glyphWidths)
+        {
+            double total = 0;
+            foreach (char ch in text)
+            {
+                int code = ch;
+                int w = (code >= 0 && code < 256) ? glyphWidths[code] : 0;
+                total += w > 0 ? w : 500;
+            }
+
+            return total / 1000.0 * state.FontSize;
+        }
+
+        return text.Length * state.FontSize * 0.6;
+    }
+
+    // Emits a Tj operator with only the out-of-region glyphs retained. When no
+    // glyph is in a region the original Tj is re-emitted; when all are, nothing
+    // is emitted; otherwise a TJ array is written whose dropped runs become
+    // negative numeric gaps equal to the removed glyphs' advance, so survivors
+    // keep their original positions.
+    private static void EmitRedactedText(
+        MemoryStream output, List<PdfToken> operands, RedactState state,
+        IReadOnlyList<RedactContext> contexts)
+    {
+        if (operands.Count == 0)
+        {
+            WriteOriginalTj(output, operands);
+            return;
+        }
+
+        PdfToken stringToken = operands[operands.Count - 1];
+        if (stringToken.Type != PdfTokenType.LiteralString
+            && stringToken.Type != PdfTokenType.HexString)
+        {
+            WriteOriginalTj(output, operands);
+            return;
+        }
+
+        string text = ExtractString(stringToken);
+        if (text.Length == 0 || state.FontSize <= 0)
+        {
+            WriteOriginalTj(output, operands);
+            return;
+        }
+
+        bool[] drop = new bool[text.Length];
+        string?[] glyphReplacement = new string?[text.Length];
+        double[] advance = new double[text.Length];
+        bool anyDropped = false;
+        bool allDropped = true;
+        bool anyReplacement = false;
+        double cursor = state.TextX;
+        Transform local = state.TextMatrix.Multiply(state.Ctm);
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            int code = text[i];
+            int width1000 =
+                (state.GlyphWidths is int[] gw && code >= 0 && code < 256 && gw[code] > 0)
+                    ? gw[code]
+                    : 500;
+            advance[i] = width1000;
+            double advUser = width1000 / 1000.0 * state.FontSize;
+
+            bool inRegion = MatchSpan(
+                cursor, cursor + advUser, state, local, contexts, out string? replacement);
+            drop[i] = inRegion;
+            glyphReplacement[i] = replacement;
+            if (inRegion)
+            {
+                anyDropped = true;
+                if (replacement is not null)
+                {
+                    anyReplacement = true;
+                }
+            }
+            else
+            {
+                allDropped = false;
+            }
+
+            cursor += advUser;
+        }
+
+        if (!anyDropped)
+        {
+            WriteOriginalTj(output, operands);
+            return;
+        }
+
+        if (allDropped && !anyReplacement)
+        {
+            return;
+        }
+
+        StringBuilder tj = new StringBuilder();
+        tj.Append('[');
+        int idx = 0;
+        while (idx < text.Length)
+        {
+            if (drop[idx])
+            {
+                double gap = 0;
+                string? replacement = null;
+                while (idx < text.Length && drop[idx])
+                {
+                    gap += advance[idx];
+                    if (replacement is null)
+                    {
+                        replacement = glyphReplacement[idx];
+                    }
+
+                    idx++;
+                }
+
+                if (replacement is null)
+                {
+                    tj.Append(' ')
+                        .Append((-gap).ToString("0.###", CultureInfo.InvariantCulture))
+                        .Append(' ');
+                }
+                else
+                {
+                    double replacementWidth = MeasureString1000(replacement, state);
+                    if (replacementWidth > gap)
+                    {
+                        throw new RedactionException(
+                            $"Replacement text \"{replacement}\" is wider than the redacted "
+                            + "span and cannot be drawn in place; use a shorter replacement.");
+                    }
+
+                    tj.Append(EncodeLiteralString(replacement));
+                    double remaining = gap - replacementWidth;
+                    if (remaining > 0)
+                    {
+                        tj.Append(' ')
+                            .Append((-remaining).ToString("0.###", CultureInfo.InvariantCulture))
+                            .Append(' ');
+                    }
+                }
+            }
+            else
+            {
+                StringBuilder run = new StringBuilder();
+                while (idx < text.Length && !drop[idx])
+                {
+                    run.Append(text[idx]);
+                    idx++;
+                }
+
+                tj.Append(EncodeLiteralString(run.ToString()));
+            }
+        }
+
+        tj.Append("] TJ\n");
+        byte[] bytes = Encoding.Latin1.GetBytes(tj.ToString());
+        output.Write(bytes, 0, bytes.Length);
+    }
+
+    // Total advance of a string in 1/1000 em for the active font (no font-size
+    // scaling), used to fit-check replacement text against the removed span.
+    private static double MeasureString1000(string text, RedactState state)
+    {
+        double total = 0;
+        foreach (char ch in text)
+        {
+            int code = ch;
+            int w = (state.GlyphWidths is int[] gw && code >= 0 && code < 256 && gw[code] > 0)
+                ? gw[code]
+                : 500;
+            total += w;
+        }
+
+        return total;
+    }
+
+    private static void WriteOriginalTj(MemoryStream output, List<PdfToken> operands)
+    {
+        WriteTokens(output, operands);
+        byte[] op = Encoding.Latin1.GetBytes("Tj\n");
+        output.Write(op, 0, op.Length);
+    }
+
+    // True when a glyph occupying [x0, x1] in text/user space (baseline to
+    // ascent) maps into any redaction rectangle for some context. Outputs the
+    // in-place replacement string of the first matched rectangle, if any.
+    private static bool MatchSpan(
+        double x0, double x1, RedactState state, Transform local,
+        IReadOnlyList<RedactContext> contexts, out string? replacement)
+    {
+        replacement = null;
+        for (int c = 0; c < contexts.Count; c++)
+        {
+            RedactContext context = contexts[c];
+            Transform combined = local.Multiply(context.BaseCtm);
+            PointF originDev = combined.TransformPoint(new PointF(x0, state.TextY));
+            PointF endDev = combined.TransformPoint(new PointF(x1, state.TextY + state.FontSize));
+            RectangleF box = RectangleF.FromCorners(originDev.X, originDev.Y, endDev.X, endDev.Y);
+
+            for (int r = 0; r < context.Rects.Count; r++)
+            {
+                if (!box.Intersect(context.Rects[r]).IsEmpty)
+                {
+                    replacement = r < context.Replacements.Count ? context.Replacements[r] : null;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string EncodeLiteralString(string value)
+    {
+        StringBuilder sb = new StringBuilder(value.Length + 2);
+        sb.Append('(');
+        foreach (char ch in value)
+        {
+            if (ch == '\\' || ch == '(' || ch == ')')
+            {
+                sb.Append('\\');
+            }
+
+            sb.Append(ch);
+        }
+
+        sb.Append(')');
+        return sb.ToString();
+    }
+
     private static bool IsTextInRedactRect(
         string text, RedactState state, IReadOnlyList<RedactContext> contexts)
     {
@@ -930,10 +1244,9 @@ public static class Redactor
             return false;
         }
 
-        // Approximate text bounding box in user space:
-        //   width  ≈ length × fontSize × 0.6 (Helvetica baseline)
-        //   height ≈ fontSize
-        double width = text.Length * state.FontSize * 0.6;
+        // Text width in user space: sum of per-glyph advances when the font's
+        // widths are known, else a Helvetica-baseline estimate.
+        double width = MeasureTextWidth(text, state);
         double height = state.FontSize;
 
         // Local-space placement (text matrix × current CTM). For a form being
@@ -967,9 +1280,13 @@ public static class Redactor
     // ── Form XObject resolution and collection ────────────────────────────
 
     // Wraps a page's rectangles as a single identity-placed redaction context.
-    private static List<RedactContext> PageContexts(List<RectangleF> rects)
+    private static List<RedactContext> PageContexts(
+        List<RectangleF> rects, List<string?> replacements)
     {
-        return new List<RedactContext> { new RedactContext(Transform.Identity, rects) };
+        return new List<RedactContext>
+        {
+            new RedactContext(Transform.Identity, rects, replacements),
+        };
     }
 
     // True when the XObject named by the Do operand resolves to a form.
@@ -1141,7 +1458,7 @@ public static class Redactor
         foreach (RedactContext ctx in contexts)
         {
             Transform baseCtm = formMatrix.Multiply(state.Ctm).Multiply(ctx.BaseCtm);
-            formContexts.Add(new RedactContext(baseCtm, ctx.Rects));
+            formContexts.Add(new RedactContext(baseCtm, ctx.Rects, ctx.Replacements));
         }
 
         lock (run.Sync)
@@ -1216,7 +1533,8 @@ public static class Redactor
 
     // ── Overlay generation ────────────────────────────────────────────────
 
-    private static byte[] BuildOverlay(List<RectangleF> rects, ColorF overlayColor)
+    private static byte[] BuildOverlay(
+        List<RectangleF> rects, List<string?> replacements, ColorF overlayColor)
     {
         ColorF rgb = overlayColor.ToRgb();
         string r = Fmt(rgb.R);
@@ -1227,8 +1545,16 @@ public static class Redactor
         sb.AppendLine("q");
         sb.AppendLine($"{r} {g} {b} rg");
 
-        foreach (RectangleF rect in rects)
+        for (int idx = 0; idx < rects.Count; idx++)
         {
+            // A region with in-place replacement text is not boxed over, so the
+            // replacement remains visible.
+            if (idx < replacements.Count && replacements[idx] is not null)
+            {
+                continue;
+            }
+
+            RectangleF rect = rects[idx];
             sb.AppendLine($"{Fmt(rect.X)} {Fmt(rect.Y)} {Fmt(rect.Width)} {Fmt(rect.Height)} re");
             sb.AppendLine("f");
         }
@@ -1814,6 +2140,10 @@ internal sealed class RedactState
     internal double TextLineX { get; set; }
     internal double TextLineY { get; set; }
     internal double FontSize { get; set; }
+
+    // Per-byte-code glyph widths (1/1000 em) for the active font, or null when
+    // the font's widths are unknown (then callers fall back to an estimate).
+    internal int[]? GlyphWidths { get; set; }
     internal double Leading { get; set; }
 
     internal void PushGraphicsState()
@@ -1862,10 +2192,14 @@ internal readonly struct RedactContext
     /// <summary>Initialises a redaction context.</summary>
     /// <param name="baseCtm">Maps local content space into page device space.</param>
     /// <param name="rects">Redaction rectangles in page device space.</param>
-    public RedactContext(Transform baseCtm, List<RectangleF> rects)
+    /// <param name="replacements">
+    /// Optional in-place replacement strings, parallel to <paramref name="rects"/>.
+    /// </param>
+    public RedactContext(Transform baseCtm, List<RectangleF> rects, List<string?> replacements)
     {
         BaseCtm = baseCtm;
         Rects = rects;
+        Replacements = replacements;
     }
 
     /// <summary>Transform from local content space into page device space.</summary>
@@ -1873,6 +2207,9 @@ internal readonly struct RedactContext
 
     /// <summary>Redaction rectangles in page device space.</summary>
     public List<RectangleF> Rects { get; }
+
+    /// <summary>Optional in-place replacement strings, parallel to <see cref="Rects"/>.</summary>
+    public List<string?> Replacements { get; }
 }
 
 /// <summary>

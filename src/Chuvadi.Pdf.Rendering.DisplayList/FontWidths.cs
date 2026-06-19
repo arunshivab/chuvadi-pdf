@@ -4,6 +4,7 @@
 // PHASE: Phase 2.1 — glyph-level text positioning
 
 using System.Collections.Generic;
+using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -33,7 +34,7 @@ internal sealed class FontWidths
         // Standard 14 fallback: when /Widths isn't present, look up per-char widths.
         if (_standard14BaseFont is not null && code < 256)
         {
-            int sw = Standard14Widths.Width(_standard14BaseFont, (char)code);
+            int sw = Standard14GlyphWidths.Width(_standard14BaseFont, (char)code);
             if (sw > 0) { return sw; }
         }
         return _defaultWidth;
@@ -42,7 +43,7 @@ internal sealed class FontWidths
     /// <summary>Tells this widths table to use Standard 14 fallback for unmapped codes.</summary>
     internal void EnableStandard14Fallback(string baseFont)
     {
-        if (Standard14Widths.IsStandard14(baseFont))
+        if (Standard14GlyphWidths.IsStandard14(baseFont))
         {
             _standard14BaseFont = baseFont;
         }
