@@ -5,7 +5,7 @@
 
 using System;
 
-namespace Chuvadi.Pdf.Rendering.DisplayList;
+namespace Chuvadi.Pdf.Fonts.Rendering;
 
 /// <summary>
 /// Per-character widths for the PDF Standard 14 fonts. Widths are in units
@@ -17,9 +17,13 @@ namespace Chuvadi.Pdf.Rendering.DisplayList;
 /// glyph-level positioning works correctly. Stage 9 will supplement this
 /// with full per-glyph outline data from Liberation/URW.
 /// </remarks>
-internal static class Standard14Widths
+public static class Standard14GlyphWidths
 {
-    internal static bool IsStandard14(string baseFont)
+    /// <summary>
+    /// Returns true when the given base font name is one of the PDF Standard 14
+    /// fonts (Helvetica, Times, Courier families, Symbol, ZapfDingbats).
+    /// </summary>
+    public static bool IsStandard14(string baseFont)
     {
         if (string.IsNullOrEmpty(baseFont)) { return false; }
         if (baseFont.StartsWith("Helvetica", StringComparison.Ordinal)) { return true; }
@@ -31,8 +35,9 @@ internal static class Standard14Widths
     }
 
     /// <summary>Returns the width in 1/1000 em of the given character.</summary>
-    internal static int Width(string baseFont, char ch)
+    public static int Width(string baseFont, char ch)
     {
+        ArgumentNullException.ThrowIfNull(baseFont);
         if (baseFont.StartsWith("Courier", StringComparison.Ordinal)) { return 600; }
         if (baseFont.StartsWith("Times", StringComparison.Ordinal))
         {

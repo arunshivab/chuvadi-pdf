@@ -273,6 +273,7 @@ python tools/gen_api_docs.py
 | [PdfFont](Fonts/PdfFont.md) | class | Represents a PDF font and provides character code to Unicode mapping for text extraction purposes. |
 | [PdfFontEncoding](Fonts/PdfFontEncoding.md) | class | Maps 1-byte character codes (0-255) to Unicode codepoints for simple fonts. |
 | [RenderableFont](Fonts/RenderableFont.md) | class | A PDF font that supports both text decoding (character codes to Unicode) and glyph rendering (character codes to vector outlines + metrics). |
+| [Standard14GlyphWidths](Fonts/Standard14GlyphWidths.md) | class | Per-character widths for the PDF Standard 14 fonts. |
 | [Standard14Outlines](Fonts/Standard14Outlines.md) | class | Provides glyph outlines for the PDF Standard 14 fonts from an embedded resource, so they work even on hosts that lack the fonts (Blazor WASM, headless servers). |
 | [Standard14Widths](Fonts/Standard14Widths.md) | class | Provides advance-width metrics for the PDF Standard 14 fonts in 1/1000-em font design units. |
 | [TrueTypeFontPatch](Fonts/TrueTypeFontPatch.md) | class | Rewrites the cmap table of an embedded TrueType font program so the browser can locate the embedded glyph by its semantic Unicode code point rather than the font's legacy encoding code point. |
