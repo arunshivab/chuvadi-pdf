@@ -40,6 +40,14 @@ ColorF OverlayColor
 
 Gets or initialises the colour painted over each redacted rectangle. Default: opaque black.
 
+### `DrawOverlay`
+
+```csharp
+bool DrawOverlay
+```
+
+Gets or initialises whether an overlay box is painted over each redacted region. Default: `true`. Set to `false` (or supply a fully transparent `OverlayColor`) for boxless redaction: the matched glyphs are physically removed and no box is drawn, so the page reads as clean where the text was.
+
 ### `PatternPadding`
 
 ```csharp

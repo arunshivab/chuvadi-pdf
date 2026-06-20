@@ -19,6 +19,7 @@ public sealed class RedactionOptions
         Rectangles = new List<RedactionRect>();
         Patterns = new List<PatternRule>();
         OverlayColor = ColorF.Black;
+        DrawOverlay = true;
         PatternPadding = 1.0;
         MaxDegreeOfParallelism = 1;
     }
@@ -40,6 +41,15 @@ public sealed class RedactionOptions
     /// Default: opaque black.
     /// </summary>
     public ColorF OverlayColor { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether an overlay box is painted over each redacted
+    /// region. Default: <see langword="true"/>. Set to <see langword="false"/>
+    /// (or supply a fully transparent <see cref="OverlayColor"/>) for boxless
+    /// redaction: the matched glyphs are physically removed and no box is drawn,
+    /// so the page reads as clean where the text was.
+    /// </summary>
+    public bool DrawOverlay { get; init; }
 
     /// <summary>
     /// Gets or initialises the padding (PDF points) added around each pattern-derived
