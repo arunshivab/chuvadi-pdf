@@ -35,6 +35,12 @@ namespace Chuvadi.Pdf.Redaction;
 /// </remarks>
 internal static class PatternMatcher
 {
+    // Vertical box extent as fractions of font size, around the baseline: a
+    // generous ascent and a descent deep enough to cover g/y/p/q tails so the
+    // overlay box never clips them.
+    private const double AscentEm = 0.80;
+    private const double DescentEm = 0.25;
+
     /// <summary>
     /// Resolves all pattern rules applicable to the given page into redaction rectangles.
     /// </summary>
@@ -139,10 +145,15 @@ internal static class PatternMatcher
             // would be more accurate but require the Font subsystem at this layer.
             double approxCharWidth = frag.FontSize * 0.5;
 
+            // Extend the box below the baseline to cover descender tails (g, y,
+            // p, q) and above to cover ascenders, plus the padding margin.
+            // frag.Y is the glyph baseline in user space.
+            double descent = (frag.FontSize * DescentEm) + (padding * 0.5);
+            double ascent = (frag.FontSize * AscentEm) + (padding * 0.5);
             double x = frag.X + (charsBeforeSpan * approxCharWidth) - padding;
-            double y = frag.Y - (padding * 0.5);
+            double y = frag.Y - descent;
             double width = (spanCharCount * approxCharWidth) + (padding * 2);
-            double height = frag.FontSize + padding;
+            double height = ascent + descent;
 
             if (width <= 0 || height <= 0)
             {

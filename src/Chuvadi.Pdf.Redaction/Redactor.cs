@@ -179,7 +179,7 @@ public static class Redactor
             for (int i = 0; i < work.Count; i++)
             {
                 redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor, options.DrawOverlay);
             }
         }
         else
@@ -194,7 +194,7 @@ public static class Redactor
             Parallel.For(0, work.Count, parallelOptions, i =>
             {
                 redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor);
+                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor, options.DrawOverlay);
             });
         }
 
@@ -904,10 +904,14 @@ public static class Redactor
         {
             double tx = ParseDouble(operands[0]);
             double ty = ParseDouble(operands[1]);
-            state.TextLineX += tx;
-            state.TextLineY += ty;
-            state.TextX = state.TextLineX;
-            state.TextY = state.TextLineY;
+
+            // PDF text model: Td moves the text line matrix by (tx, ty) in text
+            // space (Tlm' = translate(tx, ty) x Tlm) and starts a fresh in-line
+            // advance. The position lives entirely in the text matrix; TextX is
+            // the running advance from the line origin (0 at the new origin).
+            state.TextMatrix = state.TextMatrix.Translate(tx, ty);
+            state.TextX = 0;
+            state.TextY = 0;
         }
     }
 
@@ -928,14 +932,17 @@ public static class Redactor
             return;
         }
 
+        // Tm sets the text line matrix absolutely. The translation lives in the
+        // matrix itself; the in-line advance (TextX) starts at the line origin.
+        // Earlier code also copied the translation into TextX/TextY and then
+        // transformed that point by the same matrix, double-applying the
+        // translation and missing every glyph under a non-identity Tm.
         state.TextMatrix = new Transform(
             ParseDouble(operands[0]), ParseDouble(operands[1]),
             ParseDouble(operands[2]), ParseDouble(operands[3]),
             ParseDouble(operands[4]), ParseDouble(operands[5]));
-        state.TextX = ParseDouble(operands[4]);
-        state.TextY = ParseDouble(operands[5]);
-        state.TextLineX = state.TextX;
-        state.TextLineY = state.TextY;
+        state.TextX = 0;
+        state.TextY = 0;
     }
 
     // ── Text redaction decisions ──────────────────────────────────────────
@@ -1058,7 +1065,11 @@ public static class Redactor
         bool allDropped = true;
         bool anyReplacement = false;
         double cursor = state.TextX;
-        Transform local = state.TextMatrix.Multiply(state.Ctm);
+        // Match the fragment frame used to build the rectangles: the content parser
+        // records each fragment at its text-matrix translation and never applies the
+        // CTM, so the strip uses the text matrix alone (page cm is out of frame for
+        // both). Forms still map through BaseCtm in the combined transform below.
+        Transform local = state.TextMatrix;
 
         for (int i = 0; i < text.Length; i++)
         {
@@ -1189,9 +1200,28 @@ public static class Redactor
         output.Write(op, 0, op.Length);
     }
 
-    // True when a glyph occupying [x0, x1] in text/user space (baseline to
-    // ascent) maps into any redaction rectangle for some context. Outputs the
-    // in-place replacement string of the first matched rectangle, if any.
+    // Vertical extent of a glyph box in text space, relative to the baseline
+    // (text-space y = 0). Generous ascent/descent fractions plus a small margin
+    // make the box fully cover ascenders and descender tails (g, y, p, q)
+    // without clipping; over-coverage is safe and intended for a redaction box.
+    private const double TextAscentEm = 0.80;
+    private const double TextDescentEm = 0.25;
+    private const double GlyphBoxMarginPoints = 1.5;
+
+    private static double GlyphTop(RedactState state)
+    {
+        return (TextAscentEm * state.FontSize) + GlyphBoxMarginPoints;
+    }
+
+    private static double GlyphBottom(RedactState state)
+    {
+        return -((TextDescentEm * state.FontSize) + GlyphBoxMarginPoints);
+    }
+
+    // True when a glyph occupying [x0, x1] in text space (advance from the line
+    // origin), spanning the font's descent-to-ascent vertical extent, maps into
+    // any redaction rectangle for some context. Outputs the in-place replacement
+    // string of the first matched rectangle, if any.
     private static bool MatchSpan(
         double x0, double x1, RedactState state, Transform local,
         IReadOnlyList<RedactContext> contexts, out string? replacement)
@@ -1201,8 +1231,8 @@ public static class Redactor
         {
             RedactContext context = contexts[c];
             Transform combined = local.Multiply(context.BaseCtm);
-            PointF originDev = combined.TransformPoint(new PointF(x0, state.TextY));
-            PointF endDev = combined.TransformPoint(new PointF(x1, state.TextY + state.FontSize));
+            PointF originDev = combined.TransformPoint(new PointF(x0, GlyphBottom(state)));
+            PointF endDev = combined.TransformPoint(new PointF(x1, GlyphTop(state)));
             RectangleF box = RectangleF.FromCorners(originDev.X, originDev.Y, endDev.X, endDev.Y);
 
             for (int r = 0; r < context.Rects.Count; r++)
@@ -1247,20 +1277,21 @@ public static class Redactor
         // Text width in user space: sum of per-glyph advances when the font's
         // widths are known, else a Helvetica-baseline estimate.
         double width = MeasureTextWidth(text, state);
-        double height = state.FontSize;
 
-        // Local-space placement (text matrix × current CTM). For a form being
-        // rewritten this is form-local; each context's BaseCtm then maps it into
-        // the page device space where the rectangles live.
-        Transform local = state.TextMatrix.Multiply(state.Ctm);
+        // Match the fragment frame used to build the rectangles: the content parser
+        // records each fragment at its text-matrix translation and never applies the
+        // CTM, so the strip uses the text matrix alone (page cm is out of frame for
+        // both). Forms still map through BaseCtm in the combined transform below.
+        Transform local = state.TextMatrix;
 
         for (int c = 0; c < contexts.Count; c++)
         {
             RedactContext context = contexts[c];
             Transform combined = local.Multiply(context.BaseCtm);
-            PointF originDev = combined.TransformPoint(new PointF(state.TextX, state.TextY));
+            PointF originDev = combined.TransformPoint(
+                new PointF(state.TextX, GlyphBottom(state)));
             PointF endDev = combined.TransformPoint(
-                new PointF(state.TextX + width, state.TextY + height));
+                new PointF(state.TextX + width, GlyphTop(state)));
 
             RectangleF textBox = RectangleF.FromCorners(
                 originDev.X, originDev.Y, endDev.X, endDev.Y);
@@ -1534,8 +1565,16 @@ public static class Redactor
     // ── Overlay generation ────────────────────────────────────────────────
 
     private static byte[] BuildOverlay(
-        List<RectangleF> rects, List<string?> replacements, ColorF overlayColor)
+        List<RectangleF> rects, List<string?> replacements, ColorF overlayColor, bool drawOverlay)
     {
+        // Boxless redaction: the matched glyphs are physically removed; with the
+        // overlay disabled (or a fully transparent colour) no box is painted and
+        // the page reads as clean where the text was.
+        if (!drawOverlay || overlayColor.Alpha <= 0f)
+        {
+            return [];
+        }
+
         ColorF rgb = overlayColor.ToRgb();
         string r = Fmt(rgb.R);
         string g = Fmt(rgb.G);
@@ -2135,10 +2174,13 @@ internal sealed class RedactState
 
     internal Transform Ctm { get; set; }
     internal Transform TextMatrix { get; set; }
+    // Running advance from the current text-line origin, in text space (0 at a
+    // fresh Td / Tm / T*). The line position and orientation live in TextMatrix.
     internal double TextX { get; set; }
+
+    // Baseline offset in text space (0); the glyph box's vertical extent is
+    // derived from font metrics, not from this field.
     internal double TextY { get; set; }
-    internal double TextLineX { get; set; }
-    internal double TextLineY { get; set; }
     internal double FontSize { get; set; }
 
     // Per-byte-code glyph widths (1/1000 em) for the active font, or null when
@@ -2164,8 +2206,6 @@ internal sealed class RedactState
         TextMatrix = Transform.Identity;
         TextX = 0;
         TextY = 0;
-        TextLineX = 0;
-        TextLineY = 0;
     }
 
     internal void EndText()
@@ -2175,9 +2215,11 @@ internal sealed class RedactState
 
     internal void NextLine()
     {
-        TextLineY -= Leading;
-        TextX = TextLineX;
-        TextY = TextLineY;
+        // T* / ' / " : move the text line matrix down by the leading and reset
+        // the in-line advance to the new line origin.
+        TextMatrix = TextMatrix.Translate(0, -Leading);
+        TextX = 0;
+        TextY = 0;
     }
 }
 
