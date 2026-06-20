@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Fonts.Rendering;
@@ -253,6 +254,7 @@ public static class DisplayListBuilder
         {
             _state.FillColor = ColorF.FromGray((float)gray);
             _state.FillValid = true;
+            _state.FillColorSpace = null;
         }
 
         /// <inheritdoc />
@@ -260,6 +262,7 @@ public static class DisplayListBuilder
         {
             _state.StrokeColor = ColorF.FromGray((float)gray);
             _state.StrokeValid = true;
+            _state.StrokeColorSpace = null;
         }
 
         /// <inheritdoc />
@@ -267,6 +270,7 @@ public static class DisplayListBuilder
         {
             _state.FillColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.FillValid = true;
+            _state.FillColorSpace = null;
         }
 
         /// <inheritdoc />
@@ -274,6 +278,7 @@ public static class DisplayListBuilder
         {
             _state.StrokeColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.StrokeValid = true;
+            _state.StrokeColorSpace = null;
         }
 
         /// <inheritdoc />
@@ -281,6 +286,7 @@ public static class DisplayListBuilder
         {
             _state.FillColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.FillValid = true;
+            _state.FillColorSpace = null;
         }
 
         /// <inheritdoc />
@@ -288,62 +294,107 @@ public static class DisplayListBuilder
         {
             _state.StrokeColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.StrokeValid = true;
+            _state.StrokeColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetColorSpace(string name, bool stroke)
         {
-            // cs / CS sets the active colour space. We track validity:
-            // device colour spaces remain valid; Pattern marks invalid so
-            // subsequent paints get suppressed until a representable
-            // colour is set via rg/g/k.
-            bool isDevice = name == "DeviceGray" || name == "DeviceRGB" || name == "DeviceCMYK"
-                         || name == "G" || name == "RGB" || name == "CMYK";
+            // cs / CS selects the active colour space. Device families resolve by
+            // name; any other name refers to an entry in the page's
+            // /Resources /ColorSpace dictionary (Separation, DeviceN, Indexed,
+            // ICCBased, Lab, Cal*). Pattern carries no paintable colour, so paints
+            // stay suppressed until a representable colour is set.
+            ResolvedColorSpace? space = ResolveColorSpace(name);
+            bool valid = space is not null && !space.IsPattern;
 
             if (stroke)
             {
-                _state.StrokeValid = isDevice;
+                _state.StrokeColorSpace = space;
+                _state.StrokeValid = valid;
             }
             else
             {
-                _state.FillValid = isDevice;
+                _state.FillColorSpace = space;
+                _state.FillValid = valid;
             }
+        }
+
+        private ResolvedColorSpace? ResolveColorSpace(string name)
+        {
+            // Device and Pattern names resolve directly.
+            ResolvedColorSpace? direct = ResolvedColorSpace.Parse(PdfName.Intern(name), _objects);
+            if (direct is not null)
+            {
+                return direct;
+            }
+
+            // Otherwise the name keys into /Resources /ColorSpace.
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csv)
+                || csv is null)
+            {
+                return null;
+            }
+
+            PdfDictionary? spaces = _objects.ResolveAs<PdfDictionary>(csv);
+            if (spaces is null
+                || !spaces.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry)
+                || entry is null)
+            {
+                return null;
+            }
+
+            return ResolvedColorSpace.Parse(entry, _objects);
         }
 
         /// <inheritdoc />
         public void SetColorN(double[] components, bool hasName, bool stroke)
         {
-            // sc / scn / SC / SCN — set colour in current colour space.
-            // We support 1, 3, or 4 numeric operands (DeviceGray/RGB/CMYK).
-            // A trailing name operand (Pattern) suppresses validity.
+            // sc / scn / SC / SCN sets colour in the current colour space. A
+            // trailing name operand denotes a pattern, which is not a paintable
+            // colour, so validity is cleared.
             if (hasName)
             {
                 if (stroke) { _state.StrokeValid = false; } else { _state.FillValid = false; }
                 return;
             }
 
-            ColorF c;
+            ResolvedColorSpace? space = stroke ? _state.StrokeColorSpace : _state.FillColorSpace;
 
-            switch (components.Length)
+            ColorF c;
+            if (space is not null && !space.IsPattern)
             {
-                case 1:
-                    c = ColorF.FromGray((float)components[0]);
-                    break;
-                case 3:
-                    c = ColorF.FromRgb(
-                        (float)components[0],
-                        (float)components[1],
-                        (float)components[2]);
-                    break;
-                case 4:
-                    c = ColorF.FromCmyk(
-                        (float)components[0],
-                        (float)components[1],
-                        (float)components[2],
-                        (float)components[3]);
-                    break;
-                default:
-                    return;
+                // Convert through the resolved space (Separation/DeviceN tint
+                // transforms, Indexed lookup, ICCBased alternate, Lab, Cal*).
+                double[] rgb = space.ToRgb(components);
+                c = ColorF.FromRgb((float)rgb[0], (float)rgb[1], (float)rgb[2]);
+            }
+            else
+            {
+                // No explicit space recorded: fall back to the operand count
+                // (DeviceGray / DeviceRGB / DeviceCMYK).
+                switch (components.Length)
+                {
+                    case 1:
+                        c = ColorF.FromGray((float)components[0]);
+                        break;
+                    case 3:
+                        c = ColorF.FromRgb(
+                            (float)components[0],
+                            (float)components[1],
+                            (float)components[2]);
+                        break;
+                    case 4:
+                        c = ColorF.FromCmyk(
+                            (float)components[0],
+                            (float)components[1],
+                            (float)components[2],
+                            (float)components[3]);
+                        break;
+                    default:
+                        return;
+                }
             }
 
             if (stroke)

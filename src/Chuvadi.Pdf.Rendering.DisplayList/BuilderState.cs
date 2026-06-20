@@ -3,6 +3,7 @@
 // PHASE: Phase 2.1 — display-list intermediate
 
 using System.Collections.Generic;
+using Chuvadi.Pdf.Content;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
 
@@ -12,6 +13,11 @@ internal sealed class BuilderState
     internal AffineMatrix Ctm { get; set; } = AffineMatrix.Identity;
     internal PdfColor FillColor { get; set; } = PdfColor.Black;
     internal PdfColor StrokeColor { get; set; } = PdfColor.Black;
+
+    // Active non-device colour spaces set by cs / CS, used to convert sc / scn
+    // components. Null means a device space resolved by operand count.
+    internal ResolvedColorSpace? FillColorSpace { get; set; }
+    internal ResolvedColorSpace? StrokeColorSpace { get; set; }
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -80,6 +86,8 @@ internal sealed class BuilderState
         Ctm = Ctm,
         FillColor = FillColor,
         StrokeColor = StrokeColor,
+        FillColorSpace = FillColorSpace,
+        StrokeColorSpace = StrokeColorSpace,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

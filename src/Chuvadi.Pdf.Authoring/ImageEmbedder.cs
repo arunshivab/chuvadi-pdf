@@ -173,7 +173,7 @@ internal static class ImageEmbedder
         {
             case ImageFormat.Jpeg:
                 {
-                    (int w, int h, _) = JpegHeader(imageBytes);
+                    (int w, int h, _, _) = JpegHeader(imageBytes);
                     return (w, h);
                 }
             case ImageFormat.Png:
@@ -222,19 +222,43 @@ internal static class ImageEmbedder
 
     private static EmbeddedImage BuildJpeg(byte[] jpegBytes)
     {
-        (int w, int h, int components) = JpegHeader(jpegBytes);
+        (int w, int h, int components, int adobeTransform) = JpegHeader(jpegBytes);
 
-        // 1-component (grayscale) and 3-component (YCbCr → RGB) baseline JPEG
-        // embed directly under DCTDecode. Other component counts (CMYK/YCCK)
-        // go through the decoder so the embedded samples are unambiguous.
-        if (components != 1 && components != 3)
+        // 1-component (grayscale), 3-component (YCbCr -> RGB) and 4-component
+        // (CMYK / YCCK) baseline JPEG all embed directly under DCTDecode, keeping
+        // the original DCT compression instead of decoding to samples and
+        // re-deflating. For 4 components the DCTDecode filter performs any
+        // YCCK -> CMYK conversion from the stream's Adobe APP14 marker; that same
+        // marker also signals Adobe's inverted-channel convention, which a Decode
+        // array corrects. Other component counts go through the decoder so the
+        // embedded samples are unambiguous.
+        if (components != 1 && components != 3 && components != 4)
         {
             return BuildFromFrame(JpegDecoder.Decode(jpegBytes));
         }
 
-        PdfDictionary dict = NewImageDictionary(
-            w, h, components == 1 ? "DeviceGray" : "DeviceRGB", "DCTDecode");
+        string colorSpace = components switch
+        {
+            1 => "DeviceGray",
+            4 => "DeviceCMYK",
+            _ => "DeviceRGB",
+        };
+
+        PdfDictionary dict = NewImageDictionary(w, h, colorSpace, "DCTDecode");
         dict.Set(PdfName.Length, jpegBytes.Length);
+
+        if (components == 4 && adobeTransform >= 0)
+        {
+            // Adobe-marked CMYK / YCCK stores every channel inverted; remap each
+            // sample from [0,1] back through 1 - sample so colours are correct.
+            dict.Set(PdfName.Intern("Decode"), new PdfArray(new PdfPrimitive[]
+            {
+                new PdfInteger(1), new PdfInteger(0),
+                new PdfInteger(1), new PdfInteger(0),
+                new PdfInteger(1), new PdfInteger(0),
+                new PdfInteger(1), new PdfInteger(0),
+            }));
+        }
 
         return new EmbeddedImage
         {
@@ -245,9 +269,15 @@ internal static class ImageEmbedder
         };
     }
 
-    private static (int W, int H, int Components) JpegHeader(byte[] bytes)
+    private static (int W, int H, int Components, int AdobeTransform) JpegHeader(byte[] bytes)
     {
+        int w = 0;
+        int h = 0;
+        int components = 0;
+        int adobeTransform = -1;
+        bool sofFound = false;
         int i = 2;
+
         while (i < bytes.Length - 1)
         {
             if (bytes[i] != 0xFF)
@@ -255,24 +285,52 @@ internal static class ImageEmbedder
                 i++;
                 continue;
             }
+
             byte marker = bytes[i + 1];
             i += 2;
-            // SOF0–SOF3: baseline and extended sequential / progressive / lossless.
-            if (marker >= 0xC0 && marker <= 0xC3)
-            {
-                int h = (bytes[i + 3] << 8) | bytes[i + 4];
-                int w = (bytes[i + 5] << 8) | bytes[i + 6];
-                int components = bytes[i + 7];
-                return (w, h, components);
-            }
-            if (marker == 0xD8 || marker == 0xD9)
+
+            // Markers without a length segment.
+            if (marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7))
             {
                 continue;
             }
+
+            // Start of scan: the header is complete.
+            if (marker == 0xDA || i + 1 >= bytes.Length)
+            {
+                break;
+            }
+
             int len = (bytes[i] << 8) | bytes[i + 1];
+            int segStart = i + 2;
+
+            // SOF0-SOF3: baseline and extended sequential / progressive / lossless.
+            if (marker >= 0xC0 && marker <= 0xC3)
+            {
+                h = (bytes[segStart + 1] << 8) | bytes[segStart + 2];
+                w = (bytes[segStart + 3] << 8) | bytes[segStart + 4];
+                components = bytes[segStart + 5];
+                sofFound = true;
+            }
+            else if (marker == 0xEE && len >= 14
+                && bytes[segStart] == (byte)'A' && bytes[segStart + 1] == (byte)'d'
+                && bytes[segStart + 2] == (byte)'o' && bytes[segStart + 3] == (byte)'b'
+                && bytes[segStart + 4] == (byte)'e')
+            {
+                // APP14 Adobe marker: the colour-transform byte is at offset 11 of
+                // the segment data (matching the JPEG decoder's reading).
+                adobeTransform = bytes[segStart + 11];
+            }
+
             i += len;
         }
-        throw new ImageException("JPEG SOF marker not found.");
+
+        if (!sofFound)
+        {
+            throw new ImageException("JPEG SOF marker not found.");
+        }
+
+        return (w, h, components, adobeTransform);
     }
 
     // ── PNG ───────────────────────────────────────────────────────────────

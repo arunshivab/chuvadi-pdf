@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
 
@@ -52,6 +53,19 @@ internal sealed class BuilderGraphicsState
     /// colour. False when the stroke source is a pattern or shading.
     /// </summary>
     public bool StrokeValid { get; set; } = true;
+
+    /// <summary>
+    /// The active fill colour space set by <c>cs</c>, used to interpret
+    /// subsequent <c>sc</c> / <c>scn</c> components. Null for the default
+    /// DeviceGray or when the space is resolved purely by operand count.
+    /// </summary>
+    public ResolvedColorSpace? FillColorSpace { get; set; }
+
+    /// <summary>
+    /// The active stroke colour space set by <c>CS</c>, used to interpret
+    /// subsequent <c>SC</c> / <c>SCN</c> components.
+    /// </summary>
+    public ResolvedColorSpace? StrokeColorSpace { get; set; }
 
     /// <summary>Line width in user-space units.</summary>
     public double LineWidth { get; set; } = 1.0;
@@ -138,6 +152,8 @@ internal sealed class BuilderGraphicsState
             StrokeColor = StrokeColor,
             FillValid = FillValid,
             StrokeValid = StrokeValid,
+            FillColorSpace = FillColorSpace,
+            StrokeColorSpace = StrokeColorSpace,
             LineWidth = LineWidth,
             LineCap = LineCap,
             LineJoin = LineJoin,
