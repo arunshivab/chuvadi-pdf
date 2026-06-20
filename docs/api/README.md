@@ -91,6 +91,7 @@ python tools/gen_api_docs.py
 | [Matrix3x3](Content/Matrix3x3.md) | struct | A 3x3 matrix used for 2D affine transformations in PDF user space. |
 | [PdfFunction](Content/PdfFunction.md) | class | A PDF function (PDF 32000-1:2008 §7.10): a mapping from an `InputCount`-dimensional input to an `OutputCount`-dimensional output. |
 | [PdfShading](Content/PdfShading.md) | class | An axial (Type 2) or radial (Type 3) shading (PDF 32000-1:2008 §8.7.4.5). |
+| [ResolvedColorSpace](Content/ResolvedColorSpace.md) | class | A resolved PDF colour space that converts its colour components to sRGB. |
 | [TextFragment](Content/TextFragment.md) | class | A piece of text extracted from a PDF content stream, together with its approximate position in user space. |
 
 ## Chuvadi.Cryptography

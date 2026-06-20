@@ -181,41 +181,144 @@ public static class DisplayListBuilder
         public void SetFillGray(double gray)
         {
             _stack.Current.FillColor = PdfColor.Gray(gray);
+            _stack.Current.FillColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetStrokeGray(double gray)
         {
             _stack.Current.StrokeColor = PdfColor.Gray(gray);
+            _stack.Current.StrokeColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetFillRgb(double r, double g, double b)
         {
             _stack.Current.FillColor = PdfColor.Rgb(r, g, b);
+            _stack.Current.FillColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetStrokeRgb(double r, double g, double b)
         {
             _stack.Current.StrokeColor = PdfColor.Rgb(r, g, b);
+            _stack.Current.StrokeColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetFillCmyk(double c, double m, double y, double k)
         {
             _stack.Current.FillColor = PdfColor.Cmyk(c, m, y, k);
+            _stack.Current.FillColorSpace = null;
         }
 
         /// <inheritdoc />
         public void SetStrokeCmyk(double c, double m, double y, double k)
         {
             _stack.Current.StrokeColor = PdfColor.Cmyk(c, m, y, k);
+            _stack.Current.StrokeColorSpace = null;
         }
 
-        // cs / CS / sc / scn / SC / SCN are intentionally not implemented on
-        // this sink — the SVG/Reader display list ignored them before
-        // consolidation, and the interface defaults keep that behaviour.
+        /// <inheritdoc />
+        public void SetColorSpace(string name, bool stroke)
+        {
+            // cs / CS selects the active colour space. Device families resolve by
+            // name; other names key into /Resources /ColorSpace (Separation,
+            // DeviceN, Indexed, ICCBased, Lab, Cal*). A resolved space is kept so
+            // sc / scn can convert through it; an unresolved or Pattern space
+            // leaves the previous colour in place.
+            ResolvedColorSpace? space = ResolveColorSpace(name);
+
+            if (stroke)
+            {
+                _stack.Current.StrokeColorSpace = space;
+            }
+            else
+            {
+                _stack.Current.FillColorSpace = space;
+            }
+        }
+
+        /// <inheritdoc />
+        public void SetColorN(double[] components, bool hasName, bool stroke)
+        {
+            // sc / scn / SC / SCN sets colour in the current space. A trailing
+            // name (pattern) has no directly representable colour, so the current
+            // colour is left unchanged.
+            if (hasName)
+            {
+                return;
+            }
+
+            ResolvedColorSpace? space = stroke
+                ? _stack.Current.StrokeColorSpace
+                : _stack.Current.FillColorSpace;
+
+            PdfColor color;
+            if (space is not null && !space.IsPattern)
+            {
+                // Convert through the resolved space (Separation/DeviceN tint
+                // transforms, Indexed lookup, ICCBased alternate, Lab, Cal*).
+                double[] rgb = space.ToRgb(components);
+                color = PdfColor.Rgb(rgb[0], rgb[1], rgb[2]);
+            }
+            else
+            {
+                // No explicit space: fall back to the operand count.
+                switch (components.Length)
+                {
+                    case 1:
+                        color = PdfColor.Gray(components[0]);
+                        break;
+                    case 3:
+                        color = PdfColor.Rgb(components[0], components[1], components[2]);
+                        break;
+                    case 4:
+                        color = PdfColor.Cmyk(
+                            components[0], components[1], components[2], components[3]);
+                        break;
+                    default:
+                        return;
+                }
+            }
+
+            if (stroke)
+            {
+                _stack.Current.StrokeColor = color;
+            }
+            else
+            {
+                _stack.Current.FillColor = color;
+            }
+        }
+
+        private ResolvedColorSpace? ResolveColorSpace(string name)
+        {
+            // Device and Pattern names resolve directly.
+            ResolvedColorSpace? direct = ResolvedColorSpace.Parse(PdfName.Intern(name), _doc.Objects);
+            if (direct is not null)
+            {
+                return direct;
+            }
+
+            // Otherwise the name keys into /Resources /ColorSpace.
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csv)
+                || csv is null)
+            {
+                return null;
+            }
+
+            PdfDictionary? spaces = _doc.Objects.ResolveAs<PdfDictionary>(csv);
+            if (spaces is null
+                || !spaces.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry)
+                || entry is null)
+            {
+                return null;
+            }
+
+            return ResolvedColorSpace.Parse(entry, _doc.Objects);
+        }
 
         // ── IContentOperatorSink — path construction ─────────────────────
 
