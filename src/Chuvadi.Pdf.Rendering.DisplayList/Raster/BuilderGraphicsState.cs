@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
+using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 
 namespace Chuvadi.Pdf.Rendering.Raster;
 
@@ -137,6 +138,12 @@ internal sealed class BuilderGraphicsState
     /// <summary>Constant stroking alpha from ExtGState /CA. 1 = opaque.</summary>
     public double StrokeAlpha { get; set; } = 1.0;
 
+    /// <summary>Active separable blend mode (ExtGState /BM, PDF §11.3.5).</summary>
+    public PdfBlendMode BlendMode { get; set; } = PdfBlendMode.Normal;
+
+    /// <summary>Active soft mask (ExtGState /SMask), or null when none.</summary>
+    public RasterSoftMaskInfo? SoftMask { get; set; }
+
     /// <summary>
     /// Returns a deep copy of this state suitable for pushing onto the
     /// q/Q stack. The clip list is defensively copied; primitive fields
@@ -172,6 +179,8 @@ internal sealed class BuilderGraphicsState
             TextRenderingMode = TextRenderingMode,
             FillAlpha = FillAlpha,
             StrokeAlpha = StrokeAlpha,
+            BlendMode = BlendMode,
+            SoftMask = SoftMask,
             ActiveClips = new List<ClipPath>(ActiveClips),
         };
     }

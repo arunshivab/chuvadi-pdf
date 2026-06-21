@@ -17,6 +17,16 @@ PDF FlateDecode streams are compressed using the zlib format (RFC 1950), which w
 - PNG predictor reversal (predictors 10-15) for cross-reference streams and image data 
 - TIFF predictor reversal (predictor 2) for legacy streams  Compression (Encode) uses fixed Huffman coding for simplicity and correctness. Decompression (Decode) supports all valid DEFLATE streams. PDF 32000-1:2008 §7.4.4. RFC 1950 §2-3 — zlib format. RFC 1951 §3 — DEFLATE format.
 
+## Constructors
+
+### `DeflateFilter(DeflateEffort effort = DeflateEffort.Default)`
+
+Initialises a `DeflateFilter`.
+
+**Parameters**
+
+- `effort` — Encoder effort. `DeflateEffort.Default` uses the fast greedy-parse fixed/dynamic-Huffman path. `DeflateEffort.Maximum` additionally tries the BCL deflater and an iterated optimal ("zopfli-style") parse, keeping whichever candidate is smallest — at the cost of speed.
+
 ## Properties
 
 ### `FilterName`

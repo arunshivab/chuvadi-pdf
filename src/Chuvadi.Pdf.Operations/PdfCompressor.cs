@@ -112,6 +112,15 @@ public sealed record CompressionOptions
     /// content anyway.
     /// </summary>
     public bool AllowEncryptedRewrite { get; init; }
+
+    /// <summary>
+    /// When true, streams are re-deflated at maximum effort
+    /// (<see cref="Chuvadi.Pdf.Filters.DeflateEffort.Maximum"/>): the encoder also
+    /// tries the runtime deflater and an iterated optimal ("zopfli-style") parse
+    /// and keeps the smallest result. This yields the best lossless ratio at the
+    /// cost of compression speed. Default false (fast greedy parse).
+    /// </summary>
+    public bool MaxDeflateStreams { get; init; }
 }
 
 /// <summary>
@@ -271,7 +280,7 @@ public static class PdfCompressor
             if (copy is PdfStream stream)
             {
                 bool isContent = contentStreamNumbers.Contains(entry.Key) || IsFormXObject(stream.Dictionary);
-                PdfStream? minified = isContent ? TryMinifyContentStream(stream) : null;
+                PdfStream? minified = isContent ? TryMinifyContentStream(stream, options) : null;
                 if (minified is not null)
                 {
                     copy = minified;
@@ -801,7 +810,7 @@ public static class PdfCompressor
     // the stream carries decode parameters, cannot be decoded, is not safely
     // minifiable, or does not shrink. The dictionary mutated here is the freshly
     // copied one, so the source document is untouched.
-    private static PdfStream? TryMinifyContentStream(PdfStream stream)
+    private static PdfStream? TryMinifyContentStream(PdfStream stream, CompressionOptions options)
     {
         if (stream.Dictionary.ContainsKey(PdfName.Intern("DecodeParms")) ||
             stream.Dictionary.ContainsKey(PdfName.Intern("DP")))
@@ -826,7 +835,7 @@ public static class PdfCompressor
         {
             using MemoryStream input = new(minified);
             using MemoryStream packed = new();
-            Deflate.Encode(input, packed);
+            (options.MaxDeflateStreams ? DeflateMax : Deflate).Encode(input, packed);
             encoded = packed.ToArray();
         }
         catch (FilterException)
@@ -1188,6 +1197,7 @@ public static class PdfCompressor
     // ── Stream reduction ──────────────────────────────────────────────────
 
     private static readonly DeflateFilter Deflate = new();
+    private static readonly DeflateFilter DeflateMax = new(Chuvadi.Pdf.Filters.DeflateEffort.Maximum);
 
     // Flate-compresses an unfiltered stream when it shrinks. Returns null
     // when the stream is already filtered, too small, or grows.
@@ -1203,7 +1213,7 @@ public static class PdfCompressor
         {
             using MemoryStream input = new(stream.RawBytes);
             using MemoryStream packed = new();
-            Deflate.Encode(input, packed);
+            (options.MaxDeflateStreams ? DeflateMax : Deflate).Encode(input, packed);
             compressed = packed.ToArray();
         }
         catch (FilterException)

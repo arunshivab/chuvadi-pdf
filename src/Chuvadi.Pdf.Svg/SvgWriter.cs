@@ -111,6 +111,29 @@ internal sealed class SvgWriter
         _body.Append("</g>");
     }
 
+    /// <summary>
+    /// Opens a <c>&lt;mask&gt;</c> element with the given id. Uses
+    /// user-space units so the mask aligns with the masked content; luminance
+    /// (the default) for luminosity masks, alpha otherwise.
+    /// </summary>
+    internal void OpenMask(string id, bool luminance)
+    {
+        _body.Append("<mask id=\"").Append(EscapeXml(id)).Append('"');
+        _body.Append(" maskUnits=\"userSpaceOnUse\"");
+        if (!luminance)
+        {
+            _body.Append(" style=\"mask-type:alpha\"");
+        }
+
+        _body.Append('>');
+    }
+
+    /// <summary>Closes a <c>&lt;mask&gt;</c> element opened by <see cref="OpenMask"/>.</summary>
+    internal void CloseMask()
+    {
+        _body.Append("</mask>");
+    }
+
     internal void EmitPath(string d, string? fill, string? stroke,
         double strokeWidth, string? fillRule = null, string? extraAttrs = null)
     {

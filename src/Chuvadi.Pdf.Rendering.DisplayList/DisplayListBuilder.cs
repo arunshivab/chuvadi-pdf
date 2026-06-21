@@ -598,6 +598,136 @@ public static class DisplayListBuilder
             // clamped. Other ExtGState entries are not interpreted here.
             if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; }
             if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; }
+
+            // /BM — blend mode (PDF §11.3.5). A name, or an array of names whose
+            // first supported entry wins. Unsupported/non-separable names map to
+            // Normal (source-over).
+            if (TryReadBlendMode(gs, out PdfBlendMode blendMode))
+            {
+                s.BlendMode = blendMode;
+            }
+
+            // /SMask — soft mask (PDF §11.6.5.2). /None clears; a dictionary
+            // installs a luminosity or alpha masking group.
+            ReadSoftMask(gs);
+        }
+
+        private void ReadSoftMask(PdfDictionary gs)
+        {
+            if (!gs.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smv))
+            {
+                return;
+            }
+
+            PdfPrimitive sm = _doc.Objects.Resolve(smv);
+            if (sm is PdfName nm)
+            {
+                if (nm.Value == "None")
+                {
+                    _stack.Current.SoftMask = null;
+                }
+
+                return;
+            }
+
+            if (sm is not PdfDictionary smDict)
+            {
+                return;
+            }
+
+            if (!smDict.TryGetValue(PdfName.Intern("G"), out PdfPrimitive? gp)
+                || _doc.Objects.Resolve(gp) is not PdfStream groupStream)
+            {
+                return;
+            }
+
+            bool isLuminosity = smDict.GetName(PdfName.Intern("S"))?.Value != "Alpha";
+
+            double backdrop = 0.0;
+            PdfArray? bc = smDict.GetArray(PdfName.Intern("BC"));
+            if (bc is not null && bc.Count > 0)
+            {
+                backdrop = NumberOf(bc[0]);
+            }
+
+            PageDisplayList group = BuildSoftMaskGroup(groupStream, out AffineMatrix groupMatrix);
+            _stack.Current.SoftMask = new SoftMaskInfo(
+                group, groupMatrix.Multiply(_stack.Current.Ctm), isLuminosity, backdrop);
+        }
+
+        private PageDisplayList BuildSoftMaskGroup(
+            PdfStream groupStream, out AffineMatrix groupMatrix)
+        {
+            groupMatrix = AffineMatrix.Identity;
+            if (groupStream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mp)
+                && _doc.Objects.ResolveAs<PdfArray>(mp) is PdfArray arr && arr.Count >= 6)
+            {
+                groupMatrix = new AffineMatrix(
+                    NumberOf(arr[0]), NumberOf(arr[1]),
+                    NumberOf(arr[2]), NumberOf(arr[3]),
+                    NumberOf(arr[4]), NumberOf(arr[5]));
+            }
+
+            PdfDictionary? groupResources = _resources;
+            if (groupStream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
+                && _doc.Objects.ResolveAs<PdfDictionary>(rp) is PdfDictionary r)
+            {
+                groupResources = r;
+            }
+
+            Builder sub = new Builder(_doc);
+            byte[] content;
+            try
+            {
+                content = ContentStreamLoader.Decode(groupStream);
+            }
+            catch
+            {
+                return new PageDisplayList(sub._ops, 0, 0, 0);
+            }
+
+            if (content.Length > 0)
+            {
+                sub._resources = groupResources;
+                ContentStreamWalker.Walk(content, sub);
+            }
+
+            return new PageDisplayList(sub._ops, 0, 0, 0);
+        }
+
+        private bool TryReadBlendMode(PdfDictionary extGState, out PdfBlendMode mode)
+        {
+            mode = PdfBlendMode.Normal;
+            if (!extGState.TryGetValue(PdfName.Intern("BM"), out PdfPrimitive? bmValue))
+            {
+                return false;
+            }
+
+            PdfPrimitive resolved = _doc.Objects.Resolve(bmValue);
+            if (resolved is PdfName single)
+            {
+                mode = BlendModes.FromName(single.Value);
+                return true;
+            }
+
+            if (resolved is PdfArray array)
+            {
+                for (int i = 0; i < array.Count; i++)
+                {
+                    if (_doc.Objects.Resolve(array[i]) is PdfName candidate
+                        && BlendModes.TryFromName(candidate.Value, out PdfBlendMode m))
+                    {
+                        mode = m;
+                        return true;
+                    }
+                }
+
+                // No supported name in the array — fall back to Normal.
+                mode = PdfBlendMode.Normal;
+                return true;
+            }
+
+            return false;
         }
 
         // ── IContentOperatorSink — Shading ─────────────────────────────────
@@ -648,6 +778,8 @@ public static class DisplayListBuilder
                 (double rx1, double ry1) = ctm.Apply(coords[3], coords[4]);
                 _ops.Add(new ShadingOp
                 {
+                    BlendMode = _stack.Current.BlendMode,
+                    SoftMask = _stack.Current.SoftMask,
                     IsRadial = true,
                     X0 = x0,
                     Y0 = y0,
@@ -665,6 +797,8 @@ public static class DisplayListBuilder
                 (double ax1, double ay1) = ctm.Apply(coords[2], coords[3]);
                 _ops.Add(new ShadingOp
                 {
+                    BlendMode = _stack.Current.BlendMode,
+                    SoftMask = _stack.Current.SoftMask,
                     IsRadial = false,
                     X0 = x0,
                     Y0 = y0,
@@ -703,6 +837,8 @@ public static class DisplayListBuilder
                 DashPhase: s.DashPhase) : null;
             _ops.Add(new PathOp
             {
+                BlendMode = _stack.Current.BlendMode,
+                SoftMask = _stack.Current.SoftMask,
                 Geometry = s.CurrentPath,
                 Mode = mode,
                 FillRule = rule,
@@ -826,6 +962,8 @@ public static class DisplayListBuilder
             AffineMatrix combined = s.TextMatrix.Multiply(s.Ctm);
             _ops.Add(new TextOp
             {
+                BlendMode = _stack.Current.BlendMode,
+                SoftMask = _stack.Current.SoftMask,
                 FontKey = s.FontKey,
                 BaseFont = s.BaseFont ?? "Helvetica",
                 FontSize = s.FontSize,
@@ -1039,6 +1177,8 @@ public static class DisplayListBuilder
 
             _ops.Add(new TextOp
             {
+                BlendMode = _stack.Current.BlendMode,
+                SoftMask = _stack.Current.SoftMask,
                 FontKey = s.FontKey!,
                 BaseFont = s.BaseFont ?? "Helvetica",
                 FontSize = s.FontSize,
@@ -1445,6 +1585,8 @@ public static class DisplayListBuilder
 
             _ops.Add(new ImageOp
             {
+                BlendMode = _stack.Current.BlendMode,
+                SoftMask = _stack.Current.SoftMask,
                 PixelData = pixelData,
                 Format = format,
                 Width = width,

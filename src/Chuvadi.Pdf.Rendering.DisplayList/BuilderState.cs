@@ -18,6 +18,13 @@ internal sealed class BuilderState
     // components. Null means a device space resolved by operand count.
     internal ResolvedColorSpace? FillColorSpace { get; set; }
     internal ResolvedColorSpace? StrokeColorSpace { get; set; }
+
+    // Active blend mode from the ExtGState /BM entry (PDF §11.3.5). Normal is
+    // source-over; q/Q scopes it because the stack clones this state.
+    internal PdfBlendMode BlendMode { get; set; } = PdfBlendMode.Normal;
+
+    // Active soft mask (ExtGState /SMask, PDF §11.6.5.2), or null when none.
+    internal SoftMaskInfo? SoftMask { get; set; }
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -88,6 +95,8 @@ internal sealed class BuilderState
         StrokeColor = StrokeColor,
         FillColorSpace = FillColorSpace,
         StrokeColorSpace = StrokeColorSpace,
+        BlendMode = BlendMode,
+        SoftMask = SoftMask,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

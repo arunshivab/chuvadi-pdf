@@ -7,6 +7,8 @@
 using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
+using BlendModes = Chuvadi.Pdf.Rendering.DisplayList.BlendModes;
+using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 
 namespace Chuvadi.Pdf.Rendering;
 
@@ -52,6 +54,15 @@ public sealed class ScanlineRasterizer
     /// light (gamma-correct). Forwarded to <see cref="PixelBuffer.BlendPixel(int, int, ColorF, bool)"/>.
     /// </summary>
     public bool GammaCorrect { get; set; }
+
+    /// <summary>Active separable blend mode for compositing (PDF §11.3.5).</summary>
+    public PdfBlendMode BlendMode { get; set; } = PdfBlendMode.Normal;
+
+    /// <summary>Device-space soft-mask coverage (length Width*Height), or null.</summary>
+    public float[]? SoftMask { get; set; }
+
+    /// <summary>Row stride of <see cref="SoftMask"/> (= buffer width).</summary>
+    public int SoftMaskWidth { get; set; }
 
     /// <summary>
     /// Fills the given sub-paths into the pixel buffer with the given colour
@@ -137,7 +148,7 @@ public sealed class ScanlineRasterizer
 
         if (AntiAlias)
         {
-            FillAntiAliased(buffer, edges, color, fillRule, clip, yMin, yMax, GammaCorrect);
+            FillAntiAliased(buffer, edges, color, fillRule, clip, yMin, yMax, GammaCorrect, BlendMode, SoftMask, SoftMaskWidth);
             return;
         }
 
@@ -165,7 +176,7 @@ public sealed class ScanlineRasterizer
                 continue;
             }
 
-            FillScanline(buffer, y, crossings, color, fillRule, allowed);
+            FillScanline(buffer, y, crossings, color, fillRule, allowed, BlendMode, SoftMask, SoftMaskWidth);
         }
     }
 
@@ -174,7 +185,7 @@ public sealed class ScanlineRasterizer
     private static void FillAntiAliased(
         PixelBuffer buffer, List<Edge> edges,
         ColorF color, FillRule fillRule, ClipRegion? clip,
-        int yMin, int yMax, bool gammaCorrect)
+        int yMin, int yMax, bool gammaCorrect, PdfBlendMode mode, float[]? smask, int smW)
     {
         ColorF rgb = color.ToRgb();
         float baseAlpha = rgb.Alpha;
@@ -237,7 +248,7 @@ public sealed class ScanlineRasterizer
                 }
 
                 ColorF px = ColorF.FromRgb(rgb.R, rgb.G, rgb.B, baseAlpha * cov);
-                buffer.BlendPixel(x, y, px, gammaCorrect);
+                WritePixel(buffer, x, y, px, gammaCorrect, mode, smask, smW);
             }
         }
     }
@@ -428,22 +439,22 @@ public sealed class ScanlineRasterizer
         PixelBuffer buffer, int y,
         List<Crossing> crossings,
         ColorF color, FillRule fillRule,
-        List<(double Start, double End)>? allowed)
+        List<(double Start, double End)>? allowed, PdfBlendMode mode, float[]? smask, int smW)
     {
         if (fillRule == FillRule.EvenOdd)
         {
-            FillEvenOdd(buffer, y, crossings, color, allowed);
+            FillEvenOdd(buffer, y, crossings, color, allowed, mode, smask, smW);
         }
         else
         {
-            FillNonZeroWinding(buffer, y, crossings, color, allowed);
+            FillNonZeroWinding(buffer, y, crossings, color, allowed, mode, smask, smW);
         }
     }
 
     private static void FillEvenOdd(
         PixelBuffer buffer, int y,
         List<Crossing> crossings, ColorF color,
-        List<(double Start, double End)>? allowed)
+        List<(double Start, double End)>? allowed, PdfBlendMode mode, float[]? smask, int smW)
     {
         // Even-odd: fill between pairs (0-1, 2-3, …)
         for (int i = 0; i + 1 < crossings.Count; i += 2)
@@ -456,12 +467,12 @@ public sealed class ScanlineRasterizer
 
                 for (int x = xStart; x <= xEnd; x++)
                 {
-                    buffer.BlendPixel(x, y, color);
+                    WritePixel(buffer, x, y, color, true, mode, smask, smW);
                 }
             }
             else
             {
-                BlendClippedSpan(buffer, y, crossings[i].X, crossings[i + 1].X, color, allowed);
+                BlendClippedSpan(buffer, y, crossings[i].X, crossings[i + 1].X, color, allowed, mode, smask, smW);
             }
         }
     }
@@ -469,7 +480,7 @@ public sealed class ScanlineRasterizer
     private static void FillNonZeroWinding(
         PixelBuffer buffer, int y,
         List<Crossing> crossings, ColorF color,
-        List<(double Start, double End)>? allowed)
+        List<(double Start, double End)>? allowed, PdfBlendMode mode, float[]? smask, int smW)
     {
         // Non-zero: track winding number; fill where winding != 0
         int winding = 0;
@@ -489,12 +500,12 @@ public sealed class ScanlineRasterizer
 
                     for (int x = xStart; x <= xEnd; x++)
                     {
-                        buffer.BlendPixel(x, y, color);
+                        WritePixel(buffer, x, y, color, true, mode, smask, smW);
                     }
                 }
                 else
                 {
-                    BlendClippedSpan(buffer, y, prevXExact, crossing.X, color, allowed);
+                    BlendClippedSpan(buffer, y, prevXExact, crossing.X, color, allowed, mode, smask, smW);
                 }
             }
 
@@ -515,7 +526,7 @@ public sealed class ScanlineRasterizer
         PixelBuffer buffer, int y,
         double spanStart, double spanEnd,
         ColorF color,
-        List<(double Start, double End)> allowed)
+        List<(double Start, double End)> allowed, PdfBlendMode mode, float[]? smask, int smW)
     {
         foreach ((double Start, double End) interval in allowed)
         {
@@ -529,10 +540,44 @@ public sealed class ScanlineRasterizer
 
                 for (int x = xStart; x <= xEnd; x++)
                 {
-                    buffer.BlendPixel(x, y, color);
+                    WritePixel(buffer, x, y, color, true, mode, smask, smW);
                 }
             }
         }
+    }
+
+    // Composites a source colour into one pixel, applying a separable blend
+    // mode against the current backdrop before the source-over (PDF §11.3.5).
+    private static void WritePixel(
+        PixelBuffer buffer, int x, int y, ColorF src, bool gamma,
+        PdfBlendMode mode, float[]? smask, int smW)
+    {
+        ColorF s = src.ToRgb();
+        float alpha = s.Alpha;
+        if (smask is not null)
+        {
+            float cov = smask[(y * smW) + x];
+            if (cov <= 0f)
+            {
+                return;
+            }
+
+            alpha *= cov;
+        }
+
+        if (mode == PdfBlendMode.Normal)
+        {
+            buffer.BlendPixel(x, y, ColorF.FromRgb(s.R, s.G, s.B, alpha), gamma);
+            return;
+        }
+
+        (byte db, byte dg, byte dr, byte da) = buffer.GetPixelBgra(x, y);
+        double ab = da / 255.0;
+        double crR = ((1.0 - ab) * s.R) + (ab * BlendModes.Blend(mode, dr / 255.0, s.R));
+        double crG = ((1.0 - ab) * s.G) + (ab * BlendModes.Blend(mode, dg / 255.0, s.G));
+        double crB = ((1.0 - ab) * s.B) + (ab * BlendModes.Blend(mode, db / 255.0, s.B));
+        buffer.BlendPixel(
+            x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha), gamma);
     }
 
     // ── Data structures ───────────────────────────────────────────────────

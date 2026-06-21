@@ -12,6 +12,8 @@ using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Rendering.Raster;
 using GraphicsPath = Chuvadi.Pdf.Graphics.Path;
+using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
+using BlendModes = Chuvadi.Pdf.Rendering.DisplayList.BlendModes;
 
 namespace Chuvadi.Pdf.Rendering;
 
@@ -53,6 +55,8 @@ public sealed class PageRasterizer
     private readonly RenderOptions _options;
     private readonly ScanlineRasterizer _scanline;
     private readonly StrokeExpander _stroke;
+    private readonly Dictionary<RasterSoftMaskInfo, float[]> _softMaskCache =
+        new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Initialises a <see cref="PageRasterizer"/> for a document's object store.
@@ -280,6 +284,9 @@ public sealed class PageRasterizer
                 case NestedDisplayListOp np:
                     PaintNestedOp(np, buffer, pageHeight, outerTransform);
                     break;
+                case ShadeOp sh:
+                    PaintShadeOp(sh, buffer, pageHeight, outerTransform);
+                    break;
             }
         }
     }
@@ -426,7 +433,14 @@ public sealed class PageRasterizer
         List<List<PointF>> subPaths = flattener.Flatten(device);
         SnapThinAxisAlignedRects(subPaths);
         ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.BlendMode = op.BlendMode;
+        _scanline.SoftMask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, subPaths, op.Color, op.Rule, clip);
+        _scanline.BlendMode = PdfBlendMode.Normal;
+        _scanline.SoftMask = null;
     }
 
     private void PaintStrokeOp(
@@ -465,7 +479,14 @@ public sealed class PageRasterizer
 
         List<List<PointF>> filled = _stroke.Expand(subPaths, deviceStyle);
         ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.BlendMode = op.BlendMode;
+        _scanline.SoftMask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, filled, op.Style.Color, FillRule.NonZeroWinding, clip);
+        _scanline.BlendMode = PdfBlendMode.Normal;
+        _scanline.SoftMask = null;
     }
 
     private void PaintGlyphOp(
@@ -479,7 +500,14 @@ public sealed class PageRasterizer
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
         ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        _scanline.BlendMode = op.BlendMode;
+        _scanline.SoftMask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, subPaths, op.Color, FillRule.NonZeroWinding, clip);
+        _scanline.BlendMode = PdfBlendMode.Normal;
+        _scanline.SoftMask = null;
     }
 
     private void PaintImageOp(
@@ -513,7 +541,12 @@ public sealed class PageRasterizer
             return;
         }
 
-        CompositeImage(op.Image, buffer, destX, destY - destH, destW, destH, clip, op.Alpha);
+        float[]? smask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        CompositeImage(
+            op.Image, buffer, destX, destY - destH, destW, destH, clip, op.Alpha,
+            op.BlendMode, smask, buffer.Width);
     }
 
     private void PaintNestedOp(
@@ -524,6 +557,333 @@ public sealed class PageRasterizer
         // is op.CtmComposition; outer-space → page-space is outerTransform.
         Transform innerToPage = op.CtmComposition.Multiply(outerTransform);
         PaintDisplayList(op.Inner, buffer, pageHeight, innerToPage);
+    }
+
+    // Paints an axial or radial shading (the sh operator). The gradient geometry
+    // is in page space; each device pixel inside the active clip is mapped back
+    // to page space, its parametric position computed, and the interpolated stop
+    // colour written. Pixels outside the (optionally extended) domain are left
+    // untouched, matching the transparent regions of an unextended shading.
+    private void PaintShadeOp(
+        ShadeOp op, PixelBuffer buffer,
+        double pageHeight, Transform outerTransform)
+    {
+        if (op.Stops.Count == 0)
+        {
+            return;
+        }
+
+        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        if (clip is not null && clip.IsEmpty)
+        {
+            return;
+        }
+
+        float[]? smask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        int smW = buffer.Width;
+
+        double scale = _options.Scale;
+        Transform inverseOuter;
+        try
+        {
+            inverseOuter = outerTransform.Invert();
+        }
+        catch (InvalidOperationException)
+        {
+            // Degenerate composition (collapsed form XObject) — nothing to paint.
+            return;
+        }
+
+        // Precomputed axial axis terms.
+        double axdx = op.X1 - op.X0;
+        double axdy = op.Y1 - op.Y0;
+        double axisLenSq = (axdx * axdx) + (axdy * axdy);
+
+        // Precomputed radial terms.
+        double cdx = op.X1 - op.X0;
+        double cdy = op.Y1 - op.Y0;
+        double dr = op.R1 - op.R0;
+        double aQuad = (cdx * cdx) + (cdy * cdy) - (dr * dr);
+
+        for (int py = 0; py < buffer.Height; py++)
+        {
+            List<(double Start, double End)>? allowed = clip?.AllowedIntervals(py + 0.5);
+            if (allowed is not null && allowed.Count == 0)
+            {
+                continue;
+            }
+
+            for (int px = 0; px < buffer.Width; px++)
+            {
+                if (allowed is not null && !InAnyInterval(allowed, px + 0.5))
+                {
+                    continue;
+                }
+
+                // Device pixel centre → outer space → page space.
+                double outerX = (px + 0.5) / scale;
+                double outerY = pageHeight - ((py + 0.5) / scale);
+                PointF page = inverseOuter.TransformPoint(new PointF(outerX, outerY));
+
+                double t;
+                bool inside = op.IsRadial
+                    ? TryRadialParameter(op, page.X, page.Y, cdx, cdy, dr, aQuad, out t)
+                    : TryAxialParameter(op, page.X, page.Y, axdx, axdy, axisLenSq, out t);
+
+                if (!inside)
+                {
+                    continue;
+                }
+
+                ColorF color = SampleStops(op.Stops, t);
+                if (op.BlendMode == PdfBlendMode.Normal && smask is null)
+                {
+                    buffer.SetPixelBgra(
+                        px, py, ToByte(color.B), ToByte(color.G), ToByte(color.R), 255);
+                }
+                else
+                {
+                    WriteBlended(
+                        buffer, px, py,
+                        ColorF.FromRgb(color.R, color.G, color.B, 1f), op.BlendMode, smask, smW);
+                }
+            }
+        }
+    }
+
+    private static bool TryAxialParameter(
+        ShadeOp op, double gx, double gy,
+        double axdx, double axdy, double axisLenSq, out double t)
+    {
+        if (axisLenSq < 1e-12)
+        {
+            t = 0.0;
+            return true;
+        }
+
+        double s = (((gx - op.X0) * axdx) + ((gy - op.Y0) * axdy)) / axisLenSq;
+        return ClampToDomain(op, s, out t);
+    }
+
+    private static bool TryRadialParameter(
+        ShadeOp op, double gx, double gy,
+        double cdx, double cdy, double dr, double aQuad, out double t)
+    {
+        double px = gx - op.X0;
+        double py = gy - op.Y0;
+        double bQuad = (px * cdx) + (py * cdy) + (op.R0 * dr);
+        double cQuad = (px * px) + (py * py) - (op.R0 * op.R0);
+
+        // Solve aQuad*s^2 - 2*bQuad*s + cQuad = 0 for the largest s whose circle
+        // has non-negative radius and lies within the (extended) domain.
+        if (Math.Abs(aQuad) < 1e-9)
+        {
+            if (Math.Abs(bQuad) < 1e-12)
+            {
+                t = 0.0;
+                return false;
+            }
+
+            double sLin = cQuad / (2.0 * bQuad);
+            return AcceptRadialRoot(op, sLin, dr, out t);
+        }
+
+        double disc = (bQuad * bQuad) - (aQuad * cQuad);
+        if (disc < 0.0)
+        {
+            t = 0.0;
+            return false;
+        }
+
+        double sq = Math.Sqrt(disc);
+        double sHi = (bQuad + sq) / aQuad;
+        double sLo = (bQuad - sq) / aQuad;
+        if (sLo > sHi)
+        {
+            (sHi, sLo) = (sLo, sHi);
+        }
+
+        if (AcceptRadialRoot(op, sHi, dr, out t))
+        {
+            return true;
+        }
+
+        return AcceptRadialRoot(op, sLo, dr, out t);
+    }
+
+    private static bool AcceptRadialRoot(ShadeOp op, double s, double dr, out double t)
+    {
+        // The interpolated circle radius must be non-negative.
+        if (op.R0 + (s * dr) < 0.0)
+        {
+            t = 0.0;
+            return false;
+        }
+
+        return ClampToDomain(op, s, out t);
+    }
+
+    private static bool ClampToDomain(ShadeOp op, double s, out double t)
+    {
+        if (s < 0.0)
+        {
+            if (!op.ExtendStart)
+            {
+                t = 0.0;
+                return false;
+            }
+
+            t = 0.0;
+            return true;
+        }
+
+        if (s > 1.0)
+        {
+            if (!op.ExtendEnd)
+            {
+                t = 0.0;
+                return false;
+            }
+
+            t = 1.0;
+            return true;
+        }
+
+        t = s;
+        return true;
+    }
+
+    private static ColorF SampleStops(IReadOnlyList<GradientStop> stops, double t)
+    {
+        int n = stops.Count;
+        if (n == 1)
+        {
+            return stops[0].Color;
+        }
+
+        // Stops are emitted at evenly spaced offsets i/(n-1), so the bracketing
+        // pair is a direct index — no search needed.
+        double pos = t * (n - 1);
+        if (pos <= 0.0)
+        {
+            return stops[0].Color;
+        }
+
+        if (pos >= n - 1)
+        {
+            return stops[n - 1].Color;
+        }
+
+        int i0 = (int)pos;
+        double frac = pos - i0;
+        ColorF c0 = stops[i0].Color;
+        ColorF c1 = stops[i0 + 1].Color;
+        return ColorF.FromRgb(
+            (float)(c0.R + ((c1.R - c0.R) * frac)),
+            (float)(c0.G + ((c1.G - c0.G) * frac)),
+            (float)(c0.B + ((c1.B - c0.B) * frac)));
+    }
+
+    private static byte ToByte(float component)
+    {
+        int v = (int)Math.Round(component * 255.0f);
+        if (v < 0)
+        {
+            v = 0;
+        }
+        else if (v > 255)
+        {
+            v = 255;
+        }
+
+        return (byte)v;
+    }
+
+    // Composites a source colour into one pixel, applying a separable blend mode
+    // against the current backdrop before the source-over (PDF §11.3.5). Used by
+    // the direct-write paths (images, shadings); the scanline filler has its own
+    // equivalent for fills/strokes/glyphs.
+    private static void WriteBlended(
+        PixelBuffer buffer, int x, int y, ColorF src, PdfBlendMode mode, float[]? smask, int smW)
+    {
+        ColorF s = src.ToRgb();
+        float alpha = s.Alpha;
+        if (smask is not null)
+        {
+            float cov = smask[(y * smW) + x];
+            if (cov <= 0f)
+            {
+                return;
+            }
+
+            alpha *= cov;
+        }
+
+        if (mode == PdfBlendMode.Normal)
+        {
+            buffer.BlendPixel(x, y, ColorF.FromRgb(s.R, s.G, s.B, alpha));
+            return;
+        }
+
+        (byte db, byte dg, byte dr, byte da) = buffer.GetPixelBgra(x, y);
+        double ab = da / 255.0;
+        double crR = ((1.0 - ab) * s.R) + (ab * BlendModes.Blend(mode, dr / 255.0, s.R));
+        double crG = ((1.0 - ab) * s.G) + (ab * BlendModes.Blend(mode, dg / 255.0, s.G));
+        double crB = ((1.0 - ab) * s.B) + (ab * BlendModes.Blend(mode, db / 255.0, s.B));
+        buffer.BlendPixel(
+            x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha));
+    }
+
+    // Returns the device-space coverage (0..1 per pixel) for a soft mask,
+    // rendering its group once and caching by mask identity.
+    private float[] GetSoftMask(
+        RasterSoftMaskInfo mask, PixelBuffer buffer, double pageHeight, Transform outerTransform)
+    {
+        if (_softMaskCache.TryGetValue(mask, out float[]? cached))
+        {
+            return cached;
+        }
+
+        float[] coverage = RenderSoftMask(mask, buffer, pageHeight, outerTransform);
+        _softMaskCache[mask] = coverage;
+        return coverage;
+    }
+
+    // Renders the masking group to its own buffer and derives per-pixel coverage:
+    // luminosity of the result over the backdrop, or the group's own alpha.
+    private float[] RenderSoftMask(
+        RasterSoftMaskInfo mask, PixelBuffer buffer, double pageHeight, Transform outerTransform)
+    {
+        int w = buffer.Width;
+        int h = buffer.Height;
+        PixelBuffer maskBuffer = new PixelBuffer(w, h);
+
+        if (mask.IsLuminosity)
+        {
+            // Luminosity masks composite over an opaque backdrop (/BC, default
+            // black); unpainted areas therefore read as the backdrop luminosity.
+            float bd = (float)mask.Backdrop;
+            maskBuffer.Clear(ColorF.FromRgb(bd, bd, bd, 1f));
+        }
+
+        Transform groupToPage = mask.Composition.Multiply(outerTransform);
+        PaintDisplayList(mask.Group, maskBuffer, pageHeight, groupToPage);
+
+        float[] coverage = new float[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                (byte b, byte g, byte r, byte a) = maskBuffer.GetPixelBgra(x, y);
+                coverage[(y * w) + x] = mask.IsLuminosity
+                    ? (((0.299f * r) + (0.587f * g) + (0.114f * b)) / 255f)
+                    : (a / 255f);
+            }
+        }
+
+        return coverage;
     }
 
     // ── Clip helpers ──────────────────────────────────────────────────────
@@ -616,7 +976,8 @@ public sealed class PageRasterizer
     private static void CompositeImage(
         ImageFrame frame, PixelBuffer buffer,
         double x, double y, double w, double h,
-        ClipRegion? clip, double alpha = 1.0)
+        ClipRegion? clip, double alpha = 1.0, PdfBlendMode mode = PdfBlendMode.Normal,
+        float[]? smask = null, int smW = 0)
     {
         int dstX0 = Math.Max(0, (int)Math.Round(x));
         int dstY0 = Math.Max(0, (int)Math.Round(y));
@@ -657,7 +1018,12 @@ public sealed class PageRasterizer
                     continue;
                 }
 
-                if (effA >= 255)
+                if (mode != PdfBlendMode.Normal || smask is not null)
+                {
+                    WriteBlended(
+                        buffer, px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA), mode, smask, smW);
+                }
+                else if (effA >= 255)
                 {
                     buffer.SetPixelBgra(px, py, sb, sg, sr, 255);
                 }

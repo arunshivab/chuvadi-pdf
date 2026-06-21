@@ -35,6 +35,22 @@ namespace Chuvadi.Pdf.Filters;
 /// </remarks>
 public sealed class DeflateFilter : IStreamFilter
 {
+    private readonly DeflateEffort _effort;
+
+    /// <summary>
+    /// Initialises a <see cref="DeflateFilter"/>.
+    /// </summary>
+    /// <param name="effort">
+    /// Encoder effort. <see cref="DeflateEffort.Default"/> uses the fast
+    /// greedy-parse fixed/dynamic-Huffman path. <see cref="DeflateEffort.Maximum"/>
+    /// additionally tries the BCL deflater and an iterated optimal ("zopfli-style")
+    /// parse, keeping whichever candidate is smallest — at the cost of speed.
+    /// </param>
+    public DeflateFilter(DeflateEffort effort = DeflateEffort.Default)
+    {
+        _effort = effort;
+    }
+
     /// <inheritdoc/>
     public string FilterName => "FlateDecode";
 
@@ -146,8 +162,8 @@ public sealed class DeflateFilter : IStreamFilter
         // Apply predictor if specified.
         byte[] toCompress = ApplyPredictorForward(raw, encodeParms);
 
-        // Compress using fixed Huffman DEFLATE.
-        DeflateDeflater deflater = new DeflateDeflater(toCompress);
+        // Compress using DEFLATE at the configured effort.
+        DeflateDeflater deflater = new DeflateDeflater(toCompress, _effort);
         byte[] compressed = deflater.Deflate();
 
         // Write zlib header: CM=8, CINFO=7 (32K window), FCHECK computed.
@@ -802,10 +818,12 @@ internal sealed class DeflateDeflater
     private const int EndOfBlock = 256;
 
     private readonly byte[] _data;
+    private readonly DeflateEffort _effort;
 
-    internal DeflateDeflater(byte[] data)
+    internal DeflateDeflater(byte[] data, DeflateEffort effort = DeflateEffort.Default)
     {
         _data = data;
+        _effort = effort;
     }
 
     // A literal byte or a back-reference (length, distance) produced by LZ77.
@@ -845,12 +863,61 @@ internal sealed class DeflateDeflater
 
         System.Collections.Generic.List<Token> tokens = Tokenize();
 
-        byte[] fixedBytes = EmitFixed(tokens);
+        byte[] best = EmitFixed(tokens);
         byte[] dynamicBytes = EmitDynamic(tokens);
-        byte[] best = dynamicBytes.Length < fixedBytes.Length ? dynamicBytes : fixedBytes;
+        if (dynamicBytes.Length < best.Length)
+        {
+            best = dynamicBytes;
+        }
+
+        if (_effort == DeflateEffort.Maximum)
+        {
+            // (a) Runtime (BCL) deflater — a strong lazy-matching parse.
+            byte[]? bcl = TryDeflateBcl();
+            if (bcl is not null && bcl.Length < best.Length)
+            {
+                best = bcl;
+            }
+
+            // (c) Iterated optimal ("zopfli-style") parse, emitted both ways.
+            System.Collections.Generic.List<Token> optimal = TokenizeOptimal();
+            byte[] optimalDynamic = EmitDynamic(optimal);
+            if (optimalDynamic.Length < best.Length)
+            {
+                best = optimalDynamic;
+            }
+
+            byte[] optimalFixed = EmitFixed(optimal);
+            if (optimalFixed.Length < best.Length)
+            {
+                best = optimalFixed;
+            }
+        }
 
         int storedSize = StoredSize(_data.Length);
         return best.Length <= storedSize ? best : DeflateStored();
+    }
+
+    // ── (a) Runtime deflater candidate ─────────────────────────────────
+    // Produces raw DEFLATE via the BCL at maximum compression. Returns null on
+    // any failure so the custom candidates still apply.
+    private byte[]? TryDeflateBcl()
+    {
+        try
+        {
+            using System.IO.MemoryStream output = new System.IO.MemoryStream();
+            using (System.IO.Compression.DeflateStream ds = new System.IO.Compression.DeflateStream(
+                output, System.IO.Compression.CompressionLevel.SmallestSize, leaveOpen: true))
+            {
+                ds.Write(_data, 0, _data.Length);
+            }
+
+            return output.ToArray();
+        }
+        catch (System.Exception)
+        {
+            return null;
+        }
     }
 
     private static int StoredSize(int dataLength)
@@ -1585,6 +1652,208 @@ internal sealed class DeflateDeflater
                 _bitCount = 0;
             }
             return [.. _bytes];
+        }
+    }
+
+    // ── (c) Iterated optimal ("zopfli-style") parse ────────────────────
+    //
+    // Produces an LZ77 token stream chosen by least-cost (shortest-path) search
+    // under a Huffman cost model that is refined across a few iterations. The
+    // distance of the longest match at each position is reused for all shorter
+    // lengths at that position (valid: a match of length L at distance d implies
+    // every prefix length l <= L also matches at d). The final token stream is
+    // re-emitted through the real fixed/dynamic Huffman encoders, so output is
+    // always a valid DEFLATE stream regardless of cost-model accuracy.
+
+    private System.Collections.Generic.List<Token> TokenizeOptimal()
+    {
+        int n = _data.Length;
+        ComputeLongestMatches(out int[] matchLen, out int[] matchDist);
+
+        int[] litCost = new int[LitLenSymbols];
+        int[] distCost = new int[DistanceSymbols];
+        BuildCostModel(Tokenize(), litCost, distCost);
+
+        int[] cost = new int[n + 1];
+        int[] choiceLen = new int[n + 1];
+        int[] choiceDist = new int[n + 1];
+
+        int iterations = n < 65536 ? 10 : (n < 524288 ? 5 : 2);
+        System.Collections.Generic.List<Token> tokens = Tokenize();
+
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            for (int i = 0; i <= n; i++)
+            {
+                cost[i] = int.MaxValue;
+            }
+
+            cost[0] = 0;
+
+            for (int i = 0; i < n; i++)
+            {
+                if (cost[i] == int.MaxValue)
+                {
+                    continue;
+                }
+
+                int literal = cost[i] + litCost[_data[i]];
+                if (literal < cost[i + 1])
+                {
+                    cost[i + 1] = literal;
+                    choiceLen[i + 1] = 1;
+                    choiceDist[i + 1] = 0;
+                }
+
+                int maxL = matchLen[i];
+                if (maxL >= MinMatch)
+                {
+                    int dist = matchDist[i];
+                    int distanceCost = distCost[DistanceCodeOf(dist)]
+                        + DistanceExtraBits[DistanceCodeOf(dist)];
+                    for (int l = MinMatch; l <= maxL; l++)
+                    {
+                        int lengthCode = LengthCodeOf(l);
+                        int c = cost[i] + litCost[257 + lengthCode]
+                            + LengthExtraBits[lengthCode] + distanceCost;
+                        if (c < cost[i + l])
+                        {
+                            cost[i + l] = c;
+                            choiceLen[i + l] = l;
+                            choiceDist[i + l] = dist;
+                        }
+                    }
+                }
+            }
+
+            tokens = Backtrack(choiceLen, choiceDist, n);
+            Array.Clear(litCost, 0, litCost.Length);
+            Array.Clear(distCost, 0, distCost.Length);
+            BuildCostModel(tokens, litCost, distCost);
+        }
+
+        return tokens;
+    }
+
+    private System.Collections.Generic.List<Token> Backtrack(
+        int[] choiceLen, int[] choiceDist, int n)
+    {
+        System.Collections.Generic.List<Token> reversed =
+            new System.Collections.Generic.List<Token>();
+        int p = n;
+        while (p > 0)
+        {
+            int len = choiceLen[p];
+            if (len <= 1)
+            {
+                reversed.Add(new Token(_data[p - 1]));
+                p -= 1;
+            }
+            else
+            {
+                reversed.Add(new Token(len, choiceDist[p]));
+                p -= len;
+            }
+        }
+
+        reversed.Reverse();
+        return reversed;
+    }
+
+    private void ComputeLongestMatches(out int[] matchLen, out int[] matchDist)
+    {
+        int length = _data.Length;
+        matchLen = new int[length];
+        matchDist = new int[length];
+
+        int[] head = new int[HashSize];
+        int[] prev = new int[WindowSize];
+        for (int i = 0; i < HashSize; i++)
+        {
+            head[i] = -1;
+        }
+
+        for (int pos = 0; pos < length; pos++)
+        {
+            if (pos + MinMatch > length)
+            {
+                continue;
+            }
+
+            int hash = Hash(pos);
+            int candidate = head[hash];
+            int chain = MaxChainLength;
+            int limit = pos - WindowSize;
+            int bestLen = 0;
+            int bestDist = 0;
+
+            while (candidate >= 0 && candidate > limit && chain-- > 0)
+            {
+                int len = MatchLength(candidate, pos, length);
+                if (len > bestLen)
+                {
+                    bestLen = len;
+                    bestDist = pos - candidate;
+                    if (bestLen >= MaxMatch)
+                    {
+                        break;
+                    }
+                }
+
+                candidate = prev[candidate & (WindowSize - 1)];
+            }
+
+            InsertHash(head, prev, pos);
+            matchLen[pos] = bestLen;
+            matchDist[pos] = bestDist;
+        }
+    }
+
+    private void BuildCostModel(
+        System.Collections.Generic.List<Token> tokens, int[] litCost, int[] distCost)
+    {
+        int[] litFreq = new int[LitLenSymbols];
+        int[] distFreq = new int[DistanceSymbols];
+
+        foreach (Token token in tokens)
+        {
+            if (token.IsMatch)
+            {
+                litFreq[257 + LengthCodeOf(token.Length)]++;
+                distFreq[DistanceCodeOf(token.Distance)]++;
+            }
+            else
+            {
+                litFreq[token.Literal]++;
+            }
+        }
+
+        litFreq[EndOfBlock]++;
+
+        int[] litLengths = BuildCodeLengths(litFreq, MaxCodeBits);
+        int[] distLengths = BuildCodeLengths(distFreq, MaxCodeBits);
+        FillCosts(litLengths, litCost, 8);
+        FillCosts(distLengths, distCost, 5);
+    }
+
+    // Translates Huffman code lengths into per-symbol bit costs. Symbols with no
+    // code (length 0) get a fallback slightly worse than the longest real code so
+    // the search avoids them without treating them as free.
+    private static void FillCosts(int[] huffLengths, int[] cost, int defaultFallback)
+    {
+        int maxLen = 0;
+        for (int i = 0; i < huffLengths.Length; i++)
+        {
+            if (huffLengths[i] > maxLen)
+            {
+                maxLen = huffLengths[i];
+            }
+        }
+
+        int fallback = maxLen > 0 ? Math.Min(maxLen + 1, MaxCodeBits) : defaultFallback;
+        for (int i = 0; i < huffLengths.Length; i++)
+        {
+            cost[i] = huffLengths[i] > 0 ? huffLengths[i] : fallback;
         }
     }
 }

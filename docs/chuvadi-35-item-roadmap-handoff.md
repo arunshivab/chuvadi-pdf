@@ -213,7 +213,11 @@ calls object/xref-stream writing a "recorded follow-up." **Reading already shipp
 This is the highest-leverage lossless win and the natural first build after the Phase-0
 scoreboard. Goes in `src/Chuvadi.Pdf.IO/` (writer) + wired through `PdfCompressor`.
 
-**6. [CMP] Garbage collection + incremental-update flattening** — 🟡 **PARTIAL / VERIFY**
+**6. [CMP] Garbage collection + incremental-update flattening** — ✅ **DONE** (Phase 2 Bucket A)
+*Bucket A update: verified — `PdfCompressor`'s reachability rewrite IS the flattening. The GC
+walk keys reachable objects by number and stores the resolved (latest) version, renumbering
+into one clean generation, so superseded generations and update orphans are dropped and the
+`/Prev` chain disappears. Covered by `IncrementalFlatteningTests`.*
 `PdfCompressor` removes orphan objects (`CompressionResult.ObjectsRemoved`). Full
 incremental-update **flattening** (collapsing multiple update sections into one clean
 generation) was **not confirmed** as a distinct, complete feature. *Verify what's actually
@@ -223,7 +227,14 @@ implemented vs. just orphan sweeping.*
 `PdfCompressor` (`CompressionResult.DuplicatesRemoved`). Confirm coverage across all object
 kinds if extending.
 
-**8. [CMP] Max-level lossless re-deflate (zopfli / libdeflate)** — ❌ **NOT DONE**
+**8. [CMP] Max-level lossless re-deflate (zopfli / libdeflate)** — ✅ **DONE** (Phase 2 Bucket A)
+*Bucket A update: `DeflateEffort.Maximum` widens the encoder to a smallest-wins picker over
+(a) the BCL deflater (`CompressionLevel.SmallestSize`), (b) the existing dynamic-Huffman path
+(already shipped — the "fixed Huffman only" note below was stale), and (c) a from-scratch
+iterated optimal ("zopfli-style") parse. Opt-in via `CompressionOptions.MaxDeflateStreams`.
+~5-6% smaller than the default greedy path on realistic streams, with the optimal parse beating
+the BCL baseline; every candidate is round-tripped through the inflater and emits valid zlib
+(`MaxDeflateTests`).*
 No zopfli/libdeflate implementation. Note B01 (zero deps) means this must be a from-scratch
 implementation or a managed port — no external package. The existing deflater uses fixed
 Huffman (~85-90% of zlib ratios); see also BACKLOG "Dynamic-Huffman DEFLATE."
@@ -244,13 +255,23 @@ not yet implemented. *Remaining work: the granular per-category strip flags.*
 > (BACKLOG.md items ~11–18). They were surfaced by a code-survey conformance audit
 > (`docs/CONFORMANCE-AUDIT.md`, 2026-06-15). Ordered by real-world impact.
 
-**11. [BL] Shadings / gradients (`sh`)** — 🟡 **PARTIAL** (v3.14.0, #115)
+**11. [BL] Shadings / gradients (`sh`)** — ✅ **DONE** (Phase 2 Bucket A)
+*Bucket A update: raster `sh` now implemented — `ShadeOp`/`GradientStop` plus per-pixel
+axial/radial gradient rasterization in `PageRasterizer` (clip- and Extend-aware). With the SVG
+sink already done, axial (2) + radial (3) `sh` render on both paths; mesh ShadingTypes 4–7
+remain (Bucket B). Covered by `ShadingRasterTests`.*
 *v3.14.0 update: PDF function + shading evaluators (axial/radial, `sh`) implemented in the **SVG sink** (`PdfFunction`, `PdfShading`, `ShadingOp`). The **raster sink still defers `sh`** (Raster/DisplayListBuilder.cs:42). Remaining: raster shadings + ShadingTypes 4–7.*
 `sh` is a recognised no-op; no ShadingType 1–7. Gradient fills/backgrounds render blank.
 Start with axial (type 2) + radial (type 3), then function-based (1), then mesh (4–7).
 *High impact.*
 
-**12. [BL] ExtGState transparency (`gs`)** — 🟡 **PARTIAL** (v3.12.0, #111)
+**12. [BL] ExtGState transparency (`gs`)** — ✅ **DONE** (Phase 2 Bucket A)
+*Bucket A update: blend modes (`/BM`, 12 separable; non-separable fall back to Normal) and
+ExtGState soft masks (`/SMask`, luminosity + alpha) now apply on BOTH the raster and SVG sinks.
+Raster composites per-pixel through `ScanlineRasterizer`; SVG emits `mix-blend-mode` groups and
+`<mask>` defs. With constant alpha already shipped, the one remaining sub-piece is
+isolated/knockout transparency-group compositing (deferred). Covered by `RasterBlendModeTests`,
+`RasterSoftMaskTests`, `BlendModeSvgTests`, `SoftMaskSvgTests`.*
 *v3.14.0 update: constant alpha `/ca` `/CA` is applied in the raster sink (`ApplyExtGState` → FillAlpha/StrokeAlpha). Still missing: blend modes (`/BM`), soft masks in an ExtGState (`/SMask` in `gs`), and transparency groups.*
 `gs` is a no-op, so constant alpha (`ca`/`CA`), blend modes (`BM`), ExtGState soft masks, and
 transparency groups are ignored — everything paints fully opaque/Normal. (Image `/SMask` is
