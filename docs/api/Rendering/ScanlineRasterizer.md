@@ -33,6 +33,30 @@ bool GammaCorrect
 
 Gets or sets whether anti-aliased fills blend colour channels in linear light (gamma-correct). Forwarded to `PixelBuffer.BlendPixel(int, int, ColorF, bool)`.
 
+### `BlendMode`
+
+```csharp
+PdfBlendMode BlendMode
+```
+
+Active separable blend mode for compositing (PDF §11.3.5).
+
+### `SoftMask`
+
+```csharp
+float[]? SoftMask
+```
+
+Device-space soft-mask coverage (length Width*Height), or null.
+
+### `SoftMaskWidth`
+
+```csharp
+int SoftMaskWidth
+```
+
+Row stride of `SoftMask` (= buffer width).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs`](../../../src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs)_

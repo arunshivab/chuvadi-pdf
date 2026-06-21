@@ -13,6 +13,8 @@ using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
+using BlendModes = Chuvadi.Pdf.Rendering.DisplayList.BlendModes;
+using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 using Chuvadi.Pdf.Rendering.Walking;
 using Path = Chuvadi.Pdf.Graphics.Path;
 
@@ -540,6 +542,139 @@ public static class DisplayListBuilder
             // alpha (PDF 32000-1:2008 §8.4.5, Table 58). Out-of-range values clamp.
             if (TryReadAlpha(gs, "ca", out double fillAlpha)) { _state.FillAlpha = fillAlpha; }
             if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { _state.StrokeAlpha = strokeAlpha; }
+
+            // /BM — blend mode (PDF §11.3.5). A name or array of names; the first
+            // supported separable mode wins, otherwise Normal.
+            if (TryReadBlendMode(gs, out PdfBlendMode blendMode))
+            {
+                _state.BlendMode = blendMode;
+            }
+
+            // /SMask — soft mask (PDF §11.6.5.2). /None clears any active mask; a
+            // dictionary installs a luminosity or alpha masking group.
+            ReadSoftMask(gs);
+        }
+
+        private void ReadSoftMask(PdfDictionary gs)
+        {
+            if (!gs.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smv))
+            {
+                return;
+            }
+
+            PdfPrimitive sm = _objects.Resolve(smv);
+            if (sm is PdfName name)
+            {
+                if (name.Value == "None")
+                {
+                    _state.SoftMask = null;
+                }
+
+                return;
+            }
+
+            if (sm is not PdfDictionary smDict)
+            {
+                return;
+            }
+
+            if (!smDict.TryGetValue(PdfName.Intern("G"), out PdfPrimitive? gp)
+                || _objects.Resolve(gp) is not PdfStream groupStream)
+            {
+                return;
+            }
+
+            // /S: Luminosity (default) or Alpha.
+            bool isLuminosity = smDict.GetName(PdfName.Intern("S"))?.Value != "Alpha";
+
+            // /BC: backdrop colour; first component is the backdrop luminosity for
+            // areas the group does not paint (default black = 0 for luminosity).
+            double backdrop = 0.0;
+            PdfArray? bc = smDict.GetArray(PdfName.Intern("BC"));
+            if (bc is not null && bc.Count > 0)
+            {
+                backdrop = AsDouble(_objects.Resolve(bc[0]));
+            }
+
+            PageDisplayList group = BuildSoftMaskGroup(groupStream, out Transform groupMatrix);
+            _state.SoftMask = new RasterSoftMaskInfo(
+                group, groupMatrix.Multiply(_state.Ctm), isLuminosity, backdrop);
+        }
+
+        private PageDisplayList BuildSoftMaskGroup(
+            PdfStream groupStream, out Transform groupMatrix)
+        {
+            groupMatrix = Transform.Identity;
+            if (groupStream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mp)
+                && _objects.ResolveAs<PdfArray>(mp ?? PdfNull.Value) is PdfArray arr
+                && arr.Count >= 6)
+            {
+                groupMatrix = new Transform(
+                    AsDouble(arr[0]), AsDouble(arr[1]),
+                    AsDouble(arr[2]), AsDouble(arr[3]),
+                    AsDouble(arr[4]), AsDouble(arr[5]));
+            }
+
+            PdfDictionary? groupResources = _resources;
+            if (groupStream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
+                && _objects.ResolveAs<PdfDictionary>(rp ?? PdfNull.Value) is PdfDictionary r)
+            {
+                groupResources = r;
+            }
+
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+
+            byte[] content;
+            try
+            {
+                content = ContentStreamLoader.Decode(groupStream);
+            }
+            catch (Exception)
+            {
+                return new PageDisplayList(sub._ops, 0, 0);
+            }
+
+            if (content.Length > 0)
+            {
+                sub._resources = groupResources;
+                ContentStreamWalker.Walk(content, sub);
+            }
+
+            return new PageDisplayList(sub._ops, 0, 0);
+        }
+
+        private bool TryReadBlendMode(PdfDictionary extGState, out PdfBlendMode mode)
+        {
+            mode = PdfBlendMode.Normal;
+            if (!extGState.TryGetValue(PdfName.Intern("BM"), out PdfPrimitive? bmValue))
+            {
+                return false;
+            }
+
+            PdfPrimitive resolved = _objects.Resolve(bmValue);
+            if (resolved is PdfName single)
+            {
+                mode = BlendModes.FromName(single.Value);
+                return true;
+            }
+
+            if (resolved is PdfArray array)
+            {
+                for (int i = 0; i < array.Count; i++)
+                {
+                    if (_objects.Resolve(array[i]) is PdfName candidate
+                        && BlendModes.TryFromName(candidate.Value, out PdfBlendMode m))
+                    {
+                        mode = m;
+                        return true;
+                    }
+                }
+
+                mode = PdfBlendMode.Normal;
+                return true;
+            }
+
+            return false;
         }
 
         private static bool TryReadAlpha(PdfDictionary extGState, string key, out double value)
@@ -554,6 +689,84 @@ public static class DisplayListBuilder
 
             value = raw < 0.0 ? 0.0 : (raw > 1.0 ? 1.0 : raw);
             return true;
+        }
+
+        /// <inheritdoc />
+        public void PaintShading(string name)
+        {
+            if (_resources is null) { return; }
+            if (!_resources.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shv)) { return; }
+            PdfDictionary? shadings = _objects.ResolveAs<PdfDictionary>(shv);
+            if (shadings is null) { return; }
+            if (!shadings.TryGetValue(PdfName.Intern(name), out PdfPrimitive? shadingRef)) { return; }
+
+            PdfShading shading;
+            try
+            {
+                shading = PdfShading.Parse(shadingRef, _objects);
+            }
+            catch (ContentException)
+            {
+                // Unsupported shading type (e.g. mesh shadings 4-7) — skip the
+                // paint rather than failing the whole page.
+                return;
+            }
+
+            // The CTM at the sh operator maps shading space to page space; raster
+            // op geometry is already baked to page space, so the gradient must be
+            // too. Radii scale by the CTM's unit-vector length.
+            Transform ctm = _state.Ctm;
+            PointF unit = ctm.TransformVector(1.0, 0.0);
+            double scale = Math.Sqrt((unit.X * unit.X) + (unit.Y * unit.Y));
+
+            double[] coords = shading.Coords;
+            PointF p0 = ctm.TransformPoint(new PointF(coords[0], coords[1]));
+
+            const int sampleCount = 16;
+            List<GradientStop> stops = new List<GradientStop>(sampleCount + 1);
+            for (int i = 0; i <= sampleCount; i++)
+            {
+                double t = (double)i / sampleCount;
+                (double r, double g, double b) = shading.EvaluateRgb(t);
+                stops.Add(new GradientStop(t, ColorF.FromRgb((float)r, (float)g, (float)b)));
+            }
+
+            IReadOnlyList<ClipPath>? clips = SnapshotClips();
+
+            if (shading.IsRadial)
+            {
+                PointF p1 = ctm.TransformPoint(new PointF(coords[3], coords[4]));
+                _ops.Add(new ShadeOp(
+                    isRadial: true,
+                    x0: p0.X,
+                    y0: p0.Y,
+                    x1: p1.X,
+                    y1: p1.Y,
+                    r0: coords[2] * scale,
+                    r1: coords[5] * scale,
+                    extendStart: shading.ExtendStart,
+                    extendEnd: shading.ExtendEnd,
+                    stops: stops,
+                    clips: clips)
+                { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+            }
+            else
+            {
+                PointF p1 = ctm.TransformPoint(new PointF(coords[2], coords[3]));
+                _ops.Add(new ShadeOp(
+                    isRadial: false,
+                    x0: p0.X,
+                    y0: p0.Y,
+                    x1: p1.X,
+                    y1: p1.Y,
+                    r0: 0.0,
+                    r1: 0.0,
+                    extendStart: shading.ExtendStart,
+                    extendEnd: shading.ExtendEnd,
+                    stops: stops,
+                    clips: clips)
+                { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+            }
         }
 
         // Paint colours with the constant ExtGState alpha (/ca, /CA) folded in.
@@ -574,7 +787,7 @@ public static class DisplayListBuilder
             if (_state.FillValid && !_currentPath.IsEmpty)
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
-                _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()));
+                _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
             }
 
             ApplyDeferredClip();
@@ -593,7 +806,7 @@ public static class DisplayListBuilder
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 StrokeStyle style = BuildStrokeStyle();
-                _ops.Add(new StrokePathOp(transformed, style, SnapshotClips()));
+                _ops.Add(new StrokePathOp(transformed, style, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
             }
 
             ApplyDeferredClip();
@@ -614,13 +827,13 @@ public static class DisplayListBuilder
 
                 if (_state.FillValid)
                 {
-                    _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot));
+                    _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
 
                 if (_state.StrokeValid)
                 {
                     StrokeStyle style = BuildStrokeStyle();
-                    _ops.Add(new StrokePathOp(transformed, style, snapshot));
+                    _ops.Add(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
             }
 
@@ -942,7 +1155,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     double programAdvance = hintedGlyph is not null && !_lightHinting
@@ -966,7 +1179,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = ResolveSimpleAdvance(code, std14.GetAdvanceWidth(ch, _state.FontSize));
@@ -986,7 +1199,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = ResolveSimpleAdvance(code, adv);
@@ -1271,7 +1484,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()));
+                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = hintedGlyph is not null && !_lightHinting
@@ -1765,7 +1978,7 @@ public static class DisplayListBuilder
 
             ApplySoftMask(xobjStream, frame);
 
-            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha));
+            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
         }
 
         // Converts decoded raw samples into an ImageFrame for the cases the

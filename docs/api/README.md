@@ -244,6 +244,7 @@ python tools/gen_api_docs.py
 | [Ascii85Filter](Filters/Ascii85Filter.md) | class | Implements the PDF ASCII85Decode filter. 4 binary bytes → 5 ASCII characters. |
 | [AsciiHexFilter](Filters/AsciiHexFilter.md) | class | Implements the PDF ASCIIHexDecode filter. |
 | [CcittFaxFilter](Filters/CcittFaxFilter.md) | class | Implements the `CCITTFaxDecode` filter: Group 3 one-dimensional (Modified Huffman), Group 3 two-dimensional (Modified READ), and Group 4 (Modified Modified READ) decoding of bilevel image data, as used by scanned-document PDFs. |
+| [DeflateEffort](Filters/DeflateEffort.md) | enum | Effort level for FlateDecode (DEFLATE) compression. |
 | [DeflateFilter](Filters/DeflateFilter.md) | class | Implements the PDF FlateDecode filter using zlib-framed DEFLATE. |
 | [FilterException](Filters/FilterException.md) | class | Thrown when a PDF stream filter encounters data it cannot decode or encode. |
 | [FilterParameters](Filters/FilterParameters.md) | record | Parameters passed to a filter's Decode or Encode operation, derived from the `/DecodeParms` or `/EncodeParms` dictionary in the stream dictionary. |
@@ -442,6 +443,7 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [AffineMatrix](Rendering/AffineMatrix.md) | record struct | 2D affine transformation matrix in PDF convention.  |
 | [BlendModeOp](Rendering/BlendModeOp.md) | class | Pushes or pops a blend mode. |
+| [BlendModes](Rendering/BlendModes.md) | class | Helpers for the PDF blend-mode (/BM) names. |
 | [ClipOp](Rendering/ClipOp.md) | class | Pushes a clipping region. |
 | [ClipPath](Rendering/ClipPath.md) | struct | A clipping path applied to a single render operation. |
 | [ClipRegion](Rendering/ClipRegion.md) | class | A device-space clipping region used by `ScanlineRasterizer` to restrict where a fill is painted. |
@@ -457,6 +459,7 @@ python tools/gen_api_docs.py
 | [FontStyle](Rendering/FontStyle.md) | record struct | Resolved presentation style for a text run — family, weight, and slant — derived from a font's base name and FontDescriptor. |
 | [FontStyleClassifier](Rendering/FontStyleClassifier.md) | class | Derives a `FontStyle` from a font's base name and, when available, its FontDescriptor `/Flags`, `/ItalicAngle`, and `/StemV`. |
 | [GlyphPosition](Rendering/GlyphPosition.md) | record struct | The position of a single glyph in a `TextRun`. |
+| [GradientStop](Rendering/GradientStop.md) | struct | A single sampled gradient stop: an offset in [0, 1] and its colour. |
 | [HintingMode](Rendering/HintingMode.md) | enum | Controls how strongly the TrueType bytecode hinting interpreter adjusts glyph outlines before rasterization. |
 | [ImageFormat](Rendering/ImageFormat.md) | enum | Raster format of image pixel data. |
 | [ImageOp](Rendering/ImageOp.md) | class | Renders a raster image. |
@@ -476,6 +479,7 @@ python tools/gen_api_docs.py
 | [PdfColor](Rendering/PdfColor.md) | record struct | A color value with explicit source color space. |
 | [PdfColorSpace](Rendering/PdfColorSpace.md) | enum | The source color space of a `PdfColor`. |
 | [PdfPageExtensions](Rendering/PdfPageExtensions.md) | class | Extensions on `PdfDocument` and `PdfPage` for the display-list and text-run APIs. |
+| [RasterSoftMaskInfo](Rendering/RasterSoftMaskInfo.md) | class | An active soft mask (ExtGState `/SMask`): the masking transparency group plus how to derive and place its per-pixel coverage. |
 | [Rect](Rendering/Rect.md) | record struct | An axis-aligned bounding rectangle in PDF user-space coords. |
 | [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all operations in a `PageDisplayList`. |
 | [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all display-list operations. |
@@ -486,8 +490,10 @@ python tools/gen_api_docs.py
 | [ScanlineRasterizer](Rendering/ScanlineRasterizer.md) | class | Fills vector paths into a `PixelBuffer` using a scanline edge-crossing algorithm. |
 | [SearchMatch](Rendering/SearchMatch.md) | class | A search match against the logical text of a page. |
 | [SearchOptions](Rendering/SearchOptions.md) | class | Options controlling a search. |
+| [ShadeOp](Rendering/ShadeOp.md) | class | Paints an axial or radial shading (the `sh` operator) across the active clip region. |
 | [ShadingOp](Rendering/ShadingOp.md) | class | Paints an axial or radial shading (the `sh` operator). |
 | [ShadingStop](Rendering/ShadingStop.md) | struct | A single colour stop of a shading gradient. |
+| [SoftMaskInfo](Rendering/SoftMaskInfo.md) | class | An active soft mask (ExtGState `/SMask`) for the SVG path: the masking group's display list plus how its coverage is derived and placed. |
 | [StrokeExpander](Rendering/StrokeExpander.md) | class | Converts a stroked path into a filled path by expanding each segment by half the stroke width on each side. |
 | [StrokePathOp](Rendering/StrokePathOp.md) | class | Strokes a path with the supplied `StrokeStyle`. |
 | [TextDirection](Rendering/TextDirection.md) | enum | Reading direction of a `TextRun`. |

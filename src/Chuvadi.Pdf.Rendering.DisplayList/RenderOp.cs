@@ -11,6 +11,12 @@ public abstract class RenderOp
 {
     /// <summary>Discriminator for switch-pattern dispatch.</summary>
     public abstract RenderOpKind Kind { get; }
+
+    /// <summary>Blend mode for compositing this op against the backdrop (PDF §11.3.5).</summary>
+    public PdfBlendMode BlendMode { get; init; } = PdfBlendMode.Normal;
+
+    /// <summary>Active soft mask (ExtGState /SMask) gating this op, or null.</summary>
+    public SoftMaskInfo? SoftMask { get; init; }
 }
 
 /// <summary>Tag identifying the concrete <see cref="RenderOp"/> subtype.</summary>
@@ -82,6 +88,7 @@ public sealed class PathOp : RenderOp
     /// <inheritdoc />
     public override RenderOpKind Kind => RenderOpKind.Path;
 
+
     /// <summary>The path geometry to render.</summary>
     public required PathGeometry Geometry { get; init; }
 
@@ -146,6 +153,7 @@ public sealed class TextOp : RenderOp
     /// <inheritdoc />
     public override RenderOpKind Kind => RenderOpKind.Text;
 
+
     /// <summary>Font resource name as declared in /Resources/Font.</summary>
     public required string FontKey { get; init; }
 
@@ -200,6 +208,7 @@ public sealed class ImageOp : RenderOp
 {
     /// <inheritdoc />
     public override RenderOpKind Kind => RenderOpKind.Image;
+
 
     /// <summary>Pixel data (interpretation depends on <see cref="Format"/> and <see cref="ColorSpace"/>).</summary>
     public required byte[] PixelData { get; init; }
@@ -366,6 +375,7 @@ public sealed class ShadingOp : RenderOp
 {
     /// <inheritdoc />
     public override RenderOpKind Kind => RenderOpKind.Shading;
+
 
     /// <summary>True for a radial shading; false for axial (linear).</summary>
     public required bool IsRadial { get; init; }

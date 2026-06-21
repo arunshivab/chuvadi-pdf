@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 
 namespace Chuvadi.Pdf.Rendering.Raster;
 
@@ -62,4 +63,16 @@ public abstract class RenderOp
     /// no clip is in effect.
     /// </summary>
     public IReadOnlyList<ClipPath> Clips { get; }
+
+    /// <summary>
+    /// Gets the separable blend mode for compositing this op against the
+    /// backdrop (PDF §11.3.5). Normal is source-over.
+    /// </summary>
+    public PdfBlendMode BlendMode { get; init; } = PdfBlendMode.Normal;
+
+    /// <summary>
+    /// Gets the active soft mask (ExtGState <c>/SMask</c>) gating this op, or
+    /// null when no soft mask is in effect.
+    /// </summary>
+    public RasterSoftMaskInfo? SoftMask { get; init; }
 }

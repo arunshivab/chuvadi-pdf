@@ -99,6 +99,12 @@ public sealed class SvgRenderer
     // Monotonic counter for unique gradient ids within an SVG document.
     private int _gradientSeq;
 
+    // Soft-mask (/SMask) defs emitted this render, keyed by mask identity, plus
+    // a counter for unique <mask> ids.
+    private readonly Dictionary<SoftMaskInfo, string> _emittedMasks =
+        new(ReferenceEqualityComparer.Instance);
+    private int _maskSeq;
+
     // v2.1.2 snap-tolerance parameters.
     private const double KerningGapMinFraction = 0.2;
     private const double KerningGapMaxFactor = 2.0;
@@ -177,6 +183,8 @@ public sealed class SvgRenderer
     public string Render(PageDisplayList list, IPdfObjectResolver? resolver)
     {
         ArgumentNullException.ThrowIfNull(list);
+        _emittedMasks.Clear();
+        _maskSeq = 0;
         SvgWriter w = new(_opts.Precision);
         w.StartSvg(list.MediaWidth, list.MediaHeight);
 
@@ -198,6 +206,17 @@ public sealed class SvgRenderer
 
         w.OpenPageFlip(list.MediaHeight);
 
+        RenderOpList(list, w, familyByBaseFont, resolver);
+        w.CloseGroup();
+        return w.ToSvgString();
+    }
+
+    // Renders one display list's ops into the writer. Reused for the page
+    // body and for soft-mask group sub-lists (rendered inside a <mask> def).
+    private void RenderOpList(
+        PageDisplayList list, SvgWriter w,
+        Dictionary<string, string> familyByBaseFont, IPdfObjectResolver? resolver)
+    {
         double accumulatedShift = 0;
         double prevLineY = double.NaN;
         double prevEndX = double.NaN;
@@ -215,24 +234,31 @@ public sealed class SvgRenderer
             switch (op)
             {
                 case PathOp p:
-                    if (TryBuildFillRectCandidate(p, out PendingFillRect cand))
+                    if (p.BlendMode == PdfBlendMode.Normal && p.SoftMask is null
+                        && TryBuildFillRectCandidate(p, out PendingFillRect cand))
                     {
                         BufferOrEmitFillRect(cand, ref pendingFillRect, w);
                     }
                     else
                     {
                         FlushPendingFillRect(ref pendingFillRect, w);
+                        int wrapP = OpenOpWrappers(p, w, familyByBaseFont, resolver);
                         EmitPath(p, w);
+                        CloseWrappers(w, wrapP);
                     }
                     break;
                 case TextOp t:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    int wrapT = OpenOpWrappers(t, w, familyByBaseFont, resolver);
                     EmitTextWithSnap(t, w, familyByBaseFont,
                         ref accumulatedShift, ref prevLineY, ref prevEndX);
+                    CloseWrappers(w, wrapT);
                     break;
                 case ImageOp i:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    int wrapI = OpenOpWrappers(i, w, familyByBaseFont, resolver);
                     EmitImage(i, w);
+                    CloseWrappers(w, wrapI);
                     break;
                 case ClipOp c:
                     FlushPendingFillRect(ref pendingFillRect, w);
@@ -284,7 +310,9 @@ public sealed class SvgRenderer
                     break;
                 case ShadingOp sh:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    int wrapSh = OpenOpWrappers(sh, w, familyByBaseFont, resolver);
                     EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
+                    CloseWrappers(w, wrapSh);
                     break;
                 default: break;
             }
@@ -293,8 +321,62 @@ public sealed class SvgRenderer
 
         int rootClipsToClose = clipsOpenedPerScope.Pop();
         for (int i = 0; i < rootClipsToClose; i++) { w.CloseGroup(); }
+    }
+
+    // Opens the wrapper <g> groups a painting op needs (soft mask outermost,
+    // then blend mode) and returns how many were opened.
+    private int OpenOpWrappers(
+        RenderOp op, SvgWriter w,
+        Dictionary<string, string> familyByBaseFont, IPdfObjectResolver? resolver)
+    {
+        int opened = 0;
+        if (op.SoftMask is not null)
+        {
+            string id = EnsureMaskDef(op.SoftMask, w, familyByBaseFont, resolver);
+            w.OpenGroup(extraAttrs: $"mask=\"url(#{id})\"");
+            opened++;
+        }
+
+        if (op.BlendMode != PdfBlendMode.Normal)
+        {
+            w.OpenGroup(extraAttrs: BlendStyleAttr(op.BlendMode));
+            opened++;
+        }
+
+        return opened;
+    }
+
+    private static void CloseWrappers(SvgWriter w, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            w.CloseGroup();
+        }
+    }
+
+    // Emits a <mask> definition for a soft mask (once per mask identity) by
+    // rendering its group sub-list, returning the mask element id. SVG <mask>
+    // defaults to luminance, matching a PDF luminosity mask; alpha masks set
+    // mask-type:alpha.
+    private string EnsureMaskDef(
+        SoftMaskInfo mask, SvgWriter w,
+        Dictionary<string, string> familyByBaseFont, IPdfObjectResolver? resolver)
+    {
+        if (_emittedMasks.TryGetValue(mask, out string? existing))
+        {
+            return existing;
+        }
+
+        string id = "smask" + _maskSeq.ToString(CultureInfo.InvariantCulture);
+        _maskSeq++;
+        _emittedMasks[mask] = id;
+
+        w.OpenMask(id, mask.IsLuminosity);
+        w.OpenGroup(transform: mask.Composition.ToSvgMatrix());
+        RenderOpList(mask.Group, w, familyByBaseFont, resolver);
         w.CloseGroup();
-        return w.ToSvgString();
+        w.CloseMask();
+        return id;
     }
 
     // ── Shading ──────────────────────────────────────────────────────────
@@ -996,6 +1078,9 @@ public sealed class SvgRenderer
     /// </summary>
     private static (string? fontWeight, string? fontStyle) ResolveStyleHints(FontStyle style) =>
         (style.IsBold ? "bold" : null, style.IsItalic ? "italic" : null);
+
+    private static string BlendStyleAttr(PdfBlendMode mode) =>
+        $"style=\"mix-blend-mode:{BlendModeCss(mode)}\"";
 
     private static string BlendModeCss(PdfBlendMode mode) => mode switch
     {

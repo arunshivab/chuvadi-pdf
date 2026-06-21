@@ -122,6 +122,14 @@ bool AllowEncryptedRewrite
 
 When false (the default), an encrypted document is not rewritten: `PdfCompressor.Compress` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Encrypted` and writes nothing, because the reader exposes decrypted content and the rewrite would emit the document without encryption. Set to true to rewrite the decrypted content anyway.
 
+### `MaxDeflateStreams`
+
+```csharp
+bool MaxDeflateStreams
+```
+
+When true, streams are re-deflated at maximum effort (`Chuvadi.Pdf.Filters.DeflateEffort.Maximum`): the encoder also tries the runtime deflater and an iterated optimal ("zopfli-style") parse and keeps the smallest result. This yields the best lossless ratio at the cost of compression speed. Default false (fast greedy parse).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/PdfCompressor.cs`](../../../src/Chuvadi.Pdf.Operations/PdfCompressor.cs)_
