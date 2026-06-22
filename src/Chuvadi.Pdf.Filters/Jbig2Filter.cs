@@ -17,9 +17,11 @@ namespace Chuvadi.Pdf.Filters;
 /// inverted on output.
 /// </summary>
 /// <remarks>
-/// This release decodes arithmetic-coded generic regions. Symbol-dictionary and
-/// text-region segments, MMR-coded generic regions, and the <c>/JBIG2Globals</c>
-/// shared-segment stream are not yet supported and raise a
+/// This release decodes arithmetic-coded generic regions, symbol dictionaries, and
+/// text regions. Shared segments named by the image's <c>/JBIG2Globals</c> entry are
+/// supplied through <see cref="FilterParameters.Jbig2Globals"/> by the decoding call
+/// site. Huffman-coded segments, refinement/aggregate coding, transposed text
+/// regions, and MMR-coded generic regions are not yet supported and raise a
 /// <see cref="FilterException"/> where encountered.
 /// </remarks>
 public sealed class Jbig2Filter : IStreamFilter
@@ -43,7 +45,7 @@ public sealed class Jbig2Filter : IStreamFilter
         byte[] data = ReadAllBytes(input);
 
         Jbig2Decoder decoder = new Jbig2Decoder();
-        Jbig2Bitmap page = decoder.Decode(data, null);
+        Jbig2Bitmap page = decoder.Decode(data, decodeParms?.Jbig2Globals);
 
         WritePackedRows(page, output);
     }

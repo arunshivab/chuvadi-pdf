@@ -1658,7 +1658,7 @@ public static class DisplayListBuilder
             else
             {
                 format = ImageFormat.Raw;
-                try { pixelData = ContentStreamLoader.Decode(stream); }
+                try { pixelData = ContentStreamLoader.Decode(stream, _doc.Objects); }
                 catch { return; }
             }
 
@@ -1681,7 +1681,7 @@ public static class DisplayListBuilder
                 {
                     try
                     {
-                        byte[] smPixels = ContentStreamLoader.Decode(smStream);
+                        byte[] smPixels = ContentStreamLoader.Decode(smStream, _doc.Objects);
                         if (smPixels.Length >= smWidth * smHeight)
                         {
                             if (IsDecodeInverted(smStream.Dictionary))

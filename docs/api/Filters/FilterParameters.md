@@ -102,6 +102,14 @@ bool EndOfBlock
 
 For CCITTFaxDecode: when true (the PDF default), the data is expected to end with an end-of-block pattern (EOFB or RTC).
 
+### `Jbig2Globals`
+
+```csharp
+byte[]? Jbig2Globals
+```
+
+For JBIG2Decode: the decoded bytes of the shared-segment stream named by the image's `/JBIG2Globals` entry, or null when the stream has none. Globals carry segments (typically a symbol dictionary) referenced by the image stream's regions. Because resolving the `/JBIG2Globals` indirect reference requires the document, the decoding call site dereferences it and supplies the bytes here; `FromDictionary` does not populate it. PDF 32000-1:2008 §7.4.7.
+
 ## Methods
 
 ### `FromDictionary`

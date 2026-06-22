@@ -2092,7 +2092,7 @@ public static class DisplayListBuilder
 
             try
             {
-                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream);
+                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream, _objects);
             }
             catch (Exception)
             {
@@ -2261,7 +2261,7 @@ public static class DisplayListBuilder
 
             try
             {
-                smSamples = ContentStreamLoader.Decode(smStream);
+                smSamples = ContentStreamLoader.Decode(smStream, _objects);
             }
             catch (Exception)
             {

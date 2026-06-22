@@ -1,24 +1,12 @@
-Add JBIG2 decode: generic region, symbol dictionary, text region
+Wire /JBIG2Globals through the decode pipeline
 
-Implements arithmetic JBIG2Decode for embedded-organisation streams.
+Adds FilterParameters.Jbig2Globals and makes ContentStreamLoader resolve a
+filter's /JBIG2Globals shared-segment stream (dereferenced and decoded) when a
+resolver is available, so JBIG2 images that reference a globals symbol
+dictionary decode from a real PDF. Both display-list builders pass the resolver
+at image and soft-mask decode sites; Jbig2Filter forwards the globals to the
+decoder.
 
-Core (MQ arithmetic coder, segment headers, generic regions):
-- MQDecoder/MQEncoder per ITU-T T.88 Annex E (round-trip tested)
-- Generic region codec, templates 0-3, adaptive AT pixels, TPGDON
-- Segment header parser and page composition (OR/AND/XOR/XNOR/REPLACE)
-
-Symbol dictionary + text region (arithmetic):
-- Arithmetic integer coders (IADH/IADW/IAEX/IADT/IAFS/IADS/IAIT) and IAID
-- Symbol dictionary decoding via height classes and the generic procedure
-- Text region strip/instance placement with reference-corner handling
-
-Registered as the JBIG2Decode stream filter (samples inverted to PDF
-polarity). Unsupported paths (Huffman, refinement/aggregate, transposed
-text, MMR generic) raise a clear FilterException.
-
-Conformance: decodes the public Norconex sample (symbol dictionary in
-the globals stream, text region in the image stream); the decoded bitmap
-was visually verified and is locked as a regression fixture.
-
-Tests: MQ coder, generic region, integer coder round-trips, filter
-behaviour, and real-file conformance.
+Verified end-to-end: the public Norconex sample PDF decodes to a byte-exact
+352x91 image through the full pipeline, covered by an end-to-end regression
+test loading the sample PDF. Marks roadmap #22 (JBIG2 decode) done.
