@@ -10,7 +10,7 @@ public sealed class Jbig2Filter : IStreamFilter
 
 ## Remarks
 
-This release decodes arithmetic-coded generic regions. Symbol-dictionary and text-region segments, MMR-coded generic regions, and the `/JBIG2Globals` shared-segment stream are not yet supported and raise a `FilterException` where encountered.
+This release decodes arithmetic-coded generic regions, symbol dictionaries, and text regions. Shared segments named by the image's `/JBIG2Globals` entry are supplied through `FilterParameters.Jbig2Globals` by the decoding call site. Huffman-coded segments, refinement/aggregate coding, transposed text regions, and MMR-coded generic regions are not yet supported and raise a `FilterException` where encountered.
 
 ## Properties
 

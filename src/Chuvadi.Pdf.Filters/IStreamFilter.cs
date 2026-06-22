@@ -150,6 +150,17 @@ public sealed record FilterParameters
     public bool EndOfBlock { get; init; } = true;
 
     /// <summary>
+    /// For JBIG2Decode: the decoded bytes of the shared-segment stream named by
+    /// the image's <c>/JBIG2Globals</c> entry, or null when the stream has none.
+    /// Globals carry segments (typically a symbol dictionary) referenced by the
+    /// image stream's regions. Because resolving the <c>/JBIG2Globals</c> indirect
+    /// reference requires the document, the decoding call site dereferences it and
+    /// supplies the bytes here; <see cref="FromDictionary"/> does not populate it.
+    /// PDF 32000-1:2008 §7.4.7.
+    /// </summary>
+    public byte[]? Jbig2Globals { get; init; }
+
+    /// <summary>
     /// Builds <see cref="FilterParameters"/> from a <c>/DecodeParms</c> (or
     /// <c>/DecodeParams</c>) value taken from a stream dictionary.
     /// </summary>

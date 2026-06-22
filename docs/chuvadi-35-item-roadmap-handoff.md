@@ -320,9 +320,14 @@ No per-image codec/bit-depth/palette decision logic.
 whether bitonal/grayscale **detection** for the compression path (deciding when to re-encode
 as G4) is wired, vs. just the decode filter.*
 
-**22. [BL] JBIG2 decode** — ❌ **NOT DONE**
-No JBIG2 decoder — scanned bilevel JBIG2 images render blank. *Large (arithmetic coding,
-symbol dictionaries, generic regions).*
+**22. [BL] JBIG2 decode** — ✅ **DONE (decode)**
+`src/Chuvadi.Pdf.Filters/Jbig2Filter.cs` implements `JBIG2Decode` (arithmetic): MQ
+arithmetic coder, segment headers, generic regions (templates 0-3, TPGDON), symbol
+dictionaries, and text regions. Shared `/JBIG2Globals` segments are supplied via
+`FilterParameters.Jbig2Globals`. Conformance-verified against a real text-region sample
+(symbol dictionary in globals + text region in the image). *Remaining sub-features —
+Huffman, refinement/aggregate, transposed text, MMR-coded generic — fail clearly and
+are rare follow-ons.*
 
 **23. [CMP] JBIG2 encode (shares the segment model with 22)** — ❌ **NOT DONE**
 Depends on 22.
@@ -464,14 +469,14 @@ Acceptance:
 | 1 — Lossless compression | 5–10 | 5,7,9,10 | 6 | 8 |
 | 2 — Rendering completeness | 11–17, **38** | — | 11,12 | 13,14,15,16,17,**38** |
 | 3 — Image recoding | 18–20 | 18 | — | 19,20 |
-| 4 — Codecs | 21–27 | 21,27 | — | 22,23,24,25,26 |
+| 4 — Codecs | 21–27 | 21,22,26,27 | — | 23,24,25 |
 | 5 — Research-grade | 28–31 | 28 | — | 29,30,31 |
 | 6 — Perceptual/delivery | 32–35 | 33(lin.),35 | 33(PDF/A) | 32,34 |
 | Completeness (added) | 37–38 | 37 | — | 38 |
 
-**Done (14):** 1, 2, 3, 4, 5, 7, 9, 10, 18, 21, 27, 28, 35, 37 (+ linearization half of 33).
+**Done (16):** 1, 2, 3, 4, 5, 7, 9, 10, 18, 21, 22, 26, 27, 28, 35, 37 (+ linearization half of 33).
 **Partial (4):** 6, 11, 12, 33 (PDF/A side open).
-**Not done (19):** 8, 13, 14, 15, 16, 17, 19, 20, 22, 23, 24, 25, 26, 29, 30, 31, 32, 34, 38.
+**Not done (17):** 8, 13, 14, 15, 16, 17, 19, 20, 23, 24, 25, 29, 30, 31, 32, 34, 38.
 **Deferred (1):** 36 (watermark custom-font — needs a licensable .ttf).
 
 > **Moved since the v3.11.1 snapshot (PRs #110–#119):** #4 and #5 → DONE (external
@@ -520,7 +525,7 @@ impact.** Suggested order, grouping the colorspace work together:
 **Then** either the image-recoding compression chain (**#19 → #20**) for file-size wins, or the
 research-grade items.
 
-The research-grade items (**#22 JBIG2, #24 JPX, #29 MRC, #30 Indic, #31 XFA**) are each their own
+The research-grade items (**#23 JBIG2 encode, #24 JPX, #29 MRC, #30 Indic, #31 XFA**) are each their own
 multi-round effort and should be scheduled deliberately, not picked up casually.
 
 **My recommendation:** start the **#13 + #38 colorspace/CMYK pair** — it's the most coherent next

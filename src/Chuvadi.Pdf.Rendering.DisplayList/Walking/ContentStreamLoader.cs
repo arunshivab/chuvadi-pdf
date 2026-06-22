@@ -65,9 +65,11 @@ internal static class ContentStreamLoader
 
     /// <summary>
     /// Runs a stream's filter chain (aliases resolved), honouring per-filter
-    /// /DecodeParms entries; raw bytes when unfiltered.
+    /// /DecodeParms entries; raw bytes when unfiltered. When <paramref name="objects"/>
+    /// is supplied, a filter's <c>/JBIG2Globals</c> shared-segment stream is resolved
+    /// and decoded so JBIG2 images that reference globals decode correctly.
     /// </summary>
-    internal static byte[] Decode(PdfStream stream)
+    internal static byte[] Decode(PdfStream stream, PdfObjectStore? objects = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -83,7 +85,7 @@ internal static class ContentStreamLoader
         {
             string resolved = FilterRegistry.ResolveAlias(filterName.Value);
             return Pipeline.Decode(
-                resolved, stream.RawBytes, FilterParameters.FromDictionary(decodeParms));
+                resolved, stream.RawBytes, BuildParameters(decodeParms, 0, objects));
         }
 
         if (filter is PdfArray filterArray)
@@ -95,13 +97,62 @@ internal static class ContentStreamLoader
                 {
                     string resolved = FilterRegistry.ResolveAlias(fn.Value);
                     data = Pipeline.Decode(
-                        resolved, data, FilterParameters.FromDictionary(decodeParms, i));
+                        resolved, data, BuildParameters(decodeParms, i, objects));
                 }
             }
             return data;
         }
 
         return stream.RawBytes;
+    }
+
+    // Builds one filter's parameters, attaching the resolved /JBIG2Globals
+    // shared-segment bytes when the parameter dictionary names them and a
+    // resolver is available.
+    private static FilterParameters? BuildParameters(
+        PdfPrimitive? decodeParms, int filterIndex, PdfObjectStore? objects)
+    {
+        FilterParameters? parameters = FilterParameters.FromDictionary(decodeParms, filterIndex);
+        if (objects is null)
+        {
+            return parameters;
+        }
+
+        byte[]? globals = ResolveJbig2Globals(decodeParms, filterIndex, objects);
+        if (globals is null)
+        {
+            return parameters;
+        }
+
+        FilterParameters effective = parameters ?? new FilterParameters();
+        return effective with { Jbig2Globals = globals };
+    }
+
+    // Resolves the /JBIG2Globals stream named by a filter's parameter dictionary
+    // to its decoded bytes (the stream may itself be filtered), or null when
+    // absent or unresolvable.
+    private static byte[]? ResolveJbig2Globals(
+        PdfPrimitive? decodeParms, int filterIndex, PdfObjectStore objects)
+    {
+        PdfDictionary? parmsDict = decodeParms switch
+        {
+            PdfDictionary single => single,
+            PdfArray array => array.GetAs<PdfDictionary>(filterIndex),
+            _ => null,
+        };
+
+        if (parmsDict is null
+            || !parmsDict.TryGetValue(PdfName.Intern("JBIG2Globals"), out PdfPrimitive? globalsRef))
+        {
+            return null;
+        }
+
+        if (objects.Resolve(globalsRef) is not PdfStream globalsStream)
+        {
+            return null;
+        }
+
+        return Decode(globalsStream, objects);
     }
 
     // /DecodeParms with its /DP abbreviation (PDF 32000-1:2008 Table 5).
