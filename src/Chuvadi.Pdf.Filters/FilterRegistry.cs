@@ -24,6 +24,7 @@ public static class FilterRegistry
         new RunLengthFilter(),
         new LzwFilter(),
         new CcittFaxFilter(),
+        new Jbig2Filter(),
     ];
 
     private static readonly Dictionary<string, string> Aliases =
