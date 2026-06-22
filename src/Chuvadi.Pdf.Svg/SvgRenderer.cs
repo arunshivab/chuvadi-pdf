@@ -314,6 +314,14 @@ public sealed class SvgRenderer
                     EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
                     CloseWrappers(w, wrapSh);
                     break;
+                case Type3UseOp t3:
+                    FlushPendingFillRect(ref pendingFillRect, w);
+                    int wrapT3 = OpenOpWrappers(t3, w, familyByBaseFont, resolver);
+                    w.OpenGroup(transform: t3.Composition.ToSvgMatrix());
+                    RenderOpList(t3.Glyph, w, familyByBaseFont, resolver);
+                    w.CloseGroup();
+                    CloseWrappers(w, wrapT3);
+                    break;
                 default: break;
             }
         }

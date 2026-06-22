@@ -502,6 +502,9 @@ python tools/gen_api_docs.py
 | [TextRun](Rendering/TextRun.md) | class | A contiguous run of text on a page, with glyph-level positions for selection-overlay use cases. |
 | [TextRunExtractor](Rendering/TextRunExtractor.md) | class | Walks a `PageDisplayList` and produces a sequence of `TextRun`s in reading order. |
 | [TransformOp](Rendering/TransformOp.md) | class | Pushes or pops a graphics-state transformation matrix. |
+| [Type3Font](Rendering/Type3Font.md) | class | A parsed Type 3 font: its FontMatrix, per-code glyph content streams, the font's own /Resources, and glyph-space widths. |
+| [Type3Glyph](Rendering/Type3Glyph.md) | record struct | A single Type 3 glyph: its content stream and glyph-space width. |
+| [Type3UseOp](Rendering/Type3UseOp.md) | class | Paints one Type 3 glyph: a cached glyph-space sub-display-list positioned by a composition transform (FontMatrix · text-scale · text matrix · CTM). |
 | [WpfRenderer](Rendering/WpfRenderer.md) | class | Renders a `PageDisplayList` into a WPF `DrawingVisual`. |
 
 ## Chuvadi.Pdf.Signatures

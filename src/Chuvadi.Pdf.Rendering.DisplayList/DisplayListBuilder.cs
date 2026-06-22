@@ -69,6 +69,12 @@ public static class DisplayListBuilder
         private int _formDepth;
         private const int MaxFormDepth = 12;
 
+        // Type 3 font state: parsed fonts per resource key, cached glyph
+        // sub-display-lists, and a d1 colour-suppression flag.
+        private readonly Dictionary<string, Type3Font?> _type3FontCache = new();
+        private readonly Dictionary<(string Font, int Code, PdfColor Fill), PageDisplayList> _type3GlyphCache = new();
+        private bool _suppressColorOps;
+
         // ── v2.1.2: gap-tracking for word-boundary space insertion ───────────
         //
         // After each text emit on the same line, we record the text-matrix
@@ -180,6 +186,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetFillGray(double gray)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Gray(gray);
             _stack.Current.FillColorSpace = null;
         }
@@ -187,6 +194,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetStrokeGray(double gray)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Gray(gray);
             _stack.Current.StrokeColorSpace = null;
         }
@@ -194,6 +202,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetFillRgb(double r, double g, double b)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Rgb(r, g, b);
             _stack.Current.FillColorSpace = null;
         }
@@ -201,6 +210,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetStrokeRgb(double r, double g, double b)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Rgb(r, g, b);
             _stack.Current.StrokeColorSpace = null;
         }
@@ -208,6 +218,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetFillCmyk(double c, double m, double y, double k)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Cmyk(c, m, y, k);
             _stack.Current.FillColorSpace = null;
         }
@@ -215,6 +226,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetStrokeCmyk(double c, double m, double y, double k)
         {
+            if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Cmyk(c, m, y, k);
             _stack.Current.StrokeColorSpace = null;
         }
@@ -222,6 +234,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetColorSpace(string name, bool stroke)
         {
+            if (_suppressColorOps) { return; }
             // cs / CS selects the active colour space. Device families resolve by
             // name; other names key into /Resources /ColorSpace (Separation,
             // DeviceN, Indexed, ICCBased, Lab, Cal*). A resolved space is kept so
@@ -242,6 +255,7 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void SetColorN(double[] components, bool hasName, bool stroke)
         {
+            if (_suppressColorOps) { return; }
             // sc / scn / SC / SCN sets colour in the current space. A trailing
             // name (pattern) has no directly representable colour, so the current
             // colour is left unchanged.
@@ -462,6 +476,121 @@ public static class DisplayListBuilder
             s.FontSize = size;
             s.BaseFont = ResolveBaseFont(name);
             s.Style = ResolveFontStyle(name, s.BaseFont);
+            s.Type3 = GetType3Font(name);
+        }
+
+        // Resolves and caches the Type 3 font for a resource name, or null.
+        private Type3Font? GetType3Font(string name)
+        {
+            if (string.IsNullOrEmpty(name) || _resources is null)
+            {
+                return null;
+            }
+
+            if (_type3FontCache.TryGetValue(name, out Type3Font? cached))
+            {
+                return cached;
+            }
+
+            Type3Font? font = null;
+            if (_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontsRef)
+                && _doc.Objects.ResolveAs<PdfDictionary>(fontsRef ?? PdfNull.Value) is PdfDictionary fonts
+                && fonts.TryGetValue(PdfName.Intern(name), out PdfPrimitive? fontRef)
+                && _doc.Objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value) is PdfDictionary fontDict)
+            {
+                font = Type3Font.FromDictionary(fontDict, _doc.Objects);
+            }
+
+            _type3FontCache[name] = font;
+            return font;
+        }
+
+        /// <inheritdoc />
+        public void SetGlyphWidth(double wx, double wy)
+        {
+            // d0 — coloured glyph; colour comes from the glyph itself.
+        }
+
+        /// <inheritdoc />
+        public void SetGlyphWidthAndBBox(
+            double wx, double wy, double llx, double lly, double urx, double ury)
+        {
+            // d1 — uncoloured glyph: ignore colour operators; paint with text colour.
+            _suppressColorOps = true;
+        }
+
+        // Emits a run of single-byte codes in a Type 3 font. Each glyph's CharProc
+        // is built once (cached) in glyph space, then placed via a Type3UseOp whose
+        // composition maps glyph space to page space: FontMatrix · textScale ·
+        // TextMatrix · CTM.
+        private void EmitTextType3(byte[] bytes, BuilderState s, Type3Font type3)
+        {
+            if (s.FontSize <= 0) { return; }
+
+            bool emit = s.RenderingMode != TextRenderingMode.Invisible;
+            double th = s.HorizontalScaling / 100.0;
+
+            AffineMatrix fontMatrix = new AffineMatrix(
+                type3.FontMatrix[0], type3.FontMatrix[1], type3.FontMatrix[2],
+                type3.FontMatrix[3], type3.FontMatrix[4], type3.FontMatrix[5]);
+
+            foreach (byte b in bytes)
+            {
+                int code = b;
+                double advance = 0.0;
+
+                if (type3.TryGetGlyph(code, out Type3Glyph glyph))
+                {
+                    if (emit && glyph.Content.Length > 0)
+                    {
+                        PageDisplayList glyphList = GetOrBuildType3GlyphList(type3, code, glyph, s.FillColor);
+                        if (glyphList.Count > 0)
+                        {
+                            AffineMatrix textScale = new AffineMatrix(
+                                s.FontSize * th, 0, 0, s.FontSize, 0, s.TextRise);
+                            AffineMatrix composition = fontMatrix
+                                .Multiply(textScale)
+                                .Multiply(s.TextMatrix)
+                                .Multiply(s.Ctm);
+                            _ops.Add(new Type3UseOp(glyphList, composition)
+                            {
+                                BlendMode = s.BlendMode,
+                                SoftMask = s.SoftMask,
+                            });
+                        }
+                    }
+
+                    advance = glyph.Width * type3.FontMatrix[0] * s.FontSize;
+                }
+
+                double extra = s.CharSpacing + (code == 32 ? s.WordSpacing : 0.0);
+                double tx = (advance + extra) * th;
+                s.TextMatrix = new AffineMatrix(1, 0, 0, 1, tx, 0).Multiply(s.TextMatrix);
+            }
+        }
+
+        // Builds (or returns a cached) glyph-space sub-display-list for one Type 3
+        // glyph. Keyed by font, code, and fill colour (which an uncoloured d1 glyph
+        // bakes in). Blend mode and soft mask are applied by the Type3UseOp, not the
+        // cached list, so they are not part of the key.
+        private PageDisplayList GetOrBuildType3GlyphList(
+            Type3Font type3, int code, Type3Glyph glyph, PdfColor fill)
+        {
+            (string, int, PdfColor) key = (_stack.Current.FontKey ?? string.Empty, code, fill);
+            if (_type3GlyphCache.TryGetValue(key, out PageDisplayList? cached))
+            {
+                return cached;
+            }
+
+            Builder sub = new Builder(_doc);
+            sub._resources = type3.Resources ?? _resources;
+            sub._stack.Current.FillColor = fill;
+
+            ContentStreamWalker.Walk(glyph.Content, sub);
+
+            PageDisplayList glyphList = new PageDisplayList(sub._ops, 0, 0, 0);
+            _type3GlyphCache[key] = glyphList;
+            return glyphList;
         }
 
         /// <inheritdoc />
@@ -907,6 +1036,12 @@ public static class DisplayListBuilder
         {
             if (s.FontKey is null) { return; }
             if (bytes.Length == 0) { return; }
+
+            if (s.Type3 is Type3Font type3)
+            {
+                EmitTextType3(bytes, s, type3);
+                return;
+            }
 
             FontWidths widths = GetWidths(s.FontKey);
             bool composite = _compositeByKey.GetValueOrDefault(s.FontKey, false);

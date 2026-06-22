@@ -303,6 +303,26 @@ internal interface IContentOperatorSink
     {
     }
 
+    // ── Type 3 font glyph metrics ─────────────────────────────────────────
+
+    /// <summary>
+    /// d0 — set the width of the current Type 3 glyph (a coloured glyph that
+    /// supplies its own colour). Operands are in glyph space.
+    /// </summary>
+    void SetGlyphWidth(double wx, double wy)
+    {
+    }
+
+    /// <summary>
+    /// d1 — set the width and bounding box of the current Type 3 glyph (an
+    /// uncoloured glyph painted with the text colour; colour operators in the
+    /// glyph description are ignored). Operands are in glyph space.
+    /// </summary>
+    void SetGlyphWidthAndBBox(
+        double wx, double wy, double llx, double lly, double urx, double ury)
+    {
+    }
+
     // ── XObjects ──────────────────────────────────────────────────────────
 
     /// <summary>Do — invoke a named XObject (image or form).</summary>

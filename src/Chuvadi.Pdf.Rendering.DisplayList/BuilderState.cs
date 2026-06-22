@@ -25,6 +25,9 @@ internal sealed class BuilderState
 
     // Active soft mask (ExtGState /SMask, PDF §11.6.5.2), or null when none.
     internal SoftMaskInfo? SoftMask { get; set; }
+
+    // Parsed Type 3 font for the current font resource, or null.
+    internal Type3Font? Type3 { get; set; }
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -97,6 +100,7 @@ internal sealed class BuilderState
         StrokeColorSpace = StrokeColorSpace,
         BlendMode = BlendMode,
         SoftMask = SoftMask,
+        Type3 = Type3,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

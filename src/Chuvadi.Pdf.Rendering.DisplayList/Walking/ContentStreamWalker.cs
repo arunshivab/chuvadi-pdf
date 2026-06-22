@@ -423,6 +423,23 @@ internal static class ContentStreamWalker
             case "EMC":
                 break;
 
+            // ── Type 3 glyph metrics ──────────────────────────────────────
+            case "d0":
+                if (operands.Count >= 2)
+                {
+                    sink.SetGlyphWidth(Number(operands[0]), Number(operands[1]));
+                }
+                break;
+
+            case "d1":
+                if (operands.Count >= 6)
+                {
+                    sink.SetGlyphWidthAndBBox(
+                        Number(operands[0]), Number(operands[1]), Number(operands[2]),
+                        Number(operands[3]), Number(operands[4]), Number(operands[5]));
+                }
+                break;
+
             default:
                 sink.UnknownOperator(op);
                 break;
