@@ -251,6 +251,7 @@ python tools/gen_api_docs.py
 | [FilterPipeline](Filters/FilterPipeline.md) | class | Applies and removes chains of PDF stream filters. |
 | [FilterRegistry](Filters/FilterRegistry.md) | class | Central registry of PDF stream filter implementations. |
 | [IStreamFilter](Filters/IStreamFilter.md) | interface | Defines the contract for a PDF stream filter. |
+| [Jbig2Filter](Filters/Jbig2Filter.md) | class | The `JBIG2Decode` filter (PDF 32000-1:2008 §7.4.7). |
 | [LzwFilter](Filters/LzwFilter.md) | class | Implements the PDF LZWDecode filter. |
 | [RunLengthFilter](Filters/RunLengthFilter.md) | class | Implements the PDF RunLengthDecode filter (PackBits algorithm). |
 
