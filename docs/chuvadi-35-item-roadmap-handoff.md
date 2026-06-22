@@ -333,7 +333,8 @@ No JPX decoder — renders blank. *Very large (wavelets, EBCOT).*
 **25. [CMP] JPEG2000 (JPX) encode (optional)** — ❌ **NOT DONE**
 Only worth doing if it beats DCT+MRC. Depends on 24.
 
-**26. [BL] Type3 fonts (rendering)** — ❌ **NOT DONE**
+**26. [BL] Type3 fonts (rendering)** — ✅ **DONE** (Phase 2 Bucket B)
+*Bucket B update: Type 3 glyphs (CharProc content streams) now render on BOTH sinks. `d0`/`d1` added to the operator sink + walker; `Type3Font` parses FontMatrix, Encoding/Differences → CharProcs, Resources, and widths. Raster places each cached glyph via `NestedDisplayListOp`; SVG via a `Type3UseOp` transform group. d1 uncoloured glyphs paint in the text colour (colour ops suppressed); d0 coloured glyphs keep their own colour. Glyphs are cached per font/code/fill. Covered by `RasterType3Tests` + `SvgType3Tests`.*
 No `CharProcs`/`d0`/`d1` handling; Type3 text (glyphs defined as content streams) doesn't
 render. *Medium impact.*
 

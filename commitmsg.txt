@@ -1,0 +1,18 @@
+feat(rendering): Type 3 font rendering on raster and SVG sinks
+
+Render Type 3 font glyphs (CharProc content streams mapped to text space
+by the font matrix) on both the raster and SVG display-list pipelines.
+
+- Add d0/d1 to IContentOperatorSink and dispatch them in the content stream
+  walker; Type3Font parses FontMatrix, Encoding/Differences to CharProcs,
+  Resources, and per-glyph widths.
+- Raster: each cached glyph is placed via NestedDisplayListOp with the
+  composition FontMatrix * textScale * Tm * CTM.
+- SVG: a new Type3UseOp renders as a transform group wrapping the cached
+  glyph sub-display-list.
+- d1 uncoloured glyphs paint with the text fill colour (colour operators
+  suppressed); d0 coloured glyphs keep their own colour. Glyphs are cached
+  per font, code, and fill colour.
+- Tests: RasterType3Tests (pixel-verified) and SvgType3Tests (structural).
+
+Roadmap item 26.

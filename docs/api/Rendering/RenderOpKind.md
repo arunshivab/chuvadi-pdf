@@ -20,6 +20,7 @@ public enum RenderOpKind
 | `Opacity` | `OpacityOp`. |
 | `BlendMode` | `BlendModeOp`. |
 | `Shading` | `ShadingOp`. |
+| `Type3Glyph` | `Type3UseOp`. |
 
 ---
 

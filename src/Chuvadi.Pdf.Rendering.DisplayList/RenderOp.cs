@@ -38,6 +38,8 @@ public enum RenderOpKind
     BlendMode = 6,
     /// <summary><see cref="ShadingOp"/>.</summary>
     Shading = 7,
+    /// <summary><see cref="Type3UseOp"/>.</summary>
+    Type3Glyph = 8,
 }
 
 /// <summary>Line cap style (PDF §8.4.3.3).</summary>
@@ -406,4 +408,32 @@ public sealed class ShadingOp : RenderOp
 
     /// <summary>The sampled gradient stops, in increasing offset order.</summary>
     public IReadOnlyList<ShadingStop> Stops { get; init; } = System.Array.Empty<ShadingStop>();
+}
+
+/// <summary>
+/// Paints one Type 3 glyph: a cached glyph-space sub-display-list positioned by a
+/// composition transform (FontMatrix · text-scale · text matrix · CTM). The
+/// renderer wraps the sub-list in a transform group so a repeated glyph reuses
+/// the same cached ops. Blend mode and soft mask ride on this op (not baked into
+/// the cached sub-list), so the cache is colour-keyed only.
+/// </summary>
+public sealed class Type3UseOp : RenderOp
+{
+    /// <inheritdoc />
+    public override RenderOpKind Kind => RenderOpKind.Type3Glyph;
+
+    /// <summary>Initialises a <see cref="Type3UseOp"/>.</summary>
+    /// <param name="glyph">The glyph's sub-display-list, in glyph space.</param>
+    /// <param name="composition">Glyph space → page space transform.</param>
+    public Type3UseOp(PageDisplayList glyph, AffineMatrix composition)
+    {
+        Glyph = glyph;
+        Composition = composition;
+    }
+
+    /// <summary>The glyph's sub-display-list, in glyph space.</summary>
+    public PageDisplayList Glyph { get; }
+
+    /// <summary>Glyph space → page space transform for this occurrence.</summary>
+    public AffineMatrix Composition { get; }
 }

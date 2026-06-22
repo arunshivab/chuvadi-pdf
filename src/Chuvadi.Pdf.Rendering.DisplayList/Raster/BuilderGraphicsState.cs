@@ -9,6 +9,7 @@ using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
 using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
+using Type3Font = Chuvadi.Pdf.Rendering.DisplayList.Type3Font;
 
 namespace Chuvadi.Pdf.Rendering.Raster;
 
@@ -144,6 +145,9 @@ internal sealed class BuilderGraphicsState
     /// <summary>Active soft mask (ExtGState /SMask), or null when none.</summary>
     public RasterSoftMaskInfo? SoftMask { get; set; }
 
+    /// <summary>Parsed Type 3 font for the current font resource, or null.</summary>
+    public Type3Font? Type3 { get; set; }
+
     /// <summary>
     /// Returns a deep copy of this state suitable for pushing onto the
     /// q/Q stack. The clip list is defensively copied; primitive fields
@@ -181,6 +185,7 @@ internal sealed class BuilderGraphicsState
             StrokeAlpha = StrokeAlpha,
             BlendMode = BlendMode,
             SoftMask = SoftMask,
+            Type3 = Type3,
             ActiveClips = new List<ClipPath>(ActiveClips),
         };
     }
