@@ -418,9 +418,28 @@ internal static class ContentStreamWalker
 
             case "i":      // flatness — visual hint
             case "ri":     // rendering intent
-            case "BMC":    // marked content
-            case "BDC":
-            case "EMC":
+                break;
+
+            case "BMC":    // begin marked content (no property list)
+                if (operands.Count > 0)
+                {
+                    sink.BeginMarkedContent(ContentStrings.ExtractName(operands[0]), null);
+                }
+                break;
+
+            case "BDC":    // begin marked content with a property list
+                if (operands.Count > 0)
+                {
+                    string mcTag = ContentStrings.ExtractName(operands[0]);
+                    string mcProp = operands.Count > 1
+                        ? ContentStrings.ExtractName(operands[1])
+                        : string.Empty;
+                    sink.BeginMarkedContent(mcTag, mcProp.Length == 0 ? null : mcProp);
+                }
+                break;
+
+            case "EMC":    // end marked content
+                sink.EndMarkedContent();
                 break;
 
             // ── Type 3 glyph metrics ──────────────────────────────────────

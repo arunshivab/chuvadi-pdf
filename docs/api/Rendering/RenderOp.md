@@ -34,6 +34,14 @@ SoftMaskInfo? SoftMask
 
 Active soft mask (ExtGState /SMask) gating this op, or null.
 
+### `Layers`
+
+```csharp
+IReadOnlyList<string> Layers
+```
+
+The optional-content-group (layer) names that this op belongs to, from the enclosing marked-content sequences (`/OC … BDC … EMC`), ordered outermost-first. Empty when the op is not inside any optional-content layer. Never null. PDF 32000-1:2008 §8.11.3.2.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_
