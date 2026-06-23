@@ -20,8 +20,21 @@ namespace Chuvadi.Pdf.Rendering.DisplayList;
 /// </summary>
 public static class DisplayListBuilder
 {
-    /// <summary>Builds a display list for the given page.</summary>
-    public static PageDisplayList Build(PdfDocument document, int pageIndex)
+    /// <summary>
+    /// Builds a display list for the given page.
+    /// </summary>
+    /// <param name="document">The source document.</param>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <param name="flattenTransforms">
+    /// When true, the returned list contains no <see cref="TransformOp"/>s: the
+    /// current transformation matrix is already baked into every op's geometry
+    /// (and exposed per-op, e.g. <see cref="PathOp.Ctm"/>), so a consumer
+    /// walking the raw op list never has to track a transform stack. Renderers
+    /// that interpret <see cref="TransformOp"/> should leave this false (the
+    /// default), which preserves the full op stream.
+    /// </param>
+    public static PageDisplayList Build(
+        PdfDocument document, int pageIndex, bool flattenTransforms = false)
     {
         ArgumentNullException.ThrowIfNull(document);
         if (pageIndex < 0 || pageIndex >= document.PageCount)
@@ -29,7 +42,7 @@ public static class DisplayListBuilder
             throw new ArgumentOutOfRangeException(nameof(pageIndex));
         }
         PdfPage page = document.Pages[pageIndex];
-        return new Builder(document).BuildPage(page);
+        return new Builder(document).BuildPage(page, flattenTransforms);
     }
 
     private sealed class Builder : IContentOperatorSink
@@ -118,7 +131,7 @@ public static class DisplayListBuilder
 
         internal Builder(PdfDocument doc) { _doc = doc; }
 
-        internal PageDisplayList BuildPage(PdfPage page)
+        internal PageDisplayList BuildPage(PdfPage page, bool flattenTransforms)
         {
             _resources = page.Resources;
             byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
@@ -127,8 +140,25 @@ public static class DisplayListBuilder
             if (page.Dictionary.TryGetValue(PdfName.Intern("Rotate"), out PdfPrimitive? rv)
                 && rv is PdfInteger ri) { rotation = ri.Value; }
             IReadOnlyList<OptionalContentGroup> layers = OptionalContentReader.GetGroups(_doc);
+            IReadOnlyList<RenderOp> ops = flattenTransforms ? WithoutTransformOps(_ops) : _ops;
             return new PageDisplayList(
-                _ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers);
+                ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers);
+        }
+
+        // Returns a copy of the op list with every TransformOp removed. Safe
+        // because the CTM is already baked into each op's geometry and exposed
+        // per-op (e.g. PathOp.Ctm), so no transform-stack tracking is needed.
+        private static List<RenderOp> WithoutTransformOps(List<RenderOp> ops)
+        {
+            List<RenderOp> filtered = new List<RenderOp>(ops.Count);
+            foreach (RenderOp op in ops)
+            {
+                if (op is not TransformOp)
+                {
+                    filtered.Add(op);
+                }
+            }
+            return filtered;
         }
 
         // Appends an emitted op, stamping the optional-content layers currently
