@@ -74,6 +74,54 @@ Rasterizes a page and returns the result as a `CmykImage`.
 
 **Remarks:** Uses the standard subtractive RGB→CMYK conversion. For press-accurate output, apply an ICC transform externally.
 
+### `RenderRegion`
+
+```csharp
+PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi)
+```
+
+Renders a rectangular sub-region of a page to a `PixelBuffer` at the given resolution. The region is given in page (PDF user) space; the result is sized `region.Width * dpi/72` by `region.Height * dpi/72` pixels, with the region's top-left corner at the buffer origin. Lighter than rasterizing the whole page and cropping.
+
+**Parameters**
+
+- `page` — The page to render.
+- `region` — The sub-region in page space (PDF points).
+- `dpi` — Output resolution in dots per inch. Must be positive.
+
+**Returns:** The rendered region. Never null. <exception cref="ArgumentNullException">`page` is null.</exception> <exception cref="ArgumentOutOfRangeException"> `dpi` is not positive, or `region` has a non-positive dimension. </exception>
+
+### `RenderClipped`
+
+```csharp
+PixelBuffer RenderClipped(PdfPage page, PathGeometry clipPageSpace, double dpi)
+```
+
+Renders the content inside a clip path to a `PixelBuffer` at the given resolution. The buffer is sized to the clip path's page-space bounding box (at `dpi`); pixels outside the clip path are left fully transparent. The clip path is given in page (PDF user) space.
+
+**Parameters**
+
+- `page` — The page to render.
+- `clipPageSpace` — The clip path in page space.
+- `dpi` — Output resolution in dots per inch. Must be positive.
+
+**Returns:** The rendered, clipped region, sized to the clip's bounding box. Pixels outside the clip are transparent. Never null. <exception cref="ArgumentNullException"> `page` or `clipPageSpace` is null. </exception> <exception cref="ArgumentOutOfRangeException">`dpi` is not positive.</exception> <exception cref="ArgumentException">`clipPageSpace` has an empty bounding box.</exception>
+
+### `RenderRegionToPng`
+
+```csharp
+byte[] RenderRegionToPng(PdfPage page, Rect region, double dpi)
+```
+
+Renders a sub-region (see `RenderRegion`) and encodes it as 24-bit RGB PNG bytes.
+
+### `RenderClippedToPng`
+
+```csharp
+byte[] RenderClippedToPng(PdfPage page, PathGeometry clipPageSpace, double dpi)
+```
+
+Renders a clipped region (see `RenderClipped`) and encodes it as 32-bit RGBA PNG bytes, preserving the transparency outside the clip.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/PageRasterizer.cs`](../../../src/Chuvadi.Pdf.Rendering/PageRasterizer.cs)_
