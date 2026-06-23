@@ -14,6 +14,9 @@ using Chuvadi.Pdf.Rendering.Raster;
 using GraphicsPath = Chuvadi.Pdf.Graphics.Path;
 using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 using BlendModes = Chuvadi.Pdf.Rendering.DisplayList.BlendModes;
+using Rect = Chuvadi.Pdf.Rendering.DisplayList.Rect;
+using PathGeometry = Chuvadi.Pdf.Rendering.DisplayList.PathGeometry;
+using PathGeometryAccessors = Chuvadi.Pdf.Rendering.DisplayList.PathGeometryAccessors;
 
 namespace Chuvadi.Pdf.Rendering;
 
@@ -241,6 +244,217 @@ public sealed class PageRasterizer
 
         PixelBuffer buffer = Rasterize(page);
         return CmykImage.FromBgra(buffer);
+    }
+
+    // ── Region / clipped rendering ────────────────────────────────────────
+
+    /// <summary>
+    /// Renders a rectangular sub-region of a page to a <see cref="PixelBuffer"/>
+    /// at the given resolution. The region is given in page (PDF user) space;
+    /// the result is sized <c>region.Width * dpi/72</c> by
+    /// <c>region.Height * dpi/72</c> pixels, with the region's top-left corner
+    /// at the buffer origin. Lighter than rasterizing the whole page and
+    /// cropping.
+    /// </summary>
+    /// <param name="page">The page to render.</param>
+    /// <param name="region">The sub-region in page space (PDF points).</param>
+    /// <param name="dpi">Output resolution in dots per inch. Must be positive.</param>
+    /// <returns>The rendered region. Never null.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="page"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="dpi"/> is not positive, or <paramref name="region"/> has
+    /// a non-positive dimension.
+    /// </exception>
+    public PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (dpi <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dpi), "DPI must be positive.");
+        }
+        if (region.Width <= 0 || region.Height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(region), "Region must have positive width and height.");
+        }
+
+        RenderOptions options = WithDpi(dpi);
+        double scale = dpi / 72.0;
+        int width = Math.Max(1, (int)Math.Round(region.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(region.Height * scale));
+
+        PixelBuffer buffer = new PixelBuffer(width, height);
+        buffer.Clear(options.Background);
+        PaintRegion(page, options, region, buffer);
+        return buffer;
+    }
+
+    /// <summary>
+    /// Renders the content inside a clip path to a <see cref="PixelBuffer"/> at
+    /// the given resolution. The buffer is sized to the clip path's page-space
+    /// bounding box (at <paramref name="dpi"/>); pixels outside the clip path
+    /// are left fully transparent. The clip path is given in page (PDF user)
+    /// space.
+    /// </summary>
+    /// <param name="page">The page to render.</param>
+    /// <param name="clipPageSpace">The clip path in page space.</param>
+    /// <param name="dpi">Output resolution in dots per inch. Must be positive.</param>
+    /// <returns>
+    /// The rendered, clipped region, sized to the clip's bounding box. Pixels
+    /// outside the clip are transparent. Never null.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="page"/> or <paramref name="clipPageSpace"/> is null.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="dpi"/> is not positive.</exception>
+    /// <exception cref="ArgumentException"><paramref name="clipPageSpace"/> has an empty bounding box.</exception>
+    public PixelBuffer RenderClipped(PdfPage page, PathGeometry clipPageSpace, double dpi)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(clipPageSpace);
+        if (dpi <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dpi), "DPI must be positive.");
+        }
+
+        Rect bounds = PathGeometryAccessors.Bounds(clipPageSpace);
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            throw new ArgumentException(
+                "Clip path has an empty bounding box.", nameof(clipPageSpace));
+        }
+
+        RenderOptions options = WithDpi(dpi);
+        double scale = dpi / 72.0;
+        int width = Math.Max(1, (int)Math.Round(bounds.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(bounds.Height * scale));
+
+        PixelBuffer buffer = new PixelBuffer(width, height);
+        buffer.Clear(options.Background);
+        PaintRegion(page, options, bounds, buffer);
+        MaskToClip(buffer, clipPageSpace, bounds, scale, options.FlatnessTolerance);
+        return buffer;
+    }
+
+    /// <summary>
+    /// Renders a sub-region (see <see cref="RenderRegion"/>) and encodes it as
+    /// 24-bit RGB PNG bytes.
+    /// </summary>
+    public byte[] RenderRegionToPng(PdfPage page, Rect region, double dpi)
+    {
+        PixelBuffer buffer = RenderRegion(page, region, dpi);
+        ImageFrame frame = new ImageFrame(buffer, ImageColorFormat.Rgb24);
+        using (MemoryStream ms = new MemoryStream())
+        {
+            PngEncoder.Encode(frame, ms);
+            return ms.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Renders a clipped region (see <see cref="RenderClipped"/>) and encodes it
+    /// as 32-bit RGBA PNG bytes, preserving the transparency outside the clip.
+    /// </summary>
+    public byte[] RenderClippedToPng(PdfPage page, PathGeometry clipPageSpace, double dpi)
+    {
+        PixelBuffer buffer = RenderClipped(page, clipPageSpace, dpi);
+        ImageFrame frame = new ImageFrame(buffer, ImageColorFormat.Rgb24);
+        using (MemoryStream ms = new MemoryStream())
+        {
+            PngEncoder.Encode(frame, ms, includeAlpha: true);
+            return ms.ToArray();
+        }
+    }
+
+    // Clones the instance options with a new DPI.
+    private RenderOptions WithDpi(double dpi)
+    {
+        return new RenderOptions
+        {
+            Dpi = dpi,
+            Background = _options.Background,
+            FlatnessTolerance = _options.FlatnessTolerance,
+            SuperSample = _options.SuperSample,
+            AntiAlias = _options.AntiAlias,
+            GammaCorrect = _options.GammaCorrect,
+            Hinting = _options.Hinting,
+            AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
+        };
+    }
+
+    // Paints the page's display list into a region-sized buffer. The outer
+    // transform shifts the region's origin to (0,0); painting uses the region
+    // height for the Y-flip so the region's top maps to the buffer's top row.
+    private void PaintRegion(PdfPage page, RenderOptions options, Rect region, PixelBuffer buffer)
+    {
+        double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
+        bool lightHint = options.Hinting == HintingMode.Light;
+        PageDisplayList list = DisplayListBuilder.Build(
+            page, _objects, hintScale, lightHint, options.AutohintUnhintedFonts);
+        if (list.Ops.Count == 0)
+        {
+            return;
+        }
+
+        PageRasterizer painter = new PageRasterizer(_objects, options);
+        Transform outer = Transform.CreateTranslation(-region.X, -region.Y);
+        painter.PaintDisplayList(list, buffer, region.Height, outer);
+    }
+
+    // Sets pixels whose centres fall outside the clip path to fully transparent.
+    // The clip is flattened once; each pixel centre is mapped back to page space
+    // and tested with the same non-zero winding rule the renderer's fills use.
+    private static void MaskToClip(
+        PixelBuffer buffer, PathGeometry clip, Rect bounds, double scale, double tolerance)
+    {
+        IReadOnlyList<IReadOnlyList<(double X, double Y)>> subpaths =
+            PathGeometryAccessors.Flatten(clip, tolerance);
+
+        for (int y = 0; y < buffer.Height; y++)
+        {
+            double py = bounds.Y + bounds.Height - ((y + 0.5) / scale);
+            for (int x = 0; x < buffer.Width; x++)
+            {
+                double px = bounds.X + ((x + 0.5) / scale);
+                if (!PointInSubpaths(subpaths, px, py))
+                {
+                    buffer.SetPixelBgra(x, y, 0, 0, 0, 0);
+                }
+            }
+        }
+    }
+
+    // Non-zero winding point-in-path over pre-flattened subpaths. Mirrors
+    // PathGeometryAccessors.Contains so the mask matches the renderer's fills.
+    private static bool PointInSubpaths(
+        IReadOnlyList<IReadOnlyList<(double X, double Y)>> subpaths, double x, double y)
+    {
+        int winding = 0;
+        foreach (IReadOnlyList<(double X, double Y)> subpath in subpaths)
+        {
+            int n = subpath.Count;
+            if (n < 2)
+            {
+                continue;
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                (double X, double Y) a = subpath[i];
+                (double X, double Y) b = subpath[(i + 1) % n];
+                if ((a.Y > y) != (b.Y > y))
+                {
+                    double t = (y - a.Y) / (b.Y - a.Y);
+                    double crossX = a.X + (t * (b.X - a.X));
+                    if (crossX > x)
+                    {
+                        winding += b.Y > a.Y ? 1 : -1;
+                    }
+                }
+            }
+        }
+
+        return winding != 0;
     }
 
     // ── Display list painter ──────────────────────────────────────────────
