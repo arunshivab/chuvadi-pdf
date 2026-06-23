@@ -466,6 +466,7 @@ python tools/gen_api_docs.py
 | [ImageOp](Rendering/ImageOp.md) | class | Renders a raster image. |
 | [LineCap](Rendering/LineCap.md) | enum | Line cap style (PDF §8.4.3.3). |
 | [LineJoin](Rendering/LineJoin.md) | enum | Line join style (PDF §8.4.3.4). |
+| [LineSegmentExtraction](Rendering/LineSegmentExtraction.md) | class | Extension accessor that presents a page's path content as a flat list of `LineSegment`s, flattening cubic curves to polylines. |
 | [NestedDisplayListOp](Rendering/NestedDisplayListOp.md) | class | Paints another `PageDisplayList` with a composing transform. |
 | [OpacityOp](Rendering/OpacityOp.md) | class | Pushes or pops an opacity group. |
 | [PageDisplayList](Rendering/PageDisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
