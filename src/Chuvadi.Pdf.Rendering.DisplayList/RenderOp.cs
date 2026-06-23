@@ -33,6 +33,23 @@ public abstract class RenderOp
     /// extraction without re-walking the page.
     /// </remarks>
     public IReadOnlyList<string> Layers { get; internal set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The clipping paths in effect when this op was emitted, ordered
+    /// outermost-first (draw order), each already in page space (the CTM is
+    /// applied, matching <see cref="PathOp.Geometry"/> and
+    /// <see cref="ClipOp.Geometry"/>). The effective clip region is the
+    /// intersection of all paths in the list. Empty when the op is not clipped.
+    /// Never null. PDF 32000-1:2008 §8.5.4.
+    /// </summary>
+    /// <remarks>
+    /// Populated by <see cref="DisplayListBuilder"/> as it walks the content
+    /// stream, snapshotting the active clip stack (saved and restored by
+    /// <c>q</c>/<c>Q</c>) onto each op. Lets a consumer determine the region a
+    /// glyph, path, or image is confined to — e.g. which table cell or detail
+    /// view bounds it — without re-walking the clip stack.
+    /// </remarks>
+    public IReadOnlyList<PathGeometry> Clips { get; internal set; } = Array.Empty<PathGeometry>();
 }
 
 /// <summary>Tag identifying the concrete <see cref="RenderOp"/> subtype.</summary>
