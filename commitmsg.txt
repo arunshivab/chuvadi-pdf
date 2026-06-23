@@ -1,6 +1,0 @@
-Add per-op bounding boxes for vector extraction
-
-Adds Bounds extension methods for PathOp, ClipOp, and ImageOp (page-space
-axis-aligned boxes), plus RenderOp.TryGetBounds for polymorphic broad-phase
-culling. Path and clip bounds come from the flattened geometry; image bounds
-are the AABB of the unit square under the placement transform.

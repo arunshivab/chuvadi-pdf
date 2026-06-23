@@ -110,6 +110,24 @@ public sealed class PathOp : RenderOp
     /// <summary>The path geometry to render.</summary>
     public required PathGeometry Geometry { get; init; }
 
+    /// <summary>
+    /// The path geometry in user space, exactly as authored in the content
+    /// stream before the current transformation matrix was applied, or null
+    /// when raw geometry was not retained. <see cref="Ctm"/> maps this onto
+    /// <see cref="Geometry"/>: applying the CTM to each raw point yields the
+    /// corresponding page-space point. Enables extraction at true scale and
+    /// recovery of the original authored coordinates without inverting the CTM.
+    /// </summary>
+    public PathGeometry? RawGeometry { get; init; }
+
+    /// <summary>
+    /// The current transformation matrix in effect when this path was painted,
+    /// mapping <see cref="RawGeometry"/> (user space) onto <see cref="Geometry"/>
+    /// (page space). <see cref="AffineMatrix.Identity"/> when no raw geometry
+    /// was retained. PDF 32000-1:2008 §8.3.4.
+    /// </summary>
+    public AffineMatrix Ctm { get; init; } = AffineMatrix.Identity;
+
     /// <summary>Paint mode (fill / stroke / both).</summary>
     public required PaintMode Mode { get; init; }
 

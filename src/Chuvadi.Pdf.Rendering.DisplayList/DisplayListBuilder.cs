@@ -454,6 +454,7 @@ public static class DisplayListBuilder
             BuilderState s = _stack.Current;
             (double mx, double my) = s.Ctm.Apply(x, y);
             s.AppendMoveTo(mx, my);
+            s.AppendRawMoveTo(x, y);
         }
 
         /// <inheritdoc />
@@ -462,6 +463,7 @@ public static class DisplayListBuilder
             BuilderState s = _stack.Current;
             (double lx, double ly) = s.Ctm.Apply(x, y);
             s.AppendLineTo(lx, ly);
+            s.AppendRawLineTo(x, y);
         }
 
         /// <inheritdoc />
@@ -472,6 +474,7 @@ public static class DisplayListBuilder
             (double cx2, double cy2) = s.Ctm.Apply(x2, y2);
             (double cx3, double cy3) = s.Ctm.Apply(x3, y3);
             s.AppendCubicTo(cx1, cy1, cx2, cy2, cx3, cy3);
+            s.AppendRawCubicTo(x1, y1, x2, y2, x3, y3);
         }
 
         /// <inheritdoc />
@@ -481,6 +484,7 @@ public static class DisplayListBuilder
             (double vx2, double vy2) = s.Ctm.Apply(x2, y2);
             (double vx3, double vy3) = s.Ctm.Apply(x3, y3);
             s.AppendCubicTo(s.CurX, s.CurY, vx2, vy2, vx3, vy3);
+            s.AppendRawCubicTo(s.RawCurX, s.RawCurY, x2, y2, x3, y3);
         }
 
         /// <inheritdoc />
@@ -490,12 +494,14 @@ public static class DisplayListBuilder
             (double yx1, double yy1) = s.Ctm.Apply(x1, y1);
             (double yx3, double yy3) = s.Ctm.Apply(x3, y3);
             s.AppendCubicTo(yx1, yy1, yx3, yy3, yx3, yy3);
+            s.AppendRawCubicTo(x1, y1, x3, y3, x3, y3);
         }
 
         /// <inheritdoc />
         public void ClosePath()
         {
             _stack.Current.AppendClose();
+            _stack.Current.AppendRawClose();
         }
 
         /// <inheritdoc />
@@ -511,6 +517,11 @@ public static class DisplayListBuilder
             s.AppendLineTo(p2x, p2y);
             s.AppendLineTo(p3x, p3y);
             s.AppendClose();
+            s.AppendRawMoveTo(x, y);
+            s.AppendRawLineTo(x + w, y);
+            s.AppendRawLineTo(x + w, y + h);
+            s.AppendRawLineTo(x, y + h);
+            s.AppendRawClose();
         }
 
         // ── IContentOperatorSink — path painting and clipping ────────────
@@ -528,6 +539,7 @@ public static class DisplayListBuilder
             if (closeFirst)
             {
                 s.AppendClose();
+                s.AppendRawClose();
             }
             EmitPath(s, PaintMode.Stroke, FillRule.NonZero);
         }
@@ -539,6 +551,7 @@ public static class DisplayListBuilder
             if (closeFirst)
             {
                 s.AppendClose();
+                s.AppendRawClose();
             }
             EmitPath(s, PaintMode.FillAndStroke, evenOdd ? FillRule.EvenOdd : FillRule.NonZero);
         }
@@ -1081,6 +1094,8 @@ public static class DisplayListBuilder
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
                 Geometry = s.CurrentPath,
+                RawGeometry = s.CurrentRawPath,
+                Ctm = s.Ctm,
                 Mode = mode,
                 FillRule = rule,
                 FillColor = s.FillColor,
