@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.1 — glyph-level text positioning
 
+using System;
 using System.Collections.Generic;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
@@ -45,7 +46,8 @@ public sealed class TextRun
         string fontFamily,
         int fontWeight,
         FontSlant slant,
-        double fontSize)
+        double fontSize,
+        IReadOnlyList<string>? layers = null)
     {
         Unicode = unicode;
         BoundingBox = boundingBox;
@@ -56,6 +58,7 @@ public sealed class TextRun
         FontWeight = fontWeight;
         Slant = slant;
         FontSize = fontSize;
+        Layers = layers ?? Array.Empty<string>();
     }
 
     /// <summary>The logical character sequence (concatenation of glyph Unicodes).</summary>
@@ -84,4 +87,11 @@ public sealed class TextRun
 
     /// <summary>Effective font size of the run in user-space points.</summary>
     public double FontSize { get; }
+
+    /// <summary>
+    /// Optional-content (OCG) layers this run belongs to, outermost first, as
+    /// resolved from the marked-content stack. Empty when the run is not inside
+    /// any optional-content group.
+    /// </summary>
+    public IReadOnlyList<string> Layers { get; }
 }
