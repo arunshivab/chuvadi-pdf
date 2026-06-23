@@ -75,6 +75,17 @@ public static class DisplayListBuilder
         private readonly Dictionary<(string Font, int Code, PdfColor Fill), PageDisplayList> _type3GlyphCache = new();
         private bool _suppressColorOps;
 
+        // ── Optional-content (layer) membership ──────────────────────────────
+        //
+        // Marked-content nesting stack: one entry per BMC/BDC, holding the
+        // resolved OCG layer name for an /OC sequence, or null for any other
+        // marked-content tag. This is independent of the q/Q graphics-state
+        // stack (PDF 32000-1:2008 §8.10.1) — marked content nests on its own.
+        // _currentLayers is the cached outer-first snapshot of the non-null
+        // entries, stamped onto every emitted op by Add.
+        private readonly List<string?> _markedContentStack = new();
+        private IReadOnlyList<string> _currentLayers = Array.Empty<string>();
+
         // ── v2.1.2: gap-tracking for word-boundary space insertion ───────────
         //
         // After each text emit on the same line, we record the text-matrix
@@ -115,7 +126,108 @@ public static class DisplayListBuilder
             int rotation = 0;
             if (page.Dictionary.TryGetValue(PdfName.Intern("Rotate"), out PdfPrimitive? rv)
                 && rv is PdfInteger ri) { rotation = ri.Value; }
-            return new PageDisplayList(_ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics);
+            IReadOnlyList<OptionalContentGroup> layers = OptionalContentReader.GetGroups(_doc);
+            return new PageDisplayList(
+                _ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers);
+        }
+
+        // Appends an emitted op, stamping the optional-content layers currently
+        // in scope. All op emission funnels through here so layer membership is
+        // applied in exactly one place. PDF 32000-1:2008 §8.11.3.2.
+        private void Add(RenderOp op)
+        {
+            op.Layers = _currentLayers;
+            _ops.Add(op);
+        }
+
+        // ── IContentOperatorSink — marked content / optional content ──────────
+
+        /// <inheritdoc />
+        public void BeginMarkedContent(string tag, string? propertyName)
+        {
+            string? layer = (tag == "OC" && propertyName is not null)
+                ? ResolveOptionalContentName(propertyName)
+                : null;
+            _markedContentStack.Add(layer);
+            RecomputeCurrentLayers();
+        }
+
+        /// <inheritdoc />
+        public void EndMarkedContent()
+        {
+            if (_markedContentStack.Count > 0)
+            {
+                _markedContentStack.RemoveAt(_markedContentStack.Count - 1);
+                RecomputeCurrentLayers();
+            }
+        }
+
+        // Rebuilds the cached outer-first snapshot of active layer names from
+        // the marked-content stack (entries that are null — non-/OC marked
+        // content — contribute nothing).
+        private void RecomputeCurrentLayers()
+        {
+            List<string> active = new();
+            foreach (string? name in _markedContentStack)
+            {
+                if (name is not null) { active.Add(name); }
+            }
+            _currentLayers = active.Count == 0 ? Array.Empty<string>() : active;
+        }
+
+        // Resolves a BDC /OC property name through /Resources /Properties to the
+        // referenced OCG's /Name. Handles a direct OCG dictionary and an OCMD
+        // that references one or more OCGs (the first named group is used).
+        // Returns null when the chain cannot be resolved.
+        private string? ResolveOptionalContentName(string propertyName)
+        {
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Properties"), out PdfPrimitive? propsPrim)
+                || _doc.Objects.ResolveAs<PdfDictionary>(propsPrim) is not PdfDictionary properties
+                || !properties.TryGetValue(PdfName.Intern(propertyName), out PdfPrimitive? entryPrim)
+                || _doc.Objects.ResolveAs<PdfDictionary>(entryPrim) is not PdfDictionary entry)
+            {
+                return null;
+            }
+
+            string? direct = NameOfOcg(entry);
+            if (direct is not null) { return direct; }
+
+            // OCMD: /OCGs is a single OCG reference or an array of them.
+            if (entry.TryGetValue(PdfName.Intern("OCGs"), out PdfPrimitive? ocgsPrim))
+            {
+                PdfPrimitive resolved = _doc.Objects.Resolve(ocgsPrim);
+                if (resolved is PdfDictionary single)
+                {
+                    return NameOfOcg(single);
+                }
+
+                if (_doc.Objects.ResolveAs<PdfArray>(ocgsPrim) is PdfArray array)
+                {
+                    for (int i = 0; i < array.Count; i++)
+                    {
+                        if (_doc.Objects.ResolveAs<PdfDictionary>(array[i]) is PdfDictionary member)
+                        {
+                            string? memberName = NameOfOcg(member);
+                            if (memberName is not null) { return memberName; }
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        // Reads an OCG dictionary's /Name (a direct PDF string), decoded the
+        // same way OptionalContentReader does. Returns null when absent.
+        private static string? NameOfOcg(PdfDictionary ocg)
+        {
+            if (ocg.TryGetValue(PdfName.Intern("Name"), out PdfPrimitive? namePrim)
+                && namePrim is PdfString nameStr)
+            {
+                return System.Text.Encoding.Latin1.GetString(nameStr.Bytes);
+            }
+            return null;
         }
 
         // ── IContentOperatorSink — graphics state ─────────────────────────
@@ -125,14 +237,14 @@ public static class DisplayListBuilder
         {
             BuilderState s = _stack.Current;
             _stack.Push();
-            _ops.Add(new TransformOp { Push = true, Ctm = s.Ctm });
+            Add(new TransformOp { Push = true, Ctm = s.Ctm });
         }
 
         /// <inheritdoc />
         public void RestoreState()
         {
             _stack.Pop();
-            _ops.Add(new TransformOp { Push = false, Ctm = _stack.Current.Ctm });
+            Add(new TransformOp { Push = false, Ctm = _stack.Current.Ctm });
         }
 
         /// <inheritdoc />
@@ -443,7 +555,7 @@ public static class DisplayListBuilder
             BuilderState s = _stack.Current;
             if (s.HasCurrentPath)
             {
-                _ops.Add(new ClipOp
+                Add(new ClipOp
                 {
                     Geometry = s.CurrentPath,
                     FillRule = evenOdd ? FillRule.EvenOdd : FillRule.NonZero,
@@ -552,7 +664,7 @@ public static class DisplayListBuilder
                                 .Multiply(textScale)
                                 .Multiply(s.TextMatrix)
                                 .Multiply(s.Ctm);
-                            _ops.Add(new Type3UseOp(glyphList, composition)
+                            Add(new Type3UseOp(glyphList, composition)
                             {
                                 BlendMode = s.BlendMode,
                                 SoftMask = s.SoftMask,
@@ -905,7 +1017,7 @@ public static class DisplayListBuilder
             if (shading.IsRadial)
             {
                 (double rx1, double ry1) = ctm.Apply(coords[3], coords[4]);
-                _ops.Add(new ShadingOp
+                Add(new ShadingOp
                 {
                     BlendMode = _stack.Current.BlendMode,
                     SoftMask = _stack.Current.SoftMask,
@@ -924,7 +1036,7 @@ public static class DisplayListBuilder
             else
             {
                 (double ax1, double ay1) = ctm.Apply(coords[2], coords[3]);
-                _ops.Add(new ShadingOp
+                Add(new ShadingOp
                 {
                     BlendMode = _stack.Current.BlendMode,
                     SoftMask = _stack.Current.SoftMask,
@@ -964,7 +1076,7 @@ public static class DisplayListBuilder
                 MiterLimit: s.MiterLimit,
                 DashArray: s.DashArray,
                 DashPhase: s.DashPhase) : null;
-            _ops.Add(new PathOp
+            Add(new PathOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
@@ -1095,7 +1207,7 @@ public static class DisplayListBuilder
             }
 
             AffineMatrix combined = s.TextMatrix.Multiply(s.Ctm);
-            _ops.Add(new TextOp
+            Add(new TextOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
@@ -1310,7 +1422,7 @@ public static class DisplayListBuilder
         {
             if (pending.Count == 0) { return; }
 
-            _ops.Add(new TextOp
+            Add(new TextOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
@@ -1718,7 +1830,7 @@ public static class DisplayListBuilder
                 }
             }
 
-            _ops.Add(new ImageOp
+            Add(new ImageOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,

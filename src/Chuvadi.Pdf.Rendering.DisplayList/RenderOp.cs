@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.1 — display-list intermediate
 
+using System;
 using System.Collections.Generic;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
@@ -17,6 +18,21 @@ public abstract class RenderOp
 
     /// <summary>Active soft mask (ExtGState /SMask) gating this op, or null.</summary>
     public SoftMaskInfo? SoftMask { get; init; }
+
+    /// <summary>
+    /// The optional-content-group (layer) names that this op belongs to, from
+    /// the enclosing marked-content sequences (<c>/OC … BDC … EMC</c>), ordered
+    /// outermost-first. Empty when the op is not inside any optional-content
+    /// layer. Never null. PDF 32000-1:2008 §8.11.3.2.
+    /// </summary>
+    /// <remarks>
+    /// Populated by <see cref="DisplayListBuilder"/> as it walks the content
+    /// stream; consumers see it as read-only. A drawing op nested inside
+    /// <c>/OC /MC0 BDC</c> whose property resolves to an OCG named
+    /// <c>"PDF9_AR-Wall"</c> carries that name here, enabling layer-aware
+    /// extraction without re-walking the page.
+    /// </remarks>
+    public IReadOnlyList<string> Layers { get; internal set; } = Array.Empty<string>();
 }
 
 /// <summary>Tag identifying the concrete <see cref="RenderOp"/> subtype.</summary>

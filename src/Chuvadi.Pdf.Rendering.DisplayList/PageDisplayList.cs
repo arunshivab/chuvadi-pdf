@@ -8,6 +8,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
@@ -40,6 +41,9 @@ public sealed class PageDisplayList : IReadOnlyList<RenderOp>
 
     private static readonly IReadOnlyList<RenderingDiagnostic> EmptyDiagnostics
         = Array.Empty<RenderingDiagnostic>();
+
+    private static readonly IReadOnlyList<OptionalContentGroup> EmptyOcgs
+        = Array.Empty<OptionalContentGroup>();
 
     private readonly IReadOnlyList<RenderOp> _ops;
 
@@ -85,15 +89,35 @@ public sealed class PageDisplayList : IReadOnlyList<RenderOp>
         int rotation,
         IReadOnlyDictionary<string, PdfDictionary> fontDictsByKey,
         IReadOnlyList<RenderingDiagnostic> diagnostics)
+        : this(ops, mediaWidth, mediaHeight, rotation, fontDictsByKey, diagnostics, EmptyOcgs)
+    {
+    }
+
+    /// <summary>
+    /// Initialises a display list with the given ops, page metadata, font
+    /// dictionaries, diagnostics, and the document's optional-content groups
+    /// (layers) declared in /OCProperties/OCGs. New in v2.3. Individual ops
+    /// reference these layers by name through <see cref="RenderOp.Layers"/>.
+    /// </summary>
+    public PageDisplayList(
+        IReadOnlyList<RenderOp> ops,
+        double mediaWidth,
+        double mediaHeight,
+        int rotation,
+        IReadOnlyDictionary<string, PdfDictionary> fontDictsByKey,
+        IReadOnlyList<RenderingDiagnostic> diagnostics,
+        IReadOnlyList<OptionalContentGroup> optionalContentGroups)
     {
         _ops = ops ?? throw new ArgumentNullException(nameof(ops));
         ArgumentNullException.ThrowIfNull(fontDictsByKey);
         ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(optionalContentGroups);
         MediaWidth = mediaWidth;
         MediaHeight = mediaHeight;
         Rotation = rotation;
         FontDictsByKey = fontDictsByKey;
         Diagnostics = diagnostics;
+        OptionalContentGroups = optionalContentGroups;
     }
 
     /// <summary>Page width in points.</summary>
@@ -121,6 +145,15 @@ public sealed class PageDisplayList : IReadOnlyList<RenderOp>
     /// constructors without this argument see an empty list.
     /// </summary>
     public IReadOnlyList<RenderingDiagnostic> Diagnostics { get; }
+
+    /// <summary>
+    /// The optional-content groups (layers) declared in the document's
+    /// /OCProperties/OCGs array, in declaration order, with default
+    /// visibility resolved. Empty when the document has no optional content or
+    /// when a constructor without this argument was used. Never null. New in
+    /// v2.3. See <see cref="RenderOp.Layers"/> for per-op membership.
+    /// </summary>
+    public IReadOnlyList<OptionalContentGroup> OptionalContentGroups { get; }
 
     /// <inheritdoc />
     public int Count => _ops.Count;

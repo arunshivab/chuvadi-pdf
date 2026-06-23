@@ -350,6 +350,25 @@ internal interface IContentOperatorSink
     {
     }
 
+    // ── Marked content ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// BDC / BMC — begin a marked-content sequence. <paramref name="tag"/> is
+    /// the marked-content tag (for example <c>"OC"</c> for optional content).
+    /// <paramref name="propertyName"/> is the name of the /Properties resource
+    /// entry carried by BDC; it is null for BMC (which has no property operand)
+    /// and for a BDC whose property operand was an inline dictionary rather
+    /// than a name. PDF 32000-1:2008 §8.10.2, §8.11.3.2.
+    /// </summary>
+    void BeginMarkedContent(string tag, string? propertyName)
+    {
+    }
+
+    /// <summary>EMC — end the most recently begun marked-content sequence.</summary>
+    void EndMarkedContent()
+    {
+    }
+
     // ── Fallback ──────────────────────────────────────────────────────────
 
     /// <summary>Any operator the walker does not recognise.</summary>
