@@ -167,6 +167,7 @@ public static class DisplayListBuilder
         private void Add(RenderOp op)
         {
             op.Layers = _currentLayers;
+            op.Clips = _stack.Current.Clips;
             _ops.Add(op);
         }
 
@@ -603,7 +604,20 @@ public static class DisplayListBuilder
                     Geometry = s.CurrentPath,
                     FillRule = evenOdd ? FillRule.EvenOdd : FillRule.NonZero,
                 });
+                s.Clips = AppendClip(s.Clips, s.CurrentPath);
             }
+        }
+
+        // Returns a new list = existing active clips plus one more, outermost-
+        // first. A new list (rather than mutation) keeps clip sets shared by
+        // q/Q-cloned states immutable, so an inner clip is dropped on Q.
+        private static IReadOnlyList<PathGeometry> AppendClip(
+            IReadOnlyList<PathGeometry> clips, PathGeometry clip)
+        {
+            List<PathGeometry> next = new List<PathGeometry>(clips.Count + 1);
+            next.AddRange(clips);
+            next.Add(clip);
+            return next;
         }
 
         // ── IContentOperatorSink — text ──────────────────────────────────

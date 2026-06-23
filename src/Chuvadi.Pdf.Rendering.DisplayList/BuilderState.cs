@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.1 — display-list intermediate
 
+using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Content;
 
@@ -38,6 +39,12 @@ internal sealed class BuilderState
     // Constant alpha from ExtGState (/ca fill, /CA stroke). 1.0 = opaque.
     internal double FillAlpha { get; set; } = 1.0;
     internal double StrokeAlpha { get; set; } = 1.0;
+
+    // Active clip stack, outermost-first, each path in page space (CTM applied).
+    // Part of the graphics state: cloned by q and restored by Q, so a clip set
+    // inside a q/Q scope is dropped on Q. Treated immutably — SetClip replaces
+    // it with a new list — so a cloned reference is never mutated in place.
+    internal IReadOnlyList<PathGeometry> Clips { get; set; } = Array.Empty<PathGeometry>();
 
     // Text state
     internal AffineMatrix TextMatrix { get; set; } = AffineMatrix.Identity;
@@ -142,6 +149,7 @@ internal sealed class BuilderState
         DashPhase = DashPhase,
         FillAlpha = FillAlpha,
         StrokeAlpha = StrokeAlpha,
+        Clips = Clips,
         TextMatrix = TextMatrix,
         TextLineMatrix = TextLineMatrix,
         FontKey = FontKey,

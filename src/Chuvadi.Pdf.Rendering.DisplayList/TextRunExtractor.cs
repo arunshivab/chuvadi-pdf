@@ -65,29 +65,40 @@ public static class TextRunExtractor
     {
         System.Text.StringBuilder sb = new();
         List<GlyphPosition> positions = new(t.Glyphs.Count);
-        double minX = double.MaxValue, minY = double.MaxValue;
-        double maxX = double.MinValue, maxY = double.MinValue;
+
+        // Accumulate the run's extent in TEXT space (axis-aligned there), then
+        // transform the whole box to page space so rotation / shear produce a
+        // correct page-space AABB. The earlier approach assumed a horizontal
+        // advance and a vertical em, collapsing the width to zero for rotated
+        // (e.g. vertical) text.
+        double tsMinX = double.MaxValue, tsMinY = double.MaxValue;
+        double tsMaxX = double.MinValue, tsMaxY = double.MinValue;
 
         foreach (DisplayListGlyph g in t.Glyphs)
         {
             sb.Append(g.Unicode);
             (double wx, double wy) = t.Transform.Apply(g.X, g.Y);
-            (double wxa, _) = t.Transform.Apply(g.X + g.Advance, g.Y);
-            double advanceWorld = wxa - wx;
+            (double wxa, double wya) = t.Transform.Apply(g.X + g.Advance, g.Y);
+            double advanceWorld =
+                Math.Sqrt(((wxa - wx) * (wxa - wx)) + ((wya - wy) * (wya - wy)));
 
             positions.Add(new GlyphPosition(wx, wy, advanceWorld, g.Unicode));
 
-            double cx = wx;
-            double cy = wy;
-            double cw = advanceWorld;
-            double ch = t.FontSize * Math.Max(Math.Abs(t.Transform.D), Math.Abs(t.Transform.A));
-
-            if (cx < minX) { minX = cx; }
-            if (cy < minY) { minY = cy; }
-            if (cx + cw > maxX) { maxX = cx + cw; }
-            if (cy + ch > maxY) { maxY = cy + ch; }
+            // Glyph cell in text space: baseline origin to advance (x), baseline
+            // to ascent ~ one em (y).
+            double gx1 = g.X + g.Advance;
+            double gy1 = g.Y + t.FontSize;
+            if (g.X < tsMinX) { tsMinX = g.X; }
+            if (gx1 < tsMinX) { tsMinX = gx1; }
+            if (g.X > tsMaxX) { tsMaxX = g.X; }
+            if (gx1 > tsMaxX) { tsMaxX = gx1; }
+            if (g.Y < tsMinY) { tsMinY = g.Y; }
+            if (gy1 < tsMinY) { tsMinY = gy1; }
+            if (g.Y > tsMaxY) { tsMaxY = g.Y; }
+            if (gy1 > tsMaxY) { tsMaxY = gy1; }
         }
-        Rect bounds = new(minX, minY, maxX - minX, maxY - minY);
+
+        Rect bounds = TransformedBounds(t.Transform, t.Glyphs.Count, tsMinX, tsMinY, tsMaxX, tsMaxY);
         (double bx, double by) = t.Transform.Apply(0, 0);
 
         return new RawRun
@@ -101,6 +112,31 @@ public static class TextRunExtractor
             Style = t.Style,
             Layers = t.Layers,
         };
+    }
+
+    // Maps a text-space axis-aligned box through the run transform and returns
+    // the page-space axis-aligned bounding box of its four corners. Handles
+    // rotation and shear; collapses to a zero-size box at the origin for an
+    // empty run.
+    private static Rect TransformedBounds(
+        AffineMatrix m, int glyphCount, double minX, double minY, double maxX, double maxY)
+    {
+        if (glyphCount == 0)
+        {
+            (double ox, double oy) = m.Apply(0, 0);
+            return new Rect(ox, oy, 0, 0);
+        }
+
+        (double ax, double ay) = m.Apply(minX, minY);
+        (double bx, double by) = m.Apply(maxX, minY);
+        (double cx, double cy) = m.Apply(maxX, maxY);
+        (double dx, double dy) = m.Apply(minX, maxY);
+
+        double pMinX = Math.Min(Math.Min(ax, bx), Math.Min(cx, dx));
+        double pMinY = Math.Min(Math.Min(ay, by), Math.Min(cy, dy));
+        double pMaxX = Math.Max(Math.Max(ax, bx), Math.Max(cx, dx));
+        double pMaxY = Math.Max(Math.Max(ay, by), Math.Max(cy, dy));
+        return new Rect(pMinX, pMinY, pMaxX - pMinX, pMaxY - pMinY);
     }
 
     private sealed class RawRun
