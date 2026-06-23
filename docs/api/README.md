@@ -474,6 +474,7 @@ python tools/gen_api_docs.py
 | [PaintMode](Rendering/PaintMode.md) | enum | Whether a path is filled, stroked, or both. |
 | [PathCommand](Rendering/PathCommand.md) | enum | Type of a path command. |
 | [PathGeometry](Rendering/PathGeometry.md) | class | An ordered sequence of path segments. |
+| [PathGeometryAccessors](Rendering/PathGeometryAccessors.md) | class | Query accessors over `PathGeometry`: flattening, bounds, signed area, and point containment. |
 | [PathOp](Rendering/PathOp.md) | class | Renders a path with fill and/or stroke. |
 | [PathSegment](Rendering/PathSegment.md) | record struct | A single path segment. |
 | [PdfBlendMode](Rendering/PdfBlendMode.md) | enum | PDF blend modes (§11.3.5). |

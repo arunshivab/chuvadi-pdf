@@ -1,12 +1,7 @@
-Wire /JBIG2Globals through the decode pipeline
+Add PathGeometry query accessors for vector extraction
 
-Adds FilterParameters.Jbig2Globals and makes ContentStreamLoader resolve a
-filter's /JBIG2Globals shared-segment stream (dereferenced and decoded) when a
-resolver is available, so JBIG2 images that reference a globals symbol
-dictionary decode from a real PDF. Both display-list builders pass the resolver
-at image and soft-mask decode sites; Jbig2Filter forwards the globals to the
-decoder.
-
-Verified end-to-end: the public Norconex sample PDF decodes to a byte-exact
-352x91 image through the full pipeline, covered by an end-to-end regression
-test loading the sample PDF. Marks roadmap #22 (JBIG2 decode) done.
+Adds Flatten, Bounds, SignedArea, and Contains extension methods on
+PathGeometry: adaptive de Casteljau curve flattening, tight axis-aligned
+bounds, signed polygon area, and crossing/winding point-in-path for both
+fill rules. Pure functions over the segment list with no renderer or
+graphics-state dependency. First of the vector-extraction accessor set.
