@@ -1,7 +1,6 @@
-Add PathGeometry query accessors for vector extraction
+Add per-op bounding boxes for vector extraction
 
-Adds Flatten, Bounds, SignedArea, and Contains extension methods on
-PathGeometry: adaptive de Casteljau curve flattening, tight axis-aligned
-bounds, signed polygon area, and crossing/winding point-in-path for both
-fill rules. Pure functions over the segment list with no renderer or
-graphics-state dependency. First of the vector-extraction accessor set.
+Adds Bounds extension methods for PathOp, ClipOp, and ImageOp (page-space
+axis-aligned boxes), plus RenderOp.TryGetBounds for polymorphic broad-phase
+culling. Path and clip bounds come from the flattened geometry; image bounds
+are the AABB of the unit square under the placement transform.

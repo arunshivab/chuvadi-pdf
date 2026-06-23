@@ -485,6 +485,7 @@ python tools/gen_api_docs.py
 | [Rect](Rendering/Rect.md) | record struct | An axis-aligned bounding rectangle in PDF user-space coords. |
 | [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all operations in a `PageDisplayList`. |
 | [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all display-list operations. |
+| [RenderOpBounds](Rendering/RenderOpBounds.md) | class | Axis-aligned bounds accessors for `RenderOp` subtypes. |
 | [RenderOpKind](Rendering/RenderOpKind.md) | enum | Tag identifying the concrete `RenderOp` subtype. |
 | [RenderOptions](Rendering/RenderOptions.md) | class | Options that control how a PDF page is rasterized. |
 | [RenderingDiagnostic](Rendering/RenderingDiagnostic.md) | record | A single diagnostic event recorded by `DisplayListBuilder` during page construction. |
