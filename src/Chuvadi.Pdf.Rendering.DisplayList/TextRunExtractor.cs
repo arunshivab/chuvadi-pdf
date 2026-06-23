@@ -55,7 +55,8 @@ public static class TextRunExtractor
                 fontFamily: r.Style.FontFamily,
                 fontWeight: r.Style.Weight,
                 slant: r.Style.Slant,
-                fontSize: r.FontSize));
+                fontSize: r.FontSize,
+                layers: r.Layers));
         }
         return runs;
     }
@@ -98,6 +99,7 @@ public static class TextRunExtractor
             BaselineY = by,
             FontSize = t.FontSize,
             Style = t.Style,
+            Layers = t.Layers,
         };
     }
 
@@ -111,5 +113,7 @@ public static class TextRunExtractor
         public double FontSize { get; init; }
 
         public FontStyle Style { get; init; } = FontStyle.Default;
+
+        public IReadOnlyList<string> Layers { get; init; } = Array.Empty<string>();
     }
 }

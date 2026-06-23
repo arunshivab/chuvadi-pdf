@@ -504,6 +504,7 @@ python tools/gen_api_docs.py
 | [TextOp](Rendering/TextOp.md) | class | Renders a positioned glyph run. |
 | [TextRenderingMode](Rendering/TextRenderingMode.md) | enum | Rendering mode for a `TextOp` (PDF §9.3.6). |
 | [TextRun](Rendering/TextRun.md) | class | A contiguous run of text on a page, with glyph-level positions for selection-overlay use cases. |
+| [TextRunExtraction](Rendering/TextRunExtraction.md) | class | Extension surface for extracting text runs from a `PageDisplayList`. |
 | [TextRunExtractor](Rendering/TextRunExtractor.md) | class | Walks a `PageDisplayList` and produces a sequence of `TextRun`s in reading order. |
 | [TransformOp](Rendering/TransformOp.md) | class | Pushes or pops a graphics-state transformation matrix. |
 | [Type3Font](Rendering/Type3Font.md) | class | A parsed Type 3 font: its FontMatrix, per-code glyph content streams, the font's own /Resources, and glyph-space widths. |

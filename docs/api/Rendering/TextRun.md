@@ -82,6 +82,14 @@ double FontSize
 
 Effective font size of the run in user-space points.
 
+### `Layers`
+
+```csharp
+IReadOnlyList<string> Layers
+```
+
+Optional-content (OCG) layers this run belongs to, outermost first, as resolved from the marked-content stack. Empty when the run is not inside any optional-content group.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/TextRun.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/TextRun.cs)_
