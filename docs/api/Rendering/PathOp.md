@@ -26,6 +26,22 @@ required PathGeometry Geometry
 
 The path geometry to render.
 
+### `RawGeometry`
+
+```csharp
+PathGeometry? RawGeometry
+```
+
+The path geometry in user space, exactly as authored in the content stream before the current transformation matrix was applied, or null when raw geometry was not retained. `Ctm` maps this onto `Geometry`: applying the CTM to each raw point yields the corresponding page-space point. Enables extraction at true scale and recovery of the original authored coordinates without inverting the CTM.
+
+### `Ctm`
+
+```csharp
+AffineMatrix Ctm
+```
+
+The current transformation matrix in effect when this path was painted, mapping `RawGeometry` (user space) onto `Geometry` (page space). `AffineMatrix.Identity` when no raw geometry was retained. PDF 32000-1:2008 §8.3.4.
+
 ### `Mode`
 
 ```csharp

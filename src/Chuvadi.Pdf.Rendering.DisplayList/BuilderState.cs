@@ -59,6 +59,15 @@ internal sealed class BuilderState
     internal double CurY { get; set; }
     internal bool HasCurrentPath { get; set; }
 
+    // Raw (pre-CTM, user-space) mirror of the path under construction, retained
+    // alongside CurrentPath so extraction can recover authored coordinates and
+    // true scale. Appended point-for-point with CurrentPath; the CTM in effect
+    // maps CurrentRawPath onto CurrentPath (Ctm.Apply(raw) == baked). RawCurX/
+    // RawCurY track the raw current point for the v/y curve variants.
+    internal PathGeometry CurrentRawPath { get; set; } = new();
+    internal double RawCurX { get; set; }
+    internal double RawCurY { get; set; }
+
     internal void AppendMoveTo(double x, double y)
     {
         CurrentPath.MoveTo(x, y);
@@ -85,9 +94,33 @@ internal sealed class BuilderState
         CurrentPath.Close();
     }
 
+    internal void AppendRawMoveTo(double x, double y)
+    {
+        CurrentRawPath.MoveTo(x, y);
+        RawCurX = x; RawCurY = y;
+    }
+
+    internal void AppendRawLineTo(double x, double y)
+    {
+        CurrentRawPath.LineTo(x, y);
+        RawCurX = x; RawCurY = y;
+    }
+
+    internal void AppendRawCubicTo(double x1, double y1, double x2, double y2, double x3, double y3)
+    {
+        CurrentRawPath.CubicTo(x1, y1, x2, y2, x3, y3);
+        RawCurX = x3; RawCurY = y3;
+    }
+
+    internal void AppendRawClose()
+    {
+        CurrentRawPath.Close();
+    }
+
     internal void ResetPath()
     {
         CurrentPath = new PathGeometry();
+        CurrentRawPath = new PathGeometry();
         HasCurrentPath = false;
     }
 
