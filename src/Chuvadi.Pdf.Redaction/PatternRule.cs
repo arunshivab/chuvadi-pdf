@@ -15,17 +15,17 @@ namespace Chuvadi.Pdf.Redaction;
 /// </summary>
 /// <remarks>
 /// Use this when the exact rectangles aren't known up front (e.g., "redact every
-/// SSN", "redact every email address"). At redaction time the document's text
-/// is extracted with glyph positions; any match is resolved back to a device-space
-/// rectangle and fed into the existing rectangle-based redactor.
+/// SSN", "redact every email address"). At redaction time each text-showing
+/// operator's glyphs are decoded to Unicode (via the font's ToUnicode CMap) and
+/// matched against the pattern; matched glyphs are physically removed from the
+/// content stream, independent of layout geometry. A black (or caller-chosen)
+/// box is painted over each removed run when the overlay is enabled.
 /// </remarks>
 public sealed class PatternRule
 {
     /// <summary>Initialises a new <see cref="PatternRule"/>.</summary>
     /// <param name="pattern">
     /// The regex pattern. Must compile against the .NET regex flavour.
-    /// Matching is case-sensitive by default; pass an already-compiled <see cref="Regex"/>
-    /// via the other constructor to override.
     /// </param>
     /// <param name="pageIndices">
     /// Optional list of zero-based page indices to restrict the rule to.
@@ -36,14 +36,25 @@ public sealed class PatternRule
     /// returns <see langword="false"/> the match is not redacted. Use this to
     /// reject false positives via a checksum (e.g. <see cref="PatternValidators"/>).
     /// </param>
-    public PatternRule(string pattern, int[]? pageIndices = null, Func<string, bool>? validator = null)
+    /// <param name="ignoreCase">
+    /// When <see langword="true"/>, matching is case-insensitive. Defaults to
+    /// <see langword="false"/> (case-sensitive). To control other regex options,
+    /// pass a pre-compiled <see cref="Regex"/> via the other constructor.
+    /// </param>
+    public PatternRule(string pattern, int[]? pageIndices = null, Func<string, bool>? validator = null, bool ignoreCase = false)
     {
         if (pattern is null)
         {
             throw new ArgumentNullException(nameof(pattern));
         }
 
-        Regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions options = RegexOptions.Compiled | RegexOptions.CultureInvariant;
+        if (ignoreCase)
+        {
+            options |= RegexOptions.IgnoreCase;
+        }
+
+        Regex = new Regex(pattern, options);
         PageIndices = pageIndices;
         Validator = validator;
     }

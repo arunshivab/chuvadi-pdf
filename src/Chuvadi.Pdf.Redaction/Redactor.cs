@@ -12,9 +12,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
+using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
@@ -79,17 +81,11 @@ public static class Redactor
 
         // Resolve pattern rules into explicit rectangles by extracting text from each
         // page and matching the patterns against it.
+        // Rectangle-based redaction targets. Pattern (text) redaction is applied
+        // separately, by content, inside the rewrite — it is not resolved to
+        // rectangles here (that required a second, approximate layout pass that
+        // could drift from the rewrite's own glyph positions).
         List<RedactionRect> allRects = new List<RedactionRect>(options.Rectangles);
-
-        if (options.Patterns.Count > 0)
-        {
-            for (int p = 0; p < document.PageCount; p++)
-            {
-                List<RedactionRect> resolved = PatternMatcher.Resolve(
-                    document, p, options.Patterns, options.PatternPadding);
-                allRects.AddRange(resolved);
-            }
-        }
 
         // Group rectangles by page (with a parallel list of optional
         // in-place replacement strings, same index order as the rectangles).
@@ -127,10 +123,23 @@ public static class Redactor
 
         List<RedactionWork> work = new List<RedactionWork>();
 
-        foreach (KeyValuePair<int, List<RectangleF>> kvp in byPage)
+        // Pages to rewrite = those with rectangles plus those with applicable
+        // text patterns (a page may need rewriting for patterns alone, with no
+        // rectangles). Process in stable page order.
+        SortedSet<int> pagesToProcess = new SortedSet<int>(byPage.Keys);
+        if (options.Patterns.Count > 0)
         {
-            int pageIndex = kvp.Key;
+            for (int p = 0; p < document.PageCount; p++)
+            {
+                if (PageApplicablePatterns(options.Patterns, p).Count > 0)
+                {
+                    pagesToProcess.Add(p);
+                }
+            }
+        }
 
+        foreach (int pageIndex in pagesToProcess)
+        {
             if (pageIndex >= document.PageCount)
             {
                 continue;
@@ -141,8 +150,17 @@ public static class Redactor
                 continue;
             }
 
+            List<RectangleF> rects = byPage.TryGetValue(pageIndex, out List<RectangleF>? rectList)
+                ? rectList
+                : new List<RectangleF>();
+            List<string?> replacements =
+                byPageReplacements.TryGetValue(pageIndex, out List<string?>? replList)
+                    ? replList
+                    : new List<string?>();
+            List<PatternRule> pagePatterns = PageApplicablePatterns(options.Patterns, pageIndex);
+
             PdfPage page = document.Pages[pageIndex];
-            work.Add(new RedactionWork(pageId, page, kvp.Value, byPageReplacements[pageIndex]));
+            work.Add(new RedactionWork(pageId, page, rects, replacements, pagePatterns));
         }
 
         // Phase 1 (serial) — touches the lazy object store, which is NOT
@@ -178,8 +196,12 @@ public static class Redactor
         {
             for (int i = 0; i < work.Count; i++)
             {
-                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor, options.DrawOverlay);
+                (byte[] Bytes, List<RectangleF> OverlayBoxes) rewritten = RewriteContent(
+                    originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                    work[i].Page.Resources, work[i].Patterns);
+                redactedBytes[i] = rewritten.Bytes;
+                overlayBytes[i] = BuildOverlayWithPatterns(
+                    work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
             }
         }
         else
@@ -193,8 +215,12 @@ public static class Redactor
 
             Parallel.For(0, work.Count, parallelOptions, i =>
             {
-                redactedBytes[i] = RewriteContent(originals[i], PageContexts(work[i].Rects, work[i].Replacements), run, work[i].Page.Resources);
-                overlayBytes[i] = BuildOverlay(work[i].Rects, work[i].Replacements, options.OverlayColor, options.DrawOverlay);
+                (byte[] Bytes, List<RectangleF> OverlayBoxes) rewritten = RewriteContent(
+                    originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                    work[i].Page.Resources, work[i].Patterns);
+                redactedBytes[i] = rewritten.Bytes;
+                overlayBytes[i] = BuildOverlayWithPatterns(
+                    work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
             });
         }
 
@@ -307,12 +333,14 @@ public static class Redactor
     private readonly struct RedactionWork
     {
         public RedactionWork(
-            PdfObjectId pageId, PdfPage page, List<RectangleF> rects, List<string?> replacements)
+            PdfObjectId pageId, PdfPage page, List<RectangleF> rects, List<string?> replacements,
+            IReadOnlyList<PatternRule> patterns)
         {
             PageId = pageId;
             Page = page;
             Rects = rects;
             Replacements = replacements;
+            Patterns = patterns;
         }
 
         public PdfObjectId PageId { get; }
@@ -322,18 +350,39 @@ public static class Redactor
         public List<RectangleF> Rects { get; }
 
         public List<string?> Replacements { get; }
+
+        public IReadOnlyList<PatternRule> Patterns { get; }
+    }
+
+    // Returns the patterns from the set that apply to the given page (honouring
+    // each rule's optional page filter).
+    private static List<PatternRule> PageApplicablePatterns(
+        IList<PatternRule> patterns, int pageIndex)
+    {
+        List<PatternRule> result = new List<PatternRule>();
+        for (int i = 0; i < patterns.Count; i++)
+        {
+            if (patterns[i].AppliesToPage(pageIndex))
+            {
+                result.Add(patterns[i]);
+            }
+        }
+
+        return result;
     }
 
     // ── Content stream rewriter ───────────────────────────────────────────
 
-    private static byte[] RewriteContent(
-        byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources)
+    private static (byte[] Bytes, List<RectangleF> OverlayBoxes) RewriteContent(
+        byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources,
+        IReadOnlyList<PatternRule> patterns)
     {
         using (MemoryStream input = new MemoryStream(content))
         using (MemoryStream output = new MemoryStream())
         using (PdfTokenizer tok = new PdfTokenizer(input))
         {
             RedactState state = new RedactState();
+            state.Patterns = patterns;
             List<PdfToken> pendingOperands = new List<PdfToken>();
             PathAccumulator path = new PathAccumulator();
 
@@ -436,12 +485,48 @@ public static class Redactor
                     path.Reset();
                 }
 
-                // Glyph-level text redaction: rebuild a Tj so only the
+                // Glyph-level text redaction: rebuild Tj and TJ so only the
                 // in-region glyphs are removed, keeping neighbours in place.
-                // TJ/'/" remain whole-operator (still secure) for now.
+                // ' and " are decomposed below so their text is redacted the same way.
                 if (op == "Tj")
                 {
                     EmitRedactedText(output, pendingOperands, state, contexts);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                if (op == "TJ")
+                {
+                    EmitRedactedTJ(output, pendingOperands, state, contexts);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                // ' (move to next line and show) and " (set word/char spacing,
+                // move to next line, and show) are decomposed into their explicit
+                // equivalents so the shown string runs through the same glyph-level
+                // pattern redaction as Tj/TJ, instead of being dropped whole.
+                if (op == "'" && pendingOperands.Count >= 1)
+                {
+                    WriteRaw(output, "T*\n");
+                    state.NextLine();
+                    List<PdfToken> stringOnly = new List<PdfToken> { pendingOperands[pendingOperands.Count - 1] };
+                    EmitRedactedText(output, stringOnly, state, contexts);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                if (op == "\"" && pendingOperands.Count >= 3)
+                {
+                    state.WordSpacing = ParseDouble(pendingOperands[0]);
+                    state.CharSpacing = ParseDouble(pendingOperands[1]);
+                    WriteRaw(
+                        output,
+                        pendingOperands[0].RawText + " Tw\n"
+                            + pendingOperands[1].RawText + " Tc\nT*\n");
+                    state.NextLine();
+                    List<PdfToken> stringOnly = new List<PdfToken> { pendingOperands[2] };
+                    EmitRedactedText(output, stringOnly, state, contexts);
                     pendingOperands.Clear();
                     continue;
                 }
@@ -464,7 +549,7 @@ public static class Redactor
                 FlushPath(output, path);
             }
 
-            return output.ToArray();
+            return (output.ToArray(), state.PatternOverlayBoxes);
         }
     }
 
@@ -491,6 +576,20 @@ public static class Redactor
             case "TD": ApplyTD(operands, state); return false;
             case "Tm": ApplyTm(operands, state); return false;
             case "T*": state.NextLine(); return false;
+            case "Tc":
+                if (operands.Count >= 1 && operands[0].IsNumeric)
+                {
+                    state.CharSpacing = ParseDouble(operands[0]);
+                }
+
+                return false;
+            case "Tw":
+                if (operands.Count >= 1 && operands[0].IsNumeric)
+                {
+                    state.WordSpacing = ParseDouble(operands[0]);
+                }
+
+                return false;
 
             // ── Text-showing operators ─────────────────────────────────────
             case "Tj":
@@ -839,7 +938,50 @@ public static class Redactor
         {
             state.FontSize = ParseDouble(operands[1]);
             state.GlyphWidths = BuildGlyphWidths(operands[0], resources, store);
+            state.Font = BuildFont(operands[0], resources, store, state.FontCache);
         }
+    }
+
+    // Resolves the font named by the Tf operand into a PdfFont (for decoding
+    // glyph codes to Unicode), caching the result per name so each font's
+    // ToUnicode CMap is parsed at most once. Returns null when the font cannot
+    // be resolved or decoded, in which case callers fall back to treating codes
+    // as Latin-1.
+    private static PdfFont? BuildFont(
+        PdfToken nameToken,
+        PdfDictionary? resources,
+        PdfObjectStore store,
+        Dictionary<string, PdfFont?> cache)
+    {
+        if (resources is null || nameToken.Type != PdfTokenType.Name)
+        {
+            return null;
+        }
+
+        string fontName = nameToken.RawText.TrimStart('/');
+        if (cache.TryGetValue(fontName, out PdfFont? cached))
+        {
+            return cached;
+        }
+
+        PdfFont? result = null;
+        if (resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontDictValue)
+            && store.Resolve(fontDictValue) is PdfDictionary fonts
+            && fonts.TryGetValue(PdfName.Intern(fontName), out PdfPrimitive? fontEntry)
+            && store.Resolve(fontEntry) is PdfDictionary font)
+        {
+            try
+            {
+                result = PdfFont.FromDictionary(font, store);
+            }
+            catch (Exception)
+            {
+                result = null;
+            }
+        }
+
+        cache[fontName] = result;
+        return result;
     }
 
     // Builds a per-byte-code width table (1/1000 em) for the font named by the
@@ -1061,6 +1203,8 @@ public static class Redactor
         bool[] drop = new bool[text.Length];
         string?[] glyphReplacement = new string?[text.Length];
         double[] advance = new double[text.Length];
+        double[] glyphX0 = new double[text.Length];
+        double[] glyphX1 = new double[text.Length];
         bool anyDropped = false;
         bool allDropped = true;
         bool anyReplacement = false;
@@ -1079,16 +1223,40 @@ public static class Redactor
                     ? gw[code]
                     : 500;
             advance[i] = width1000;
-            double advUser = width1000 / 1000.0 * state.FontSize;
+            double advUser = width1000 / 1000.0 * state.FontSize
+                + state.CharSpacing
+                + (code == 32 ? state.WordSpacing : 0.0);
 
+            glyphX0[i] = cursor;
+            glyphX1[i] = cursor + advUser;
             bool inRegion = MatchSpan(
                 cursor, cursor + advUser, state, local, contexts, out string? replacement);
             drop[i] = inRegion;
             glyphReplacement[i] = replacement;
-            if (inRegion)
+
+            cursor += advUser;
+        }
+
+        // Advance the in-line text cursor so a subsequent show operator on the
+        // same line is measured from the correct position (PDF text positions
+        // accumulate across Tj/TJ until the next line move resets TextX).
+        state.TextX = cursor;
+
+        // Pattern (content) redaction: flag glyphs that fall within a text-pattern
+        // match, independent of layout geometry. Then derive the drop summary.
+        bool[] patternDrop = new bool[text.Length];
+        MarkPatternDrops(text, state, patternDrop);
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (patternDrop[i])
+            {
+                drop[i] = true;
+            }
+
+            if (drop[i])
             {
                 anyDropped = true;
-                if (replacement is not null)
+                if (glyphReplacement[i] is not null)
                 {
                     anyReplacement = true;
                 }
@@ -1097,9 +1265,10 @@ public static class Redactor
             {
                 allDropped = false;
             }
-
-            cursor += advUser;
         }
+
+        Transform overlayBase = contexts.Count > 0 ? contexts[0].BaseCtm : Transform.Identity;
+        AddPatternOverlayBoxes(patternDrop, glyphX0, glyphX1, state, overlayBase);
 
         if (!anyDropped)
         {
@@ -1174,6 +1343,329 @@ public static class Redactor
         tj.Append("] TJ\n");
         byte[] bytes = Encoding.Latin1.GetBytes(tj.ToString());
         output.Write(bytes, 0, bytes.Length);
+    }
+
+    // Glyph-level redaction for a TJ array. Walks the array's strings and
+    // kerning numbers, dropping only the glyphs whose span falls in a redaction
+    // rectangle and preserving the original inter-glyph kerns so survivors stay
+    // positioned. This is the array analogue of EmitRedactedText (single-string
+    // Tj): without it, a whole TJ — typically one line of a Word/Office PDF —
+    // was dropped if any glyph in it was redacted, and mid-line matches were
+    // missed because the cursor was not advanced across array elements.
+    private static void EmitRedactedTJ(
+        MemoryStream output, List<PdfToken> operands, RedactState state,
+        IReadOnlyList<RedactContext> contexts)
+    {
+        // Flatten the array into ordered glyphs, recording the kern number that
+        // precedes each (a TJ number k shifts the next glyph left by k/1000 of
+        // the text space).
+        List<char> chars = new List<char>();
+        List<double> widths = new List<double>();
+        List<double> leadKern = new List<double>();
+        double pendingKern = 0.0;
+        bool sawArray = false;
+
+        for (int t = 0; t < operands.Count; t++)
+        {
+            PdfToken tok = operands[t];
+            if (tok.Type == PdfTokenType.ArrayStart)
+            {
+                sawArray = true;
+                continue;
+            }
+            if (tok.Type == PdfTokenType.ArrayEnd)
+            {
+                break;
+            }
+            if (!sawArray)
+            {
+                continue;
+            }
+
+            if (tok.IsNumeric)
+            {
+                pendingKern += ParseDouble(tok);
+                continue;
+            }
+
+            if (tok.Type == PdfTokenType.LiteralString || tok.Type == PdfTokenType.HexString)
+            {
+                string s = ExtractString(tok);
+                for (int j = 0; j < s.Length; j++)
+                {
+                    int code = s[j];
+                    int width1000 =
+                        (state.GlyphWidths is int[] gw && code >= 0 && code < 256 && gw[code] > 0)
+                            ? gw[code]
+                            : 500;
+                    chars.Add(s[j]);
+                    widths.Add(width1000);
+                    leadKern.Add(j == 0 ? pendingKern : 0.0);
+                    pendingKern = 0.0;
+                }
+            }
+        }
+
+        int n = chars.Count;
+        if (n == 0 || state.FontSize <= 0)
+        {
+            WriteOriginalTJ(output, operands);
+            return;
+        }
+
+        bool[] drop = new bool[n];
+        string?[] glyphReplacement = new string?[n];
+        double[] glyphX0 = new double[n];
+        double[] glyphX1 = new double[n];
+        bool anyDropped = false;
+        bool allDropped = true;
+        bool anyReplacement = false;
+        double cursor = state.TextX;
+        Transform local = state.TextMatrix;
+
+        for (int i = 0; i < n; i++)
+        {
+            // Apply the kern preceding this glyph (TJ number k → shift left by
+            // k/1000 × font size) before measuring its span.
+            cursor -= leadKern[i] / 1000.0 * state.FontSize;
+
+            double advUser = widths[i] / 1000.0 * state.FontSize
+                + state.CharSpacing
+                + (chars[i] == 32 ? state.WordSpacing : 0.0);
+            glyphX0[i] = cursor;
+            glyphX1[i] = cursor + advUser;
+            bool inRegion = MatchSpan(
+                cursor, cursor + advUser, state, local, contexts, out string? replacement);
+            drop[i] = inRegion;
+            glyphReplacement[i] = replacement;
+
+            cursor += advUser;
+        }
+
+        // Advance the in-line text cursor (see EmitRedactedText) so a following
+        // show operator on the same line measures from the correct position.
+        state.TextX = cursor;
+
+        // Pattern (content) redaction: flag glyphs within a text-pattern match,
+        // independent of layout geometry. Then derive the drop summary.
+        bool[] patternDrop = new bool[n];
+        MarkPatternDrops(new string(chars.ToArray()), state, patternDrop);
+        for (int i = 0; i < n; i++)
+        {
+            if (patternDrop[i])
+            {
+                drop[i] = true;
+            }
+
+            if (drop[i])
+            {
+                anyDropped = true;
+                if (glyphReplacement[i] is not null)
+                {
+                    anyReplacement = true;
+                }
+            }
+            else
+            {
+                allDropped = false;
+            }
+        }
+
+        Transform overlayBase = contexts.Count > 0 ? contexts[0].BaseCtm : Transform.Identity;
+        AddPatternOverlayBoxes(patternDrop, glyphX0, glyphX1, state, overlayBase);
+
+        if (!anyDropped)
+        {
+            WriteOriginalTJ(output, operands);
+            return;
+        }
+
+        if (allDropped && !anyReplacement)
+        {
+            return;
+        }
+
+        // Rebuild. Displacement is tracked in 1/1000 em, rightward-positive: a
+        // glyph width w contributes +w, a TJ kern number k contributes −k. The
+        // number that reproduces a displacement d is −d.
+        StringBuilder tj = new StringBuilder();
+        tj.Append('[');
+        int idx = 0;
+        while (idx < n)
+        {
+            if (drop[idx])
+            {
+                double disp = 0;
+                string? replacement = null;
+                while (idx < n && drop[idx])
+                {
+                    disp += -leadKern[idx];
+                    disp += widths[idx];
+                    if (replacement is null)
+                    {
+                        replacement = glyphReplacement[idx];
+                    }
+
+                    idx++;
+                }
+
+                if (replacement is null)
+                {
+                    if (disp != 0)
+                    {
+                        tj.Append(' ')
+                            .Append((-disp).ToString("0.###", CultureInfo.InvariantCulture))
+                            .Append(' ');
+                    }
+                }
+                else
+                {
+                    double replacementWidth = MeasureString1000(replacement, state);
+                    if (replacementWidth > disp)
+                    {
+                        throw new RedactionException(
+                            $"Replacement text \"{replacement}\" is wider than the redacted "
+                            + "span and cannot be drawn in place; use a shorter replacement.");
+                    }
+
+                    tj.Append(EncodeLiteralString(replacement));
+                    double remaining = disp - replacementWidth;
+                    if (remaining > 0)
+                    {
+                        tj.Append(' ')
+                            .Append((-remaining).ToString("0.###", CultureInfo.InvariantCulture))
+                            .Append(' ');
+                    }
+                }
+            }
+            else
+            {
+                // Emit the kern preceding this survivor (preserving original
+                // inter-glyph spacing), then accumulate survivors until the next
+                // kern or dropped glyph.
+                if (leadKern[idx] != 0)
+                {
+                    tj.Append(' ')
+                        .Append(leadKern[idx].ToString("0.###", CultureInfo.InvariantCulture))
+                        .Append(' ');
+                }
+
+                StringBuilder run = new StringBuilder();
+                run.Append(chars[idx]);
+                idx++;
+                while (idx < n && !drop[idx] && leadKern[idx] == 0)
+                {
+                    run.Append(chars[idx]);
+                    idx++;
+                }
+
+                tj.Append(EncodeLiteralString(run.ToString()));
+            }
+        }
+
+        tj.Append("] TJ\n");
+        byte[] bytes = Encoding.Latin1.GetBytes(tj.ToString());
+        output.Write(bytes, 0, bytes.Length);
+    }
+
+    // Adds page-space overlay rectangles covering maximal runs of glyphs removed
+    // by a content pattern. Positions come from the rewrite's own glyph cursor,
+    // so the boxes line up exactly with what was removed (no second layout pass).
+    private static void AddPatternOverlayBoxes(
+        bool[] patternDrop, double[] glyphX0, double[] glyphX1, RedactState state,
+        Transform baseCtm)
+    {
+        Transform combined = state.TextMatrix.Multiply(state.Ctm).Multiply(baseCtm);
+        double bottom = GlyphBottom(state);
+        double top = GlyphTop(state);
+        int i = 0;
+        while (i < patternDrop.Length)
+        {
+            if (!patternDrop[i])
+            {
+                i++;
+                continue;
+            }
+
+            int runStart = i;
+            while (i < patternDrop.Length && patternDrop[i])
+            {
+                i++;
+            }
+
+            PointF corner0 = combined.TransformPoint(new PointF(glyphX0[runStart], bottom));
+            PointF corner1 = combined.TransformPoint(new PointF(glyphX1[i - 1], top));
+            state.PatternOverlayBoxes.Add(
+                RectangleF.FromCorners(corner0.X, corner0.Y, corner1.X, corner1.Y));
+        }
+    }
+
+    private static void WriteRaw(MemoryStream output, string text)
+    {
+        byte[] bytes = Encoding.Latin1.GetBytes(text);
+        output.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void WriteOriginalTJ(MemoryStream output, List<PdfToken> operands)
+    {
+        WriteTokens(output, operands);
+        byte[] op = Encoding.Latin1.GetBytes("TJ\n");
+        output.Write(op, 0, op.Length);
+    }
+
+    // Flags glyphs that fall within a text-pattern match. Each glyph's byte code
+    // is decoded to Unicode through the active font (its ToUnicode CMap when
+    // present), the operator's text is matched against the page's patterns, and
+    // every glyph contributing to a match is marked for removal. This is
+    // position-free: it removes the matched text wherever it physically sits,
+    // independent of layout transforms, kerning, or character spacing — so it
+    // does not drift the way geometry-based resolution can. A pattern that spans
+    // two separate show operators is not matched here (a documented limitation).
+    private static void MarkPatternDrops(string codes, RedactState state, bool[] drop)
+    {
+        IReadOnlyList<PatternRule>? patterns = state.Patterns;
+        if (patterns is null || patterns.Count == 0 || codes.Length == 0)
+        {
+            return;
+        }
+
+        StringBuilder textBuilder = new StringBuilder(codes.Length);
+        List<int> glyphOfChar = new List<int>(codes.Length);
+        for (int i = 0; i < codes.Length; i++)
+        {
+            string unicode = state.Font is PdfFont font
+                ? font.DecodeCode(codes[i])
+                : codes[i].ToString();
+            for (int k = 0; k < unicode.Length; k++)
+            {
+                textBuilder.Append(unicode[k]);
+                glyphOfChar.Add(i);
+            }
+        }
+
+        string text = textBuilder.ToString();
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        for (int p = 0; p < patterns.Count; p++)
+        {
+            PatternRule rule = patterns[p];
+            foreach (Match match in rule.Regex.Matches(text))
+            {
+                if (rule.Validator is not null && !rule.Validator(match.Value))
+                {
+                    continue;
+                }
+
+                int matchEnd = match.Index + match.Length;
+                for (int c = match.Index; c < matchEnd && c < glyphOfChar.Count; c++)
+                {
+                    drop[glyphOfChar[c]] = true;
+                }
+            }
+        }
     }
 
     // Total advance of a string in 1/1000 em for the active font (no font-size
@@ -1550,7 +2042,7 @@ public static class Redactor
 
             byte[] formBytes = DecodeStream(form, run.Pipeline);
             PdfDictionary? formResources = ResolveFormResources(form, null, run.Store);
-            byte[] redacted = RewriteContent(formBytes, kvp.Value, run, formResources);
+            byte[] redacted = RewriteContent(formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>()).Bytes;
 
             PdfDictionary newDict = CopyDictionary(form.Dictionary);
             newDict.Remove(PdfName.Intern("Filter"));
@@ -1563,6 +2055,39 @@ public static class Redactor
     }
 
     // ── Overlay generation ────────────────────────────────────────────────
+
+    // Builds the overlay for a page, combining the explicit redaction rectangles
+    // with the boxes covering content-pattern removals (which carry no
+    // replacement text). The boxes are drawn in the same overlay colour.
+    //
+    // Content-pattern box positions are derived from the rewrite's linear text
+    // advance. For normally laid-out text this matches the page exactly, but for
+    // heavily justified text inside clipped table cells the advance can drift and
+    // place the box off the visible page. Such out-of-bounds boxes are suppressed
+    // so a drifted box is never painted in the wrong place — the matched text is
+    // still physically removed, leaving a clean gap. (A render-faithful box for
+    // those cases is tracked as follow-up work.)
+    private static byte[] BuildOverlayWithPatterns(
+        RedactionWork work, List<RectangleF> patternBoxes, ColorF overlayColor, bool drawOverlay)
+    {
+        List<RectangleF> rects = new List<RectangleF>(work.Rects);
+        List<string?> replacements = new List<string?>(work.Replacements);
+
+        PdfRectangle crop = work.Page.CropBox;
+        RectangleF pageRect = RectangleF.FromCorners(crop.X1, crop.Y1, crop.X2, crop.Y2);
+        for (int b = 0; b < patternBoxes.Count; b++)
+        {
+            if (patternBoxes[b].Intersect(pageRect).IsEmpty)
+            {
+                continue;
+            }
+
+            rects.Add(patternBoxes[b]);
+            replacements.Add(null);
+        }
+
+        return BuildOverlay(rects, replacements, overlayColor, drawOverlay);
+    }
 
     private static byte[] BuildOverlay(
         List<RectangleF> rects, List<string?> replacements, ColorF overlayColor, bool drawOverlay)
@@ -2188,9 +2713,37 @@ internal sealed class RedactState
     internal int[]? GlyphWidths { get; set; }
     internal double Leading { get; set; }
 
+    // Active font for the current text-showing operator, used to decode glyph
+    // codes to Unicode for content-based pattern matching. Null when unknown.
+    internal PdfFont? Font { get; set; }
+
+    // Per-name cache of decoded fonts for this content stream, so the ToUnicode
+    // CMap of each font is parsed at most once per page.
+    internal Dictionary<string, PdfFont?> FontCache { get; } =
+        new Dictionary<string, PdfFont?>(StringComparer.Ordinal);
+
+    // Text patterns to redact by content (independent of geometry). Null or empty
+    // when only rectangle-based redaction is in effect.
+    internal IReadOnlyList<PatternRule>? Patterns { get; set; }
+
+    // Page-space rectangles covering glyphs removed by a content pattern, so the
+    // overlay can paint a box over them (rectangle-based removal already gets its
+    // overlay from the rectangles). Filled by the text-showing operators.
+    internal List<RectangleF> PatternOverlayBoxes { get; } = new List<RectangleF>();
+
+    // Text-state spacing (PDF 9.4.4): added to each glyph's advance in text
+    // space. Word spacing applies only to the single-byte space (code 32).
+    // Both are part of the graphics state and are saved/restored by q/Q.
+    internal double CharSpacing { get; set; }
+    internal double WordSpacing { get; set; }
+    private readonly Stack<double> _charSpacingStack = new Stack<double>();
+    private readonly Stack<double> _wordSpacingStack = new Stack<double>();
+
     internal void PushGraphicsState()
     {
         _ctmStack.Push(Ctm);
+        _charSpacingStack.Push(CharSpacing);
+        _wordSpacingStack.Push(WordSpacing);
     }
 
     internal void PopGraphicsState()
@@ -2198,6 +2751,16 @@ internal sealed class RedactState
         if (_ctmStack.Count > 0)
         {
             Ctm = _ctmStack.Pop();
+        }
+
+        if (_charSpacingStack.Count > 0)
+        {
+            CharSpacing = _charSpacingStack.Pop();
+        }
+
+        if (_wordSpacingStack.Count > 0)
+        {
+            WordSpacing = _wordSpacingStack.Pop();
         }
     }
 
