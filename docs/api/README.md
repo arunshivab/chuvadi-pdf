@@ -268,7 +268,7 @@ python tools/gen_api_docs.py
 | [CffLoader](Fonts/CffLoader.md) | class | Loads a Compact Font Format (CFF) / Type 1C font program and produces glyph outlines. |
 | [CodespaceRange](Fonts/CodespaceRange.md) | record struct | A declared codespace range from a CMap's `begincodespacerange ... endcodespacerange` block. |
 | [FontException](Fonts/FontException.md) | class | Thrown when a font dictionary cannot be parsed or a character code cannot be mapped to a Unicode codepoint. |
-| [FontRenderer](Fonts/FontRenderer.md) | class | High-level API for extracting glyph outlines from a TrueType or OpenType font. |
+| [FontRenderer](Fonts/FontRenderer.md) | class | High-level API for extracting glyph outlines from a TrueType, OpenType, or CFF (Type 1C) font. |
 | [FontRenderingException](Fonts/FontRenderingException.md) | class | Thrown when a font file cannot be parsed or a glyph outline cannot be extracted due to an invalid or unsupported font structure. |
 | [GlyphMetrics](Fonts/GlyphMetrics.md) | class | Typographic metrics for a single glyph, in font units (unscaled). |
 | [GlyphNameToUnicode](Fonts/GlyphNameToUnicode.md) | class | Implements the Adobe Glyph List algorithm for deriving Unicode scalar values from a glyph name. |
