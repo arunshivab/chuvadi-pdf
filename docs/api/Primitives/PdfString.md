@@ -79,7 +79,7 @@ The empty PDF string.
 string ToTextString()
 ```
 
-Decodes this PDF string as a text string. Uses UTF-16BE if the bytes begin with BOM 0xFE 0xFF, UTF-16LE if they begin with 0xFF 0xFE, or PDFDocEncoding (Latin-1) otherwise.
+Decodes this PDF string as a text string. Uses UTF-16BE if the bytes begin with BOM 0xFE 0xFF, UTF-16LE if they begin with 0xFF 0xFE, UTF-8 if they begin with 0xEF 0xBB 0xBF, or PDFDocEncoding (Latin-1) otherwise.
 
 ### `Equals`
 
