@@ -215,10 +215,22 @@ public sealed class PdfDocumentBuilder
                 xobjectDict.Set(PdfName.Intern(img.Key), new PdfReference(imgId));
             }
 
+            // ExtGState dictionary for image-overlay constant alpha (/ca, /CA).
+            PdfDictionary extGStateDict = new();
+            foreach (KeyValuePair<string, double> gs in p.ExtGStateAlphas)
+            {
+                PdfDictionary gsDict = new();
+                gsDict.Set(PdfName.Type, PdfName.Intern("ExtGState"));
+                gsDict.Set(PdfName.Intern("ca"), new PdfReal(gs.Value));
+                gsDict.Set(PdfName.Intern("CA"), new PdfReal(gs.Value));
+                extGStateDict.Set(PdfName.Intern(gs.Key), gsDict);
+            }
+
             // Resources
             PdfDictionary resources = new();
             if (p.Fonts.Count > 0) { resources.Set(PdfName.Intern("Font"), fontDict); }
             if (p.Images.Count > 0) { resources.Set(PdfName.Intern("XObject"), xobjectDict); }
+            if (p.ExtGStateAlphas.Count > 0) { resources.Set(PdfName.Intern("ExtGState"), extGStateDict); }
             // Always declare ProcSet for older readers.
             PdfArray procSet = new();
             procSet.Add(PdfName.Intern("PDF"));

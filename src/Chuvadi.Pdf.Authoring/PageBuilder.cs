@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -21,6 +22,10 @@ public sealed class PageBuilder
     internal List<HyperlinkRect> Hyperlinks { get; } = new();
     internal List<ImageRef> Images { get; } = new();
     internal HashSet<string> Fonts { get; } = new();
+
+    // gsKey -> constant alpha (0..1) for image-overlay opacity; assembled into
+    // the page's /ExtGState resource by PdfDocumentBuilder.
+    internal Dictionary<string, double> ExtGStateAlphas { get; } = new();
 
     /// <summary>Page width in points.</summary>
     public double Width { get; }
@@ -181,6 +186,65 @@ public sealed class PageBuilder
         return this;
     }
 
+    /// <summary>
+    /// Draws an arbitrary <see cref="Path"/> (lines and cubic Béziers). Supply at
+    /// least one of <paramref name="fill"/> or <paramref name="stroke"/>; a path
+    /// with neither, or an empty path, paints nothing. <paramref name="fillRule"/>
+    /// selects non-zero winding (default) or even-odd filling.
+    /// </summary>
+    public PageBuilder DrawPath(Path path, Color? fill = null, Color? stroke = null, double strokeWidth = 1.0, FillRule fillRule = FillRule.NonZeroWinding)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (path.IsEmpty || (fill is null && stroke is null)) { return this; }
+
+        _w.PushState();
+        if (fill is Color f) { _w.SetFillRgb(f); }
+        if (stroke is Color s)
+        {
+            _w.SetStrokeRgb(s);
+            _w.SetLineWidth(strokeWidth);
+        }
+
+        foreach (PathSegment segment in path.Segments)
+        {
+            switch (segment.Kind)
+            {
+                case PathSegmentKind.MoveTo:
+                    _w.MoveToTopLeft(segment.P0.X, segment.P0.Y);
+                    break;
+                case PathSegmentKind.LineTo:
+                    _w.LineToTopLeft(segment.P0.X, segment.P0.Y);
+                    break;
+                case PathSegmentKind.CubicBezierTo:
+                    _w.CurveToTopLeft(
+                        segment.P0.X, segment.P0.Y,
+                        segment.P1.X, segment.P1.Y,
+                        segment.P2.X, segment.P2.Y);
+                    break;
+                case PathSegmentKind.ClosePath:
+                    _w.ClosePath();
+                    break;
+            }
+        }
+
+        bool evenOdd = fillRule == FillRule.EvenOdd;
+        if (fill is not null && stroke is not null)
+        {
+            if (evenOdd) { _w.FillAndStrokeEvenOdd(); } else { _w.FillAndStroke(); }
+        }
+        else if (fill is not null)
+        {
+            if (evenOdd) { _w.FillEvenOdd(); } else { _w.Fill(); }
+        }
+        else
+        {
+            _w.Stroke();
+        }
+
+        _w.PopState();
+        return this;
+    }
+
     // ── Images ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -214,6 +278,44 @@ public sealed class PageBuilder
         return this;
     }
 
+    /// <summary>
+    /// Embeds an image and draws it at the given top-left rectangle with a
+    /// constant <paramref name="opacity"/> (0 fully transparent, 1 fully opaque).
+    /// Any alpha channel in the image is still honoured via its soft mask; this
+    /// opacity multiplies on top of it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="opacity"/> is outside [0, 1].
+    /// </exception>
+    public PageBuilder DrawImage(byte[] imageBytes, double x, double y, double width, double height, double opacity)
+    {
+        ArgumentNullException.ThrowIfNull(imageBytes);
+        ValidateOpacity(opacity);
+        string key = $"Img{Images.Count}";
+        Images.Add(new ImageRef(key, imageBytes, null));
+        _w.DrawImage(key, x, y, width, height, RegisterAlpha(opacity));
+        return this;
+    }
+
+    /// <summary>
+    /// Embeds an already-decoded image frame and draws it at the given top-left
+    /// rectangle with a constant <paramref name="opacity"/> (0 fully transparent,
+    /// 1 fully opaque). Any alpha channel in the frame is still honoured via its
+    /// soft mask; this opacity multiplies on top of it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="opacity"/> is outside [0, 1].
+    /// </exception>
+    public PageBuilder DrawImage(ImageFrame image, double x, double y, double width, double height, double opacity)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        ValidateOpacity(opacity);
+        string key = $"Img{Images.Count}";
+        Images.Add(new ImageRef(key, null, image));
+        _w.DrawImage(key, x, y, width, height, RegisterAlpha(opacity));
+        return this;
+    }
+
     // ── Tables (handled by TableBuilder; this exposes the entry) ──────────
 
     /// <summary>
@@ -228,6 +330,33 @@ public sealed class PageBuilder
     internal ContentStreamWriter Writer => _w;
 
     internal static string FontKey(string fontName) => fontName.Replace("-", string.Empty);
+
+    private static void ValidateOpacity(double opacity)
+    {
+        if (opacity < 0.0 || opacity > 1.0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(opacity), opacity, "Opacity must be in [0, 1].");
+        }
+    }
+
+    // Registers (or reuses) an ExtGState constant-alpha entry and returns its
+    // resource key. Values are de-duplicated so repeated opacities share one
+    // graphics-state object.
+    private string RegisterAlpha(double opacity)
+    {
+        foreach (KeyValuePair<string, double> existing in ExtGStateAlphas)
+        {
+            if (existing.Value == opacity)
+            {
+                return existing.Key;
+            }
+        }
+
+        string key = $"GsA{ExtGStateAlphas.Count}";
+        ExtGStateAlphas[key] = opacity;
+        return key;
+    }
 
     /// <summary>
     /// Maps the text's Unicode code points to glyph ids via the font's cmap,

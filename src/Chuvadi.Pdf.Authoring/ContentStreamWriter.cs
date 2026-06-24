@@ -62,14 +62,32 @@ internal sealed class ContentStreamWriter
         => _sb.AppendLine(
             $"{F(x)} {F(FlipY(yFromTop) - h)} {F(w)} {F(h)} re");
 
+    /// <summary>
+    /// Appends a cubic Bézier curve to (ex, ey) with control points
+    /// (c1x, c1y) and (c2x, c2y). All points are in top-left space.
+    /// </summary>
+    internal void CurveToTopLeft(
+        double c1x, double c1y, double c2x, double c2y, double ex, double ey)
+        => _sb.AppendLine(
+            $"{F(c1x)} {F(FlipY(c1y))} {F(c2x)} {F(FlipY(c2y))} {F(ex)} {F(FlipY(ey))} c");
+
+    /// <summary>Closes the current sub-path with a straight line to its start.</summary>
+    internal void ClosePath() => _sb.AppendLine("h");
+
     /// <summary>Strokes the current path.</summary>
     internal void Stroke() => _sb.AppendLine("S");
 
     /// <summary>Fills the current path.</summary>
     internal void Fill() => _sb.AppendLine("f");
 
+    /// <summary>Fills the current path using the even-odd rule.</summary>
+    internal void FillEvenOdd() => _sb.AppendLine("f*");
+
     /// <summary>Fills and strokes the current path.</summary>
     internal void FillAndStroke() => _sb.AppendLine("B");
+
+    /// <summary>Fills (even-odd rule) and strokes the current path.</summary>
+    internal void FillAndStrokeEvenOdd() => _sb.AppendLine("B*");
 
     // ── Text ──────────────────────────────────────────────────────────────
 
@@ -107,11 +125,22 @@ internal sealed class ContentStreamWriter
 
     // ── Images ────────────────────────────────────────────────────────────
 
-    /// <summary>Renders an image XObject named <paramref name="imageKey"/>.</summary>
-    internal void DrawImage(string imageKey, double x, double yFromTop, double width, double height)
+    /// <summary>
+    /// Renders an image XObject named <paramref name="imageKey"/>. When
+    /// <paramref name="alphaGsKey"/> is non-null, the named ExtGState (constant
+    /// alpha) is applied before the image is painted.
+    /// </summary>
+    internal void DrawImage(
+        string imageKey, double x, double yFromTop, double width, double height,
+        string? alphaGsKey = null)
     {
         double bottomY = FlipY(yFromTop + height);
         _sb.AppendLine("q");
+        if (alphaGsKey is not null)
+        {
+            _sb.AppendLine($"/{alphaGsKey} gs");
+        }
+
         // Image transform matrix is [w 0 0 h x y] — scales unit square to (w, h) at (x, y).
         _sb.AppendLine($"{F(width)} 0 0 {F(height)} {F(x)} {F(bottomY)} cm");
         _sb.AppendLine($"/{imageKey} Do");
