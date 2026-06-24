@@ -10,7 +10,7 @@ public static class OutlineReader
 
 ## Remarks
 
-Walks from `/Catalog/Outlines/First` through each item's `/Next` and `/First` pointers, building a tree of `OutlineItem` values. Destinations are resolved to zero-based page indices where possible. PDF 32000-1:2008 §12.3.3 — Document outline.
+Walks from `/Catalog/Outlines/First` through each item's `/Next` and `/First` pointers, building a tree of `OutlineItem` values. Titles are decoded per the PDF text-string rules (UTF-16BE / UTF-16LE / UTF-8 BOM, else PDFDocEncoding) and destinations — explicit arrays, `/GoTo` actions, and named destinations resolved through the `/Names /Dests` name tree or the legacy catalog `/Dests` dictionary — are resolved to zero-based page indices where possible. PDF 32000-1:2008 §12.3.3 — Document outline.
 
 ## Methods
 

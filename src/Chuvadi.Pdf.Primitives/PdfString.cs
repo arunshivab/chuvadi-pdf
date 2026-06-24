@@ -53,10 +53,16 @@ public sealed class PdfString : PdfPrimitive, IEquatable<PdfString>
     /// Decodes this PDF string as a text string.
     /// Uses UTF-16BE if the bytes begin with BOM 0xFE 0xFF,
     /// UTF-16LE if they begin with 0xFF 0xFE,
+    /// UTF-8 if they begin with 0xEF 0xBB 0xBF,
     /// or PDFDocEncoding (Latin-1) otherwise.
     /// </summary>
     public string ToTextString()
     {
+        if (Bytes.Length >= 3 && Bytes[0] == 0xEF && Bytes[1] == 0xBB && Bytes[2] == 0xBF)
+        {
+            return Encoding.UTF8.GetString(Bytes, 3, Bytes.Length - 3);
+        }
+
         if (Bytes.Length >= 2)
         {
             if (Bytes[0] == 0xFE && Bytes[1] == 0xFF)
