@@ -2449,6 +2449,14 @@ public static class DisplayListBuilder
             // worker (identity CTM, fresh path/text state, fresh stack).
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
 
+            // A non-group form XObject inherits the graphics state in effect at
+            // the Do, including the constant alpha (ExtGState /ca and /CA). The
+            // fresh worker starts fully opaque, so carry the current alpha over;
+            // otherwise content faded by an enclosing `gs` (e.g. PageOverlay) is
+            // rasterized opaque even though it is correct in the saved PDF.
+            sub._state.FillAlpha = _state.FillAlpha;
+            sub._state.StrokeAlpha = _state.StrokeAlpha;
+
             byte[] formContent;
 
             try
