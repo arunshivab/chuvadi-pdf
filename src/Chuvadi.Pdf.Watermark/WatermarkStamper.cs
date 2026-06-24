@@ -11,7 +11,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.IO;
@@ -74,6 +76,18 @@ public static class WatermarkStamper
         HashSet<int> pageSet = BuildPageSet(options.PageIndices, document.PageCount);
         WatermarkDocument doc = new WatermarkDocument(document);
 
+        // Embed a custom font once (shared by every watermarked page) when font
+        // bytes are supplied; otherwise the standard Helvetica resource is used.
+        string fontKey = SanitizeName(options.FontName);
+        PdfObjectId? embeddedFontId = null;
+        string? glyphHex = null;
+
+        if (options.FontData is not null)
+        {
+            (embeddedFontId, glyphHex) = doc.EmbedTrueTypeFont(
+                options.FontData, options.Text, options.FontName);
+        }
+
         for (int i = 0; i < document.PageCount; i++)
         {
             if (!pageSet.Contains(i))
@@ -82,8 +96,8 @@ public static class WatermarkStamper
             }
 
             PdfPage page = document.Pages[i];
-            byte[] wmStream = BuildTextStream(page.Width, page.Height, options);
-            doc.AppendContentStream(i, wmStream, options.Opacity, "WMTextGS");
+            byte[] wmStream = BuildTextStream(page.Width, page.Height, options, fontKey, glyphHex);
+            doc.AppendContentStream(i, wmStream, options.Opacity, "WMTextGS", fontKey, embeddedFontId);
         }
 
         doc.Write(output);
@@ -155,7 +169,8 @@ public static class WatermarkStamper
     // ── Text stream builder ───────────────────────────────────────────────
 
     private static byte[] BuildTextStream(
-        double pageW, double pageH, TextWatermarkOptions options)
+        double pageW, double pageH, TextWatermarkOptions options,
+        string fontKey, string? glyphHex)
     {
         // Estimate text width: Helvetica metrics average ~0.5 × fontSize per char
         double textWidth = options.Text.Length * options.FontSize * 0.5;
@@ -180,8 +195,11 @@ public static class WatermarkStamper
         string g = Fmt(rgb.G);
         string bv = Fmt(rgb.B);
 
-        string fontKey = SanitizeName(options.FontName);
-        string escaped = EscapePdfString(options.Text);
+        // Show operand: an embedded font uses Identity-H 2-byte glyph IDs in a
+        // hex string; the standard font uses a literal string.
+        string showOp = glyphHex is not null
+            ? $"<{glyphHex}> Tj"
+            : $"({EscapePdfString(options.Text)}) Tj";
 
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("q");
@@ -190,7 +208,7 @@ public static class WatermarkStamper
         sb.AppendLine($"{Fmt(cosA)} {Fmt(sinA)} {Fmt(-sinA)} {Fmt(cosA)} {Fmt(tx)} {Fmt(ty)} cm");
         sb.AppendLine("BT");
         sb.AppendLine($"/{fontKey} {Fmt(options.FontSize)} Tf");
-        sb.AppendLine($"({escaped}) Tj");
+        sb.AppendLine(showOp);
         sb.AppendLine("ET");
         sb.AppendLine("Q");
 
@@ -360,7 +378,8 @@ internal sealed class WatermarkDocument
     }
 
     internal void AppendContentStream(
-        int pageIndex, byte[] content, float opacity, string gsName)
+        int pageIndex, byte[] content, float opacity, string gsName,
+        string fontKey, PdfObjectId? embeddedFontId)
     {
         PdfObjectId streamId = NextId();
         PdfDictionary dict = new PdfDictionary();
@@ -374,7 +393,45 @@ internal sealed class WatermarkDocument
 
         _pageWatermarks[pageIndex].Add(new WatermarkEntry(
             streamId, opacity, gsName,
-            null, null));
+            null, null, fontKey, embeddedFontId));
+    }
+
+    // Embeds a TrueType/OpenType font as a composite Type0/CIDFontType2 font
+    // (Identity-H) and returns its top-level font id plus the watermark text
+    // encoded as two-byte Identity-H glyph IDs. Embedded once and shared by
+    // every watermarked page.
+    internal (PdfObjectId FontId, string GlyphHex) EmbedTrueTypeFont(
+        byte[] fontData, string text, string baseFont)
+    {
+        TrueTypeLoader loader = new TrueTypeLoader(fontData);
+
+        HashSet<int> usedCodepoints = new HashSet<int>();
+        StringBuilder hex = new StringBuilder(text.Length * 4);
+        int i = 0;
+        while (i < text.Length)
+        {
+            int codepoint = char.ConvertToUtf32(text, i);
+            i += char.IsSurrogatePair(text, i) ? 2 : 1;
+            usedCodepoints.Add(codepoint);
+            int gid = loader.GetGlyphIndex(codepoint);
+            if (gid < 0)
+            {
+                gid = 0;
+            }
+
+            hex.Append(((gid >> 8) & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
+            hex.Append((gid & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
+        }
+
+        EmbeddedFontObjects embedded = TrueTypeFontEmbedder.Build(
+            fontData, loader, usedCodepoints, baseFont, NextId);
+
+        foreach (PdfIndirectObject obj in embedded.Objects)
+        {
+            _extraObjects.Add(obj);
+        }
+
+        return (embedded.Type0FontId, hex.ToString());
     }
 
     internal void AppendImageStream(
@@ -406,7 +463,7 @@ internal sealed class WatermarkDocument
 
         _pageWatermarks[pageIndex].Add(new WatermarkEntry(
             streamId, opacity, "WMImageGS",
-            imageId, "WMImage"));
+            imageId, "WMImage", null, null));
     }
 
     internal void Write(System.IO.Stream output)
@@ -519,27 +576,46 @@ internal sealed class WatermarkDocument
 
         resources.Set(PdfName.Intern("ExtGState"), extGState);
 
-        // Add Font entry for text watermarks (standard font — no embedding needed)
+        // Add Font entries for text watermarks. Each text entry registers its
+        // font under its own resource key: an embedded font references the
+        // shared Type0 object; a standard font emits a Helvetica Type1 dict.
         bool hasTextEntry = false;
+        PdfDictionary? fonts = null;
 
         foreach (WatermarkEntry entry in entries)
         {
-            if (entry.ImageId is null)
+            if (entry.ImageId is not null || entry.FontKey is null)
             {
-                hasTextEntry = true;
+                continue;
+            }
+
+            hasTextEntry = true;
+            fonts ??= GetOrCreateSubdict(resources, "Font");
+            PdfName fontName = PdfName.Intern(entry.FontKey);
+
+            if (fonts.TryGetValue(fontName, out PdfPrimitive? _))
+            {
+                continue;
+            }
+
+            if (entry.EmbeddedFontId is PdfObjectId embeddedId)
+            {
+                fonts.Set(fontName, new PdfReference(embeddedId));
+            }
+            else
+            {
+                PdfDictionary helvetica = new PdfDictionary();
+                helvetica.Set(PdfName.Type, PdfName.Intern("Font"));
+                helvetica.Set(PdfName.Intern("Subtype"), PdfName.Intern("Type1"));
+                helvetica.Set(PdfName.Intern("BaseFont"), PdfName.Intern("Helvetica"));
+                helvetica.Set(PdfName.Intern("Encoding"), PdfName.Intern("WinAnsiEncoding"));
+                fonts.Set(fontName, helvetica);
             }
         }
 
         if (hasTextEntry)
         {
-            PdfDictionary fonts = GetOrCreateSubdict(resources, "Font");
-            PdfDictionary helvetica = new PdfDictionary();
-            helvetica.Set(PdfName.Type, PdfName.Intern("Font"));
-            helvetica.Set(PdfName.Intern("Subtype"), PdfName.Intern("Type1"));
-            helvetica.Set(PdfName.Intern("BaseFont"), PdfName.Intern("Helvetica"));
-            helvetica.Set(PdfName.Intern("Encoding"), PdfName.Intern("WinAnsiEncoding"));
-            fonts.Set(PdfName.Intern("Helvetica"), helvetica);
-            resources.Set(PdfName.Intern("Font"), fonts);
+            resources.Set(PdfName.Intern("Font"), fonts!);
         }
 
         // Add XObject entries for image watermarks
@@ -669,13 +745,16 @@ internal sealed class WatermarkDocument
     {
         internal WatermarkEntry(
             PdfObjectId streamId, float opacity, string gsName,
-            PdfObjectId? imageId, string? xObjectName)
+            PdfObjectId? imageId, string? xObjectName,
+            string? fontKey, PdfObjectId? embeddedFontId)
         {
             StreamId = streamId;
             Opacity = opacity;
             GsName = gsName;
             ImageId = imageId;
             XObjectName = xObjectName;
+            FontKey = fontKey;
+            EmbeddedFontId = embeddedFontId;
         }
 
         internal PdfObjectId StreamId { get; }
@@ -683,5 +762,11 @@ internal sealed class WatermarkDocument
         internal string GsName { get; }
         internal PdfObjectId? ImageId { get; }
         internal string? XObjectName { get; }
+
+        /// <summary>Resource key for the text font, or null for image entries.</summary>
+        internal string? FontKey { get; }
+
+        /// <summary>Embedded Type0 font object id, or null for a standard font.</summary>
+        internal PdfObjectId? EmbeddedFontId { get; }
     }
 }
