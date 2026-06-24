@@ -374,6 +374,7 @@ python tools/gen_api_docs.py
 | [DocumentInfo](Operations/DocumentInfo.md) | class | Sets document-information metadata (Title, Author, Subject, Keywords) on an existing document and writes the result. |
 | [HeaderFooter](Operations/HeaderFooter.md) | class | Adds running headers and/or footers to a document, with three strategies for how the bands interact with existing content (see `PageContentFit`): overlay in the margins, always reserve-and-scale, or scale only when content intrudes. |
 | [HeaderFooterOptions](Operations/HeaderFooterOptions.md) | class | Options controlling header/footer content, geometry, and the content-fit strategy. |
+| [MergeOptions](Operations/MergeOptions.md) | class | Options for `PageOperations.Merge(System.IO.Stream, System.Collections.Generic.IReadOnlyList{Chuvadi.Pdf.Documents.PdfDocument}, MergeOptions)`. |
 | [OperationsException](Operations/OperationsException.md) | class | Thrown when a PDF page operation (merge, split, delete, rotate, reorder) cannot be completed due to an invalid argument or document structure. |
 | [OutlineEntry](Operations/OutlineEntry.md) | class | A bookmark to write into a document outline: a title, the zero-based page it targets, and optional nested children. |
 | [OutlineWriter](Operations/OutlineWriter.md) | class | Writes a document outline (bookmark tree) onto an existing document, replacing any existing outline. |
@@ -381,6 +382,7 @@ python tools/gen_api_docs.py
 | [PageContentFit](Operations/PageContentFit.md) | enum | How header/footer bands interact with existing page content. |
 | [PageOperations](Operations/PageOperations.md) | class | Provides static methods for high-level PDF page operations: merge, split, delete, rotate, and reorder. |
 | [PageOverlay](Operations/PageOverlay.md) | class | Recolours existing pages by drawing a solid background fill behind the page content and/or rendering the existing content at reduced opacity. |
+| [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
 | [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
