@@ -54,6 +54,14 @@ PdfDictionary Dictionary => _dict
 
 Gets the raw page dictionary for advanced access.
 
+### `HasContent`
+
+```csharp
+bool HasContent
+```
+
+Returns true when the page has at least one non-empty content stream. This is a cheap structural check — a `/Contents` stream is present with non-zero raw length — and does not decode the stream or verify that it paints any visible marks.
+
 ## Methods
 
 ### `GetInheritedBox`

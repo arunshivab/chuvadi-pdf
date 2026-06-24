@@ -1,9 +1,10 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  PDF 32000-1:2008 §12.7.8 (XFA forms)
-// Regression coverage for PdfDocument.IsXfa — lets consumers detect XFA forms
-// (whose content lives outside standard page content) without reaching into
-// the catalog themselves.
+// SPEC:  PDF 32000-1:2008 §12.7.8 (XFA forms), §7.7.2 (/NeedsRendering)
+// Regression coverage for PdfDocument.IsXfa / XfaKind — lets consumers detect
+// XFA forms (whose content lives outside standard page content) and tell static
+// or hybrid (renderable) XFA apart from dynamic XFA, without reaching into the
+// catalog themselves.
 
 using System.Collections.Generic;
 using System.IO;
@@ -35,9 +36,59 @@ public sealed class XfaDetectionTests
         doc.IsXfa.Should().BeFalse();
     }
 
+    [Fact]
+    public void XfaKind_None_WhenNoXfa()
+    {
+        using MemoryStream ms = BuildPdf(withXfa: false);
+        using PdfDocument doc = OpenPdf(ms);
+
+        doc.XfaKind.Should().Be(XfaKind.None);
+        doc.IsXfa.Should().Be(doc.XfaKind != XfaKind.None);
+    }
+
+    [Fact]
+    public void XfaKind_Static_WhenXfaWithoutFieldsOrNeedsRendering()
+    {
+        using MemoryStream ms = BuildPdf(withXfa: true);
+        using PdfDocument doc = OpenPdf(ms);
+
+        doc.XfaKind.Should().Be(XfaKind.Static);
+        doc.IsXfa.Should().BeTrue();
+    }
+
+    [Fact]
+    public void XfaKind_Hybrid_WhenXfaAlongsideTraditionalFields()
+    {
+        using MemoryStream ms = BuildPdf(withXfa: true, withFields: true);
+        using PdfDocument doc = OpenPdf(ms);
+
+        doc.XfaKind.Should().Be(XfaKind.Hybrid);
+    }
+
+    [Fact]
+    public void XfaKind_Dynamic_WhenCatalogNeedsRendering()
+    {
+        using MemoryStream ms = BuildPdf(withXfa: true, needsRendering: true);
+        using PdfDocument doc = OpenPdf(ms);
+
+        doc.XfaKind.Should().Be(XfaKind.Dynamic);
+    }
+
+    [Fact]
+    public void XfaKind_Dynamic_TakesPrecedenceOverFields()
+    {
+        using MemoryStream ms = BuildPdf(withXfa: true, withFields: true, needsRendering: true);
+        using PdfDocument doc = OpenPdf(ms);
+
+        doc.XfaKind.Should().Be(XfaKind.Dynamic);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
-    private static MemoryStream BuildPdf(bool withXfa)
+    private static MemoryStream BuildPdf(
+        bool withXfa,
+        bool withFields = false,
+        bool needsRendering = false)
     {
         PdfObjectId catalogId = new PdfObjectId(1, 0);
         PdfObjectId pagesId = new PdfObjectId(2, 0);
@@ -47,6 +98,11 @@ public sealed class XfaDetectionTests
         PdfDictionary catalogDict = new PdfDictionary();
         catalogDict.Set(PdfName.Type, PdfName.Catalog);
         catalogDict.Set(PdfName.Pages, new PdfReference(pagesId));
+
+        if (needsRendering)
+        {
+            catalogDict.Set(PdfName.Intern("NeedsRendering"), true);
+        }
 
         PdfArray kids = new PdfArray([]);
         kids.Add(new PdfReference(pageId));
@@ -75,6 +131,14 @@ public sealed class XfaDetectionTests
         {
             PdfDictionary acroDict = new PdfDictionary();
             acroDict.Set(PdfName.Intern("XFA"), new PdfArray([]));
+
+            if (withFields)
+            {
+                acroDict.Set(PdfName.Intern("Fields"), new PdfArray([
+                    new PdfReference(pageId)
+                ]));
+            }
+
             objects.Add(new PdfIndirectObject(acroId, acroDict));
             catalogDict.Set(PdfName.Intern("AcroForm"), new PdfReference(acroId));
         }

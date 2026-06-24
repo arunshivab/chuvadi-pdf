@@ -122,6 +122,42 @@ public sealed class PdfPage
     /// </summary>
     public PdfPrimitive? Contents => _dict.GetAs<PdfPrimitive>(PdfName.Contents);
 
+    /// <summary>
+    /// Returns true when the page has at least one non-empty content stream.
+    /// This is a cheap structural check — a <c>/Contents</c> stream is present
+    /// with non-zero raw length — and does not decode the stream or verify that
+    /// it paints any visible marks.
+    /// </summary>
+    public bool HasContent { get => HasNonEmptyContent(); }
+
+    private bool HasNonEmptyContent()
+    {
+        PdfPrimitive? contents = _dict.GetAs<PdfPrimitive>(PdfName.Contents);
+        if (contents is null)
+        {
+            return false;
+        }
+
+        PdfPrimitive resolved = _resolver.Resolve(contents);
+        if (resolved is PdfStream single)
+        {
+            return single.RawLength > 0;
+        }
+
+        if (resolved is PdfArray array)
+        {
+            for (int i = 0; i < array.Count; i++)
+            {
+                if (_resolver.Resolve(array[i]) is PdfStream stream && stream.RawLength > 0)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     // ── Inherited value helpers ───────────────────────────────────────────
 
     private PdfRectangle GetInheritedBox(PdfName key)
