@@ -137,7 +137,26 @@ public static class HeaderFooter
                 overlays.Add(Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n"));
             }
 
-            editor.TransformAndOverlay(pageIndex, contentTransform, options.Background, overlays);
+            // The background fill (if any) is confined to the reserved band
+            // rectangle(s) so it never floods the page (LA-19). The header band
+            // sits at the page top, the footer band at the page bottom, and both
+            // span the full page width. Bands use unscaled page coordinates
+            // because the fill is drawn before the content transform.
+            List<PdfRectangle> backgroundBands = new List<PdfRectangle>();
+            if (headerBand > 0)
+            {
+                backgroundBands.Add(new PdfRectangle(
+                    mediaBox.X1, mediaBox.Y2 - headerBand, mediaBox.X2, mediaBox.Y2));
+            }
+
+            if (footerBand > 0)
+            {
+                backgroundBands.Add(new PdfRectangle(
+                    mediaBox.X1, mediaBox.Y1, mediaBox.X2, mediaBox.Y1 + footerBand));
+            }
+
+            editor.TransformAndOverlay(
+                pageIndex, contentTransform, options.Background, backgroundBands, overlays);
             editor.AddOverlayFontResource(pageIndex, StampText.FontResourceName, StampText.BuildHelveticaFont());
         }
 
@@ -159,7 +178,10 @@ public static class HeaderFooter
 
         if (options.Header is BandText header)
         {
-            double y = mediaBox.Y2 - options.HeaderHeight + options.HeaderBaselineOffset;
+            // Baseline measured downward from the top of the reserved band (the
+            // page top, Y2), per HeaderBaselineOffset's contract, so the header
+            // text sits inside the band rather than below it (mirrors the footer).
+            double y = mediaBox.Y2 + options.HeaderBaselineOffset;
             AppendSegments(sb, header, ctx, mediaBox, y, options);
         }
 
