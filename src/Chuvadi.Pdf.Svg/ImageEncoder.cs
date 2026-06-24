@@ -54,6 +54,15 @@ internal static class ImageEncoder
             }
         }
 
+        // Defence in depth: if the colour buffer is smaller than width*height*
+        // channels (e.g. a colour space the op could not represent left raw
+        // sample data behind), skip the image rather than read out of bounds in
+        // EncodePng. The page then still renders without the one image.
+        if ((long)rgb.Length < (long)op.Width * op.Height * channels)
+        {
+            return null;
+        }
+
         byte[] png = EncodePng(rgb, op.Width, op.Height, channels);
         return "data:image/png;base64," + Convert.ToBase64String(png);
     }
