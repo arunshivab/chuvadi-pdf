@@ -18,6 +18,8 @@ namespace Chuvadi.Pdf.Operations;
 /// <item><c>{total}</c> — total page count.</item>
 /// <item><c>{filename}</c> — source file name without directory path.</item>
 /// <item><c>{filepath}</c> — full source file path as supplied.</item>
+/// <item><c>{number}</c> — styled running number (Bates) supplied via the
+/// <see cref="TextStamper"/> numbering overload; empty when none is supplied.</item>
 /// <item><c>{date:FORMAT}</c>, <c>{time:FORMAT}</c>, <c>{datetime:FORMAT}</c> —
 /// the caller-supplied timestamp formatted with a .NET format string.</item>
 /// </list>
@@ -36,11 +38,28 @@ public sealed class StampContext
         int totalPages,
         string? filePath,
         DateTimeOffset? timestamp)
+        : this(pageNumber, totalPages, filePath, timestamp, null)
+    {
+    }
+
+    /// <summary>Initialises a stamp context for one page, including a styled number.</summary>
+    /// <param name="pageNumber">1-based page number.</param>
+    /// <param name="totalPages">Total page count.</param>
+    /// <param name="filePath">Source file path, or null if unknown.</param>
+    /// <param name="timestamp">Caller-supplied timestamp, or null.</param>
+    /// <param name="number">Pre-formatted numbering label for the <c>{number}</c> token, or null.</param>
+    public StampContext(
+        int pageNumber,
+        int totalPages,
+        string? filePath,
+        DateTimeOffset? timestamp,
+        string? number)
     {
         PageNumber = pageNumber;
         TotalPages = totalPages;
         FilePath = filePath;
         Timestamp = timestamp;
+        Number = number;
     }
 
     /// <summary>Gets the 1-based page number.</summary>
@@ -54,6 +73,9 @@ public sealed class StampContext
 
     /// <summary>Gets the caller-supplied timestamp, or null.</summary>
     public DateTimeOffset? Timestamp { get; }
+
+    /// <summary>Gets the pre-formatted numbering label for the <c>{number}</c> token, or null.</summary>
+    public string? Number { get; }
 }
 
 /// <summary>
@@ -139,6 +161,9 @@ public static class StampTokens
 
             case "filepath":
                 return context.FilePath ?? string.Empty;
+
+            case "number":
+                return context.Number ?? string.Empty;
 
             case "date":
             case "time":
