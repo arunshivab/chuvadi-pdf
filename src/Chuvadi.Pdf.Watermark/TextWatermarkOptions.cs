@@ -53,10 +53,24 @@ public sealed class TextWatermarkOptions
     public double RotationDegrees { get; init; }
 
     /// <summary>
-    /// Gets or initialises the standard PDF font name.
-    /// Must be one of the 14 standard PDF fonts. Default: Helvetica.
+    /// Gets or initialises the font name. When <see cref="FontData"/> is null
+    /// this must be one of the 14 standard PDF fonts (the watermark is drawn
+    /// with Helvetica metrics). When <see cref="FontData"/> is supplied this is
+    /// recorded as the embedded font's PostScript base-font name. Default:
+    /// Helvetica.
     /// </summary>
     public string FontName { get; init; }
+
+    /// <summary>
+    /// Gets or initialises the bytes of a TrueType/OpenType (glyf-based) font to
+    /// embed for this watermark. When null (the default) the watermark uses the
+    /// standard Helvetica font. When supplied, the font is embedded as a
+    /// composite Type0/CIDFontType2 font with Identity-H encoding, so watermark
+    /// text in non-Latin scripts (e.g. Tamil, Devanagari) renders with the
+    /// caller's own face. The text is emitted as glyphs in logical order without
+    /// complex shaping (no GSUB/GPOS reordering).
+    /// </summary>
+    public byte[]? FontData { get; init; }
 
     /// <summary>
     /// Gets or initialises which pages to watermark.
