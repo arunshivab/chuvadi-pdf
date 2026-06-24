@@ -1833,6 +1833,20 @@ public static class DisplayListBuilder
                 catch { return; }
             }
 
+            // Indexed (palette) images decode to one index byte per pixel; the
+            // colour-space enum cannot represent a palette, so without expansion
+            // the index bytes would be misread as direct DeviceRGB samples (a
+            // third of the data the encoder expects). Expand 8-bit indices to
+            // DeviceRGB here so soft-mask compositing and the SVG PNG encoder see
+            // real colour. Sub-8-bit images are not encoded downstream, so only
+            // the 8-bit case needs handling.
+            if (format == ImageFormat.Raw && bpc == 8
+                && TryExpandIndexed(stream.Dictionary, pixelData, width, height, out byte[] expandedRgb))
+            {
+                pixelData = expandedRgb;
+                cs = PdfColorSpace.DeviceRgb;
+            }
+
             byte[]? softMaskAlpha = null;
             int softMaskWidth = 0;
             int softMaskHeight = 0;
@@ -2037,6 +2051,65 @@ public static class DisplayListBuilder
                 };
             }
             return PdfColorSpace.DeviceRgb;
+        }
+
+        // Expands an 8-bit Indexed (palette) image to DeviceRGB. Returns false
+        // (leaving the caller's data unchanged) when the image is not Indexed,
+        // the palette cannot be parsed, or there are too few index bytes. Each
+        // index byte is looked up through the palette's base space and written
+        // as a DeviceRGB triple, so the result is width*height*3 bytes.
+        private bool TryExpandIndexed(
+            PdfDictionary dict, byte[] indices, int width, int height, out byte[] rgb)
+        {
+            rgb = Array.Empty<byte>();
+
+            if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csValue))
+            {
+                return false;
+            }
+
+            PdfPrimitive resolved = _doc.Objects.Resolve(csValue);
+            if (resolved is not PdfArray array || array.Count == 0)
+            {
+                return false;
+            }
+            if (_doc.Objects.Resolve(array[0]) is not PdfName family || family.Value != "Indexed")
+            {
+                return false;
+            }
+
+            ResolvedColorSpace? space = ResolvedColorSpace.Parse(resolved, _doc.Objects);
+            if (space is null || space.Kind != ResolvedColorSpace.Family.Indexed)
+            {
+                return false;
+            }
+
+            long pixelCount = (long)width * height;
+            if (pixelCount <= 0 || indices.Length < pixelCount)
+            {
+                return false;
+            }
+
+            byte[] outRgb = new byte[pixelCount * 3];
+            double[] component = new double[1];
+            for (long i = 0; i < pixelCount; i++)
+            {
+                component[0] = indices[i];
+                double[] c = space.ToRgb(component);
+                outRgb[(i * 3) + 0] = ClampByte(c.Length > 0 ? c[0] : 0.0);
+                outRgb[(i * 3) + 1] = ClampByte(c.Length > 1 ? c[1] : (c.Length > 0 ? c[0] : 0.0));
+                outRgb[(i * 3) + 2] = ClampByte(c.Length > 2 ? c[2] : (c.Length > 0 ? c[0] : 0.0));
+            }
+
+            rgb = outRgb;
+            return true;
+        }
+
+        // Maps a colour component in [0, 1] to a byte in [0, 255].
+        private static byte ClampByte(double value)
+        {
+            int scaled = (int)Math.Round(value * 255.0);
+            return (byte)Math.Clamp(scaled, 0, 255);
         }
 
 
