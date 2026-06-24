@@ -386,6 +386,8 @@ python tools/gen_api_docs.py
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
 | [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
 | [StampContext](Operations/StampContext.md) | class | Substitutes tokens in a stamp template into final text for one page. |
+| [StampFirstPageMode](Operations/StampFirstPageMode.md) | enum | Controls how the document's first page (page index 0) participates in a `StampNumbering` running sequence. |
+| [StampNumbering](Operations/StampNumbering.md) | class | Describes a running numbering sequence for the `{number}` stamp token: a free prefix and suffix, a start value, an optional zero-pad width, a `NumberingFormat` style, and first-page handling. |
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
 | [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
 | [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |

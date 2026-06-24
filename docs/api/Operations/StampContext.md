@@ -10,6 +10,7 @@ Substitutes tokens in a stamp template into final text for one page. Supported t
 - `{total}` — total page count. 
 - `{filename}` — source file name without directory path. 
 - `{filepath}` — full source file path as supplied. 
+- `{number}` — styled running number (Bates) supplied via the `TextStamper` numbering overload; empty when none is supplied. 
 - `{date:FORMAT}`, `{time:FORMAT}`, `{datetime:FORMAT}` — the caller-supplied timestamp formatted with a .NET format string.  A literal brace is written as `{{` or `}}`. Unknown tokens are left verbatim. Date/time tokens render empty when no timestamp is supplied.
 
 ```csharp
@@ -49,6 +50,14 @@ DateTimeOffset? Timestamp
 ```
 
 Gets the caller-supplied timestamp, or null.
+
+### `Number`
+
+```csharp
+string? Number
+```
+
+Gets the pre-formatted numbering label for the `{number}` token, or null.
 
 ---
 
