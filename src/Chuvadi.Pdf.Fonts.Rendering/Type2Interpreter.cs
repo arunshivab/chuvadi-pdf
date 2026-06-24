@@ -36,6 +36,7 @@ internal sealed class Type2Interpreter
     private double _y;
     private bool _widthRead;
     private int _hintCount;
+    private bool _contourOpen;
     private Path _path = new();
 
     internal Type2Interpreter(List<byte[]> globalSubrs, List<byte[]> localSubrs,
@@ -54,7 +55,22 @@ internal sealed class Type2Interpreter
     {
         _path = new Path();
         Execute(charstring);
+        CloseOpenContour();
         return _path;
+    }
+
+    // Type 2 charstring contours are implicitly closed. A new moveto closes the
+    // contour in progress, and the glyph's final contour is closed at endchar
+    // (or here, if the charstring ends without one). Emitting the ClosePath so
+    // each contour carries its closing edge matches the TrueType outline path
+    // and lets the fill rasterizer treat each contour as a separate sub-path.
+    private void CloseOpenContour()
+    {
+        if (_contourOpen)
+        {
+            _path.ClosePath();
+            _contourOpen = false;
+        }
     }
 
     private bool Execute(byte[] cs)
@@ -127,8 +143,10 @@ internal sealed class Type2Interpreter
                     ConsumeWidth();
                     if (_stack.Count >= 2)
                     {
+                        CloseOpenContour();
                         _x += _stack[^2]; _y += _stack[^1];
                         _path.MoveTo(_x, _y);
+                        _contourOpen = true;
                     }
                     _stack.Clear();
                     return false;
@@ -136,14 +154,26 @@ internal sealed class Type2Interpreter
             case 22: // hmoveto
                 {
                     ConsumeWidth();
-                    if (_stack.Count >= 1) { _x += _stack[^1]; _path.MoveTo(_x, _y); }
+                    if (_stack.Count >= 1)
+                    {
+                        CloseOpenContour();
+                        _x += _stack[^1];
+                        _path.MoveTo(_x, _y);
+                        _contourOpen = true;
+                    }
                     _stack.Clear();
                     return false;
                 }
             case 4:  // vmoveto
                 {
                     ConsumeWidth();
-                    if (_stack.Count >= 1) { _y += _stack[^1]; _path.MoveTo(_x, _y); }
+                    if (_stack.Count >= 1)
+                    {
+                        CloseOpenContour();
+                        _y += _stack[^1];
+                        _path.MoveTo(_x, _y);
+                        _contourOpen = true;
+                    }
                     _stack.Clear();
                     return false;
                 }
@@ -367,16 +397,136 @@ internal sealed class Type2Interpreter
             case 14: // endchar
                 {
                     ConsumeWidth();
+                    CloseOpenContour();
                     _stack.Clear();
                     return true;
                 }
             case 19: // hintmask
             case 20: // cntrmask
                 return false;   // mask bytes handled in caller
+            case (12 << 8) | 34: // hflex
+                {
+                    if (_stack.Count >= 7)
+                    {
+                        double startY = _y;
+                        double x1 = _x + _stack[0];
+                        double y1 = _y;
+                        double x2 = x1 + _stack[1];
+                        double y2 = y1 + _stack[2];
+                        double x3 = x2 + _stack[3];
+                        double y3 = y2;
+                        double x4 = x3 + _stack[4];
+                        double y4 = y2;
+                        double x5 = x4 + _stack[5];
+                        double y5 = startY;
+                        double x6 = x5 + _stack[6];
+                        double y6 = startY;
+                        EmitFlex(x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, x6, y6);
+                    }
+                    _stack.Clear();
+                    return false;
+                }
+            case (12 << 8) | 35: // flex
+                {
+                    if (_stack.Count >= 12)
+                    {
+                        double x1 = _x + _stack[0];
+                        double y1 = _y + _stack[1];
+                        double x2 = x1 + _stack[2];
+                        double y2 = y1 + _stack[3];
+                        double x3 = x2 + _stack[4];
+                        double y3 = y2 + _stack[5];
+                        double x4 = x3 + _stack[6];
+                        double y4 = y3 + _stack[7];
+                        double x5 = x4 + _stack[8];
+                        double y5 = y4 + _stack[9];
+                        double x6 = x5 + _stack[10];
+                        double y6 = y5 + _stack[11];
+                        EmitFlex(x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, x6, y6);
+                    }
+                    _stack.Clear();
+                    return false;
+                }
+            case (12 << 8) | 36: // hflex1
+                {
+                    if (_stack.Count >= 9)
+                    {
+                        double startY = _y;
+                        double x1 = _x + _stack[0];
+                        double y1 = _y + _stack[1];
+                        double x2 = x1 + _stack[2];
+                        double y2 = y1 + _stack[3];
+                        double x3 = x2 + _stack[4];
+                        double y3 = y2;
+                        double x4 = x3 + _stack[5];
+                        double y4 = y2;
+                        double x5 = x4 + _stack[6];
+                        double y5 = y4 + _stack[7];
+                        double x6 = x5 + _stack[8];
+                        double y6 = startY;
+                        EmitFlex(x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, x6, y6);
+                    }
+                    _stack.Clear();
+                    return false;
+                }
+            case (12 << 8) | 37: // flex1
+                {
+                    if (_stack.Count >= 11)
+                    {
+                        double startX = _x;
+                        double startY = _y;
+                        double dxSum = _stack[0] + _stack[2] + _stack[4] + _stack[6] + _stack[8];
+                        double dySum = _stack[1] + _stack[3] + _stack[5] + _stack[7] + _stack[9];
+                        double x1 = _x + _stack[0];
+                        double y1 = _y + _stack[1];
+                        double x2 = x1 + _stack[2];
+                        double y2 = y1 + _stack[3];
+                        double x3 = x2 + _stack[4];
+                        double y3 = y2 + _stack[5];
+                        double x4 = x3 + _stack[6];
+                        double y4 = y3 + _stack[7];
+                        double x5 = x4 + _stack[8];
+                        double y5 = y4 + _stack[9];
+                        double d6 = _stack[10];
+                        double absDx = dxSum < 0 ? -dxSum : dxSum;
+                        double absDy = dySum < 0 ? -dySum : dySum;
+                        double x6;
+                        double y6;
+                        if (absDx > absDy)
+                        {
+                            x6 = x5 + d6;
+                            y6 = startY;
+                        }
+                        else
+                        {
+                            x6 = startX;
+                            y6 = y5 + d6;
+                        }
+                        EmitFlex(x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, x6, y6);
+                    }
+                    _stack.Clear();
+                    return false;
+                }
             default:
                 _stack.Clear();
                 return false;
         }
+    }
+
+    private void EmitFlex(
+        double x1, double y1, double x2, double y2, double x3, double y3,
+        double x4, double y4, double x5, double y5, double x6, double y6)
+    {
+        _path.CubicBezierTo(
+            new PointF((float)x1, (float)y1),
+            new PointF((float)x2, (float)y2),
+            new PointF((float)x3, (float)y3));
+        _path.CubicBezierTo(
+            new PointF((float)x4, (float)y4),
+            new PointF((float)x5, (float)y5),
+            new PointF((float)x6, (float)y6));
+        _x = x6;
+        _y = y6;
     }
 
     private void ConsumeWidth()
