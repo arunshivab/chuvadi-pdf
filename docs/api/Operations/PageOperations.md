@@ -29,6 +29,37 @@ Merges two or more PDF documents into a single output stream. Pages appear in th
 - `output` — The stream to write the merged PDF to.
 - `documents` — The documents to merge, in order. <exception cref="ArgumentNullException"> Thrown when `output` or `documents` is null. </exception> <exception cref="OperationsException"> Thrown when any document has no pages or an invalid structure. </exception>
 
+### `Merge`
+
+__static__
+
+```csharp
+static void Merge(Stream output, IReadOnlyList<PdfDocument> documents, MergeOptions options)
+```
+
+Merges two or more PDF documents into a single output stream, optionally carrying each input's outline (bookmarks) into the result with page indices re-based to the merged offsets. Pages appear in the order of the input documents.
+
+**Parameters**
+
+- `output` — The stream to write the merged PDF to.
+- `documents` — The documents to merge, in order.
+- `options` — Options controlling outline preservation. <exception cref="ArgumentNullException"> Thrown when `output`, `documents`, or `options` is null. </exception> <exception cref="OperationsException"> Thrown when the document list is empty or contains a null document. </exception>
+
+### `Assemble`
+
+__static__
+
+```csharp
+static void Assemble(Stream output, IReadOnlyList<PageSelector> pages)
+```
+
+Assembles a new PDF from an ordered list of source pages, each identified by a `PageSelector`. Unlike `ReorderPages` (a single-document permutation), the same page may appear any number of times and selectors may interleave pages from different source documents, all in one write. Output page order is exactly the order of `pages`.
+
+**Parameters**
+
+- `output` — The stream to write the assembled PDF to.
+- `pages` — The ordered source pages; duplicates are allowed. <exception cref="ArgumentNullException"> Thrown when `output` or `pages` is null. </exception> <exception cref="OperationsException"> Thrown when the list is empty, a selector has a null document, or a page index is out of range for its source document. </exception>
+
 ### `SplitPages`
 
 __static__
