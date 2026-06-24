@@ -38,6 +38,46 @@ bool IsLinearized => Linearization is not null
 
 Returns true when the document is linearized (Fast Web View).
 
+### `IsXfa`
+
+```csharp
+bool IsXfa => XfaKind != XfaKind.None
+```
+
+Returns true when the document is an XFA form, i.e. its `/AcroForm` dictionary carries an `/XFA` entry. XFA content lives outside standard page content, so rendering such a document produces an essentially empty page; consumers can use this flag to show a notice instead of a blank page. Equivalent to `XfaKind != XfaKind.None`; see `XfaKind` to distinguish static, hybrid, and dynamic XFA.
+
+### `XfaKind`
+
+```csharp
+XfaKind XfaKind
+```
+
+Classifies the document's use of XFA (none, static, hybrid, or dynamic), so a consumer can tell forms that render from the page content apart from dynamic XFA that needs a processor. PDF 32000-1:2008 §12.7.8.
+
+### `StructTreeRoot`
+
+```csharp
+PdfDictionary? StructTreeRoot
+```
+
+Gets the document's structure-tree root dictionary (the catalog's `/StructTreeRoot`), or null when the document has no resolvable structure tree. PDF 32000-1:2008 §14.7.2 — Structure Hierarchy.
+
+### `HasStructTree`
+
+```csharp
+bool HasStructTree => StructTreeRoot is not null
+```
+
+Returns true when the document carries a structure tree (a resolvable `/StructTreeRoot` in the catalog). Independent of `IsTagged`: a file may carry a structure tree without formally declaring itself tagged, and a `/StructTreeRoot` that resolves to nothing reports false here.
+
+### `IsTagged`
+
+```csharp
+bool IsTagged
+```
+
+Returns true when the document declares itself a Tagged PDF, i.e. its catalog `/MarkInfo` dictionary has `/Marked true`. PDF 32000-1:2008 §14.8 — Tagged PDF.
+
 ### `Info`
 
 ```csharp
@@ -230,14 +270,6 @@ byte[]? XmpMetadata => GetXmpMetadata()
 Gets the XMP metadata stream bytes, or null when the document has no /Metadata entry in its Catalog. PDF 32000-1:2008 §14.3.2 — Metadata streams.
 
 **Remarks:** Returns the raw stream bytes as they appear in the file. The XMP specification recommends that metadata streams be uncompressed for searchability; if a producer has chosen to apply a filter, the returned bytes will be in their filtered form. Callers needing the decoded form can read `Catalog`'s /Metadata entry directly and apply the appropriate filter.
-
-### `HasXfaForm`
-
-```csharp
-bool IsXfa => HasXfaForm()
-```
-
-Returns true when the document is an XFA form, i.e. its `/AcroForm` dictionary carries an `/XFA` entry. XFA content lives outside standard page content, so rendering such a document produces an essentially empty page; consumers can use this flag to show a notice instead of a blank page.
 
 ### `Dispose`
 

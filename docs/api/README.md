@@ -222,6 +222,7 @@ python tools/gen_api_docs.py
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |
 | [PdfPageCollection](Documents/PdfPageCollection.md) | class | Provides lazy, random-access to the pages of a PDF document. |
 | [PdfRectangle](Documents/PdfRectangle.md) | struct | An immutable rectangle in PDF user space (points, 1/72 inch). |
+| [XfaKind](Documents/XfaKind.md) | enum | Classifies how a document uses XFA (XML Forms Architecture), so a consumer can tell forms that render from the page content apart from dynamic XFA that needs a dedicated processor and may otherwise appear blank. |
 
 ## Chuvadi.Pdf.Encryption
 

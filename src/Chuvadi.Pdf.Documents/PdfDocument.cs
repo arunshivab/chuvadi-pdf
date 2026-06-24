@@ -385,25 +385,102 @@ public sealed class PdfDocument : IDisposable
     /// <c>/AcroForm</c> dictionary carries an <c>/XFA</c> entry. XFA content
     /// lives outside standard page content, so rendering such a document
     /// produces an essentially empty page; consumers can use this flag to show
-    /// a notice instead of a blank page.
+    /// a notice instead of a blank page. Equivalent to
+    /// <c>XfaKind != XfaKind.None</c>; see <see cref="XfaKind"/> to distinguish
+    /// static, hybrid, and dynamic XFA.
     /// </summary>
-    public bool IsXfa => HasXfaForm();
+    public bool IsXfa => XfaKind != XfaKind.None;
 
-    private bool HasXfaForm()
+    /// <summary>
+    /// Classifies the document's use of XFA (none, static, hybrid, or dynamic),
+    /// so a consumer can tell forms that render from the page content apart from
+    /// dynamic XFA that needs a processor. PDF 32000-1:2008 §12.7.8.
+    /// </summary>
+    public XfaKind XfaKind { get => ComputeXfaKind(); }
+
+    /// <summary>
+    /// Gets the document's structure-tree root dictionary (the catalog's
+    /// <c>/StructTreeRoot</c>), or null when the document has no resolvable
+    /// structure tree. PDF 32000-1:2008 §14.7.2 — Structure Hierarchy.
+    /// </summary>
+    public PdfDictionary? StructTreeRoot { get => ResolveCatalogDictionary("StructTreeRoot"); }
+
+    /// <summary>
+    /// Returns true when the document carries a structure tree (a resolvable
+    /// <c>/StructTreeRoot</c> in the catalog). Independent of <see cref="IsTagged"/>:
+    /// a file may carry a structure tree without formally declaring itself tagged,
+    /// and a <c>/StructTreeRoot</c> that resolves to nothing reports false here.
+    /// </summary>
+    public bool HasStructTree => StructTreeRoot is not null;
+
+    /// <summary>
+    /// Returns true when the document declares itself a Tagged PDF, i.e. its
+    /// catalog <c>/MarkInfo</c> dictionary has <c>/Marked true</c>.
+    /// PDF 32000-1:2008 §14.8 — Tagged PDF.
+    /// </summary>
+    public bool IsTagged { get => MarkInfoIsMarked(); }
+
+    private XfaKind ComputeXfaKind()
+    {
+        PdfDictionary? acro = ResolveAcroForm();
+        if (acro is null || !acro.ContainsKey(PdfName.Intern("XFA")))
+        {
+            return XfaKind.None;
+        }
+
+        if (CatalogFlagIsTrue("NeedsRendering"))
+        {
+            return XfaKind.Dynamic;
+        }
+
+        return AcroFormHasFields(acro) ? XfaKind.Hybrid : XfaKind.Static;
+    }
+
+    private bool MarkInfoIsMarked()
+    {
+        PdfDictionary? mark = ResolveCatalogDictionary("MarkInfo");
+        return mark is not null
+            && mark.TryGetValue(PdfName.Intern("Marked"), out PdfPrimitive? marked)
+            && marked is PdfBoolean flag
+            && flag.Value;
+    }
+
+    private PdfDictionary? ResolveCatalogDictionary(string key)
     {
         PdfDictionary? catalog = _reader.Catalog;
         if (catalog is null)
         {
-            return false;
+            return null;
         }
 
-        if (!catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? acroForm))
+        if (!catalog.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value))
+        {
+            return null;
+        }
+
+        return Objects.ResolveAs<PdfDictionary>(value);
+    }
+
+    private PdfDictionary? ResolveAcroForm() => ResolveCatalogDictionary("AcroForm");
+
+    private bool CatalogFlagIsTrue(string key)
+    {
+        PdfDictionary? catalog = _reader.Catalog;
+        return catalog is not null
+            && catalog.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+            && Objects.Resolve(value) is PdfBoolean flag
+            && flag.Value;
+    }
+
+    private bool AcroFormHasFields(PdfDictionary acroForm)
+    {
+        if (!acroForm.TryGetValue(PdfName.Intern("Fields"), out PdfPrimitive? fieldsPrim))
         {
             return false;
         }
 
-        PdfDictionary? acro = Objects.ResolveAs<PdfDictionary>(acroForm);
-        return acro is not null && acro.ContainsKey(PdfName.Intern("XFA"));
+        PdfArray? fields = Objects.ResolveAs<PdfArray>(fieldsPrim);
+        return fields is not null && fields.Count > 0;
     }
 
     private LinearizationInfo? _linearization;
