@@ -70,16 +70,21 @@ internal sealed class PageContentEditor
     /// <summary>
     /// Applies a transform to the existing content (used to scale/shift content
     /// to free header/footer bands) and queues overlay content streams drawn on
-    /// top (e.g. header/footer text) in their own graphics-state scope.
+    /// top (e.g. header/footer text) in their own graphics-state scope. When
+    /// <paramref name="backgroundBands"/> is non-null, the background fill is
+    /// confined to those rectangles (the reserved band(s)); when null, the fill
+    /// covers the whole media box.
     /// </summary>
     internal void TransformAndOverlay(
         int pageIndex,
         Transform contentTransform,
         ColorF? background,
+        IReadOnlyList<PdfRectangle>? backgroundBands,
         IReadOnlyList<byte[]> overlayStreams)
     {
         PageEdit edit = GetOrCreate(pageIndex);
         edit.Background = background;
+        edit.BackgroundBands = backgroundBands;
         edit.ContentOpacity = 1f;
         edit.ContentTransform = contentTransform;
         edit.Overlays.AddRange(overlayStreams);
@@ -204,14 +209,28 @@ internal sealed class PageContentEditor
         //   [background fill] q [gs] <cm> /CvContent Do Q [overlays...]
         StringBuilder content = new StringBuilder();
 
-        if (edit.Background is ColorF bg)
+        if (edit.Background is ColorF bg
+            && (edit.BackgroundBands is null || edit.BackgroundBands.Count > 0))
         {
             ColorF rgb = bg.ToRgb();
             content.Append("q\n");
-            content.Append(Fmt(rgb.R)).Append(' ').Append(Fmt(rgb.G)).Append(' ')
-                .Append(Fmt(rgb.B)).Append(" rg\n");
-            content.Append(Fmt(mediaBox.X1)).Append(' ').Append(Fmt(mediaBox.Y1)).Append(' ')
-                .Append(Fmt(mediaBox.Width)).Append(' ').Append(Fmt(mediaBox.Height)).Append(" re\n");
+            AppendFillColor(content, rgb);
+
+            if (edit.BackgroundBands is null)
+            {
+                // Full-page recolour wash (PageOverlay): fill the whole media box.
+                AppendRect(content, mediaBox.X1, mediaBox.Y1, mediaBox.Width, mediaBox.Height);
+            }
+            else
+            {
+                // Band-confined fill (HeaderFooter): fill only the reserved band(s)
+                // so the background never floods the page (LA-19).
+                foreach (PdfRectangle band in edit.BackgroundBands)
+                {
+                    AppendRect(content, band.X1, band.Y1, band.Width, band.Height);
+                }
+            }
+
             content.Append("f\n");
             content.Append("Q\n");
         }
@@ -302,9 +321,24 @@ internal sealed class PageContentEditor
         return value.ToString("0.######", CultureInfo.InvariantCulture);
     }
 
+    private static void AppendFillColor(StringBuilder content, ColorF rgb)
+    {
+        content.Append(Fmt(rgb.R)).Append(' ').Append(Fmt(rgb.G)).Append(' ')
+            .Append(Fmt(rgb.B)).Append(" rg\n");
+    }
+
+    private static void AppendRect(
+        StringBuilder content, double x, double y, double width, double height)
+    {
+        content.Append(Fmt(x)).Append(' ').Append(Fmt(y)).Append(' ')
+            .Append(Fmt(width)).Append(' ').Append(Fmt(height)).Append(" re\n");
+    }
+
     private sealed class PageEdit
     {
         internal ColorF? Background { get; set; }
+
+        internal IReadOnlyList<PdfRectangle>? BackgroundBands { get; set; }
 
         internal float ContentOpacity { get; set; } = 1f;
 
