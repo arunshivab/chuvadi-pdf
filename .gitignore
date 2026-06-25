@@ -84,3 +84,5 @@ page-*.svg
 
 # Stray scratch console files
 /Program.cs
+
+commitmsg.txt
