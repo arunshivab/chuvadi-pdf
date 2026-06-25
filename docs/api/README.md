@@ -367,6 +367,9 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [AnnotationFlattenKinds](Operations/AnnotationFlattenKinds.md) | enum | — |
+| [AnnotationFlattenOptions](Operations/AnnotationFlattenOptions.md) | class | Options controlling `AnnotationFlattener`: which annotation kinds to bake, whether to strip the AcroForm field tree once its widgets are baked, whether to skip invisible annotations, and whether to drop any annotations left live after baking. |
+| [AnnotationFlattener](Operations/AnnotationFlattener.md) | class | Flattens annotations and AcroForm field widgets by baking each annotation's normal appearance stream (`/AP /N`) into the page content as a form XObject, then removing the live annotation. |
 | [BandText](Operations/BandText.md) | class | The left, centre, and right text segments of a header or footer band. |
 | [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
 | [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
