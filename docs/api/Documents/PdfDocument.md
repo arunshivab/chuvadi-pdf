@@ -271,6 +271,19 @@ Gets the XMP metadata stream bytes, or null when the document has no /Metadata e
 
 **Remarks:** Returns the raw stream bytes as they appear in the file. The XMP specification recommends that metadata streams be uncompressed for searchability; if a producer has chosen to apply a filter, the returned bytes will be in their filtered form. Callers needing the decoded form can read `Catalog`'s /Metadata entry directly and apply the appropriate filter.
 
+### `Save`
+
+```csharp
+void Save(Stream output, EncryptionOptions? encryption = null)
+```
+
+Re-serializes the document to `output`, optionally encrypting it. Passing `null` writes an unencrypted copy (decrypting the document when it was opened from an encrypted file); passing an `EncryptionOptions` (for example `EncryptionOptions.Aes256(string, string?)`, the recommended AES-256 / V5 / R6 scheme) writes an encrypted file. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `output` — The stream the document is written to.
+- `encryption` — The encryption options, or null for no encryption.
+
 ### `Dispose`
 
 ```csharp

@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Images;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -252,7 +253,16 @@ public sealed class ReportBuilder
     // ── Output ────────────────────────────────────────────────────────────
 
     /// <summary>Composes the report and returns the PDF bytes.</summary>
-    public byte[] ToByteArray()
+    public byte[] ToByteArray() => ToByteArray(null);
+
+    /// <summary>
+    /// Composes the report and returns the PDF bytes, optionally encrypting it.
+    /// Pass an <see cref="EncryptionOptions"/> (for example
+    /// <see cref="EncryptionOptions.Aes256(string, string?)"/>) to encrypt, or
+    /// null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public byte[] ToByteArray(EncryptionOptions? encryption)
     {
         PdfDocumentBuilder doc = PdfDocumentBuilder.Create();
         if (_title is not null)
@@ -272,22 +282,40 @@ public sealed class ReportBuilder
 
         ReportLayoutEngine engine = new(doc, _pageSetup);
         engine.Run(_blocks);
-        return doc.ToByteArray();
+        return doc.ToByteArray(encryption);
     }
 
     /// <summary>Composes the report and writes the PDF to a stream.</summary>
-    public void Save(Stream output)
+    public void Save(Stream output) => Save(output, null);
+
+    /// <summary>
+    /// Composes the report and writes the PDF to a stream, optionally encrypting
+    /// it. Pass an <see cref="EncryptionOptions"/> to encrypt, or null for no
+    /// encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="output">The stream to write to.</param>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public void Save(Stream output, EncryptionOptions? encryption)
     {
         ArgumentNullException.ThrowIfNull(output);
-        byte[] bytes = ToByteArray();
+        byte[] bytes = ToByteArray(encryption);
         output.Write(bytes, 0, bytes.Length);
     }
 
     /// <summary>Composes the report and writes the PDF to a file (overwritten when present).</summary>
-    public void SaveToFile(string path)
+    public void SaveToFile(string path) => SaveToFile(path, null);
+
+    /// <summary>
+    /// Composes the report and writes the PDF to a file (overwritten when
+    /// present), optionally encrypting it. Pass an <see cref="EncryptionOptions"/>
+    /// to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="path">The file path to write to.</param>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public void SaveToFile(string path, EncryptionOptions? encryption)
     {
         ArgumentNullException.ThrowIfNull(path);
-        File.WriteAllBytes(path, ToByteArray());
+        File.WriteAllBytes(path, ToByteArray(encryption));
     }
 
     private void ConfigureBands(PdfDocumentBuilder doc)

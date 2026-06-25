@@ -12,7 +12,7 @@ public sealed class PdfDocumentBuilder
 
 Pages are added in order via `AddPage`. Each returns a `PageBuilder` for drawing. Optional document-level header and footer callbacks run for every page just before save, with the final page number and total page count supplied.  
 
- Call `Save` or `ToByteArray` to emit the PDF bytes.
+ Call `Save(System.IO.Stream)` or `ToByteArray()` to emit the PDF bytes.
 
 ## Methods
 
@@ -92,18 +92,43 @@ Adds a page of the given size and returns its builder.
 ### `Save`
 
 ```csharp
-void Save(Stream output)
+void Save(Stream output) => Save(output, null)
 ```
 
 Saves the document to a stream.
 
+### `Save`
+
+```csharp
+void Save(Stream output, EncryptionOptions? encryption)
+```
+
+Saves the document to a stream, optionally encrypting it. Pass an `EncryptionOptions` (for example `EncryptionOptions.Aes256(string, string?)`) to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `output` — The stream to write to.
+- `encryption` — The encryption options, or null for no encryption.
+
 ### `ToByteArray`
 
 ```csharp
-byte[] ToByteArray()
+byte[] ToByteArray() => ToByteArray(null)
 ```
 
 Returns the document as a byte array.
+
+### `ToByteArray`
+
+```csharp
+byte[] ToByteArray(EncryptionOptions? encryption)
+```
+
+Returns the document as a byte array, optionally encrypting it. Pass an `EncryptionOptions` (for example `EncryptionOptions.Aes256(string, string?)`) to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `encryption` — The encryption options, or null for no encryption.
 
 ---
 

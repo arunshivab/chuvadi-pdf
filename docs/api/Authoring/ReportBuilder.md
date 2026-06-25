@@ -157,26 +157,64 @@ Forces the following content onto a new page.
 ### `ToByteArray`
 
 ```csharp
-byte[] ToByteArray()
+byte[] ToByteArray() => ToByteArray(null)
 ```
 
 Composes the report and returns the PDF bytes.
 
+### `ToByteArray`
+
+```csharp
+byte[] ToByteArray(EncryptionOptions? encryption)
+```
+
+Composes the report and returns the PDF bytes, optionally encrypting it. Pass an `EncryptionOptions` (for example `EncryptionOptions.Aes256(string, string?)`) to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `encryption` — The encryption options, or null for no encryption.
+
 ### `Save`
 
 ```csharp
-void Save(Stream output)
+void Save(Stream output) => Save(output, null)
 ```
 
 Composes the report and writes the PDF to a stream.
 
+### `Save`
+
+```csharp
+void Save(Stream output, EncryptionOptions? encryption)
+```
+
+Composes the report and writes the PDF to a stream, optionally encrypting it. Pass an `EncryptionOptions` to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `output` — The stream to write to.
+- `encryption` — The encryption options, or null for no encryption.
+
 ### `SaveToFile`
 
 ```csharp
-void SaveToFile(string path)
+void SaveToFile(string path) => SaveToFile(path, null)
 ```
 
 Composes the report and writes the PDF to a file (overwritten when present).
+
+### `SaveToFile`
+
+```csharp
+void SaveToFile(string path, EncryptionOptions? encryption)
+```
+
+Composes the report and writes the PDF to a file (overwritten when present), optionally encrypting it. Pass an `EncryptionOptions` to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `path` — The file path to write to.
+- `encryption` — The encryption options, or null for no encryption.
 
 ---
 
