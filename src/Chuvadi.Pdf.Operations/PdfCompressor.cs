@@ -203,7 +203,7 @@ public sealed record CompressionResult
 /// attachments, thumbnails, piece-info, the structure tree, and annotations.
 /// </para>
 /// </remarks>
-public static class PdfCompressor
+public static partial class PdfCompressor
 {
     /// <summary>
     /// Compresses <paramref name="document"/> and writes the result to

@@ -25,6 +25,8 @@ internal sealed class StampWriter
     private readonly PdfDocument _document;
     private readonly List<PdfIndirectObject> _extraObjects = new List<PdfIndirectObject>();
     private readonly Dictionary<int, List<byte[]>> _overlays = new Dictionary<int, List<byte[]>>();
+    private readonly Dictionary<string, PdfDictionary> _extGStates = new Dictionary<string, PdfDictionary>();
+    private PdfObjectId? _outlineRootId;
     private int _nextObjectNumber;
 
     internal StampWriter(PdfDocument document)
@@ -64,6 +66,11 @@ internal sealed class StampWriter
 
     internal void Write(Stream output)
     {
+        Write(output, null);
+    }
+
+    internal void Write(Stream output, EncryptionOptions? encryption)
+    {
         List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
         HashSet<int> modifiedPageNumbers = new HashSet<int>();
 
@@ -82,9 +89,21 @@ internal sealed class StampWriter
             modifiedPageNumbers.Add(pageId.ObjectNumber);
         }
 
+        PdfDictionary catalog = _document.Catalog;
         foreach (PdfIndirectObject obj in _document.Objects.Objects)
         {
-            if (!modifiedPageNumbers.Contains(obj.Id.ObjectNumber))
+            if (modifiedPageNumbers.Contains(obj.Id.ObjectNumber))
+            {
+                continue;
+            }
+
+            if (_outlineRootId is not null && ReferenceEquals(obj.Value, catalog))
+            {
+                PdfDictionary withOutline = ObjectImporter.CopyDictionary(catalog);
+                withOutline.Set(PdfName.Outlines, new PdfReference(_outlineRootId.Value));
+                allObjects.Add(new PdfIndirectObject(obj.Id, withOutline));
+            }
+            else
             {
                 allObjects.Add(obj);
             }
@@ -92,7 +111,27 @@ internal sealed class StampWriter
 
         allObjects.AddRange(_extraObjects);
 
-        PdfWriter.Write(output, allObjects, BuildTrailer());
+        PdfWriter.Write(output, allObjects, BuildTrailer(), encryption);
+    }
+
+    internal PdfObjectId AllocateId()
+    {
+        return NextId();
+    }
+
+    internal void AddIndirectObject(PdfObjectId id, PdfPrimitive value)
+    {
+        _extraObjects.Add(new PdfIndirectObject(id, value));
+    }
+
+    internal void SetOutlineRoot(PdfObjectId rootId)
+    {
+        _outlineRootId = rootId;
+    }
+
+    internal void RegisterExtGState(string name, PdfDictionary state)
+    {
+        _extGStates[name] = state;
     }
 
     private PdfDictionary BuildModifiedPage(PdfPage page, List<byte[]> overlays)
@@ -125,6 +164,18 @@ internal sealed class StampWriter
         PdfDictionary fonts = GetOrCreateSubdict(resources, "Font");
         fonts.Set(PdfName.Intern(StampText.FontResourceName), StampText.BuildHelveticaFont());
         resources.Set(PdfName.Font, fonts);
+
+        if (_extGStates.Count > 0)
+        {
+            PdfDictionary gsDict = GetOrCreateSubdict(resources, "ExtGState");
+            foreach (KeyValuePair<string, PdfDictionary> gs in _extGStates)
+            {
+                gsDict.Set(PdfName.Intern(gs.Key), gs.Value);
+            }
+
+            resources.Set(PdfName.Intern("ExtGState"), gsDict);
+        }
+
         pageDict.Set(PdfName.Resources, resources);
 
         // Isolate existing content in its own q/Q so overlays are independent.
