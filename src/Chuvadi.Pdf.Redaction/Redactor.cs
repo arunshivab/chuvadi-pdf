@@ -191,15 +191,18 @@ public static class Redactor
         // MaxDegreeOfParallelism (default 1 = sequential).
         byte[][] redactedBytes = new byte[work.Count][];
         byte[][] overlayBytes = new byte[work.Count][];
+        HashSet<int>[] redactedMcids = new HashSet<int>[work.Count];
 
         if (options.MaxDegreeOfParallelism == 1)
         {
             for (int i = 0; i < work.Count; i++)
             {
-                (byte[] Bytes, List<RectangleF> OverlayBoxes) rewritten = RewriteContent(
-                    originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                    work[i].Page.Resources, work[i].Patterns);
+                (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
+                    RewriteContent(
+                        originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                        work[i].Page.Resources, work[i].Patterns);
                 redactedBytes[i] = rewritten.Bytes;
+                redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
                     work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
             }
@@ -215,10 +218,12 @@ public static class Redactor
 
             Parallel.For(0, work.Count, parallelOptions, i =>
             {
-                (byte[] Bytes, List<RectangleF> OverlayBoxes) rewritten = RewriteContent(
-                    originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                    work[i].Page.Resources, work[i].Patterns);
+                (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
+                    RewriteContent(
+                        originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                        work[i].Page.Resources, work[i].Patterns);
                 redactedBytes[i] = rewritten.Bytes;
+                redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
                     work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
             });
@@ -256,6 +261,29 @@ public static class Redactor
         }
 
         RewriteCollectedForms(run, allObjects, removedContentStreamNums);
+
+        // LA-04: neutralise the structure tree so redacted text cannot be
+        // recovered through /ActualText, /Alt, or marked-content references in the
+        // logical structure. Map each rewritten page to the MCIDs whose marked
+        // content was removed, then strip the matching structure elements'
+        // replacement text. PDF 32000-1:2008 §14.7-§14.9.
+        Dictionary<int, PdfPrimitive> rewrittenStructObjects = new Dictionary<int, PdfPrimitive>();
+        if (document.HasStructTree)
+        {
+            Dictionary<int, HashSet<int>> redactedMcidsByPage = new Dictionary<int, HashSet<int>>();
+            for (int i = 0; i < work.Count; i++)
+            {
+                if (redactedMcids[i] is HashSet<int> pageMcids && pageMcids.Count > 0)
+                {
+                    redactedMcidsByPage[work[i].PageId.ObjectNumber] = pageMcids;
+                }
+            }
+
+            if (redactedMcidsByPage.Count > 0)
+            {
+                NeutralizeStructTree(document, redactedMcidsByPage, rewrittenStructObjects);
+            }
+        }
 
         // Physically remove redacted annotations and any sub-objects they solely
         // own (action dictionaries holding /URI, appearance streams), so a
@@ -303,6 +331,12 @@ public static class Redactor
             if (rewrittenFieldObjects.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? rewrittenField))
             {
                 allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenField));
+                continue;
+            }
+
+            if (rewrittenStructObjects.TryGetValue(obj.Id.ObjectNumber, out PdfPrimitive? rewrittenStruct))
+            {
+                allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenStruct));
                 continue;
             }
 
@@ -373,7 +407,26 @@ public static class Redactor
 
     // ── Content stream rewriter ───────────────────────────────────────────
 
-    private static (byte[] Bytes, List<RectangleF> OverlayBoxes) RewriteContent(
+    /// <summary>
+    /// Tracks one open marked-content sequence (BDC/BMC … EMC) during a content
+    /// rewrite: its operator and operands, its MCID when present, whether any of
+    /// its body was redacted, and an optional buffer used to defer emission when
+    /// the sequence carries an inline /ActualText or /Alt.
+    /// </summary>
+    private sealed class MarkedContentScope
+    {
+        public string Op { get; set; } = string.Empty;
+
+        public List<PdfToken> Operands { get; set; } = new List<PdfToken>();
+
+        public int? Mcid { get; set; }
+
+        public MemoryStream? Buffer { get; set; }
+
+        public bool Dropped { get; set; }
+    }
+
+    private static (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) RewriteContent(
         byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources,
         IReadOnlyList<PatternRule> patterns)
     {
@@ -385,6 +438,40 @@ public static class Redactor
             state.Patterns = patterns;
             List<PdfToken> pendingOperands = new List<PdfToken>();
             PathAccumulator path = new PathAccumulator();
+
+            // Marked-content scope stack (BDC/BMC … EMC). Each scope records its
+            // MCID (so a redacted sequence can be matched to its structure
+            // element) and, when it carries an inline /ActualText or /Alt, buffers
+            // its body so that property can be stripped if the body is redacted.
+            // Set of MCIDs whose marked content had at least one glyph removed.
+            List<MarkedContentScope> mcStack = new List<MarkedContentScope>();
+            HashSet<int> redactedMcids = new HashSet<int>();
+
+            // The stream every emitter writes to: the innermost open buffered
+            // scope's buffer, or the main output when none is buffering.
+            MemoryStream Sink()
+            {
+                for (int s = mcStack.Count - 1; s >= 0; s--)
+                {
+                    if (mcStack[s].Buffer is MemoryStream buffer)
+                    {
+                        return buffer;
+                    }
+                }
+
+                return output;
+            }
+
+            // Mark every open marked-content scope as having had content removed,
+            // so an ancestor's /ActualText is stripped and each scope's MCID is
+            // recorded as redacted once its EMC is reached.
+            void NoteDropped()
+            {
+                for (int s = 0; s < mcStack.Count; s++)
+                {
+                    mcStack[s].Dropped = true;
+                }
+            }
 
             while (true)
             {
@@ -427,7 +514,7 @@ public static class Redactor
                 // redaction from the CTM (it paints the unit square, like Do).
                 if (token.RawText == "BI")
                 {
-                    HandleInlineImage(tok, content, output, state, contexts, token.ByteOffset);
+                    HandleInlineImage(tok, content, Sink(), state, contexts, token.ByteOffset);
                     pendingOperands.Clear();
                     continue;
                 }
@@ -466,10 +553,11 @@ public static class Redactor
 
                     if (!dropPath)
                     {
-                        FlushPath(output, path);
-                        WriteTokens(output, pendingOperands);
+                        MemoryStream sink = Sink();
+                        FlushPath(sink, path);
+                        WriteTokens(sink, pendingOperands);
                         byte[] paintBytes = Encoding.Latin1.GetBytes(op + "\n");
-                        output.Write(paintBytes, 0, paintBytes.Length);
+                        sink.Write(paintBytes, 0, paintBytes.Length);
                     }
 
                     path.Reset();
@@ -481,8 +569,80 @@ public static class Redactor
                 // content): emit the buffered path verbatim before handling it.
                 if (path.Buffer.Count > 0)
                 {
-                    FlushPath(output, path);
+                    FlushPath(Sink(), path);
                     path.Reset();
+                }
+
+                // Marked-content sequences: BDC (tag + property list), BMC (tag),
+                // EMC. A sequence carrying an inline /ActualText or /Alt is
+                // buffered so the property can be dropped if its body is redacted;
+                // otherwise BDC/BMC is emitted immediately. MCID is recorded so the
+                // structure tree can be neutralised by the post-pass.
+                if (op == "BDC" || op == "BMC")
+                {
+                    int? mcid = op == "BDC"
+                        ? ParseBdcMcid(pendingOperands, resources, run.Store)
+                        : null;
+                    bool carriesActualText = op == "BDC" && BdcHasInlineActualText(pendingOperands);
+
+                    MarkedContentScope scope = new MarkedContentScope
+                    {
+                        Op = op,
+                        Operands = new List<PdfToken>(pendingOperands),
+                        Mcid = mcid,
+                        Buffer = carriesActualText ? new MemoryStream() : null,
+                    };
+
+                    if (!carriesActualText)
+                    {
+                        MemoryStream sink = Sink();
+                        WriteTokens(sink, pendingOperands);
+                        sink.Write(Encoding.Latin1.GetBytes(op + "\n"), 0,
+                            Encoding.Latin1.GetByteCount(op + "\n"));
+                    }
+
+                    mcStack.Add(scope);
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                if (op == "EMC")
+                {
+                    if (mcStack.Count == 0)
+                    {
+                        WriteRaw(Sink(), "EMC\n");
+                        pendingOperands.Clear();
+                        continue;
+                    }
+
+                    MarkedContentScope scope = mcStack[mcStack.Count - 1];
+                    mcStack.RemoveAt(mcStack.Count - 1);
+
+                    if (scope.Buffer is MemoryStream body)
+                    {
+                        // Buffered (carried /ActualText or /Alt): re-emit BDC with
+                        // those properties dropped when the body was redacted, then
+                        // the body and EMC, into the now-current sink.
+                        MemoryStream sink = Sink();
+                        WriteBdcOperands(sink, scope.Operands, stripActualText: scope.Dropped);
+                        sink.Write(Encoding.Latin1.GetBytes(scope.Op + "\n"), 0,
+                            Encoding.Latin1.GetByteCount(scope.Op + "\n"));
+                        byte[] bodyBytes = body.ToArray();
+                        sink.Write(bodyBytes, 0, bodyBytes.Length);
+                        WriteRaw(sink, "EMC\n");
+                    }
+                    else
+                    {
+                        WriteRaw(Sink(), "EMC\n");
+                    }
+
+                    if (scope.Mcid is int closedMcid && scope.Dropped)
+                    {
+                        redactedMcids.Add(closedMcid);
+                    }
+
+                    pendingOperands.Clear();
+                    continue;
                 }
 
                 // Glyph-level text redaction: rebuild Tj and TJ so only the
@@ -490,14 +650,22 @@ public static class Redactor
                 // ' and " are decomposed below so their text is redacted the same way.
                 if (op == "Tj")
                 {
-                    EmitRedactedText(output, pendingOperands, state, contexts);
+                    if (EmitRedactedText(Sink(), pendingOperands, state, contexts))
+                    {
+                        NoteDropped();
+                    }
+
                     pendingOperands.Clear();
                     continue;
                 }
 
                 if (op == "TJ")
                 {
-                    EmitRedactedTJ(output, pendingOperands, state, contexts);
+                    if (EmitRedactedTJ(Sink(), pendingOperands, state, contexts))
+                    {
+                        NoteDropped();
+                    }
+
                     pendingOperands.Clear();
                     continue;
                 }
@@ -508,25 +676,35 @@ public static class Redactor
                 // pattern redaction as Tj/TJ, instead of being dropped whole.
                 if (op == "'" && pendingOperands.Count >= 1)
                 {
-                    WriteRaw(output, "T*\n");
+                    MemoryStream sink = Sink();
+                    WriteRaw(sink, "T*\n");
                     state.NextLine();
                     List<PdfToken> stringOnly = new List<PdfToken> { pendingOperands[pendingOperands.Count - 1] };
-                    EmitRedactedText(output, stringOnly, state, contexts);
+                    if (EmitRedactedText(sink, stringOnly, state, contexts))
+                    {
+                        NoteDropped();
+                    }
+
                     pendingOperands.Clear();
                     continue;
                 }
 
                 if (op == "\"" && pendingOperands.Count >= 3)
                 {
+                    MemoryStream sink = Sink();
                     state.WordSpacing = ParseDouble(pendingOperands[0]);
                     state.CharSpacing = ParseDouble(pendingOperands[1]);
                     WriteRaw(
-                        output,
+                        sink,
                         pendingOperands[0].RawText + " Tw\n"
                             + pendingOperands[1].RawText + " Tc\nT*\n");
                     state.NextLine();
                     List<PdfToken> stringOnly = new List<PdfToken> { pendingOperands[2] };
-                    EmitRedactedText(output, stringOnly, state, contexts);
+                    if (EmitRedactedText(sink, stringOnly, state, contexts))
+                    {
+                        NoteDropped();
+                    }
+
                     pendingOperands.Clear();
                     continue;
                 }
@@ -535,8 +713,9 @@ public static class Redactor
 
                 if (!drop)
                 {
-                    WriteTokens(output, pendingOperands);
-                    output.Write(Encoding.Latin1.GetBytes(op + "\n"), 0,
+                    MemoryStream sink = Sink();
+                    WriteTokens(sink, pendingOperands);
+                    sink.Write(Encoding.Latin1.GetBytes(op + "\n"), 0,
                         Encoding.Latin1.GetByteCount(op + "\n"));
                 }
 
@@ -546,10 +725,144 @@ public static class Redactor
             // Flush any path left unterminated at end of stream.
             if (path.Buffer.Count > 0)
             {
-                FlushPath(output, path);
+                FlushPath(Sink(), path);
             }
 
-            return (output.ToArray(), state.PatternOverlayBoxes);
+            // Flush any marked-content scope left open at end of stream (malformed
+            // content): re-emit innermost-first so no buffered body is lost.
+            while (mcStack.Count > 0)
+            {
+                MarkedContentScope scope = mcStack[mcStack.Count - 1];
+                mcStack.RemoveAt(mcStack.Count - 1);
+                if (scope.Buffer is MemoryStream body)
+                {
+                    MemoryStream sink = Sink();
+                    WriteBdcOperands(sink, scope.Operands, stripActualText: scope.Dropped);
+                    sink.Write(Encoding.Latin1.GetBytes(scope.Op + "\n"), 0,
+                        Encoding.Latin1.GetByteCount(scope.Op + "\n"));
+                    byte[] bodyBytes = body.ToArray();
+                    sink.Write(bodyBytes, 0, bodyBytes.Length);
+                }
+
+                if (scope.Mcid is int closedMcid && scope.Dropped)
+                {
+                    redactedMcids.Add(closedMcid);
+                }
+            }
+
+            return (output.ToArray(), state.PatternOverlayBoxes, redactedMcids);
+        }
+    }
+
+    /// <summary>
+    /// Extracts the <c>/MCID</c> of a <c>BDC</c> marked-content operator from its
+    /// operands, whether the property list is given inline (<c>&lt;&lt;/MCID n&gt;&gt;</c>)
+    /// or by name into the resource <c>/Properties</c> sub-dictionary. Returns null
+    /// when no MCID is present. PDF 32000-1:2008 §14.6.
+    /// </summary>
+    private static int? ParseBdcMcid(
+        List<PdfToken> operands, PdfDictionary? resources, PdfObjectStore store)
+    {
+        for (int i = 0; i + 1 < operands.Count; i++)
+        {
+            if (operands[i].Type == PdfTokenType.Name
+                && operands[i].RawText == "MCID"
+                && int.TryParse(operands[i + 1].RawText, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out int inlineMcid))
+            {
+                return inlineMcid;
+            }
+        }
+
+        // Named property list: the operand after the tag is a name resolved through
+        // the page/form resource dictionary's /Properties entry.
+        if (resources is null)
+        {
+            return null;
+        }
+
+        PdfDictionary? properties = resources.GetDictionary(PdfName.Intern("Properties"));
+        if (properties is null)
+        {
+            return null;
+        }
+
+        for (int i = 1; i < operands.Count; i++)
+        {
+            if (operands[i].Type != PdfTokenType.Name)
+            {
+                continue;
+            }
+
+            if (!properties.TryGetValue(PdfName.Intern(operands[i].RawText), out PdfPrimitive? value))
+            {
+                continue;
+            }
+
+            PdfDictionary? prop = store.ResolveAs<PdfDictionary>(value);
+            if (prop is not null
+                && prop.TryGetValue(PdfName.Intern("MCID"), out PdfPrimitive? mcidValue)
+                && store.Resolve(mcidValue) is PdfInteger mcidInt)
+            {
+                return mcidInt.Value;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns true when a <c>BDC</c> operator's inline property list carries an
+    /// <c>/ActualText</c> or <c>/Alt</c> entry — text that would survive redaction
+    /// of the body unless it is dropped with it. PDF 32000-1:2008 §14.9.4.
+    /// </summary>
+    private static bool BdcHasInlineActualText(List<PdfToken> operands)
+    {
+        for (int i = 0; i < operands.Count; i++)
+        {
+            if (operands[i].Type == PdfTokenType.Name
+                && (operands[i].RawText == "ActualText" || operands[i].RawText == "Alt"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Serialises a <c>BDC</c> operator's operands like <see cref="WriteTokens"/>,
+    /// optionally dropping any inline <c>/ActualText</c> or <c>/Alt</c> entry (the
+    /// name plus its string value) so a redacted sequence cannot be recovered from
+    /// its replacement text.
+    /// </summary>
+    private static void WriteBdcOperands(
+        MemoryStream output, List<PdfToken> operands, bool stripActualText)
+    {
+        bool skipValue = false;
+        foreach (PdfToken t in operands)
+        {
+            if (skipValue)
+            {
+                skipValue = false;
+                continue;
+            }
+
+            if (stripActualText
+                && t.Type == PdfTokenType.Name
+                && (t.RawText == "ActualText" || t.RawText == "Alt"))
+            {
+                skipValue = true;
+                continue;
+            }
+
+            if (t.Type == PdfTokenType.Name)
+            {
+                output.WriteByte((byte)'/');
+            }
+
+            output.Write(t.RawBytes, 0, t.RawBytes.Length);
+            output.WriteByte(32);
         }
     }
 
@@ -557,6 +870,198 @@ public static class Redactor
     /// Returns true when the operator-with-operands should be dropped
     /// (i.e., its visible text intersects a redaction rectangle).
     /// </summary>
+    /// <summary>
+    /// Strips <c>/ActualText</c> and <c>/Alt</c> from every structure element
+    /// whose marked content (its own or a descendant's MCID on the relevant page)
+    /// was redacted, so the redacted text cannot be recovered through the logical
+    /// structure tree. Rewritten structure objects are collected in
+    /// <paramref name="rewritten"/> keyed by object number for the output pass.
+    /// </summary>
+    private static void NeutralizeStructTree(
+        PdfDocument document,
+        Dictionary<int, HashSet<int>> redactedMcidsByPage,
+        Dictionary<int, PdfPrimitive> rewritten)
+    {
+        PdfDictionary? catalog = FindCatalog(document);
+        if (catalog is null
+            || !catalog.TryGetValue(PdfName.Intern("StructTreeRoot"), out PdfPrimitive? rootValue))
+        {
+            return;
+        }
+
+        PdfObjectStore store = document.Objects;
+        HashSet<int> selfStrip = new HashSet<int>();
+        HashSet<PdfDictionary> inlineStrip = new HashSet<PdfDictionary>(
+            ReferenceEqualityComparer.Instance);
+        Dictionary<int, PdfPrimitive> indirectValues = new Dictionary<int, PdfPrimitive>();
+        Dictionary<int, HashSet<int>> inlineOwners = new Dictionary<int, HashSet<int>>();
+        Dictionary<int, bool> resultCache = new Dictionary<int, bool>();
+        HashSet<int> visiting = new HashSet<int>();
+
+        bool IsMcidRedacted(int pageObjNum, int mcid)
+        {
+            return redactedMcidsByPage.TryGetValue(pageObjNum, out HashSet<int>? mcids)
+                && mcids.Contains(mcid);
+        }
+
+        bool CollectElement(PdfDictionary element, int thisObjNum, bool isIndirect, int inheritedPg)
+        {
+            int pageObjNum = inheritedPg;
+            if (element.TryGetValue(PdfName.Intern("Pg"), out PdfPrimitive? pgValue)
+                && pgValue is PdfReference pgRef)
+            {
+                pageObjNum = pgRef.ObjectNumber;
+            }
+
+            // A marked-content reference dictionary points straight at an MCID.
+            if (element.TryGetValue(PdfName.Intern("MCID"), out PdfPrimitive? mcidValue)
+                && store.Resolve(mcidValue) is PdfInteger mcidInt)
+            {
+                return IsMcidRedacted(pageObjNum, mcidInt.Value);
+            }
+
+            bool redacted = false;
+            if (element.TryGetValue(PdfName.Intern("K"), out PdfPrimitive? kids))
+            {
+                redacted |= Collect(kids, thisObjNum, pageObjNum);
+            }
+
+            bool hasReplacementText = element.ContainsKey(PdfName.Intern("ActualText"))
+                || element.ContainsKey(PdfName.Intern("Alt"));
+            if (redacted && hasReplacementText)
+            {
+                if (isIndirect)
+                {
+                    selfStrip.Add(thisObjNum);
+                }
+                else
+                {
+                    inlineStrip.Add(element);
+                    if (!inlineOwners.TryGetValue(thisObjNum, out HashSet<int>? owned))
+                    {
+                        owned = new HashSet<int>();
+                        inlineOwners[thisObjNum] = owned;
+                    }
+
+                    owned.Add(thisObjNum);
+                }
+            }
+
+            return redacted;
+        }
+
+        bool Collect(PdfPrimitive node, int ownerObjNum, int inheritedPg)
+        {
+            bool isIndirect = node is PdfReference;
+            int thisObjNum = isIndirect ? ((PdfReference)node).ObjectNumber : ownerObjNum;
+            if (isIndirect)
+            {
+                if (resultCache.TryGetValue(thisObjNum, out bool cached))
+                {
+                    return cached;
+                }
+
+                if (!visiting.Add(thisObjNum))
+                {
+                    return false;
+                }
+            }
+
+            PdfPrimitive resolved = store.Resolve(node);
+            if (isIndirect && (resolved is PdfDictionary || resolved is PdfArray))
+            {
+                indirectValues[thisObjNum] = resolved;
+            }
+
+            bool redacted;
+            if (resolved is PdfInteger leaf)
+            {
+                redacted = IsMcidRedacted(inheritedPg, leaf.Value);
+            }
+            else if (resolved is PdfArray array)
+            {
+                redacted = false;
+                foreach (PdfPrimitive item in array)
+                {
+                    redacted |= Collect(item, thisObjNum, inheritedPg);
+                }
+            }
+            else if (resolved is PdfDictionary dict)
+            {
+                redacted = CollectElement(dict, thisObjNum, isIndirect, inheritedPg);
+            }
+            else
+            {
+                redacted = false;
+            }
+
+            if (isIndirect)
+            {
+                visiting.Remove(thisObjNum);
+                resultCache[thisObjNum] = redacted;
+            }
+
+            return redacted;
+        }
+
+        int rootOwner = rootValue is PdfReference rootRef ? rootRef.ObjectNumber : -1;
+        Collect(rootValue, rootOwner, -1);
+
+        HashSet<int> owners = new HashSet<int>(selfStrip);
+        owners.UnionWith(inlineOwners.Keys);
+        foreach (int objNum in owners)
+        {
+            if (!indirectValues.TryGetValue(objNum, out PdfPrimitive? value))
+            {
+                continue;
+            }
+
+            rewritten[objNum] = CloneStrippingActualText(
+                value, selfStrip.Contains(objNum), inlineStrip);
+        }
+    }
+
+    /// <summary>
+    /// Deep-copies a structure object, dropping <c>/ActualText</c> and <c>/Alt</c>
+    /// from the object itself when <paramref name="stripSelf"/> is set and from any
+    /// inline descendant dictionary in <paramref name="inlineStrip"/>. Indirect
+    /// references are left untouched (their targets are rewritten separately).
+    /// </summary>
+    private static PdfPrimitive CloneStrippingActualText(
+        PdfPrimitive value, bool stripSelf, HashSet<PdfDictionary> inlineStrip)
+    {
+        if (value is PdfDictionary dict)
+        {
+            bool stripThis = stripSelf || inlineStrip.Contains(dict);
+            PdfDictionary copy = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+            {
+                if (stripThis
+                    && (entry.Key.Value == "ActualText" || entry.Key.Value == "Alt"))
+                {
+                    continue;
+                }
+
+                copy.Set(entry.Key, CloneStrippingActualText(entry.Value, false, inlineStrip));
+            }
+
+            return copy;
+        }
+
+        if (value is PdfArray array)
+        {
+            List<PdfPrimitive> items = new List<PdfPrimitive>(array.Count);
+            foreach (PdfPrimitive item in array)
+            {
+                items.Add(CloneStrippingActualText(item, false, inlineStrip));
+            }
+
+            return new PdfArray(items);
+        }
+
+        return value;
+    }
+
     private static bool ProcessOperator(
         string op, List<PdfToken> operands,
         RedactState state, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources)
@@ -1175,14 +1680,14 @@ public static class Redactor
     // is emitted; otherwise a TJ array is written whose dropped runs become
     // negative numeric gaps equal to the removed glyphs' advance, so survivors
     // keep their original positions.
-    private static void EmitRedactedText(
+    private static bool EmitRedactedText(
         MemoryStream output, List<PdfToken> operands, RedactState state,
         IReadOnlyList<RedactContext> contexts)
     {
         if (operands.Count == 0)
         {
             WriteOriginalTj(output, operands);
-            return;
+            return false;
         }
 
         PdfToken stringToken = operands[operands.Count - 1];
@@ -1190,14 +1695,14 @@ public static class Redactor
             && stringToken.Type != PdfTokenType.HexString)
         {
             WriteOriginalTj(output, operands);
-            return;
+            return false;
         }
 
         string text = ExtractString(stringToken);
         if (text.Length == 0 || state.FontSize <= 0)
         {
             WriteOriginalTj(output, operands);
-            return;
+            return false;
         }
 
         bool[] drop = new bool[text.Length];
@@ -1273,12 +1778,12 @@ public static class Redactor
         if (!anyDropped)
         {
             WriteOriginalTj(output, operands);
-            return;
+            return false;
         }
 
         if (allDropped && !anyReplacement)
         {
-            return;
+            return true;
         }
 
         StringBuilder tj = new StringBuilder();
@@ -1343,6 +1848,7 @@ public static class Redactor
         tj.Append("] TJ\n");
         byte[] bytes = Encoding.Latin1.GetBytes(tj.ToString());
         output.Write(bytes, 0, bytes.Length);
+        return true;
     }
 
     // Glyph-level redaction for a TJ array. Walks the array's strings and
@@ -1352,7 +1858,7 @@ public static class Redactor
     // Tj): without it, a whole TJ — typically one line of a Word/Office PDF —
     // was dropped if any glyph in it was redacted, and mid-line matches were
     // missed because the cursor was not advanced across array elements.
-    private static void EmitRedactedTJ(
+    private static bool EmitRedactedTJ(
         MemoryStream output, List<PdfToken> operands, RedactState state,
         IReadOnlyList<RedactContext> contexts)
     {
@@ -1410,7 +1916,7 @@ public static class Redactor
         if (n == 0 || state.FontSize <= 0)
         {
             WriteOriginalTJ(output, operands);
-            return;
+            return false;
         }
 
         bool[] drop = new bool[n];
@@ -1477,12 +1983,12 @@ public static class Redactor
         if (!anyDropped)
         {
             WriteOriginalTJ(output, operands);
-            return;
+            return false;
         }
 
         if (allDropped && !anyReplacement)
         {
-            return;
+            return true;
         }
 
         // Rebuild. Displacement is tracked in 1/1000 em, rightward-positive: a
@@ -1566,6 +2072,7 @@ public static class Redactor
         tj.Append("] TJ\n");
         byte[] bytes = Encoding.Latin1.GetBytes(tj.ToString());
         output.Write(bytes, 0, bytes.Length);
+        return true;
     }
 
     // Adds page-space overlay rectangles covering maximal runs of glyphs removed
@@ -2287,6 +2794,18 @@ public static class Redactor
         {
             PdfPage page = document.Pages[i];
             Visit(document.Objects, page.Dictionary, visited);
+        }
+
+        // Also preload the logical structure tree. It hangs off the catalog, not
+        // the page graph, so without this it is never resolved — leaving its
+        // objects out of the object-number count (new content streams would then
+        // reuse their numbers) and dropping the tags from the output entirely.
+        // Redaction must keep and neutralise the structure tree (LA-04).
+        PdfDictionary? catalog = FindCatalog(document);
+        if (catalog is not null
+            && catalog.TryGetValue(PdfName.Intern("StructTreeRoot"), out PdfPrimitive? structTreeRoot))
+        {
+            Visit(document.Objects, structTreeRoot, visited);
         }
     }
 
