@@ -222,7 +222,11 @@ python tools/gen_api_docs.py
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |
 | [PdfPageCollection](Documents/PdfPageCollection.md) | class | Provides lazy, random-access to the pages of a PDF document. |
 | [PdfRectangle](Documents/PdfRectangle.md) | struct | An immutable rectangle in PDF user space (points, 1/72 inch). |
+| [XfaDataField](Documents/XfaDataField.md) | class | A single value drawn from the XFA `datasets` packet's data layer (`&lt;xfa:data&gt;`): the data element's path, its text value, and a best-effort widget geometry the host can use to overlay the value onto the rendered template. |
+| [XfaGeometry](Documents/XfaGeometry.md) | class | Best-effort geometry for an `XfaDataField`, taken from a matching AcroForm widget annotation's `/Rect`. |
 | [XfaKind](Documents/XfaKind.md) | enum | Classifies how a document uses XFA (XML Forms Architecture), so a consumer can tell forms that render from the page content apart from dynamic XFA that needs a dedicated processor and may otherwise appear blank. |
+| [XfaPacket](Documents/XfaPacket.md) | class | A single named packet of an XFA (XML Forms Architecture) form, such as the `template`, `datasets`, or `config` packet. |
+| [XfaPackets](Documents/XfaPackets.md) | class | Provides read access to a document's XFA (XML Forms Architecture) packets and to the data layer they carry. |
 
 ## Chuvadi.Pdf.Encryption
 

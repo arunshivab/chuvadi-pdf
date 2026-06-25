@@ -398,6 +398,31 @@ public sealed class PdfDocument : IDisposable
     /// </summary>
     public XfaKind XfaKind { get => ComputeXfaKind(); }
 
+    private XfaPackets? _xfa;
+    private bool _xfaProbed;
+
+    /// <summary>
+    /// Gets the document's XFA (XML Forms Architecture) packets and data layer,
+    /// or null when the document has no XFA form (<see cref="XfaKind"/> is
+    /// <see cref="XfaKind.None"/>). Exposes the raw packets (template, datasets,
+    /// config, …) and, from the datasets packet, the data layer as
+    /// <see cref="XfaDataField"/> values with best-effort widget geometry. The
+    /// result is computed once and cached. PDF 32000-1:2008 §12.7.8.
+    /// </summary>
+    public XfaPackets? Xfa
+    {
+        get
+        {
+            if (!_xfaProbed)
+            {
+                _xfa = XfaPackets.TryRead(this);
+                _xfaProbed = true;
+            }
+
+            return _xfa;
+        }
+    }
+
     /// <summary>
     /// Gets the document's structure-tree root dictionary (the catalog's
     /// <c>/StructTreeRoot</c>), or null when the document has no resolvable
