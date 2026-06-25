@@ -49,16 +49,23 @@ public sealed class PdfPage
     // ── Bounding boxes ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Gets the MediaBox — the full extent of the page in points.
-    /// Required. Falls back to the parent /Pages node if absent from this page.
+    /// Gets or sets the MediaBox — the full extent of the page in points.
+    /// Required. The getter falls back to the parent /Pages node if absent
+    /// from this page; the setter writes a direct <c>/MediaBox</c> entry on
+    /// this page's dictionary, overriding any inherited value.
     /// PDF 32000-1:2008 §7.7.3.3, Table 30 — MediaBox.
     /// </summary>
-    public PdfRectangle MediaBox => GetInheritedBox(PdfName.MediaBox);
+    public PdfRectangle MediaBox
+    {
+        get => GetInheritedBox(PdfName.MediaBox);
+        set => SetBox(PdfName.MediaBox, value);
+    }
 
     /// <summary>
-    /// Gets the CropBox — the visible region of the page.
-    /// Defaults to MediaBox when absent.
-    /// PDF 32000-1:2008 §7.7.3.3, Table 30 — CropBox.
+    /// Gets or sets the CropBox — the visible region of the page.
+    /// The getter defaults to MediaBox when absent; the setter writes a direct
+    /// <c>/CropBox</c> entry on this page's dictionary, overriding any inherited
+    /// value. PDF 32000-1:2008 §7.7.3.3, Table 30 — CropBox.
     /// </summary>
     public PdfRectangle CropBox
     {
@@ -67,6 +74,8 @@ public sealed class PdfPage
             PdfArray? box = GetInheritedArray(PdfName.CropBox);
             return box is not null ? RectangleFromArray(box) : MediaBox;
         }
+
+        set => SetBox(PdfName.CropBox, value);
     }
 
     /// <summary>
@@ -235,6 +244,14 @@ public sealed class PdfPage
 
             current = parent;
         }
+    }
+
+    private void SetBox(PdfName key, PdfRectangle box)
+    {
+        _dict.Set(key, new PdfArray([
+            new PdfReal(box.X1), new PdfReal(box.Y1),
+            new PdfReal(box.X2), new PdfReal(box.Y2)
+        ]));
     }
 
     private static PdfRectangle RectangleFromArray(PdfArray arr)

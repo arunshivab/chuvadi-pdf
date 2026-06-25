@@ -64,14 +64,6 @@ Returns true when the page has at least one non-empty content stream. This is a 
 
 ## Methods
 
-### `GetInheritedBox`
-
-```csharp
-PdfRectangle MediaBox => GetInheritedBox(PdfName.MediaBox)
-```
-
-Gets the MediaBox — the full extent of the page in points. Required. Falls back to the parent /Pages node if absent from this page. PDF 32000-1:2008 §7.7.3.3, Table 30 — MediaBox.
-
 ### `GetInheritedInteger`
 
 ```csharp

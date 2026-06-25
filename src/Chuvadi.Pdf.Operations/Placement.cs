@@ -12,7 +12,8 @@ namespace Chuvadi.Pdf.Operations;
 /// Builds the affine transforms most often needed when placing a page: scale a
 /// source box to fit a destination, centre it, or rotate it by an arbitrary
 /// angle. Each returns a <see cref="Transform"/> suitable for
-/// <see cref="PageComposer.PlacePage"/> or <see cref="PageStamper"/>; callers
+/// <see cref="PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform)"/> or
+/// <see cref="PageStamper"/>; callers
 /// who need full control can always supply their own transform instead.
 /// </summary>
 public static class Placement

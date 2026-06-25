@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Operations` (Operations)
 
-Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. Each returns a `Transform` suitable for `PageComposer.PlacePage` or `PageStamper`; callers who need full control can always supply their own transform instead.
+Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. Each returns a `Transform` suitable for `PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform)` or `PageStamper`; callers who need full control can always supply their own transform instead.
 
 ```csharp
 public static class Placement
