@@ -1,3 +1,0 @@
-operations: PageCropper clip-crop - box reset + hard clip (C1)
-
-Adds PageCropper.Crop(output, document, crops) and the PageCrop struct. Each listed page's MediaBox and CropBox are reset to the crop rectangle and the existing content is wrapped in q <rect> re W n ... Q so nothing outside paints. Lossless visual crop: in-box content preserved byte-for-byte, off-box bytes remain (clipped from view, not removed). Standalone op (re-serialize pattern); does not touch PageContentEditor. +5 tests.
