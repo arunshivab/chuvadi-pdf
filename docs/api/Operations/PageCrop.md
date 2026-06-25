@@ -12,12 +12,22 @@ public readonly struct PageCrop : IEquatable<PageCrop>
 
 ### `PageCrop(int pageIndex, RectangleF cropBox)`
 
+Initializes a new `PageCrop` with `PageCropMode.ClipOnly`.
+
+**Parameters**
+
+- `pageIndex` — The zero-based index of the page to crop.
+- `cropBox` — The crop rectangle in PDF user-space points.
+
+### `PageCrop(int pageIndex, RectangleF cropBox, PageCropMode mode)`
+
 Initializes a new `PageCrop`.
 
 **Parameters**
 
 - `pageIndex` — The zero-based index of the page to crop.
 - `cropBox` — The crop rectangle in PDF user-space points.
+- `mode` — How the page is confined to the crop rectangle.
 
 ## Properties
 
@@ -37,12 +47,20 @@ RectangleF CropBox
 
 Gets the crop rectangle in PDF user-space points.
 
+### `Mode`
+
+```csharp
+PageCropMode Mode
+```
+
+Gets how the page is confined to the crop rectangle.
+
 ## Methods
 
 ### `Equals`
 
 ```csharp
-bool Equals(PageCrop other) => PageIndex == other.PageIndex && CropBox.Equals(other.CropBox)
+bool Equals(PageCrop other) => PageIndex == other.PageIndex && CropBox.Equals(other.CropBox) && Mode == other.Mode
 ```
 
 Determines whether this value equals `other`.
@@ -70,7 +88,7 @@ Determines whether this value equals `obj`.
 ### `GetHashCode`
 
 ```csharp
-override int GetHashCode() => HashCode.Combine(PageIndex, CropBox)
+override int GetHashCode() => HashCode.Combine(PageIndex, CropBox, Mode)
 ```
 
 Returns a hash code for this value.

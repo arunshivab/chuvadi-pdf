@@ -13,13 +13,23 @@ namespace Chuvadi.Pdf.Operations;
 /// </summary>
 public readonly struct PageCrop : IEquatable<PageCrop>
 {
-    /// <summary>Initializes a new <see cref="PageCrop"/>.</summary>
+    /// <summary>Initializes a new <see cref="PageCrop"/> with <see cref="PageCropMode.ClipOnly"/>.</summary>
     /// <param name="pageIndex">The zero-based index of the page to crop.</param>
     /// <param name="cropBox">The crop rectangle in PDF user-space points.</param>
     public PageCrop(int pageIndex, RectangleF cropBox)
+        : this(pageIndex, cropBox, PageCropMode.ClipOnly)
+    {
+    }
+
+    /// <summary>Initializes a new <see cref="PageCrop"/>.</summary>
+    /// <param name="pageIndex">The zero-based index of the page to crop.</param>
+    /// <param name="cropBox">The crop rectangle in PDF user-space points.</param>
+    /// <param name="mode">How the page is confined to the crop rectangle.</param>
+    public PageCrop(int pageIndex, RectangleF cropBox, PageCropMode mode)
     {
         PageIndex = pageIndex;
         CropBox = cropBox;
+        Mode = mode;
     }
 
     /// <summary>Gets the zero-based index of the page to crop.</summary>
@@ -28,10 +38,13 @@ public readonly struct PageCrop : IEquatable<PageCrop>
     /// <summary>Gets the crop rectangle in PDF user-space points.</summary>
     public RectangleF CropBox { get; }
 
+    /// <summary>Gets how the page is confined to the crop rectangle.</summary>
+    public PageCropMode Mode { get; }
+
     /// <summary>Determines whether this value equals <paramref name="other"/>.</summary>
     /// <param name="other">The value to compare with.</param>
     /// <returns><see langword="true"/> when both values are equal.</returns>
-    public bool Equals(PageCrop other) => PageIndex == other.PageIndex && CropBox.Equals(other.CropBox);
+    public bool Equals(PageCrop other) => PageIndex == other.PageIndex && CropBox.Equals(other.CropBox) && Mode == other.Mode;
 
     /// <summary>Determines whether this value equals <paramref name="obj"/>.</summary>
     /// <param name="obj">The object to compare with.</param>
@@ -40,7 +53,7 @@ public readonly struct PageCrop : IEquatable<PageCrop>
 
     /// <summary>Returns a hash code for this value.</summary>
     /// <returns>A hash code combining the page index and crop rectangle.</returns>
-    public override int GetHashCode() => HashCode.Combine(PageIndex, CropBox);
+    public override int GetHashCode() => HashCode.Combine(PageIndex, CropBox, Mode);
 
     /// <summary>Determines whether two <see cref="PageCrop"/> values are equal.</summary>
     /// <param name="left">The left value.</param>

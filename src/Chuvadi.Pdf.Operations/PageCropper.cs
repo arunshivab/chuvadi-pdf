@@ -9,6 +9,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
@@ -50,7 +51,7 @@ public static class PageCropper
     {
         private readonly PdfDocument _document;
         private readonly PdfObjectStore _store;
-        private readonly Dictionary<int, RectangleF> _crops = new Dictionary<int, RectangleF>();
+        private readonly Dictionary<int, PageCrop> _crops = new Dictionary<int, PageCrop>();
         private readonly List<PdfIndirectObject> _extraObjects = new List<PdfIndirectObject>();
         private readonly List<(PdfObjectId Id, PdfDictionary Dict)> _modifiedPages =
             new List<(PdfObjectId, PdfDictionary)>();
@@ -63,7 +64,7 @@ public static class PageCropper
 
             foreach (PageCrop crop in crops)
             {
-                _crops[crop.PageIndex] = crop.CropBox;
+                _crops[crop.PageIndex] = crop;
             }
 
             _nextObjectNumber = 1;
@@ -87,7 +88,7 @@ public static class PageCropper
             Dictionary<int, PdfObjectId> pageIds = PageTree.BuildIndexToIdMap(_document);
             PdfObjectId catalogId = FindCatalogId();
 
-            foreach (KeyValuePair<int, RectangleF> entry in _crops)
+            foreach (KeyValuePair<int, PageCrop> entry in _crops)
             {
                 if (entry.Key >= 0 && entry.Key < _document.PageCount
                     && pageIds.TryGetValue(entry.Key, out PdfObjectId pageId))
@@ -117,23 +118,44 @@ public static class PageCropper
             PdfWriter.Write(output, all, BuildTrailer(catalogId));
         }
 
-        private void ProcessPage(int pageIndex, PdfObjectId pageId, RectangleF cropBox)
+        private void ProcessPage(int pageIndex, PdfObjectId pageId, PageCrop crop)
         {
+            RectangleF cropBox = crop.CropBox;
             PdfDictionary pageDict = _document.Pages[pageIndex].Dictionary;
             PdfDictionary newPage = ObjectImporter.CopyDictionary(pageDict);
 
-            // Wrap the existing content in a hard clip to the crop rectangle:
-            //   q <x> <y> <w> <h> re W n <existing content> Q
-            string clip = string.Format(
-                CultureInfo.InvariantCulture,
-                "q\n{0:0.####} {1:0.####} {2:0.####} {3:0.####} re W n\n",
-                cropBox.X, cropBox.Y, cropBox.Width, cropBox.Height);
+            if (crop.Mode == PageCropMode.Scrub)
+            {
+                byte[] decoded = DecodePageContent(pageDict);
+                PdfPrimitive? resPrim = pageDict.GetAs<PdfPrimitive>(PdfName.Resources);
+                PdfDictionary? resources = resPrim is null ? null : _store.Resolve(resPrim) as PdfDictionary;
+                PageScrubber.ScrubResult result = PageScrubber.Scrub(
+                    decoded, cropBox.X, cropBox.Y, cropBox.Right, cropBox.Top, resources, _store);
 
-            PdfArray contents = new PdfArray([]);
-            contents.Add(new PdfReference(NextStreamFromBytes(Encoding.Latin1.GetBytes(clip))));
-            AppendExistingContent(pageDict, contents);
-            contents.Add(new PdfReference(NextStreamFromBytes(Encoding.Latin1.GetBytes("\nQ\n"))));
-            newPage.Set(PdfName.Contents, contents);
+                if (result.NewXObjects.Count > 0)
+                {
+                    RegisterXObjects(newPage, resources, result.NewXObjects);
+                }
+
+                PdfArray scrubContents = new PdfArray([]);
+                scrubContents.Add(new PdfReference(NextStreamFromBytes(result.Content)));
+                newPage.Set(PdfName.Contents, scrubContents);
+            }
+            else
+            {
+                // ClipOnly: wrap the existing content in a hard clip to the crop rectangle:
+                //   q <x> <y> <w> <h> re W n <existing content> Q
+                string clip = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "q\n{0:0.####} {1:0.####} {2:0.####} {3:0.####} re W n\n",
+                    cropBox.X, cropBox.Y, cropBox.Width, cropBox.Height);
+
+                PdfArray contents = new PdfArray([]);
+                contents.Add(new PdfReference(NextStreamFromBytes(Encoding.Latin1.GetBytes(clip))));
+                AppendExistingContent(pageDict, contents);
+                contents.Add(new PdfReference(NextStreamFromBytes(Encoding.Latin1.GetBytes("\nQ\n"))));
+                newPage.Set(PdfName.Contents, contents);
+            }
 
             // Reset the page boundary to the crop rectangle.
             PdfArray box = new PdfArray(new PdfPrimitive[]
@@ -147,6 +169,72 @@ public static class PageCropper
             newPage.Set(PdfName.Intern("CropBox"), box);
 
             _modifiedPages.Add((pageId, newPage));
+        }
+
+        private byte[] DecodePageContent(PdfDictionary pageDict)
+        {
+            FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
+            using MemoryStream merged = new MemoryStream();
+
+            if (pageDict.TryGetValue(PdfName.Contents, out PdfPrimitive? contentsPrim))
+            {
+                PdfPrimitive resolved = _store.Resolve(contentsPrim);
+                if (resolved is PdfArray array)
+                {
+                    foreach (PdfPrimitive item in array)
+                    {
+                        AppendDecodedStream(_store.Resolve(item), pipeline, merged);
+                    }
+                }
+                else
+                {
+                    AppendDecodedStream(resolved, pipeline, merged);
+                }
+            }
+
+            return merged.ToArray();
+        }
+
+        private static void AppendDecodedStream(PdfPrimitive? resolved, FilterPipeline pipeline, MemoryStream merged)
+        {
+            if (resolved is not PdfStream stream)
+            {
+                return;
+            }
+
+            byte[] bytes = DecodeStream(stream, pipeline);
+            merged.Write(bytes, 0, bytes.Length);
+            merged.WriteByte((byte)'\n');
+        }
+
+        private static byte[] DecodeStream(PdfStream stream, FilterPipeline pipeline)
+        {
+            PdfPrimitive? filter = stream.Filter;
+            if (filter is null)
+            {
+                return stream.RawBytes;
+            }
+
+            if (filter is PdfName fn)
+            {
+                string resolvedFilter = FilterRegistry.ResolveAlias(fn.Value);
+                return pipeline.Decode(resolvedFilter, stream.RawBytes, null);
+            }
+
+            byte[] data = stream.RawBytes;
+            if (filter is PdfArray filterArray)
+            {
+                foreach (PdfPrimitive f in filterArray)
+                {
+                    if (f is PdfName n)
+                    {
+                        string resolvedFilter = FilterRegistry.ResolveAlias(n.Value);
+                        data = pipeline.Decode(resolvedFilter, data, null);
+                    }
+                }
+            }
+
+            return data;
         }
 
         private void AppendExistingContent(PdfDictionary pageDict, PdfArray contents)
@@ -197,6 +285,31 @@ public static class PageCropper
             PdfObjectId id = NextId();
             _extraObjects.Add(new PdfIndirectObject(id, new PdfStream(dict, bytes)));
             return id;
+        }
+
+        private void RegisterXObjects(
+            PdfDictionary newPage, PdfDictionary? resources,
+            List<(string Name, PdfStream Stream)> xobjs)
+        {
+            PdfDictionary resDict = resources is null
+                ? new PdfDictionary()
+                : ObjectImporter.CopyDictionary(resources);
+
+            PdfPrimitive? xobjPrim = resDict.GetAs<PdfPrimitive>(PdfName.Intern("XObject"));
+            PdfDictionary xobjDict =
+                (xobjPrim is not null && _store.Resolve(xobjPrim) is PdfDictionary existing)
+                    ? ObjectImporter.CopyDictionary(existing)
+                    : new PdfDictionary();
+
+            foreach ((string name, PdfStream stream) in xobjs)
+            {
+                PdfObjectId id = NextId();
+                _extraObjects.Add(new PdfIndirectObject(id, stream));
+                xobjDict.Set(PdfName.Intern(name), new PdfReference(id));
+            }
+
+            resDict.Set(PdfName.Intern("XObject"), xobjDict);
+            newPage.Set(PdfName.Resources, resDict);
         }
 
         private PdfObjectId FindCatalogId()
