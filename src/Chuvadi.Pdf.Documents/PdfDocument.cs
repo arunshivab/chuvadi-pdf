@@ -605,17 +605,71 @@ public sealed class PdfDocument : IDisposable
         ArgumentNullException.ThrowIfNull(output);
 
         PdfDictionary trailer = new PdfDictionary();
-        if (Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root))
+        Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root);
+        Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? info);
+
+        if (root is not null)
         {
             trailer.Set(PdfName.Root, root);
         }
 
-        if (Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? info))
+        if (info is not null)
         {
             trailer.Set(PdfName.Info, info);
         }
 
-        PdfWriter.Write(output, Objects.Objects, trailer, encryption);
+        // Collect every object reachable from the trailer rather than only the
+        // objects that happen to be materialized in the store. An opened
+        // document loads its objects lazily, so content streams are usually not
+        // resolved at save time; passing the bare store would drop them and emit
+        // a structurally valid but contentless file.
+        List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
+        HashSet<int> visited = new HashSet<int>();
+        CollectReachable(root, objects, visited);
+        CollectReachable(info, objects, visited);
+
+        PdfWriter.Write(output, objects, trailer, encryption);
+    }
+
+    private void CollectReachable(PdfPrimitive? primitive, List<PdfIndirectObject> collected, HashSet<int> visited)
+    {
+        if (primitive is PdfReference reference)
+        {
+            if (!visited.Add(reference.ObjectId.ObjectNumber))
+            {
+                return;
+            }
+
+            PdfPrimitive resolved = Objects.Resolve(reference);
+            collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
+            CollectReachable(resolved, collected, visited);
+        }
+        else if (primitive is PdfDictionary dictionary)
+        {
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+            {
+                if (entry.Key == PdfName.Parent)
+                {
+                    continue; // never follow /Parent — it forms a cycle
+                }
+
+                CollectReachable(entry.Value, collected, visited);
+            }
+        }
+        else if (primitive is PdfArray array)
+        {
+            for (int i = 0; i < array.Count; i++)
+            {
+                CollectReachable(array[i], collected, visited);
+            }
+        }
+        else if (primitive is PdfStream stream)
+        {
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+            {
+                CollectReachable(entry.Value, collected, visited);
+            }
+        }
     }
 
     // ── IDisposable ───────────────────────────────────────────────────────
