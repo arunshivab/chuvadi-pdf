@@ -385,6 +385,7 @@ python tools/gen_api_docs.py
 | [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
 | [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
+| [PlacePageOptions](Operations/PlacePageOptions.md) | class | Optional per-placement controls for `PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform, PlacePageOptions)`. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
 | [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
 | [StampContext](Operations/StampContext.md) | class | Substitutes tokens in a stamp template into final text for one page. |

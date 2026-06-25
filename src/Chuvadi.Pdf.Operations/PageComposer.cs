@@ -21,7 +21,8 @@ namespace Chuvadi.Pdf.Operations;
 /// Builds a new PDF by placing pages from existing documents onto target
 /// sheets under arbitrary affine transforms. Each placed page is imported as a
 /// form XObject, so vector and text content stay intact and selectable (not
-/// rasterised). One <see cref="PlacePage"/> per sheet covers rotate-any-angle
+/// rasterised). One <see cref="PlacePage(PdfDocument, int, Transform)"/> per
+/// sheet covers rotate-any-angle
 /// and resize; several per sheet cover N-up and imposition.
 /// </summary>
 /// <remarks>
@@ -75,7 +76,23 @@ public sealed class PageComposer
     public PageComposer PlacePage(PdfDocument source, int sourcePageIndex, Transform transform)
     {
         ArgumentNullException.ThrowIfNull(source);
+        return PlacePageCore(source, sourcePageIndex, transform, null);
+    }
 
+    /// <summary>
+    /// Places a source page onto the current target sheet under the given
+    /// transform, with per-placement crop/clip controls from
+    /// <paramref name="options"/>.
+    /// </summary>
+    public PageComposer PlacePage(PdfDocument source, int sourcePageIndex, Transform transform, PlacePageOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(options);
+        return PlacePageCore(source, sourcePageIndex, transform, options);
+    }
+
+    private PageComposer PlacePageCore(PdfDocument source, int sourcePageIndex, Transform transform, PlacePageOptions? options)
+    {
         if (_pages.Count == 0)
         {
             throw new InvalidOperationException(
@@ -86,7 +103,12 @@ public sealed class PageComposer
         PdfPage page = source.Pages[sourcePageIndex];
         int docIndex = SourceDocIndex(source);
 
-        PdfRectangle box = page.CropBox;
+        // SourceClip overrides the imported form's BBox so only that region of
+        // the source page is imported; otherwise the source crop box is used.
+        PdfRectangle box = options?.SourceClip is RectangleF clip
+            ? new PdfRectangle(clip.X, clip.Y, clip.Right, clip.Top)
+            : page.CropBox;
+
         byte[] body = ObjectImporter.ConcatenatePageContent(page, source.Objects);
 
         PdfDictionary? resources = page.Resources;
@@ -100,14 +122,41 @@ public sealed class PageComposer
         string name = "Fm" + target.Forms.Count.ToString(CultureInfo.InvariantCulture);
         target.Forms.Add(new PlacedForm(name, box, body, resources, docIndex, referenced));
 
-        // q <a b c d e f> cm /Fm Do Q  — paint the imported page under the CTM.
+        // q [<dx dy dw dh> re W n] <a b c d e f> cm /Fm Do Q
+        // The optional destination clip is applied in target space, outside the
+        // placement transform, so the placed page cannot paint beyond its cell.
         target.Content.Append("q\n");
+        if (options?.DestinationClip is RectangleF dest)
+        {
+            target.Content.Append(Num(dest.X)).Append(' ').Append(Num(dest.Y)).Append(' ')
+                .Append(Num(dest.Width)).Append(' ').Append(Num(dest.Height)).Append(" re\n");
+            target.Content.Append("W n\n");
+        }
+
         target.Content.Append(Num(transform.A)).Append(' ').Append(Num(transform.B)).Append(' ')
             .Append(Num(transform.C)).Append(' ').Append(Num(transform.D)).Append(' ')
             .Append(Num(transform.E)).Append(' ').Append(Num(transform.F)).Append(" cm\n");
         target.Content.Append('/').Append(name).Append(" Do\n");
         target.Content.Append("Q\n");
 
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the <c>/CropBox</c> of the current target sheet (in target user
+    /// space, bottom-left origin), declaring the visible region of the composed
+    /// page. Combine with a per-placement destination clip to both confine and
+    /// declare a cropped region.
+    /// </summary>
+    public PageComposer SetCropBox(RectangleF cropBox)
+    {
+        if (_pages.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Call AddPage before SetCropBox — there is no target sheet yet.");
+        }
+
+        _pages[_pages.Count - 1].CropBox = cropBox;
         return this;
     }
 
@@ -207,6 +256,13 @@ public sealed class PageComposer
                 new PdfReal(0), new PdfReal(0),
                 new PdfReal(page.Width), new PdfReal(page.Height)
             ]));
+            if (page.CropBox is RectangleF crop)
+            {
+                pageDict.Set(PdfName.CropBox, new PdfArray([
+                    new PdfReal(crop.X), new PdfReal(crop.Y),
+                    new PdfReal(crop.Right), new PdfReal(crop.Top)
+                ]));
+            }
             pageDict.Set(PdfName.Contents, new PdfReference(contentIds[i]));
             pageDict.Set(PdfName.Resources, resources);
             allObjects.Add(new PdfIndirectObject(pageIds[i], pageDict));
@@ -305,6 +361,8 @@ public sealed class PageComposer
         internal double Width { get; }
 
         internal double Height { get; }
+
+        internal RectangleF? CropBox { get; set; }
 
         internal StringBuilder Content { get; } = new StringBuilder();
 

@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Operations` (Operations)
 
-Builds a new PDF by placing pages from existing documents onto target sheets under arbitrary affine transforms. Each placed page is imported as a form XObject, so vector and text content stay intact and selectable (not rasterised). One `PlacePage` per sheet covers rotate-any-angle and resize; several per sheet cover N-up and imposition.
+Builds a new PDF by placing pages from existing documents onto target sheets under arbitrary affine transforms. Each placed page is imported as a form XObject, so vector and text content stay intact and selectable (not rasterised). One `PlacePage(PdfDocument, int, Transform)` per sheet covers rotate-any-angle and resize; several per sheet cover N-up and imposition.
 
 ```csharp
 public sealed class PageComposer
@@ -45,6 +45,22 @@ PageComposer PlacePage(PdfDocument source, int sourcePageIndex, Transform transf
 ```
 
 Places a source page onto the current target sheet under the given transform. Call repeatedly to compose several pages onto one sheet.
+
+### `PlacePage`
+
+```csharp
+PageComposer PlacePage(PdfDocument source, int sourcePageIndex, Transform transform, PlacePageOptions options)
+```
+
+Places a source page onto the current target sheet under the given transform, with per-placement crop/clip controls from `options`.
+
+### `SetCropBox`
+
+```csharp
+PageComposer SetCropBox(RectangleF cropBox)
+```
+
+Sets the `/CropBox` of the current target sheet (in target user space, bottom-left origin), declaring the visible region of the composed page. Combine with a per-placement destination clip to both confine and declare a cropped region.
 
 ### `Write`
 
