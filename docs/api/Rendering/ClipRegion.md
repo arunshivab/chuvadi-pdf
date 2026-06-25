@@ -26,6 +26,22 @@ Gets a value indicating whether the region excludes everything, in which case no
 
 ## Methods
 
+### `Combine`
+
+```csharp
+ClipRegion Combine(ClipRegion other)
+```
+
+Returns a region that is the intersection of this region and `other`.
+
+**Parameters**
+
+- `other` — The region to intersect with this one.
+
+**Returns:** The combined intersection region. <exception cref="ArgumentNullException">Thrown when `other` is null.</exception>
+
+**Remarks:** Every clip shape in both regions is already in device space, so the combined region simply carries all of their shapes: a pixel is inside it only when it is inside every shape of both regions. This is used to apply a parent (page-level) clip across a form XObject `Do`, intersecting it with the form's own inner clips.
+
 ### `List<`
 
 ```csharp
