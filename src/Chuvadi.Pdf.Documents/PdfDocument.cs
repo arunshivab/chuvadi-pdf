@@ -587,6 +587,37 @@ public sealed class PdfDocument : IDisposable
     /// </summary>
     public bool IsRecovered => _reader.Warnings.Count > 0;
 
+    // ── Saving ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Re-serializes the document to <paramref name="output"/>, optionally
+    /// encrypting it. Passing <see langword="null"/> writes an unencrypted copy
+    /// (decrypting the document when it was opened from an encrypted file);
+    /// passing an <see cref="EncryptionOptions"/> (for example
+    /// <see cref="EncryptionOptions.Aes256(string, string?)"/>, the recommended
+    /// AES-256 / V5 / R6 scheme) writes an encrypted file.
+    /// PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="output">The stream the document is written to.</param>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public void Save(Stream output, EncryptionOptions? encryption = null)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        PdfDictionary trailer = new PdfDictionary();
+        if (Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root))
+        {
+            trailer.Set(PdfName.Root, root);
+        }
+
+        if (Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? info))
+        {
+            trailer.Set(PdfName.Info, info);
+        }
+
+        PdfWriter.Write(output, Objects.Objects, trailer, encryption);
+    }
+
     // ── IDisposable ───────────────────────────────────────────────────────
 
     /// <inheritdoc/>

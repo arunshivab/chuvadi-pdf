@@ -23,7 +23,7 @@ namespace Chuvadi.Pdf.Authoring;
 /// final page number and total page count supplied.
 /// </para>
 /// <para>
-/// Call <see cref="Save"/> or <see cref="ToByteArray"/> to emit the PDF bytes.
+/// Call <see cref="Save(System.IO.Stream)"/> or <see cref="ToByteArray()"/> to emit the PDF bytes.
 /// </para>
 /// </remarks>
 public sealed class PdfDocumentBuilder
@@ -100,15 +100,34 @@ public sealed class PdfDocumentBuilder
     }
 
     /// <summary>Saves the document to a stream.</summary>
-    public void Save(Stream output)
+    public void Save(Stream output) => Save(output, null);
+
+    /// <summary>
+    /// Saves the document to a stream, optionally encrypting it. Pass an
+    /// <see cref="EncryptionOptions"/> (for example
+    /// <see cref="EncryptionOptions.Aes256(string, string?)"/>) to encrypt, or
+    /// null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="output">The stream to write to.</param>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public void Save(Stream output, EncryptionOptions? encryption)
     {
         ArgumentNullException.ThrowIfNull(output);
-        byte[] bytes = ToByteArray();
+        byte[] bytes = ToByteArray(encryption);
         output.Write(bytes, 0, bytes.Length);
     }
 
     /// <summary>Returns the document as a byte array.</summary>
-    public byte[] ToByteArray()
+    public byte[] ToByteArray() => ToByteArray(null);
+
+    /// <summary>
+    /// Returns the document as a byte array, optionally encrypting it. Pass an
+    /// <see cref="EncryptionOptions"/> (for example
+    /// <see cref="EncryptionOptions.Aes256(string, string?)"/>) to encrypt, or
+    /// null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public byte[] ToByteArray(EncryptionOptions? encryption)
     {
         if (_pages.Count == 0)
         {
@@ -123,10 +142,10 @@ public sealed class PdfDocumentBuilder
             _footer?.Invoke(_pages[i], i + 1, total);
         }
 
-        return EmitPdf();
+        return EmitPdf(encryption);
     }
 
-    private byte[] EmitPdf()
+    private byte[] EmitPdf(EncryptionOptions? encryption)
     {
         // Object ID plan:
         // 1 = catalog, 2 = pages, 3..N = page objects, then content streams,
@@ -316,7 +335,7 @@ public sealed class PdfDocumentBuilder
         }
 
         MemoryStream ms = new();
-        PdfWriter.Write(ms, objects, trailer);
+        PdfWriter.Write(ms, objects, trailer, encryption);
         return ms.ToArray();
     }
 }
