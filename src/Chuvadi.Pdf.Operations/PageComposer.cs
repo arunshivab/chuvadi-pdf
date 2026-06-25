@@ -161,7 +161,17 @@ public sealed class PageComposer
     }
 
     /// <summary>Writes the composed document to <paramref name="output"/>.</summary>
-    public void Write(Stream output)
+    /// <param name="output">The stream to write to.</param>
+    public void Write(Stream output) => Write(output, null);
+
+    /// <summary>
+    /// Writes the composed document to <paramref name="output"/>, optionally
+    /// encrypting it. Pass an <see cref="EncryptionOptions"/> to encrypt, or null
+    /// for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+    /// </summary>
+    /// <param name="output">The stream to write to.</param>
+    /// <param name="encryption">The encryption options, or null for no encryption.</param>
+    public void Write(Stream output, EncryptionOptions? encryption)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -328,7 +338,7 @@ public sealed class PageComposer
         PdfDictionary trailer = new PdfDictionary();
         trailer.Set(PdfName.Root, new PdfReference(catalogId));
 
-        PdfWriter.Write(output, allObjects, trailer);
+        PdfWriter.Write(output, allObjects, trailer, encryption);
     }
 
     private int SourceDocIndex(PdfDocument source)

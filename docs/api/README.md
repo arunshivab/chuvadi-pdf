@@ -375,13 +375,19 @@ python tools/gen_api_docs.py
 | [AnnotationFlattenOptions](Operations/AnnotationFlattenOptions.md) | class | Options controlling `AnnotationFlattener`: which annotation kinds to bake, whether to strip the AcroForm field tree once its widgets are baked, whether to skip invisible annotations, and whether to drop any annotations left live after baking. |
 | [AnnotationFlattener](Operations/AnnotationFlattener.md) | class | Flattens annotations and AcroForm field widgets by baking each annotation's normal appearance stream (`/AP /N`) into the page content as a form XObject, then removing the live annotation. |
 | [BandText](Operations/BandText.md) | class | The left, centre, and right text segments of a header or footer band. |
+| [BookletOptions](Operations/BookletOptions.md) | class | Options for `Imposition.Booklet(System.IO.Stream, Chuvadi.Pdf.Documents.PdfDocument, BookletOptions)`: the size of each source-page slot (the output sheet is twice this width) and the margin around each slot. |
+| [CompressToTargetOptions](Operations/CompressToTargetOptions.md) | record | Options for `PdfCompressor.CompressToTarget`. |
+| [CompressToTargetResult](Operations/CompressToTargetResult.md) | record | The outcome of a `PdfCompressor.CompressToTarget` call. |
 | [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
 | [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
 | [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress` declined to rewrite a document. |
 | [DocumentInfo](Operations/DocumentInfo.md) | class | Sets document-information metadata (Title, Author, Subject, Keywords) on an existing document and writes the result. |
 | [HeaderFooter](Operations/HeaderFooter.md) | class | Adds running headers and/or footers to a document, with three strategies for how the bands interact with existing content (see `PageContentFit`): overlay in the margins, always reserve-and-scale, or scale only when content intrudes. |
 | [HeaderFooterOptions](Operations/HeaderFooterOptions.md) | class | Options controlling header/footer content, geometry, and the content-fit strategy. |
+| [Imposition](Operations/Imposition.md) | class | Composes the pages of a source document onto larger sheets: N-up grids and 2-up saddle-stitch booklets. |
 | [MergeOptions](Operations/MergeOptions.md) | class | Options for `PageOperations.Merge(System.IO.Stream, System.Collections.Generic.IReadOnlyList{Chuvadi.Pdf.Documents.PdfDocument}, MergeOptions)`. |
+| [NUpOptions](Operations/NUpOptions.md) | class | Options for `Imposition.NUp(System.IO.Stream, Chuvadi.Pdf.Documents.PdfDocument, NUpOptions)`: how many source pages to place per sheet, the sheet size, and the spacing around and between cells. |
+| [NUpOrder](Operations/NUpOrder.md) | enum | The order in which source pages fill the cells of an N-up sheet. |
 | [OperationsException](Operations/OperationsException.md) | class | Thrown when a PDF page operation (merge, split, delete, rotate, reorder) cannot be completed due to an invalid argument or document structure. |
 | [OutlineEntry](Operations/OutlineEntry.md) | class | A bookmark to write into a document outline: a title, the zero-based page it targets, and optional nested children. |
 | [OutlineWriter](Operations/OutlineWriter.md) | class | Writes a document outline (bookmark tree) onto an existing document, replacing any existing outline. |
@@ -395,12 +401,14 @@ python tools/gen_api_docs.py
 | [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
 | [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
+| [PdfCompressor](Operations/PdfCompressor.md) | class | — |
 | [PlacePageOptions](Operations/PlacePageOptions.md) | class | Optional per-placement controls for `PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform, PlacePageOptions)`. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
 | [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
 | [StampContext](Operations/StampContext.md) | class | Substitutes tokens in a stamp template into final text for one page. |
 | [StampFirstPageMode](Operations/StampFirstPageMode.md) | enum | Controls how the document's first page (page index 0) participates in a `StampNumbering` running sequence. |
 | [StampNumbering](Operations/StampNumbering.md) | class | Describes a running numbering sequence for the `{number}` stamp token: a free prefix and suffix, a start value, an optional zero-pad width, a `NumberingFormat` style, and first-page handling. |
+| [StampPipeline](Operations/StampPipeline.md) | class | Accumulates several overlay operations — text stamps, page numbers, text watermarks, headers and footers — plus an optional outline, and applies them all in a single write. |
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
 | [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
 | [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |

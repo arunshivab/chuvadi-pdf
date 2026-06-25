@@ -65,10 +65,27 @@ Sets the `/CropBox` of the current target sheet (in target user space, bottom-le
 ### `Write`
 
 ```csharp
-void Write(Stream output)
+void Write(Stream output) => Write(output, null)
 ```
 
 Writes the composed document to `output`.
+
+**Parameters**
+
+- `output` — The stream to write to.
+
+### `Write`
+
+```csharp
+void Write(Stream output, EncryptionOptions? encryption)
+```
+
+Writes the composed document to `output`, optionally encrypting it. Pass an `EncryptionOptions` to encrypt, or null for no encryption. PDF 32000-1:2008 §7.6 — encryption.
+
+**Parameters**
+
+- `output` — The stream to write to.
+- `encryption` — The encryption options, or null for no encryption.
 
 ---
 
