@@ -100,6 +100,29 @@ public sealed class ClipRegion
     }
 
     /// <summary>
+    /// Returns a region that is the intersection of this region and <paramref name="other"/>.
+    /// </summary>
+    /// <remarks>
+    /// Every clip shape in both regions is already in device space, so the
+    /// combined region simply carries all of their shapes: a pixel is inside it
+    /// only when it is inside every shape of both regions. This is used to apply
+    /// a parent (page-level) clip across a form XObject <c>Do</c>, intersecting
+    /// it with the form's own inner clips.
+    /// </remarks>
+    /// <param name="other">The region to intersect with this one.</param>
+    /// <returns>The combined intersection region.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="other"/> is null.</exception>
+    public ClipRegion Combine(ClipRegion other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        List<ClipShape> merged = new List<ClipShape>(_shapes.Count + other._shapes.Count);
+        merged.AddRange(_shapes);
+        merged.AddRange(other._shapes);
+        return new ClipRegion(merged, IsEmpty || other.IsEmpty);
+    }
+
+    /// <summary>
     /// Returns the allowed x-intervals at the given scanline Y (sampled at the
     /// pixel centre), as the intersection of every clip shape's intervals. An
     /// empty list means nothing is allowed on this row.

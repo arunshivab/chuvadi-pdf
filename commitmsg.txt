@@ -1,0 +1,3 @@
+rendering: honour active page clip across form XObject Do
+
+PaintNestedOp built the inner display list but ignored the clip active at the form's Do, so form-XObject content (e.g. PageComposer DestinationClip) bled outside the clip rect. Build the parent clip in device space and thread it as an ambient clip through PaintDisplayList into every inner op, intersecting with each op's own clips via new ClipRegion.Combine. Top-level rendering unchanged (ambient null). +3 tests.

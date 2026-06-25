@@ -475,34 +475,49 @@ public sealed class PageRasterizer
     /// Identity for the top-level page; pre-multiplied by the form XObject's
     /// CtmComposition for each nested call.
     /// </param>
+    /// <param name="ambientClip">
+    /// A device-space clip inherited from an enclosing form XObject (the clip
+    /// active at its <c>Do</c>), intersected with each op's own clips. Null at
+    /// the top level, where no outer clip constrains the page content.
+    /// </param>
     private void PaintDisplayList(
         PageDisplayList list, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip = null)
     {
         foreach (RenderOp op in list.Ops)
         {
             switch (op)
             {
                 case FillPathOp fp:
-                    PaintFillOp(fp, buffer, pageHeight, outerTransform);
+                    PaintFillOp(fp, buffer, pageHeight, outerTransform, ambientClip);
                     break;
                 case StrokePathOp sp:
-                    PaintStrokeOp(sp, buffer, pageHeight, outerTransform);
+                    PaintStrokeOp(sp, buffer, pageHeight, outerTransform, ambientClip);
                     break;
                 case DrawGlyphOp gp:
-                    PaintGlyphOp(gp, buffer, pageHeight, outerTransform);
+                    PaintGlyphOp(gp, buffer, pageHeight, outerTransform, ambientClip);
                     break;
                 case DrawImageOp ip:
-                    PaintImageOp(ip, buffer, pageHeight, outerTransform);
+                    PaintImageOp(ip, buffer, pageHeight, outerTransform, ambientClip);
                     break;
                 case NestedDisplayListOp np:
-                    PaintNestedOp(np, buffer, pageHeight, outerTransform);
+                    PaintNestedOp(np, buffer, pageHeight, outerTransform, ambientClip);
                     break;
                 case ShadeOp sh:
-                    PaintShadeOp(sh, buffer, pageHeight, outerTransform);
+                    PaintShadeOp(sh, buffer, pageHeight, outerTransform, ambientClip);
                     break;
             }
         }
+    }
+
+    // Intersects an op's own clip with the ambient (parent-of-form) clip. Both
+    // are already in device space, so the combined region is their geometric
+    // intersection. A null on either side means "no constraint from that side".
+    private static ClipRegion? CombineClips(ClipRegion? own, ClipRegion? ambient)
+    {
+        if (own is null) { return ambient; }
+        if (ambient is null) { return own; }
+        return own.Combine(ambient);
     }
 
     // Snaps thin axis-aligned rectangles (hairline table borders) onto the
@@ -640,13 +655,13 @@ public sealed class PageRasterizer
 
     private void PaintFillOp(
         FillPathOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         GraphicsPath device = UserSpacePathToDevice(op.Path, pageHeight, outerTransform);
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
         SnapThinAxisAlignedRects(subPaths);
-        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
         _scanline.SoftMask = op.SoftMask is null
             ? null
@@ -659,7 +674,7 @@ public sealed class PageRasterizer
 
     private void PaintStrokeOp(
         StrokePathOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         GraphicsPath device = UserSpacePathToDevice(op.Path, pageHeight, outerTransform);
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
@@ -692,7 +707,7 @@ public sealed class PageRasterizer
         };
 
         List<List<PointF>> filled = _stroke.Expand(subPaths, deviceStyle);
-        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
         _scanline.SoftMask = op.SoftMask is null
             ? null
@@ -705,7 +720,7 @@ public sealed class PageRasterizer
 
     private void PaintGlyphOp(
         DrawGlyphOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         // The glyph outline is in PDF user space with textMatrix and CTM
         // already applied by DisplayListBuilder. Transform to device space.
@@ -713,7 +728,7 @@ public sealed class PageRasterizer
 
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
-        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
         _scanline.SoftMask = op.SoftMask is null
             ? null
@@ -726,7 +741,7 @@ public sealed class PageRasterizer
 
     private void PaintImageOp(
         DrawImageOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         Transform imageToOuter = op.DeviceTransform.Multiply(outerTransform);
         double scale = _options.Scale;
@@ -748,7 +763,7 @@ public sealed class PageRasterizer
             return;
         }
 
-        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
 
         if (clip is not null && clip.IsEmpty)
         {
@@ -765,12 +780,22 @@ public sealed class PageRasterizer
 
     private void PaintNestedOp(
         NestedDisplayListOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         // Compose the form XObject's contribution: inner-space → outer-space
         // is op.CtmComposition; outer-space → page-space is outerTransform.
         Transform innerToPage = op.CtmComposition.Multiply(outerTransform);
-        PaintDisplayList(op.Inner, buffer, pageHeight, innerToPage);
+
+        // The clip active at the Do (op.Clips, captured in the parent's space)
+        // must constrain everything the form paints. Build it in device space
+        // with the OUTER transform, fold in any ambient clip inherited from an
+        // enclosing form, and pass the result down so each inner op intersects
+        // it with its own clips. Without this the form content ignores the
+        // page-level clip (W n) and bleeds outside it.
+        ClipRegion? parentClip = CombineClips(
+            BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
+
+        PaintDisplayList(op.Inner, buffer, pageHeight, innerToPage, parentClip);
     }
 
     // Paints an axial or radial shading (the sh operator). The gradient geometry
@@ -780,14 +805,14 @@ public sealed class PageRasterizer
     // untouched, matching the transparent regions of an unextended shading.
     private void PaintShadeOp(
         ShadeOp op, PixelBuffer buffer,
-        double pageHeight, Transform outerTransform)
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
         if (op.Stops.Count == 0)
         {
             return;
         }
 
-        ClipRegion? clip = BuildClipRegion(op.Clips, pageHeight, outerTransform);
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         if (clip is not null && clip.IsEmpty)
         {
             return;
