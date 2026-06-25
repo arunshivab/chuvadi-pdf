@@ -387,6 +387,8 @@ python tools/gen_api_docs.py
 | [OutlineWriter](Operations/OutlineWriter.md) | class | Writes a document outline (bookmark tree) onto an existing document, replacing any existing outline. |
 | [PageComposer](Operations/PageComposer.md) | class | Builds a new PDF by placing pages from existing documents onto target sheets under arbitrary affine transforms. |
 | [PageContentFit](Operations/PageContentFit.md) | enum | How header/footer bands interact with existing page content. |
+| [PageCrop](Operations/PageCrop.md) | struct | Identifies a single page to crop and the crop rectangle, in PDF user-space points (origin at the bottom-left of the page), to confine it to. |
+| [PageCropper](Operations/PageCropper.md) | class | Crops pages to a rectangle by setting their `/MediaBox` and `/CropBox` to the crop rectangle and wrapping the existing content in a hard clip (`q &lt;rect&gt; re W n &#8230; Q`) so nothing outside the rectangle is painted. |
 | [PageOperations](Operations/PageOperations.md) | class | Provides static methods for high-level PDF page operations: merge, split, delete, rotate, and reorder. |
 | [PageOverlay](Operations/PageOverlay.md) | class | Recolours existing pages by drawing a solid background fill behind the page content and/or rendering the existing content at reduced opacity. |
 | [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
