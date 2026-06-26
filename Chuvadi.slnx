@@ -32,6 +32,7 @@
     <Project Path="src/Chuvadi.Pdf.Graphics/Chuvadi.Pdf.Graphics.csproj" />
     <Project Path="src/Chuvadi.Pdf.Images/Chuvadi.Pdf.Images.csproj" />
     <Project Path="src/Chuvadi.Pdf.IO/Chuvadi.Pdf.IO.csproj" />
+    <Project Path="src/Chuvadi.Pdf.PdfA/Chuvadi.Pdf.PdfA.csproj" />
     <Project Path="src/Chuvadi.Pdf.Objects/Chuvadi.Pdf.Objects.csproj" />
     <Project Path="src/Chuvadi.Pdf.Operations/Chuvadi.Pdf.Operations.csproj" />
     <Project Path="src/Chuvadi.Pdf.Primitives/Chuvadi.Pdf.Primitives.csproj" />
@@ -58,6 +59,7 @@
     <Project Path="tests/Chuvadi.Pdf.Fonts.Rendering.Tests/Chuvadi.Pdf.Fonts.Rendering.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Fonts.Tests/Chuvadi.Pdf.Fonts.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Fonts.Woff2.Tests/Chuvadi.Pdf.Fonts.Woff2.Tests.csproj" />
+    <Project Path="tests/Chuvadi.Pdf.PdfA.Tests/Chuvadi.Pdf.PdfA.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Forms.Tests/Chuvadi.Pdf.Forms.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Fuzz/Chuvadi.Pdf.Fuzz.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Graphics.Tests/Chuvadi.Pdf.Graphics.Tests.csproj" />

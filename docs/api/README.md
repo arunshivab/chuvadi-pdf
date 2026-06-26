@@ -288,6 +288,7 @@ python tools/gen_api_docs.py
 | [TrueTypeLoader](Fonts/TrueTypeLoader.md) | class | Loads a TrueType or OpenType font from raw bytes and provides access to glyph outlines and metrics. |
 | [Type1FontRenderer](Fonts/Type1FontRenderer.md) | class | Renders glyphs from an embedded Type1 (PostScript) font program — the `FontFile` stream of a simple Type1 font. |
 | [Woff2Packer](Fonts/Woff2Packer.md) | class | Packs a TrueType / OpenType font into the WOFF2 container format. |
+| [Woff2Unpacker](Fonts/Woff2Unpacker.md) | class | Decodes a WOFF2 font into an sfnt (TrueType) byte array. |
 
 ## Chuvadi.Pdf.Forms
 
@@ -412,6 +413,15 @@ python tools/gen_api_docs.py
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
 | [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
 | [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |
+
+## Chuvadi.Pdf.PdfA
+
+| Type | Kind | Description |
+|---|---|---|
+| [PdfAConformance](PdfA/PdfAConformance.md) | enum | The PDF/A conformance level to target. |
+| [PdfAOptions](PdfA/PdfAOptions.md) | class | Options controlling PDF/A production. |
+| [PdfAResult](PdfA/PdfAResult.md) | class | The outcome of a PDF/A write attempt. |
+| [PdfAWriter](PdfA/PdfAWriter.md) | class | Writes PDF/A-1b and PDF/A-2b conforming documents. |
 
 ## Chuvadi.Pdf.Primitives
 

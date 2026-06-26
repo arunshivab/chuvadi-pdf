@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>
+      Chuvadi PDF/A module — writes PDF/A-1b and PDF/A-2b conforming documents
+      (font embedding, OutputIntent, XMP metadata). Phase 3.
+    </Description>
+    <PackageId>Chuvadi.Pdf.PdfA</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Color\Chuvadi.Pdf.Color.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\sRGB-IEC61966-2.1.icc" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSans-Regular.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSans-Regular.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSans-Bold.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSans-Bold.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSans-Italic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSans-Italic.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSans-BoldItalic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSans-BoldItalic.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSerif-Regular.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSerif-Regular.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSerif-Bold.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSerif-Bold.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSerif-Italic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSerif-Italic.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationSerif-BoldItalic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationSerif-BoldItalic.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationMono-Regular.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationMono-Regular.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationMono-Bold.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationMono-Bold.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationMono-Italic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationMono-Italic.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\tools\fonts\LiberationMono-BoldItalic.ttf">
+      <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationMono-BoldItalic.ttf</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>
