@@ -107,6 +107,33 @@ public sealed class LineSegmentExtractionTests
         fine.Should().BeGreaterThan(coarse);
     }
 
+    [Fact]
+    public void DegenerateSegments_SkippedByDefault()
+    {
+        // MoveTo(5,5); LineTo(5,5) -> zero-length; LineTo(15,5) -> real segment.
+        using PdfDocument doc = BuildPage("5 5 m\n5 5 l\n15 5 l\nS");
+
+        IReadOnlyList<LineSegment> segs = Extract(doc);
+
+        segs.Should().HaveCount(1);
+        segs[0].RawX0.Should().BeApproximately(5, 1e-9);
+        segs[0].RawX1.Should().BeApproximately(15, 1e-9);
+    }
+
+    [Fact]
+    public void DegenerateSegments_RetainedWhenRequested()
+    {
+        using PdfDocument doc = BuildPage("5 5 m\n5 5 l\n15 5 l\nS");
+
+        IReadOnlyList<LineSegment> segs =
+            DisplayListBuilder.Build(doc, 0).ExtractLineSegments(skipDegenerate: false);
+
+        segs.Should().HaveCount(2);
+        LineSegment degenerate = segs[0];
+        degenerate.X0.Should().BeApproximately(degenerate.X1, 1e-9);
+        degenerate.Y0.Should().BeApproximately(degenerate.Y1, 1e-9);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private static IReadOnlyList<LineSegment> Extract(PdfDocument doc)

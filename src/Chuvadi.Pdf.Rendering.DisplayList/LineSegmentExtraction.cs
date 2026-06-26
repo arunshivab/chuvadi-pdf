@@ -59,6 +59,10 @@ public static class LineSegmentExtraction
     /// <summary>Default curve-flattening tolerance, in user-space units.</summary>
     public const double DefaultFlattenTolerance = 0.25;
 
+    // Page-space endpoint coincidence threshold below which a segment is treated
+    // as zero-length (degenerate) and skipped when skipDegenerate is set.
+    private const double DegenerateEpsilon = 1e-9;
+
     /// <summary>
     /// Extracts every straight segment of every <see cref="PathOp"/> on the page
     /// as a flat list, in draw order. Cubic curves are subdivided to within
@@ -72,10 +76,16 @@ public static class LineSegmentExtraction
     /// Maximum chord deviation when flattening curves, in user-space units.
     /// Non-positive values fall back to <see cref="DefaultFlattenTolerance"/>.
     /// </param>
+    /// <param name="skipDegenerate">
+    /// When true (the default), zero-length segments — whose page-space endpoints
+    /// coincide — are omitted. AutoCAD and similar exports emit many degenerate
+    /// <c>MoveTo p; LineTo p</c> / <c>MoveTo p; Close</c> ops, so skipping keeps the
+    /// result free of no-op noise. Pass false to retain every point pair verbatim.
+    /// </param>
     /// <returns>All line segments on the page, in draw order. Never null.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="list"/> is null.</exception>
     public static IReadOnlyList<LineSegment> ExtractLineSegments(
-        this PageDisplayList list, double flattenTolerance = DefaultFlattenTolerance)
+        this PageDisplayList list, double flattenTolerance = DefaultFlattenTolerance, bool skipDegenerate = true)
     {
         ArgumentNullException.ThrowIfNull(list);
         double tolerance = flattenTolerance > 0 ? flattenTolerance : DefaultFlattenTolerance;
@@ -85,7 +95,7 @@ public static class LineSegmentExtraction
         {
             if (op is PathOp path)
             {
-                AppendSegments(path, tolerance, segments);
+                AppendSegments(path, tolerance, skipDegenerate, segments);
             }
         }
 
@@ -96,7 +106,7 @@ public static class LineSegmentExtraction
     // the path is flattened in user space and each point mapped through the CTM
     // for the page-space endpoint (Ctm.Apply(raw) == baked); otherwise only the
     // baked page-space geometry is available and raw == page.
-    private static void AppendSegments(PathOp path, double tolerance, List<LineSegment> output)
+    private static void AppendSegments(PathOp path, double tolerance, bool skipDegenerate, List<LineSegment> output)
     {
         bool hasRaw = path.RawGeometry is not null;
         PathGeometry source = hasRaw ? path.RawGeometry! : path.Geometry;
@@ -117,6 +127,13 @@ public static class LineSegmentExtraction
                 (double rx1, double ry1) = polyline[i + 1];
                 (double px0, double py0) = hasRaw ? ctm.Apply(rx0, ry0) : (rx0, ry0);
                 (double px1, double py1) = hasRaw ? ctm.Apply(rx1, ry1) : (rx1, ry1);
+
+                if (skipDegenerate
+                    && Math.Abs(px1 - px0) <= DegenerateEpsilon
+                    && Math.Abs(py1 - py0) <= DegenerateEpsilon)
+                {
+                    continue;
+                }
 
                 output.Add(new LineSegment(
                     px0, py0, px1, py1,
