@@ -81,6 +81,16 @@ Registers a TrueType font program so pages can draw text in it. The font is embe
 
 **Remarks:** The font must be a static TrueType font (convert variable fonts to a static instance first). Text is emitted in logical order without complex-script shaping, so Latin renders correctly and Indic renders correctly only for isolated or already-ordered glyphs.
 
+### `UseLipiFonts`
+
+```csharp
+PdfDocumentBuilder UseLipiFonts()
+```
+
+Enables the automatic LiPi Sans font. After calling this, drawing text with the font name "Lipi" selects the matching LiPi face per script and embeds each used face. Glyphs are emitted in logical order (no complex shaping); Latin renders correctly, and Indic text is embedded but not yet reordered.
+
+**Returns:** This builder.
+
 ### `AddPage`
 
 ```csharp

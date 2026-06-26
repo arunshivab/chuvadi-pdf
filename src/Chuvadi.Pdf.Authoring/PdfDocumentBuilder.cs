@@ -30,6 +30,7 @@ public sealed class PdfDocumentBuilder
 {
     private readonly List<PageBuilder> _pages = new();
     private readonly CustomFontRegistry _customFonts = new();
+    private LipiFontSet? _lipi;
     private Action<PageBuilder, int, int>? _header;
     private Action<PageBuilder, int, int>? _footer;
     private string? _title;
@@ -91,10 +92,24 @@ public sealed class PdfDocumentBuilder
         return this;
     }
 
+    /// <summary>
+    /// Enables the automatic LiPi Sans font. After calling this, drawing text
+    /// with the font name "Lipi" selects the matching LiPi face per script and
+    /// embeds each used face. Glyphs are emitted in logical order (no complex
+    /// shaping); Latin renders correctly, and Indic text is embedded but not yet
+    /// reordered.
+    /// </summary>
+    /// <returns>This builder.</returns>
+    public PdfDocumentBuilder UseLipiFonts()
+    {
+        _lipi ??= new LipiFontSet();
+        return this;
+    }
+
     /// <summary>Adds a page of the given size and returns its builder.</summary>
     public PageBuilder AddPage(PageSize size)
     {
-        PageBuilder p = new(size, _customFonts);
+        PageBuilder p = new(size, _customFonts, _lipi);
         _pages.Add(p);
         return p;
     }
@@ -165,7 +180,7 @@ public sealed class PdfDocumentBuilder
             new Dictionary<string, PdfObjectId>(StringComparer.Ordinal);
         foreach (KeyValuePair<string, CustomFont> entry in _customFonts.Fonts)
         {
-            if (entry.Value.UsedCodepoints.Count == 0)
+            if (entry.Value.UsedCodepoints.Count == 0 && entry.Value.UsedGlyphs.Count == 0)
             {
                 continue;
             }
@@ -175,7 +190,8 @@ public sealed class PdfDocumentBuilder
                 entry.Value.Loader,
                 entry.Value.UsedCodepoints,
                 entry.Key.Replace(" ", string.Empty),
-                () => new PdfObjectId(nextId++, 0));
+                () => new PdfObjectId(nextId++, 0),
+                entry.Value.UsedGlyphs);
             objects.AddRange(embedded.Objects);
             customFontIds[entry.Key] = embedded.Type0FontId;
         }
