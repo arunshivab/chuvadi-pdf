@@ -40,6 +40,7 @@ public static class TrueTypeFontEmbedder
     /// <param name="usedCodepoints">Unicode code points actually drawn with the font.</param>
     /// <param name="baseFont">The PostScript base-font name to record.</param>
     /// <param name="allocateId">Allocates fresh object ids in the owning document.</param>
+    /// <param name="extraGlyphs">Raw glyph ids from pre-shaped runs to include in the subset.</param>
     /// <returns>The Type0 font id and every object to add to the document.</returns>
     /// <exception cref="ArgumentNullException">When any reference argument is null.</exception>
     public static EmbeddedFontObjects Build(
@@ -47,7 +48,8 @@ public static class TrueTypeFontEmbedder
         TrueTypeLoader loader,
         IReadOnlyCollection<int> usedCodepoints,
         string baseFont,
-        Func<PdfObjectId> allocateId)
+        Func<PdfObjectId> allocateId,
+        IReadOnlyCollection<int>? extraGlyphs = null)
     {
         ArgumentNullException.ThrowIfNull(ttf);
         ArgumentNullException.ThrowIfNull(loader);
@@ -73,6 +75,22 @@ public static class TrueTypeFontEmbedder
                 int advance = loader.GetGlyphOutline(gid).Metrics.AdvanceWidth;
                 widthByGid[gid] = (int)Math.Round(advance * scale);
                 codepointByGid[gid] = codepoint;
+            }
+        }
+
+        // Pre-shaped glyphs supplied as raw ids (e.g. ligatures not reachable via
+        // cmap). They get a width and join the subset, but no ToUnicode entry.
+        if (extraGlyphs is not null)
+        {
+            foreach (int gid in extraGlyphs)
+            {
+                if (gid <= 0 || widthByGid.ContainsKey(gid))
+                {
+                    continue;
+                }
+
+                int advance = loader.GetGlyphOutline(gid).Metrics.AdvanceWidth;
+                widthByGid[gid] = (int)Math.Round(advance * scale);
             }
         }
 

@@ -38,6 +38,7 @@ internal sealed class CustomFont
         FontData = fontData;
         Loader = loader;
         UsedCodepoints = new SortedSet<int>();
+        UsedGlyphs = new SortedSet<int>();
     }
 
     /// <summary>Gets the complete TrueType font program.</summary>
@@ -48,4 +49,7 @@ internal sealed class CustomFont
 
     /// <summary>Gets the set of Unicode code points drawn with this font.</summary>
     public SortedSet<int> UsedCodepoints { get; }
+
+    /// <summary>Gets raw glyph ids drawn via pre-shaped runs (may not be cmap-reachable).</summary>
+    public SortedSet<int> UsedGlyphs { get; }
 }

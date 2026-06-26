@@ -19,6 +19,7 @@ public sealed class PageBuilder
 {
     private readonly ContentStreamWriter _w;
     private readonly CustomFontRegistry? _customFonts;
+    private readonly LipiFontSet? _lipi;
     internal List<HyperlinkRect> Hyperlinks { get; } = new();
     internal List<ImageRef> Images { get; } = new();
     internal HashSet<string> Fonts { get; } = new();
@@ -34,15 +35,21 @@ public sealed class PageBuilder
     public double Height { get; }
 
     internal PageBuilder(PageSize size)
-        : this(size, null)
+        : this(size, null, null)
     {
     }
 
     internal PageBuilder(PageSize size, CustomFontRegistry? customFonts)
+        : this(size, customFonts, null)
+    {
+    }
+
+    internal PageBuilder(PageSize size, CustomFontRegistry? customFonts, LipiFontSet? lipi)
     {
         Width = size.Width;
         Height = size.Height;
         _customFonts = customFonts;
+        _lipi = lipi;
         _w = new ContentStreamWriter(Height);
     }
 
@@ -58,6 +65,14 @@ public sealed class PageBuilder
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(font);
+
+        if (_lipi is not null && _customFonts is not null
+            && string.Equals(font, LipiFontSet.LogicalName, StringComparison.Ordinal))
+        {
+            DrawLipiText(text, x, y, size, color);
+            return this;
+        }
+
         Fonts.Add(font);
         _w.PushState();
         _w.SetFillRgb(color);
@@ -73,6 +88,105 @@ public sealed class PageBuilder
         _w.PopState();
         return this;
     }
+
+    // Draws text with the automatic LiPi font, splitting it into per-script runs
+    // and drawing each with the matching embedded LiPi face. Selection only; no
+    // complex shaping is applied (glyphs are emitted in logical order).
+    private void DrawLipiText(string text, double x, double y, double size, Color color)
+    {
+        double penX = x;
+        foreach (ScriptRun run in ScriptClassifier.Split(text))
+        {
+            CustomFont face = EnsureLipiFace(run.Script);
+            string faceName = LipiFontSet.FaceName(run.Script);
+            Fonts.Add(faceName);
+
+            _w.PushState();
+            _w.SetFillRgb(color);
+            _w.ShowGlyphsAt(FontKey(faceName), size, penX, y, EncodeGlyphs(run.Text, face));
+            _w.PopState();
+
+            penX += MeasureLipiRun(run.Text, face, size);
+        }
+    }
+
+    private CustomFont EnsureLipiFace(LipiScript script)
+    {
+        string faceName = LipiFontSet.FaceName(script);
+        if (_customFonts!.TryGet(faceName, out CustomFont existing))
+        {
+            return existing;
+        }
+
+        _customFonts.Register(faceName, _lipi!.GetFontProgram(script));
+        _customFonts.TryGet(faceName, out CustomFont registered);
+        return registered;
+    }
+
+    private static double MeasureLipiRun(string text, CustomFont face, double size)
+    {
+        double scale = size / face.Loader.UnitsPerEm;
+        double total = 0.0;
+        int i = 0;
+        while (i < text.Length)
+        {
+            int codepoint = char.ConvertToUtf32(text, i);
+            i += char.IsSurrogatePair(text, i) ? 2 : 1;
+            int gid = face.Loader.GetGlyphIndex(codepoint);
+            if (gid > 0)
+            {
+                total += face.Loader.GetGlyphMetrics(gid).AdvanceWidth * scale;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Draws a pre-shaped glyph run with a registered custom (TrueType) font.
+    /// Each glyph is placed at an absolute position derived from its advance and
+    /// offsets, preserving the output of an external shaper. Advances and offsets
+    /// are in 1000-units-per-em text space.
+    /// </summary>
+    /// <param name="glyphs">The shaped glyphs, in visual order.</param>
+    /// <param name="x">The pen x position (top-left origin).</param>
+    /// <param name="y">The baseline-top y position.</param>
+    /// <param name="font">The name of a registered custom TrueType font.</param>
+    /// <param name="size">The font size in points.</param>
+    /// <param name="color">The fill color.</param>
+    /// <returns>This page builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="glyphs"/> or <paramref name="font"/> is null.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="font"/> is not a registered custom font.</exception>
+    public PageBuilder DrawShapedRun(
+        IReadOnlyList<ShapedGlyph> glyphs, double x, double y, string font, double size, Color color)
+    {
+        ArgumentNullException.ThrowIfNull(glyphs);
+        ArgumentNullException.ThrowIfNull(font);
+        if (_customFonts is null || !_customFonts.TryGet(font, out CustomFont custom))
+        {
+            throw new InvalidOperationException(
+                $"DrawShapedRun requires a registered custom TrueType font; '{font}' is not registered.");
+        }
+
+        Fonts.Add(font);
+        double scale = size / 1000.0;
+        double penX = x;
+        foreach (ShapedGlyph glyph in glyphs)
+        {
+            custom.UsedGlyphs.Add(glyph.GlyphId);
+            _w.PushState();
+            _w.SetFillRgb(color);
+            _w.ShowGlyphsAt(FontKey(font), size, penX + (glyph.XOffset * scale), y - (glyph.YOffset * scale), GlyphHex(glyph.GlyphId));
+            _w.PopState();
+            penX += glyph.XAdvance * scale;
+        }
+
+        return this;
+    }
+
+    private static string GlyphHex(int gid)
+        => ((gid >> 8) & 0xFF).ToString("X2", CultureInfo.InvariantCulture)
+            + (gid & 0xFF).ToString("X2", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Draws word-wrapped text inside a rectangle. Returns a result indicating

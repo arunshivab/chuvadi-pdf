@@ -14,8 +14,41 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Latin.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Latin.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Tamil.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Tamil.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Devanagari.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Devanagari.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Bengali.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Bengali.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Gurmukhi.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Gurmukhi.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Gujarati.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Gujarati.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Odia.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Odia.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Telugu.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Telugu.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Kannada.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Kannada.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Malayalam.woff2">
+      <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Malayalam.woff2</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 </Project>
