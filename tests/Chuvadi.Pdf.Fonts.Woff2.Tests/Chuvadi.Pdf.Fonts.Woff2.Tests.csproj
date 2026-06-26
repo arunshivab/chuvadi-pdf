@@ -18,4 +18,10 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures\LiberationSubset.woff2">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
