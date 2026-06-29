@@ -12,7 +12,6 @@
 //   கௌ  U+0B95 + U+0BCC  -> gids [46, 18, 54] (L_And_R: e-sign, ka, au-mark)
 //   கி  U+0B95 + U+0BBF  -> gids [18, ...]  (Right/Top: no pre-base reorder)
 
-using System;
 using System.IO;
 using System.Collections.Generic;
 using FluentAssertions;
