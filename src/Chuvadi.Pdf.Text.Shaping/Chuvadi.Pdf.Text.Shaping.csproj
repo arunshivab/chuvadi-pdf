@@ -17,4 +17,10 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Chuvadi.Pdf.Text.Shaping.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>
