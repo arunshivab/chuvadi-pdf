@@ -127,7 +127,109 @@ public static class AnnotationFlattener
             }
 
             all.AddRange(_extraObjects);
-            PdfWriter.Write(output, all, BuildTrailer(catalogId));
+
+            // Drop orphaned objects (e.g. the /AP appearance streams of widget
+            // annotations whose /Annots references were removed during flattening).
+            // Without this, the dead annotation dictionaries and their appearance
+            // streams would be carried into the output even though nothing in the
+            // page graph references them. Walk reachability from the catalog and
+            // trailer Info, then keep only objects reached.
+            List<PdfIndirectObject> reachable = KeepReachable(all, catalogId);
+            PdfWriter.Write(output, reachable, BuildTrailer(catalogId));
+        }
+
+        // Builds the set of objects reachable from the catalog (and trailer Info)
+        // and returns only those, preserving input order. Objects in the input
+        // list are indexed by object number so references resolve against the
+        // post-flatten graph (modified pages and catalog included).
+        private List<PdfIndirectObject> KeepReachable(List<PdfIndirectObject> all, PdfObjectId catalogId)
+        {
+            Dictionary<int, PdfIndirectObject> byNumber = new Dictionary<int, PdfIndirectObject>(all.Count);
+            foreach (PdfIndirectObject obj in all)
+            {
+                byNumber[obj.Id.ObjectNumber] = obj;
+            }
+
+            HashSet<int> visited = new HashSet<int>();
+
+            // The catalog is reached directly (by value), not through a reference,
+            // so mark its own object number before walking its contents — otherwise
+            // the catalog itself would be filtered out as unreachable.
+            visited.Add(catalogId.ObjectNumber);
+
+            if (byNumber.TryGetValue(catalogId.ObjectNumber, out PdfIndirectObject? catalogObj))
+            {
+                VisitReachable(catalogObj.Value, byNumber, visited);
+            }
+            if (_document.Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? infoPrim))
+            {
+                VisitReachable(infoPrim, byNumber, visited);
+            }
+
+            List<PdfIndirectObject> result = new List<PdfIndirectObject>(visited.Count);
+            foreach (PdfIndirectObject obj in all)
+            {
+                if (visited.Contains(obj.Id.ObjectNumber))
+                {
+                    result.Add(obj);
+                }
+            }
+
+            return result;
+        }
+
+        private static void VisitReachable(
+            PdfPrimitive? primitive,
+            Dictionary<int, PdfIndirectObject> byNumber,
+            HashSet<int> visited)
+        {
+            if (primitive is null)
+            {
+                return;
+            }
+
+            if (primitive is PdfReference reference)
+            {
+                int number = reference.ObjectId.ObjectNumber;
+                if (!visited.Add(number))
+                {
+                    return;
+                }
+
+                if (byNumber.TryGetValue(number, out PdfIndirectObject? target))
+                {
+                    VisitReachable(target.Value, byNumber, visited);
+                }
+
+                return;
+            }
+
+            switch (primitive)
+            {
+                case PdfDictionary dictionary:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                    {
+                        VisitReachable(entry.Value, byNumber, visited);
+                    }
+
+                    break;
+                case PdfArray array:
+                    for (int i = 0; i < array.Count; i++)
+                    {
+                        VisitReachable(array[i], byNumber, visited);
+                    }
+
+                    break;
+                case PdfStream stream:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+                    {
+                        VisitReachable(entry.Value, byNumber, visited);
+                    }
+
+                    break;
+                default:
+                    break;
+            }
         }
 
         private bool ShouldRemoveAcroForm()

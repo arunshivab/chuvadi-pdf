@@ -218,6 +218,96 @@ public sealed class AnnotationFlattenTests
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    // ── Orphan cleanup ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Default_DropsOrphanedAppearanceStreams()
+    {
+        // After flattening, the widget annotation's /Annots reference is removed.
+        // Its appearance stream (the widget-AP object) becomes unreachable from the
+        // page graph and must not be carried into the output. Every object the
+        // writer emits should be reachable from the catalog.
+        byte[] output = Flatten(BuildFixture(), AnnotationFlattenOptions.Default);
+
+        using MemoryStream ms = new MemoryStream(output);
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
+
+        HashSet<int> reachable = CollectReachable(doc);
+
+        foreach (PdfIndirectObject obj in doc.Objects.Objects)
+        {
+            reachable.Should().Contain(
+                obj.Id.ObjectNumber,
+                "object {0} is present in the output and must be reachable from the catalog",
+                obj.Id.ObjectNumber);
+        }
+    }
+
+    private static HashSet<int> CollectReachable(PdfDocument doc)
+    {
+        HashSet<int> visited = new HashSet<int>();
+        PdfDictionary catalog = doc.Catalog;
+
+        // Mark the catalog's own number, then walk its references.
+        foreach (PdfIndirectObject obj in doc.Objects.Objects)
+        {
+            if (ReferenceEquals(obj.Value, catalog))
+            {
+                visited.Add(obj.Id.ObjectNumber);
+                break;
+            }
+        }
+
+        VisitReachable(doc.Objects, catalog, visited);
+        return visited;
+    }
+
+    private static void VisitReachable(PdfObjectStore store, PdfPrimitive? primitive, HashSet<int> visited)
+    {
+        if (primitive is null)
+        {
+            return;
+        }
+
+        if (primitive is PdfReference reference)
+        {
+            if (!visited.Add(reference.ObjectId.ObjectNumber))
+            {
+                return;
+            }
+
+            VisitReachable(store, store.Resolve(reference), visited);
+            return;
+        }
+
+        switch (primitive)
+        {
+            case PdfDictionary dictionary:
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                {
+                    VisitReachable(store, entry.Value, visited);
+                }
+
+                break;
+            case PdfArray array:
+                for (int i = 0; i < array.Count; i++)
+                {
+                    VisitReachable(store, array[i], visited);
+                }
+
+                break;
+            case PdfStream stream:
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+                {
+                    VisitReachable(store, entry.Value, visited);
+                }
+
+                break;
+            default:
+                break;
+        }
+    }
+
     private static byte[] Flatten(byte[] pdf, AnnotationFlattenOptions options)
     {
         using MemoryStream input = new MemoryStream(pdf);
