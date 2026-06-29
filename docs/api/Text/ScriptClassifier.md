@@ -1,6 +1,6 @@
 # ScriptClassifier
 
-**Class** in `Chuvadi.Pdf.Authoring` (Authoring)
+**Class** in `Chuvadi.Pdf.Text.Shaping` (Text)
 
 Classifies code points by script and splits text into script runs.
 
@@ -44,5 +44,5 @@ Splits text into maximal same-script runs. Whitespace attaches to the current ru
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Authoring/LipiScript.cs`](../../../src/Chuvadi.Pdf.Authoring/LipiScript.cs)_
+_Source: [`src/Chuvadi.Pdf.Text.Shaping/LipiScript.cs`](../../../src/Chuvadi.Pdf.Text.Shaping/LipiScript.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

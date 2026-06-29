@@ -47,7 +47,6 @@ python tools/gen_api_docs.py
 | [ImagePageSizing](Authoring/ImagePageSizing.md) | enum | How `ImagePdfConverter` sizes each PDF page relative to its image. |
 | [ImagePdfConverter](Authoring/ImagePdfConverter.md) | class | Converts images (JPEG, PNG, TIFF, BMP) into PDF documents — one page per image (and, optionally, one page per TIFF frame). |
 | [ImagePdfOptions](Authoring/ImagePdfOptions.md) | class | Options for `ImagePdfConverter`. |
-| [LipiScript](Authoring/LipiScript.md) | enum | A script covered by the LiPi Sans font family. |
 | [ListStyle](Authoring/ListStyle.md) | class | List styling for bulleted and numbered lists. |
 | [NumberingFormat](Authoring/NumberingFormat.md) | enum | The numbering scheme of an ordered list or a page number. |
 | [PageBuilder](Authoring/PageBuilder.md) | class | Per-page drawing API. |
@@ -63,9 +62,6 @@ python tools/gen_api_docs.py
 | [ReportPageSetup](Authoring/ReportPageSetup.md) | class | Page geometry for a report: paper size and the four margins. |
 | [ReportRow](Authoring/ReportRow.md) | class | One table row: its cells plus optional height and background overrides. |
 | [ReportTable](Authoring/ReportTable.md) | class | A report table: columns, rows, and a style. |
-| [ScriptClassifier](Authoring/ScriptClassifier.md) | class | Classifies code points by script and splits text into script runs. |
-| [ScriptRun](Authoring/ScriptRun.md) | record struct | A maximal run of text in a single script. |
-| [ShapedGlyph](Authoring/ShapedGlyph.md) | record struct | One glyph of a pre-shaped run, as produced by an external shaper. |
 | [StandardFonts](Authoring/StandardFonts.md) | class | The PDF Standard 14 fonts. |
 | [TableBorderMode](Authoring/TableBorderMode.md) | enum | Which grid lines a table draws. |
 | [TableBuilder](Authoring/TableBuilder.md) | class | Fluent table builder. |
@@ -591,8 +587,14 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [ExtractionStrategy](Text/ExtractionStrategy.md) | enum | Specifies the text extraction strategy. |
 | [LayoutExtractor](Text/LayoutExtractor.md) | class | Extracts text from `TextFragment` objects by reconstructing the visual reading order: group by line (Y position), sort by column (X position). |
+| [LipiScript](Text/LipiScript.md) | enum | A script covered by the LiPi Sans font family. |
 | [OperatorExtractor](Text/OperatorExtractor.md) | class | Extracts text from a list of `TextFragment` objects in content stream order with simple heuristics for word and line breaks. |
+| [ScriptClassifier](Text/ScriptClassifier.md) | class | Classifies code points by script and splits text into script runs. |
+| [ScriptRun](Text/ScriptRun.md) | record struct | A maximal run of text in a single script. |
+| [ShapedGlyph](Text/ShapedGlyph.md) | record struct | One glyph of a pre-shaped run, as produced by an external shaper or by `TextShaper`. |
+| [ShapingFeatures](Text/ShapingFeatures.md) | class | Controls which OpenType features `TextShaper` applies when shaping a run. |
 | [TextExtractor](Text/TextExtractor.md) | class | Extracts plain text from a PDF page. |
+| [TextShaper](Text/TextShaper.md) | class | Shapes a run of text using the OpenType GSUB and GPOS tables embedded in a TrueType/OpenType font. |
 
 ## Chuvadi.Pdf.Watermark
 

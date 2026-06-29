@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using FluentAssertions;
+using Chuvadi.Pdf.Text.Shaping;
 using Xunit;
 
 namespace Chuvadi.Pdf.Authoring.Tests;

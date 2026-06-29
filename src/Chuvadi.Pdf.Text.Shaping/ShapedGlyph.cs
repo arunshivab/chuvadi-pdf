@@ -1,16 +1,12 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// PHASE: Phase 4 (Phase 0) — pre-shaped glyph runs
-//
-// A single positioned glyph in a pre-shaped run. Advances and offsets are in
-// 1000-units-per-em text space (1000 = one em), matching PDF text-space
-// convention, so device values scale by size/1000.
 
-namespace Chuvadi.Pdf.Authoring;
+namespace Chuvadi.Pdf.Text.Shaping;
 
 /// <summary>
-/// One glyph of a pre-shaped run, as produced by an external shaper. Advances
-/// and offsets are in 1000-units-per-em text space.
+/// One glyph of a pre-shaped run, as produced by an external shaper or by
+/// <see cref="TextShaper"/>. Advances and offsets are in 1000-units-per-em
+/// text space (1000 = one em), so device values scale by size/1000.
 /// </summary>
 /// <param name="GlyphId">The glyph index into the run's font.</param>
 /// <param name="XAdvance">The horizontal advance after this glyph, in 1000ths of an em.</param>
