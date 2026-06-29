@@ -9,7 +9,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Chuvadi.Pdf.Authoring;
+namespace Chuvadi.Pdf.Text.Shaping;
 
 /// <summary>A script covered by the LiPi Sans font family.</summary>
 public enum LipiScript

@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Chuvadi.Pdf.Fonts.Woff2;
+using Chuvadi.Pdf.Text.Shaping;
 
 namespace Chuvadi.Pdf.Authoring;
 

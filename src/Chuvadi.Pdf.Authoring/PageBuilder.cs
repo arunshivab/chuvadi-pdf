@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Text;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
+using Chuvadi.Pdf.Text.Shaping;
 
 namespace Chuvadi.Pdf.Authoring;
 

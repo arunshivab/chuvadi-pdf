@@ -1,6 +1,6 @@
 # LipiScript
 
-**Enum** in `Chuvadi.Pdf.Authoring` (Authoring)
+**Enum** in `Chuvadi.Pdf.Text.Shaping` (Text)
 
 A script covered by the LiPi Sans font family.
 
@@ -25,5 +25,5 @@ public enum LipiScript
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Authoring/LipiScript.cs`](../../../src/Chuvadi.Pdf.Authoring/LipiScript.cs)_
+_Source: [`src/Chuvadi.Pdf.Text.Shaping/LipiScript.cs`](../../../src/Chuvadi.Pdf.Text.Shaping/LipiScript.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._
