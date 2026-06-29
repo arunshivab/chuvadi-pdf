@@ -22,7 +22,7 @@ namespace Chuvadi.Pdf.Text.Shaping.Tests;
 public sealed class IndicReorderingTests
 {
     private static readonly string FixturesDir =
-        Path.Combine(AppContext.BaseDirectory, "Fixtures");
+        Path.Combine(System.AppContext.BaseDirectory, "Fixtures");
 
     // ref-Tamil.ttf is the known-good TTF that HarfBuzz reads correctly.
     // It lives next to Carlito-Regular.ttf in the Fixtures directory.
