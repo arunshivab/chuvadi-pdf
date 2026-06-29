@@ -102,12 +102,36 @@ public sealed class PageBuilder
             string faceName = LipiFontSet.FaceName(run.Script);
             Fonts.Add(faceName);
 
-            _w.PushState();
-            _w.SetFillRgb(color);
-            _w.ShowGlyphsAt(FontKey(faceName), size, penX, y, EncodeGlyphs(run.Text, face));
-            _w.PopState();
-
-            penX += MeasureLipiRun(run.Text, face, size);
+            if (run.Script == LipiScript.Latin)
+            {
+                // Latin: logical-order cmap emit — no shaping required.
+                _w.PushState();
+                _w.SetFillRgb(color);
+                _w.ShowGlyphsAt(FontKey(faceName), size, penX, y, EncodeGlyphs(run.Text, face));
+                _w.PopState();
+                penX += MeasureLipiRun(run.Text, face, size);
+            }
+            else
+            {
+                // Indic: shape the run (reorder + GSUB/GPOS), then emit per glyph.
+                byte[] sfnt = _lipi!.GetFontProgram(run.Script);
+                IReadOnlyList<ShapedGlyph> glyphs = TextShaper.Shape(sfnt, run.Text, run.Script);
+                double scale = size / 1000.0;
+                foreach (ShapedGlyph glyph in glyphs)
+                {
+                    face.UsedGlyphs.Add(glyph.GlyphId);
+                    _w.PushState();
+                    _w.SetFillRgb(color);
+                    _w.ShowGlyphsAt(
+                        FontKey(faceName),
+                        size,
+                        penX + (glyph.XOffset * scale),
+                        y - (glyph.YOffset * scale),
+                        GlyphHex(glyph.GlyphId));
+                    _w.PopState();
+                    penX += glyph.XAdvance * scale;
+                }
+            }
         }
     }
 
