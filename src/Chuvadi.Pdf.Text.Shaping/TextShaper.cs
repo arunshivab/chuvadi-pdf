@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Fonts.Rendering;
+using Chuvadi.Pdf.Text.Shaping.Indic;
 using Chuvadi.Pdf.Text.Shaping.OpenType;
 
 namespace Chuvadi.Pdf.Text.Shaping;
@@ -46,28 +47,40 @@ public static class TextShaper
         ShapingFeatures feat = features ?? ShapingFeatures.Default;
         TrueTypeLoader loader = new TrueTypeLoader(ttf);
         double scale = 1000.0 / loader.UnitsPerEm;
+        bool indic = IsIndicScript(script);
 
-        // 1. Map code points to initial glyph ids + initial advances
-        GlyphBuffer buffer = BuildBuffer(text, loader, scale);
+        // 1. Map code points to initial glyph ids.
+        // For Indic scripts the Cluster field stores the source codepoint so the
+        // reorderer can classify each slot by its Unicode category.
+        // For Latin the Cluster field holds a sequential index for cluster tracking.
+        GlyphBuffer buffer = BuildBuffer(text, loader, scale, storeCodepointInCluster: indic);
 
-        // 2. Apply GSUB substitution
+        // 2. Indic reordering: reorder syllables and synthesise Left_And_Right
+        // decompositions before GSUB runs on the visual-order buffer.
         string scriptTag = ScriptToOtTag(script);
+        if (indic)
+        {
+            buffer = IndicReorderer.Reorder(buffer, script, loader);
+        }
+
+        // 3. Apply GSUB substitution
         GsubEngine.Apply(ttf, buffer, feat, scriptTag, "dflt");
 
-        // 3. Reset slot advances to 0 so GPOS accumulates only deltas
+        // 4. Reset slot advances to 0 so GPOS accumulates only deltas
         foreach (GlyphSlot s in buffer.ActiveSlots())
         {
             s.XAdvance = 0;
         }
 
-        // 4. Apply GPOS positioning
+        // 5. Apply GPOS positioning
         GposEngine.Apply(ttf, buffer, feat, scriptTag, "dflt");
 
-        // 5. Collect active slots, re-resolve advances for post-GSUB glyph ids
+        // 6. Collect active slots, re-resolve advances for post-GSUB glyph ids
         return Collect(buffer, loader, scale);
     }
 
-    private static GlyphBuffer BuildBuffer(string text, TrueTypeLoader loader, double scale)
+    private static GlyphBuffer BuildBuffer(
+        string text, TrueTypeLoader loader, double scale, bool storeCodepointInCluster = false)
     {
         List<GlyphSlot> slots = new List<GlyphSlot>();
         int cluster = 0;
@@ -80,7 +93,8 @@ public static class TextShaper
             int advance = gid > 0
                 ? (int)Math.Round(loader.GetGlyphMetrics(gid).AdvanceWidth * scale)
                 : 0;
-            slots.Add(new GlyphSlot(gid, cluster, advance));
+            int clusterValue = storeCodepointInCluster ? codepoint : cluster;
+            slots.Add(new GlyphSlot(gid, clusterValue, advance));
             cluster++;
             i += width;
         }
@@ -94,22 +108,12 @@ public static class TextShaper
         foreach (GlyphSlot slot in buffer.ActiveSlots())
         {
             // Re-fetch design-space advance for the post-GSUB glyph id.
-            // slot.XAdvance holds the pre-GSUB initial advance; GPOS deltas are
-            // stored additively in slot.XAdvance via ApplyValueRecord.
-            // We separate the two by re-reading the base advance here.
+            // slot.XAdvance after step 4-5 holds only the GPOS delta (we zeroed it
+            // before GPOS ran). Add the font's base advance for the current glyph.
             int baseAdv = slot.GlyphId > 0
                 ? (int)Math.Round(loader.GetGlyphMetrics(slot.GlyphId).AdvanceWidth * scale)
                 : 0;
 
-            // slot.XAdvance at this point = (pre-GSUB initial advance) + (GPOS XAdvance delta).
-            // We want (post-GSUB base advance) + (GPOS delta).
-            // GPOS delta = slot.XAdvance - initialAdvance; but we don't track initialAdvance
-            // separately. Instead we track GPOS deltas additively from 0 in a separate field
-            // by ensuring ApplyValueRecord adds to a zeroed-out field.
-            // Simplest correct approach: use baseAdv + the accumulated GPOS XAdvance delta.
-            // The delta is: slot.XAdvance (post-GPOS) - initialSlotAdvance.
-            // Since we can't recover initialSlotAdvance here, we expose the raw GPOS delta
-            // from the slot directly by zeroing XAdvance before GPOS runs (done in BuildBuffer).
             result.Add(new ShapedGlyph(
                 slot.GlyphId,
                 baseAdv + slot.XAdvance,
@@ -120,6 +124,12 @@ public static class TextShaper
 
         return result;
     }
+
+    private static bool IsIndicScript(LipiScript script) => script switch
+    {
+        LipiScript.Latin => false,
+        _ => true,
+    };
 
     private static string ScriptToOtTag(LipiScript script) => script switch
     {
