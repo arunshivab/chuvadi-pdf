@@ -611,6 +611,7 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [XfaArea](Xfa/XfaArea.md) | class | A generic container element used for grouped positioning. |
 | [XfaBorder](Xfa/XfaBorder.md) | class | A node border: edge stroke and optional fill. |
+| [XfaBox](Xfa/XfaBox.md) | class | A single positioned box produced by the layout engine, expressed in device space (PDF points, origin at the page's top-left, y increasing downward — matching the authoring layer's top-left drawing API). |
 | [XfaCaption](Xfa/XfaCaption.md) | class | A field caption: its text and placement relative to the value. |
 | [XfaCaptionPlacement](Xfa/XfaCaptionPlacement.md) | enum | Placement of a field caption relative to its value area. |
 | [XfaContentArea](Xfa/XfaContentArea.md) | class | The drawable region within a page area where content flows. |
@@ -620,12 +621,17 @@ python tools/gen_api_docs.py
 | [XfaFont](Xfa/XfaFont.md) | class | A font descriptor applied to caption, value, or draw text. |
 | [XfaHAlign](Xfa/XfaHAlign.md) | enum | Horizontal alignment of content within a box. |
 | [XfaLayout](Xfa/XfaLayout.md) | enum | The layout strategy a container applies to its children. |
+| [XfaLayoutEngine](Xfa/XfaLayoutEngine.md) | class | Resolves an XFA model subtree into a flat list of positioned `XfaBox`es in device space. |
 | [XfaMargin](Xfa/XfaMargin.md) | class | The four-sided margin (inset) box of a node. |
 | [XfaMeasurement](Xfa/XfaMeasurement.md) | struct | A linear measurement parsed from an XFA template attribute (for example "12.7mm", "0.5in", "36pt"). |
 | [XfaNode](Xfa/XfaNode.md) | class | Base type for every parsed XFA template node. |
 | [XfaPageArea](Xfa/XfaPageArea.md) | class | A single page area, defining its size and content region. |
 | [XfaPageSet](Xfa/XfaPageSet.md) | class | A page-geometry container holding one or more page areas. |
 | [XfaPresence](Xfa/XfaPresence.md) | enum | Whether and how a node participates in layout and rendering. |
+| [XfaRenderException](Xfa/XfaRenderException.md) | class | The exception thrown when an XFA template cannot be rendered. |
+| [XfaRenderOptions](Xfa/XfaRenderOptions.md) | class | Options controlling XFA rendering. |
+| [XfaRenderer](Xfa/XfaRenderer.md) | class | Renders a document's XFA template to a new PDF. |
+| [XfaScriptMode](Xfa/XfaScriptMode.md) | enum | How the renderer treats embedded XFA scripts. |
 | [XfaSubform](Xfa/XfaSubform.md) | class | A container of fields and nested subforms; the primary layout unit. |
 | [XfaTemplateParser](Xfa/XfaTemplateParser.md) | class | Parses the XFA `template` packet XML into a typed `XfaNode` tree. |
 | [XfaUi](Xfa/XfaUi.md) | class | Describes the UI widget a field uses to present its value. |

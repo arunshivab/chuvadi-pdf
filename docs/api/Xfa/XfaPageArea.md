@@ -18,6 +18,30 @@ override string ElementName => "pageArea"
 
 <inheritdoc />
 
+### `MediumLong`
+
+```csharp
+XfaMeasurement? MediumLong
+```
+
+Gets or sets the long edge of the page medium, when specified.
+
+### `MediumShort`
+
+```csharp
+XfaMeasurement? MediumShort
+```
+
+Gets or sets the short edge of the page medium, when specified.
+
+### `Landscape`
+
+```csharp
+bool Landscape
+```
+
+Gets or sets a value indicating whether the medium is oriented landscape (long edge horizontal).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

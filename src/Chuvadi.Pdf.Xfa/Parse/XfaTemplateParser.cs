@@ -111,6 +111,9 @@ public static class XfaTemplateParser
             case "font" when parent is XfaDraw fontDraw:
                 fontDraw.Font = ParseFont(childElement);
                 return;
+            case "medium" when parent is XfaPageArea pageArea:
+                ApplyMedium(pageArea, childElement);
+                return;
             default:
                 break;
         }
@@ -225,6 +228,23 @@ public static class XfaTemplateParser
         "bottom" => XfaVAlign.Bottom,
         _ => XfaVAlign.Top,
     };
+
+    private static void ApplyMedium(XfaPageArea pageArea, XmlElement element)
+    {
+        string longEdge = element.GetAttribute("long");
+        string shortEdge = element.GetAttribute("short");
+        if (longEdge.Length > 0)
+        {
+            pageArea.MediumLong = XfaMeasurement.Parse(longEdge);
+        }
+
+        if (shortEdge.Length > 0)
+        {
+            pageArea.MediumShort = XfaMeasurement.Parse(shortEdge);
+        }
+
+        pageArea.Landscape = element.GetAttribute("orientation") == "landscape";
+    }
 
     private static XfaMargin ParseMargin(XmlElement element)
     {
