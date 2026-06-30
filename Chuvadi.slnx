@@ -28,6 +28,7 @@
     <Project Path="src/Chuvadi.Pdf.Fonts.Rendering/Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <Project Path="src/Chuvadi.Pdf.Fonts.Woff2/Chuvadi.Pdf.Fonts.Woff2.csproj" />
     <Project Path="src/Chuvadi.Pdf.Text.Shaping/Chuvadi.Pdf.Text.Shaping.csproj" />
+    <Project Path="src/Chuvadi.Pdf.Xfa/Chuvadi.Pdf.Xfa.csproj" />
     <Project Path="src/Chuvadi.Pdf.Fonts/Chuvadi.Pdf.Fonts.csproj" />
     <Project Path="src/Chuvadi.Pdf.Forms/Chuvadi.Pdf.Forms.csproj" />
     <Project Path="src/Chuvadi.Pdf.Graphics/Chuvadi.Pdf.Graphics.csproj" />
@@ -79,6 +80,7 @@
     <Project Path="tests/Chuvadi.Pdf.Text.Tests/Chuvadi.Pdf.Text.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Watermark.Tests/Chuvadi.Pdf.Watermark.Tests.csproj" />
     <Project Path="tests/Chuvadi.Pdf.Text.Shaping.Tests/Chuvadi.Pdf.Text.Shaping.Tests.csproj" />
+    <Project Path="tests/Chuvadi.Pdf.Xfa.Tests/Chuvadi.Pdf.Xfa.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Chuvadi.Pdf.Cli/Chuvadi.Pdf.Cli.csproj" />

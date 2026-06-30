@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="position">
+    <pageSet>
+      <pageArea name="Page1">
+        <contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/>
+      </pageArea>
+    </pageSet>
+    <subform name="body" layout="tb" w="200mm" h="250mm">
+      <margin leftInset="2mm" rightInset="2mm" topInset="1mm" bottomInset="1mm"/>
+      <draw name="title" x="10mm" y="5mm" w="180mm" h="10mm" hAlign="center">
+        <font typeface="Helvetica" size="18pt" weight="bold"/>
+        <value><text>Sample Form Title</text></value>
+      </draw>
+      <field name="fullName" x="10mm" y="20mm" w="120mm" h="8mm" hAlign="left">
+        <caption placement="left" reserve="30mm">
+          <value><text>Full Name:</text></value>
+          <font typeface="Helvetica" size="10pt"/>
+        </caption>
+        <ui><textEdit/></ui>
+        <value><text>placeholder</text></value>
+        <font typeface="Helvetica" size="11pt"/>
+        <border>
+          <edge thickness="0.5pt"><color value="0,0,0"/></edge>
+        </border>
+      </field>
+      <field name="agree" x="10mm" y="35mm" w="8mm" h="8mm">
+        <caption placement="right"><value><text>I agree</text></value></caption>
+        <ui><checkButton/></ui>
+        <value><text>1</text></value>
+      </field>
+      <field name="country" x="10mm" y="50mm" w="80mm" h="8mm">
+        <caption placement="top"><value><text>Country</text></value></caption>
+        <ui><choiceList/></ui>
+        <value><text>India</text></value>
+      </field>
+      <field name="dob" x="10mm" y="65mm" w="60mm" h="8mm">
+        <ui><dateTimeEdit/></ui>
+        <value><text>2019-04-02</text></value>
+      </field>
+      <field name="amount" x="10mm" y="80mm" w="60mm" h="8mm" hAlign="right">
+        <ui><numericEdit/></ui>
+        <value><text>1234.50</text></value>
+      </field>
+    </subform>
+  </subform>
+</template>

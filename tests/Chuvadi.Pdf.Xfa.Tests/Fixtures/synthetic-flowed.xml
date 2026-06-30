@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <subform name="section1" layout="lr-tb">
+      <draw name="label1"><value><text>Section One</text></value></draw>
+      <field name="f1"><ui><textEdit/></ui><value><text>a</text></value></field>
+      <field name="f2"><ui><textEdit/></ui><value><text>b</text></value></field>
+    </subform>
+    <exclGroup name="choice" layout="tb">
+      <field name="opt1"><caption><value><text>Option 1</text></value></caption><ui><checkButton/></ui></field>
+      <field name="opt2"><caption><value><text>Option 2</text></value></caption><ui><checkButton/></ui></field>
+    </exclGroup>
+    <subform name="nested1" layout="tb">
+      <subform name="nested2" layout="position">
+        <field name="deep" x="5mm" y="5mm"><ui><textEdit/></ui><value><text>deep</text></value></field>
+      </subform>
+    </subform>
+  </subform>
+</template>
