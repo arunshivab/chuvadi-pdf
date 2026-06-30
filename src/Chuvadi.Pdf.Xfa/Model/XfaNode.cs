@@ -127,6 +127,18 @@ public sealed class XfaPageArea : XfaNode
 {
     /// <inheritdoc />
     public override string ElementName => "pageArea";
+
+    /// <summary>Gets or sets the long edge of the page medium, when specified.</summary>
+    public XfaMeasurement? MediumLong { get; set; }
+
+    /// <summary>Gets or sets the short edge of the page medium, when specified.</summary>
+    public XfaMeasurement? MediumShort { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the medium is oriented landscape
+    /// (long edge horizontal).
+    /// </summary>
+    public bool Landscape { get; set; }
 }
 
 /// <summary>The drawable region within a page area where content flows.</summary>
