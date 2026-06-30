@@ -604,3 +604,31 @@ python tools/gen_api_docs.py
 | [TextWatermarkOptions](Watermark/TextWatermarkOptions.md) | class | Options for stamping a text watermark onto PDF pages. |
 | [WatermarkException](Watermark/WatermarkException.md) | class | Thrown when a watermark cannot be applied. |
 | [WatermarkStamper](Watermark/WatermarkStamper.md) | class | Stamps text or image watermarks onto PDF pages by appending new content streams, preserving the original page content. |
+
+## Chuvadi.Pdf.Xfa
+
+| Type | Kind | Description |
+|---|---|---|
+| [XfaArea](Xfa/XfaArea.md) | class | A generic container element used for grouped positioning. |
+| [XfaBorder](Xfa/XfaBorder.md) | class | A node border: edge stroke and optional fill. |
+| [XfaCaption](Xfa/XfaCaption.md) | class | A field caption: its text and placement relative to the value. |
+| [XfaCaptionPlacement](Xfa/XfaCaptionPlacement.md) | enum | Placement of a field caption relative to its value area. |
+| [XfaContentArea](Xfa/XfaContentArea.md) | class | The drawable region within a page area where content flows. |
+| [XfaDraw](Xfa/XfaDraw.md) | class | Static, non-interactive content such as boilerplate text or lines. |
+| [XfaExclGroup](Xfa/XfaExclGroup.md) | class | A mutually-exclusive group of fields (for example radio buttons). |
+| [XfaField](Xfa/XfaField.md) | class | An interactive field with an optional caption, value, and UI widget. |
+| [XfaFont](Xfa/XfaFont.md) | class | A font descriptor applied to caption, value, or draw text. |
+| [XfaHAlign](Xfa/XfaHAlign.md) | enum | Horizontal alignment of content within a box. |
+| [XfaLayout](Xfa/XfaLayout.md) | enum | The layout strategy a container applies to its children. |
+| [XfaMargin](Xfa/XfaMargin.md) | class | The four-sided margin (inset) box of a node. |
+| [XfaMeasurement](Xfa/XfaMeasurement.md) | struct | A linear measurement parsed from an XFA template attribute (for example "12.7mm", "0.5in", "36pt"). |
+| [XfaNode](Xfa/XfaNode.md) | class | Base type for every parsed XFA template node. |
+| [XfaPageArea](Xfa/XfaPageArea.md) | class | A single page area, defining its size and content region. |
+| [XfaPageSet](Xfa/XfaPageSet.md) | class | A page-geometry container holding one or more page areas. |
+| [XfaPresence](Xfa/XfaPresence.md) | enum | Whether and how a node participates in layout and rendering. |
+| [XfaSubform](Xfa/XfaSubform.md) | class | A container of fields and nested subforms; the primary layout unit. |
+| [XfaTemplateParser](Xfa/XfaTemplateParser.md) | class | Parses the XFA `template` packet XML into a typed `XfaNode` tree. |
+| [XfaUi](Xfa/XfaUi.md) | class | Describes the UI widget a field uses to present its value. |
+| [XfaUiKind](Xfa/XfaUiKind.md) | enum | The kind of widget a field uses to present its value. |
+| [XfaVAlign](Xfa/XfaVAlign.md) | enum | Vertical alignment of content within a box. |
+| [XfaValue](Xfa/XfaValue.md) | class | The value of a field or draw, carrying its resolved text content. |
