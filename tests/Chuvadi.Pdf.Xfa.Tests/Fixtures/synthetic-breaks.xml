@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <pageSet>
+      <pageArea name="Page">
+        <contentArea name="ca" x="0pt" y="0pt" w="400pt" h="500pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur max="-1"/>
+      </pageArea>
+    </pageSet>
+    <draw name="a" w="400pt" h="30pt"><value><text>alpha</text></value></draw>
+    <subform name="b" layout="tb" w="400pt" h="30pt">
+      <breakBefore targetType="pageArea"/>
+      <draw name="binner" w="400pt" h="30pt"><value><text>bravo</text></value></draw>
+    </subform>
+    <draw name="c" w="400pt" h="30pt"><value><text>charlie</text></value></draw>
+  </subform>
+</template>

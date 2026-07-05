@@ -66,6 +66,14 @@ XfaVAlign VAlign
 
 Gets or sets the vertical alignment of value content.
 
+### `DataRef`
+
+```csharp
+string? DataRef
+```
+
+Gets or sets the datasets bind reference (the SOM expression from `&lt;bind ref="..."&gt;`), used to merge a value from the datasets packet. Null when the field has no data binding.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

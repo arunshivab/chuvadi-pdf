@@ -82,6 +82,22 @@ XfaBorder? Border
 
 Gets or sets the border, when specified.
 
+### `BreakBefore`
+
+```csharp
+XfaBreakTarget? BreakBefore
+```
+
+Gets or sets a forced layout transition before this node lays out (from `&lt;breakBefore&gt;` or the legacy `&lt;break before&gt;`). Null when no break is requested.
+
+### `BreakAfter`
+
+```csharp
+XfaBreakTarget? BreakAfter
+```
+
+Gets or sets a forced layout transition after this node lays out (from `&lt;breakAfter&gt;` or the legacy `&lt;break after&gt;`). Null when no break is requested.
+
 ### `Children`
 
 ```csharp

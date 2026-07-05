@@ -96,3 +96,32 @@ public enum XfaCaptionPlacement
     /// <summary>Caption occupies the whole content area (inline).</summary>
     Inline,
 }
+
+/// <summary>The target of a forced layout break (breakBefore / breakAfter).</summary>
+public enum XfaBreakTarget
+{
+    /// <summary>Let the layout engine choose the transition.</summary>
+    Auto,
+
+    /// <summary>Force a transition to the next content area.</summary>
+    ContentArea,
+
+    /// <summary>Force a transition to a new page.</summary>
+    PageArea,
+}
+
+/// <summary>How a page set generates pages from its child page areas.</summary>
+public enum XfaPageSetRelation
+{
+    /// <summary>
+    /// Walk the child page areas in document order, honoring each one's
+    /// occurrence counts; unbounded page areas repeat for overflow.
+    /// </summary>
+    OrderedOccurrence,
+
+    /// <summary>Generate front/back page pairs for double-sided output.</summary>
+    DuplexPaginated,
+
+    /// <summary>Generate single-sided pages.</summary>
+    SimplexPaginated,
+}

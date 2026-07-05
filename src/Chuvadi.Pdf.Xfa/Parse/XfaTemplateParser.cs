@@ -114,6 +114,21 @@ public static class XfaTemplateParser
             case "medium" when parent is XfaPageArea pageArea:
                 ApplyMedium(pageArea, childElement);
                 return;
+            case "bind" when parent is XfaField bindField:
+                bindField.DataRef = NullIfEmpty(childElement.GetAttribute("ref"));
+                return;
+            case "occur" when parent is XfaPageArea occurArea:
+                ApplyOccur(occurArea, childElement);
+                return;
+            case "breakBefore":
+                parent.BreakBefore = ParseBreakTarget(childElement.GetAttribute("targetType"));
+                return;
+            case "breakAfter":
+                parent.BreakAfter = ParseBreakTarget(childElement.GetAttribute("targetType"));
+                return;
+            case "break":
+                ApplyLegacyBreak(parent, childElement);
+                return;
             default:
                 break;
         }
@@ -197,8 +212,57 @@ public static class XfaTemplateParser
                 draw.HAlign = ParseHAlign(element.GetAttribute("hAlign"));
                 draw.VAlign = ParseVAlign(element.GetAttribute("vAlign"));
                 break;
+            case XfaPageSet pageSet:
+                pageSet.Relation = element.GetAttribute("relation") switch
+                {
+                    "duplexPaginated" => XfaPageSetRelation.DuplexPaginated,
+                    "simplexPaginated" => XfaPageSetRelation.SimplexPaginated,
+                    _ => XfaPageSetRelation.OrderedOccurrence,
+                };
+                break;
             default:
                 break;
+        }
+    }
+
+    private static void ApplyOccur(XfaPageArea pageArea, XmlElement element)
+    {
+        string min = element.GetAttribute("min");
+        string max = element.GetAttribute("max");
+        if (min.Length > 0 && int.TryParse(min, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int minValue))
+        {
+            pageArea.MinOccur = minValue;
+        }
+
+        if (max.Length > 0 && int.TryParse(max, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int maxValue))
+        {
+            pageArea.MaxOccur = maxValue;
+        }
+    }
+
+    private static XfaBreakTarget ParseBreakTarget(string targetType) => targetType switch
+    {
+        "pageArea" => XfaBreakTarget.PageArea,
+        "contentArea" => XfaBreakTarget.ContentArea,
+        _ => XfaBreakTarget.Auto,
+    };
+
+    // The legacy <break> element combines before/after on one element:
+    // <break before="pageArea" after="contentArea"/>.
+    private static void ApplyLegacyBreak(XfaNode parent, XmlElement element)
+    {
+        string before = element.GetAttribute("before");
+        if (before.Length > 0 && before != "auto")
+        {
+            parent.BreakBefore = ParseBreakTarget(before);
+        }
+
+        string after = element.GetAttribute("after");
+        if (after.Length > 0 && after != "auto")
+        {
+            parent.BreakAfter = ParseBreakTarget(after);
         }
     }
 

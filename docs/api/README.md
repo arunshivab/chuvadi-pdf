@@ -612,9 +612,11 @@ python tools/gen_api_docs.py
 | [XfaArea](Xfa/XfaArea.md) | class | A generic container element used for grouped positioning. |
 | [XfaBorder](Xfa/XfaBorder.md) | class | A node border: edge stroke and optional fill. |
 | [XfaBox](Xfa/XfaBox.md) | class | A single positioned box produced by the layout engine, expressed in device space (PDF points, origin at the page's top-left, y increasing downward — matching the authoring layer's top-left drawing API). |
+| [XfaBreakTarget](Xfa/XfaBreakTarget.md) | enum | The target of a forced layout break (breakBefore / breakAfter). |
 | [XfaCaption](Xfa/XfaCaption.md) | class | A field caption: its text and placement relative to the value. |
 | [XfaCaptionPlacement](Xfa/XfaCaptionPlacement.md) | enum | Placement of a field caption relative to its value area. |
 | [XfaContentArea](Xfa/XfaContentArea.md) | class | The drawable region within a page area where content flows. |
+| [XfaDataMerge](Xfa/XfaDataMerge.md) | class | Merges values from the datasets packet into a parsed template tree by resolving each field's `XfaField.DataRef` against the document's extracted `XfaDataField` list. |
 | [XfaDraw](Xfa/XfaDraw.md) | class | Static, non-interactive content such as boilerplate text or lines. |
 | [XfaExclGroup](Xfa/XfaExclGroup.md) | class | A mutually-exclusive group of fields (for example radio buttons). |
 | [XfaField](Xfa/XfaField.md) | class | An interactive field with an optional caption, value, and UI widget. |
@@ -627,6 +629,7 @@ python tools/gen_api_docs.py
 | [XfaNode](Xfa/XfaNode.md) | class | Base type for every parsed XFA template node. |
 | [XfaPageArea](Xfa/XfaPageArea.md) | class | A single page area, defining its size and content region. |
 | [XfaPageSet](Xfa/XfaPageSet.md) | class | A page-geometry container holding one or more page areas. |
+| [XfaPageSetRelation](Xfa/XfaPageSetRelation.md) | enum | How a page set generates pages from its child page areas. |
 | [XfaPresence](Xfa/XfaPresence.md) | enum | Whether and how a node participates in layout and rendering. |
 | [XfaRenderException](Xfa/XfaRenderException.md) | class | The exception thrown when an XFA template cannot be rendered. |
 | [XfaRenderOptions](Xfa/XfaRenderOptions.md) | class | Options controlling XFA rendering. |

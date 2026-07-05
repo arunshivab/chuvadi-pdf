@@ -18,6 +18,14 @@ override string ElementName => "pageSet"
 
 <inheritdoc />
 
+### `Relation`
+
+```csharp
+XfaPageSetRelation Relation
+```
+
+Gets or sets how this page set generates pages from its page areas.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

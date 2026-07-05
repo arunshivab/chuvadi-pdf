@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <pageSet>
+      <pageArea name="Page">
+        <contentArea name="ca1" x="0pt" y="0pt" w="400pt" h="100pt"/>
+        <contentArea name="ca2" x="0pt" y="120pt" w="400pt" h="100pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur max="-1"/>
+      </pageArea>
+    </pageSet>
+    <draw name="b0" w="400pt" h="60pt"><value><text>block zero</text></value></draw>
+    <draw name="b1" w="400pt" h="60pt"><value><text>block one</text></value></draw>
+    <draw name="b2" w="400pt" h="60pt"><value><text>block two</text></value></draw>
+  </subform>
+</template>
