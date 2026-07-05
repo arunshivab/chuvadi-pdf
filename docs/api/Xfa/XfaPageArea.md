@@ -42,6 +42,22 @@ bool Landscape
 
 Gets or sets a value indicating whether the medium is oriented landscape (long edge horizontal).
 
+### `MinOccur`
+
+```csharp
+int MinOccur
+```
+
+Gets or sets the minimum occurrence count (from `&lt;occur min&gt;`).
+
+### `MaxOccur`
+
+```csharp
+int MaxOccur
+```
+
+Gets or sets the maximum occurrence count (from `&lt;occur max&gt;`). -1 means unbounded: the page area repeats for as long as overflow demands.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

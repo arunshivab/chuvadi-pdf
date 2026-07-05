@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Xfa.Render` (Xfa)
 
-Renders a document's XFA template to a new PDF. Phase B supports positioned layout: draws, fields, captions, borders, and check buttons placed by their explicit coordinates.
+Renders a document's XFA template to a new PDF. Positioned and flowed (top-to-bottom, left-right-top-to-bottom) layouts are supported; datasets values are merged into bound fields; flowed content paginates across content areas and pages per the page set's occurrence rules, honoring forced breaks.
 
 ```csharp
 public static class XfaRenderer

@@ -43,6 +43,20 @@ public abstract class XfaNode
     /// <summary>Gets or sets the border, when specified.</summary>
     public XfaBorder? Border { get; set; }
 
+    /// <summary>
+    /// Gets or sets a forced layout transition before this node lays out
+    /// (from <c>&lt;breakBefore&gt;</c> or the legacy <c>&lt;break before&gt;</c>).
+    /// Null when no break is requested.
+    /// </summary>
+    public XfaBreakTarget? BreakBefore { get; set; }
+
+    /// <summary>
+    /// Gets or sets a forced layout transition after this node lays out
+    /// (from <c>&lt;breakAfter&gt;</c> or the legacy <c>&lt;break after&gt;</c>).
+    /// Null when no break is requested.
+    /// </summary>
+    public XfaBreakTarget? BreakAfter { get; set; }
+
     /// <summary>Gets the child nodes in document order.</summary>
     public IReadOnlyList<XfaNode> Children => _children;
 
@@ -94,6 +108,13 @@ public sealed class XfaField : XfaNode
 
     /// <summary>Gets or sets the vertical alignment of value content.</summary>
     public XfaVAlign VAlign { get; set; } = XfaVAlign.Top;
+
+    /// <summary>
+    /// Gets or sets the datasets bind reference (the SOM expression from
+    /// <c>&lt;bind ref="..."&gt;</c>), used to merge a value from the datasets
+    /// packet. Null when the field has no data binding.
+    /// </summary>
+    public string? DataRef { get; set; }
 }
 
 /// <summary>Static, non-interactive content such as boilerplate text or lines.</summary>
@@ -120,6 +141,9 @@ public sealed class XfaPageSet : XfaNode
 {
     /// <inheritdoc />
     public override string ElementName => "pageSet";
+
+    /// <summary>Gets or sets how this page set generates pages from its page areas.</summary>
+    public XfaPageSetRelation Relation { get; set; } = XfaPageSetRelation.OrderedOccurrence;
 }
 
 /// <summary>A single page area, defining its size and content region.</summary>
@@ -139,6 +163,15 @@ public sealed class XfaPageArea : XfaNode
     /// (long edge horizontal).
     /// </summary>
     public bool Landscape { get; set; }
+
+    /// <summary>Gets or sets the minimum occurrence count (from <c>&lt;occur min&gt;</c>).</summary>
+    public int MinOccur { get; set; } = 1;
+
+    /// <summary>
+    /// Gets or sets the maximum occurrence count (from <c>&lt;occur max&gt;</c>).
+    /// -1 means unbounded: the page area repeats for as long as overflow demands.
+    /// </summary>
+    public int MaxOccur { get; set; } = 1;
 }
 
 /// <summary>The drawable region within a page area where content flows.</summary>

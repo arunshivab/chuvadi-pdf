@@ -25,18 +25,22 @@ public sealed class XfaLayoutAndRenderTests
     // ── Positioned layout ─────────────────────────────────────────────────────
 
     [Fact]
-    public void Layout_AccumulatesParentOrigin()
+    public void Layout_FlowTopToBottom_PreservesChildXFlowsY()
     {
         XfaSubform root = XfaTemplateParser.Parse(Fixture("synthetic-positioned.xml"))!;
         XfaSubform body = (XfaSubform)FindByName(root, "body");
 
-        // body has x=10mm in the fixture? No — body has no x; its title draw is x=10mm y=5mm.
-        // Lay out body from origin (100, 200) and confirm the title box is offset.
+        // body is layout="tb": children flow vertically. The title's x is honored
+        // (origin + body leftInset 2mm + title x 10mm) but its y comes from the
+        // flow pen (origin + body topInset 1mm), not its declared y.
         IReadOnlyList<XfaBox> boxes = XfaLayoutEngine.Layout(body, 100.0, 200.0);
 
         XfaBox title = boxes.First(b => b.Text == "Sample Form Title");
-        title.X.Should().BeApproximately(100.0 + (10.0 / 25.4 * 72.0), 0.01);
-        title.Y.Should().BeApproximately(200.0 + (5.0 / 25.4 * 72.0), 0.01);
+        title.X.Should().BeApproximately(
+            100.0 + (2.0 / 25.4 * 72.0) + (10.0 / 25.4 * 72.0), 0.01,
+            "tb flow applies the container inset then the child's horizontal offset");
+        title.Y.Should().BeApproximately(200.0 + (1.0 / 25.4 * 72.0), 0.01,
+            "tb flow positions the first child at the content-area top");
     }
 
     [Fact]

@@ -53,21 +53,133 @@ public static class XfaLayoutEngine
             case XfaSubform or XfaExclGroup or XfaArea
                 or XfaPageArea or XfaContentArea or XfaPageSet:
                 // Containers contribute their own border/fill box when sized,
-                // then lay out children relative to this origin.
+                // then lay out children according to the container's layout mode.
                 if (node.Border is not null && (node.Width.HasValue || node.Height.HasValue))
                 {
                     boxes.Add(new XfaBox(x, y, WidthOf(node), HeightOf(node)) { Border = node.Border });
                 }
 
+                LayoutChildren(node, x, y, boxes);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static void LayoutChildren(XfaNode node, double x, double y, List<XfaBox> boxes)
+    {
+        XfaLayout layout = LayoutOf(node);
+        (double insetLeft, double insetTop) = ContentInset(node);
+        double contentX = x + insetLeft;
+        double contentY = y + insetTop;
+
+        switch (layout)
+        {
+            case XfaLayout.TopToBottom or XfaLayout.Tb:
+                LayoutTopToBottom(node, contentX, contentY, boxes);
+                break;
+            case XfaLayout.LeftRightTopToBottom:
+                LayoutLeftRightTopToBottom(node, contentX, contentY, boxes);
+                break;
+            default:
+                // Positioned (and table/row, handled in a later phase): each child
+                // is placed by its own x/y relative to this origin.
                 foreach (XfaNode child in node.Children)
                 {
                     LayoutNode(child, x, y, boxes);
                 }
 
                 break;
-            default:
-                break;
         }
+    }
+
+    // Top-to-bottom flow: stack children vertically, advancing the pen by each
+    // child's height (plus its top/bottom margins). The child's own x is honored
+    // as a horizontal offset; only the y position is governed by the flow pen.
+    private static void LayoutTopToBottom(XfaNode node, double x, double y, List<XfaBox> boxes)
+    {
+        double penY = y;
+        foreach (XfaNode child in node.Children)
+        {
+            if (child.Presence is XfaPresence.Hidden or XfaPresence.Inactive
+                || IsNonFlowing(child))
+            {
+                continue;
+            }
+
+            (double marginTop, double marginBottom, _, _) = Margins(child);
+            penY += marginTop;
+
+            // x flows from the container origin + child x (LayoutNode adds child.X);
+            // y comes from the flow pen, so cancel child.Y which LayoutNode re-adds.
+            LayoutNode(child, x, penY - child.Y.Points, boxes);
+            penY += HeightOf(child) + marginBottom;
+        }
+    }
+
+    // Left-right then top-to-bottom flow: place children in a row until the
+    // container width is exceeded, then wrap to the next row.
+    private static void LayoutLeftRightTopToBottom(XfaNode node, double x, double y, List<XfaBox> boxes)
+    {
+        double maxWidth = WidthOf(node);
+        double penX = x;
+        double penY = y;
+        double rowHeight = 0.0;
+
+        foreach (XfaNode child in node.Children)
+        {
+            if (child.Presence is XfaPresence.Hidden or XfaPresence.Inactive
+                || IsNonFlowing(child))
+            {
+                continue;
+            }
+
+            double childWidth = WidthOf(child);
+            double childHeight = HeightOf(child);
+
+            if (maxWidth > 0 && penX > x && (penX + childWidth) > (x + maxWidth))
+            {
+                penX = x;
+                penY += rowHeight;
+                rowHeight = 0.0;
+            }
+
+            LayoutNode(child, penX - child.X.Points, penY - child.Y.Points, boxes);
+            penX += childWidth;
+            rowHeight = System.Math.Max(rowHeight, childHeight);
+        }
+    }
+
+    private static XfaLayout LayoutOf(XfaNode node) => node switch
+    {
+        XfaSubform s => s.Layout,
+        XfaExclGroup e => e.Layout,
+        _ => XfaLayout.Position,
+    };
+
+    // Page-geometry nodes do not participate in their parent's content flow.
+    private static bool IsNonFlowing(XfaNode node) =>
+        node is XfaPageSet or XfaPageArea or XfaContentArea;
+
+    private static (double Top, double Bottom, double Left, double Right) Margins(XfaNode node)
+    {
+        if (node.Margin is null)
+        {
+            return (0, 0, 0, 0);
+        }
+
+        return (node.Margin.Top.Points, node.Margin.Bottom.Points,
+            node.Margin.Left.Points, node.Margin.Right.Points);
+    }
+
+    private static (double Left, double Top) ContentInset(XfaNode node)
+    {
+        if (node.Margin is null)
+        {
+            return (0, 0);
+        }
+
+        return (node.Margin.Left.Points, node.Margin.Top.Points);
     }
 
     private static void LayoutField(XfaField field, double x, double y, List<XfaBox> boxes)

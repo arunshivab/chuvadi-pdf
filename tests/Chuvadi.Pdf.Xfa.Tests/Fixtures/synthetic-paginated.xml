@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <pageSet relation="orderedOccurrence">
+      <pageArea name="First">
+        <contentArea name="firstCa" x="0pt" y="50pt" w="400pt" h="100pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur min="1" max="1"/>
+      </pageArea>
+      <pageArea name="Body">
+        <contentArea name="bodyCa" x="0pt" y="10pt" w="400pt" h="100pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur min="0" max="-1"/>
+      </pageArea>
+    </pageSet>
+    <draw name="p0" w="400pt" h="80pt"><value><text>page zero content</text></value></draw>
+    <draw name="p1" w="400pt" h="80pt"><value><text>page one content</text></value></draw>
+    <draw name="p2" w="400pt" h="80pt"><value><text>page two content</text></value></draw>
+    <draw name="p3" w="400pt" h="80pt"><value><text>page three content</text></value></draw>
+  </subform>
+</template>

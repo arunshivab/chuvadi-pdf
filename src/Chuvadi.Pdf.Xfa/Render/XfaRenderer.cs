@@ -1,10 +1,9 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  XFA 3.3 — template rendering.
-// PHASE: LA-23b Phase B — positioned rendering.
+// PHASE: LA-23b Phase C — merged, flowed, paginated rendering.
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
@@ -15,9 +14,11 @@ using Chuvadi.Pdf.Xfa.Parse;
 namespace Chuvadi.Pdf.Xfa.Render;
 
 /// <summary>
-/// Renders a document's XFA template to a new PDF. Phase B supports positioned
-/// layout: draws, fields, captions, borders, and check buttons placed by their
-/// explicit coordinates.
+/// Renders a document's XFA template to a new PDF. Positioned and flowed
+/// (top-to-bottom, left-right-top-to-bottom) layouts are supported; datasets
+/// values are merged into bound fields; flowed content paginates across
+/// content areas and pages per the page set's occurrence rules, honoring
+/// forced breaks.
 /// </summary>
 public static class XfaRenderer
 {
@@ -45,28 +46,16 @@ public static class XfaRenderer
         XfaSubform root = XfaTemplateParser.Parse(packets.Template.Xml)
             ?? throw new XfaRenderException("The XFA template does not contain a root subform.");
 
+        // Merge datasets values into the template fields so bound fields render
+        // their actual values rather than the (usually empty) template defaults.
+        XfaDataMerge.Apply(root, packets.DataFields);
+
         PdfDocumentBuilder builder = PdfDocumentBuilder.Create();
 
-        XfaPageArea? pageArea = FindFirst<XfaPageArea>(root);
-        PageSize pageSize = ResolvePageSize(pageArea);
-        XfaContentArea? contentArea = pageArea is null ? null : FindFirst<XfaContentArea>(pageArea);
-
-        double originX = contentArea?.X.Points ?? 0.0;
-        double originY = contentArea?.Y.Points ?? 0.0;
-
-        PageBuilder page = builder.AddPage(pageSize);
-
-        // Lay out the body subform(s): the structural children of the root that
-        // are not page-geometry nodes.
-        foreach (XfaNode child in root.Children)
+        foreach (XfaComposedPage composed in XfaPaginator.Compose(root))
         {
-            if (child is XfaPageSet or XfaPageArea or XfaContentArea)
-            {
-                continue;
-            }
-
-            IReadOnlyList<XfaBox> boxes = XfaLayoutEngine.Layout(child, originX, originY);
-            XfaContentEmitter.Emit(page, boxes);
+            PageBuilder page = builder.AddPage(ResolvePageSize(composed.Area));
+            XfaContentEmitter.Emit(page, composed.Boxes);
         }
 
         byte[] bytes = builder.ToByteArray();
@@ -83,25 +72,5 @@ public static class XfaRenderer
         }
 
         return PageSize.Letter;
-    }
-
-    private static T? FindFirst<T>(XfaNode node)
-        where T : XfaNode
-    {
-        if (node is T match)
-        {
-            return match;
-        }
-
-        foreach (XfaNode child in node.Children)
-        {
-            T? found = FindFirst<T>(child);
-            if (found is not null)
-            {
-                return found;
-            }
-        }
-
-        return null;
     }
 }
