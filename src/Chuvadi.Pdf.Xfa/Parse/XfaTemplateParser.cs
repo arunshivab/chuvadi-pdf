@@ -133,6 +133,9 @@ public static class XfaTemplateParser
             case "keep":
                 ApplyKeep(parent, childElement);
                 return;
+            case "event":
+                ParseEvent(parent, childElement);
+                return;
             default:
                 break;
         }
@@ -242,6 +245,50 @@ public static class XfaTemplateParser
             default:
                 break;
         }
+    }
+
+    // Parses <event activity="..."><script contentType="...">source</script>.
+    // The script is attached to the owning node so the runner can fire it.
+    private static void ParseEvent(XfaNode parent, XmlElement element)
+    {
+        XfaScriptEvent activity = ParseActivity(element.GetAttribute("activity"));
+
+        foreach (XmlNode child in element.ChildNodes)
+        {
+            if (child is not XmlElement scriptElement
+                || scriptElement.LocalName != "script")
+            {
+                continue;
+            }
+
+            XfaScriptLanguage language =
+                ParseScriptLanguage(scriptElement.GetAttribute("contentType"));
+            string source = scriptElement.InnerText ?? string.Empty;
+            parent.AddScript(new XfaScript(language, activity, source));
+        }
+    }
+
+    private static XfaScriptEvent ParseActivity(string activity) => activity switch
+    {
+        "initialize" => XfaScriptEvent.Initialize,
+        "calculate" => XfaScriptEvent.Calculate,
+        "validate" => XfaScriptEvent.Validate,
+        "preSign" => XfaScriptEvent.PreSign,
+        "postSign" => XfaScriptEvent.PostSign,
+        _ => XfaScriptEvent.Interactive,
+    };
+
+    private static XfaScriptLanguage ParseScriptLanguage(string contentType)
+    {
+        // FormCalc is the XFA default when no contentType is specified.
+        if (contentType.Length == 0)
+        {
+            return XfaScriptLanguage.FormCalc;
+        }
+
+        return contentType.Contains("javascript", StringComparison.OrdinalIgnoreCase)
+            ? XfaScriptLanguage.JavaScript
+            : XfaScriptLanguage.FormCalc;
     }
 
     private static void ApplyKeep(XfaNode parent, XmlElement element)

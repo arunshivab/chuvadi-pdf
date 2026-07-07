@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+  <subform name="form1" layout="tb">
+    <pageSet>
+      <pageArea name="Page1">
+        <contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/>
+        <medium short="8.5in" long="11in"/>
+      </pageArea>
+    </pageSet>
+
+    <field name="CompanyName" x="0.5in" y="0.5in" w="4in" h="0.3in">
+      <value><text>ACME WIDGETS</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="City" x="0.5in" y="1in" w="4in" h="0.3in">
+      <value><text>Springfield</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="Price" x="0.5in" y="1.5in" w="2in" h="0.3in">
+      <value><text>250</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="Qty" x="0.5in" y="2in" w="2in" h="0.3in">
+      <value><text>4</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <!-- Initialize: sentence built from literals + SOM reads + concat. -->
+    <field name="Certified" x="0.5in" y="2.5in" w="6in" h="0.5in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script contentType="application/x-javascript">this.rawValue = "Certified: " + CompanyName.rawValue + " of " + City.rawValue + ".";</script>
+      </event>
+    </field>
+
+    <!-- Initialize: numeric compute via String(Number*Number). -->
+    <field name="Total" x="0.5in" y="3in" w="3in" h="0.3in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script contentType="application/x-javascript">this.rawValue = "Total = " + String(Number(Price.rawValue) * Number(Qty.rawValue));</script>
+      </event>
+    </field>
+
+    <!-- Initialize: newline escape + toUpperCase(). -->
+    <field name="Block" x="0.5in" y="3.5in" w="6in" h="0.6in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script contentType="application/x-javascript">this.rawValue = CompanyName.rawValue.toUpperCase() + '\n' + City.rawValue;</script>
+      </event>
+    </field>
+
+    <!-- A fully commented-out script must be a no-op (field stays empty). -->
+    <field name="Untouched" x="0.5in" y="4.2in" w="4in" h="0.3in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script contentType="application/x-javascript">// this.rawValue = "should not appear";</script>
+      </event>
+    </field>
+  </subform>
+</template>

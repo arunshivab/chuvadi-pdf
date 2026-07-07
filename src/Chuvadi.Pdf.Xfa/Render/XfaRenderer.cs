@@ -10,6 +10,7 @@ using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Xfa.Layout;
 using Chuvadi.Pdf.Xfa.Model;
 using Chuvadi.Pdf.Xfa.Parse;
+using Chuvadi.Pdf.Xfa.Scripting;
 
 namespace Chuvadi.Pdf.Xfa.Render;
 
@@ -50,6 +51,11 @@ public static class XfaRenderer
         // their actual values rather than the (usually empty) template defaults.
         XfaDataMerge.Apply(root, packets.DataFields);
 
+        // Run embedded scripts per the requested mode. Scripts execute after the
+        // data merge so they observe merged values, and before pagination so the
+        // computed values flow through layout. Each script fails soft.
+        RunScripts(root, options.ScriptMode);
+
         PdfDocumentBuilder builder = PdfDocumentBuilder.Create();
 
         foreach (XfaComposedPage composed in XfaPaginator.Compose(root))
@@ -60,6 +66,28 @@ public static class XfaRenderer
 
         byte[] bytes = builder.ToByteArray();
         output.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void RunScripts(XfaSubform root, XfaScriptMode mode)
+    {
+        if (mode == XfaScriptMode.None)
+        {
+            return;
+        }
+
+        XfaScriptHost host = new XfaScriptHost(root);
+
+        if (mode == XfaScriptMode.Full)
+        {
+            XfaScriptRunner.RunInitialize(root, host);
+        }
+
+        XfaScriptRunner.RunCalculate(root, host);
+
+        if (mode == XfaScriptMode.Full)
+        {
+            XfaScriptRunner.RunValidate(root, host);
+        }
     }
 
     private static PageSize ResolvePageSize(XfaPageArea? pageArea)
