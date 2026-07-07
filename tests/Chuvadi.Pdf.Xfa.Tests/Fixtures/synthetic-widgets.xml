@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="position">
+    <exclGroup name="choice" layout="tb" x="10pt" y="10pt" w="100pt" h="40pt">
+      <field name="optA" w="12pt" h="12pt">
+        <ui><checkButton shape="round"/></ui>
+        <value><text>1</text></value>
+      </field>
+      <field name="optB" w="12pt" h="12pt">
+        <ui><checkButton shape="round"/></ui>
+        <value><text>0</text></value>
+      </field>
+    </exclGroup>
+    <field name="pwd" x="10pt" y="60pt" w="120pt" h="14pt">
+      <ui><passwordEdit/></ui>
+      <value><text>secret</text></value>
+    </field>
+    <field name="sig" x="10pt" y="90pt" w="180pt" h="40pt">
+      <ui><signature/></ui>
+    </field>
+    <field name="bar" x="10pt" y="140pt" w="180pt" h="30pt">
+      <ui><barcode/></ui>
+      <value><text>1234567890</text></value>
+    </field>
+    <field name="img" x="10pt" y="180pt" w="60pt" h="60pt">
+      <ui><imageEdit/></ui>
+      <value><image contentType="image/png">iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==</image></value>
+    </field>
+    <field name="imgEmpty" x="90pt" y="180pt" w="60pt" h="60pt">
+      <ui><imageEdit/></ui>
+    </field>
+    <field name="country" x="10pt" y="250pt" w="120pt" h="14pt">
+      <ui><choiceList/></ui>
+      <value><text>India</text></value>
+    </field>
+  </subform>
+</template>

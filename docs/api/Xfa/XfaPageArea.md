@@ -58,6 +58,14 @@ int MaxOccur
 
 Gets or sets the maximum occurrence count (from `&lt;occur max&gt;`). -1 means unbounded: the page area repeats for as long as overflow demands.
 
+### `OddOrEven`
+
+```csharp
+XfaOddOrEven OddOrEven
+```
+
+Gets or sets which page parity this area may serve (duplex pagination).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

@@ -67,4 +67,16 @@ public sealed class XfaBox
     /// (used by check buttons and radios). Null for non-toggle widgets.
     /// </summary>
     public bool? WidgetChecked { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a check-button widget renders as
+    /// a radio button (round mark) rather than a square check box.
+    /// </summary>
+    public bool WidgetRound { get; set; }
+
+    /// <summary>
+    /// Gets or sets the decoded image payload for image fields. Null when the
+    /// field carries no image data.
+    /// </summary>
+    public System.ReadOnlyMemory<byte>? ImageBytes { get; set; }
 }

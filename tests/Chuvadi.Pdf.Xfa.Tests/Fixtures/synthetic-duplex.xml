@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <pageSet relation="duplexPaginated">
+      <pageArea name="Front" oddOrEven="odd">
+        <contentArea name="frontCa" x="0pt" y="40pt" w="400pt" h="100pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur max="-1"/>
+      </pageArea>
+      <pageArea name="Back" oddOrEven="even">
+        <contentArea name="backCa" x="0pt" y="80pt" w="400pt" h="100pt"/>
+        <medium long="792pt" short="612pt"/>
+        <occur max="-1"/>
+      </pageArea>
+    </pageSet>
+    <draw name="d0" w="400pt" h="80pt"><value><text>side one</text></value></draw>
+    <draw name="d1" w="400pt" h="80pt"><value><text>side two</text></value></draw>
+    <draw name="d2" w="400pt" h="80pt"><value><text>side three</text></value></draw>
+  </subform>
+</template>

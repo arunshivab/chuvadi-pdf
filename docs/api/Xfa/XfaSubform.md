@@ -26,6 +26,14 @@ XfaLayout Layout
 
 Gets or sets the layout strategy applied to children.
 
+### `ColumnWidths`
+
+```csharp
+IReadOnlyList<XfaMeasurement>? ColumnWidths
+```
+
+Gets or sets the table column widths (from `columnWidths`), used when `Layout` is `XfaLayout.Table`. Null when the subform declares no column widths.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

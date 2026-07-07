@@ -4,6 +4,7 @@
 // PHASE: LA-23b Phase A — template parser.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Xml;
 using Chuvadi.Pdf.Xfa.Model;
@@ -129,6 +130,9 @@ public static class XfaTemplateParser
             case "break":
                 ApplyLegacyBreak(parent, childElement);
                 return;
+            case "keep":
+                ApplyKeep(parent, childElement);
+                return;
             default:
                 break;
         }
@@ -136,7 +140,13 @@ public static class XfaTemplateParser
         // Structural children (subform/field/draw/exclGroup/area/pageSet/...)
         if (IsStructural(childElement.LocalName))
         {
-            parent.AddChild(ParseNode(childElement));
+            XfaNode child = ParseNode(childElement);
+            if (parent is XfaExclGroup && child is XfaField radioMember)
+            {
+                radioMember.IsExclGroupMember = true;
+            }
+
+            parent.AddChild(child);
         }
     }
 
@@ -200,6 +210,7 @@ public static class XfaTemplateParser
         {
             case XfaSubform subform:
                 subform.Layout = ParseLayout(element.GetAttribute("layout"));
+                subform.ColumnWidths = ParseColumnWidths(element.GetAttribute("columnWidths"));
                 break;
             case XfaExclGroup exclGroup:
                 exclGroup.Layout = ParseLayout(element.GetAttribute("layout"));
@@ -212,6 +223,14 @@ public static class XfaTemplateParser
                 draw.HAlign = ParseHAlign(element.GetAttribute("hAlign"));
                 draw.VAlign = ParseVAlign(element.GetAttribute("vAlign"));
                 break;
+            case XfaPageArea pageAreaNode:
+                pageAreaNode.OddOrEven = element.GetAttribute("oddOrEven") switch
+                {
+                    "odd" => XfaOddOrEven.Odd,
+                    "even" => XfaOddOrEven.Even,
+                    _ => XfaOddOrEven.Any,
+                };
+                break;
             case XfaPageSet pageSet:
                 pageSet.Relation = element.GetAttribute("relation") switch
                 {
@@ -223,6 +242,36 @@ public static class XfaTemplateParser
             default:
                 break;
         }
+    }
+
+    private static void ApplyKeep(XfaNode parent, XmlElement element)
+    {
+        parent.KeepIntact = ParseKeepScope(element.GetAttribute("intact"));
+        parent.KeepPrevious = ParseKeepScope(element.GetAttribute("previous"));
+        parent.KeepNext = ParseKeepScope(element.GetAttribute("next"));
+    }
+
+    private static XfaKeepScope ParseKeepScope(string value) => value switch
+    {
+        "contentArea" => XfaKeepScope.ContentArea,
+        "pageArea" => XfaKeepScope.PageArea,
+        _ => XfaKeepScope.None,
+    };
+
+    private static List<XfaMeasurement>? ParseColumnWidths(string value)
+    {
+        if (value.Length == 0)
+        {
+            return null;
+        }
+
+        List<XfaMeasurement> widths = new List<XfaMeasurement>();
+        foreach (string token in value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            widths.Add(XfaMeasurement.Parse(token));
+        }
+
+        return widths.Count == 0 ? null : widths;
     }
 
     private static void ApplyOccur(XfaPageArea pageArea, XmlElement element)
@@ -396,6 +445,13 @@ public static class XfaTemplateParser
         if (exData is not null)
         {
             value.RichText = exData.InnerXml;
+            return value;
+        }
+
+        XmlElement? image = FindFirstByLocalName(element, "image");
+        if (image is not null)
+        {
+            value.ImageBase64 = image.InnerText.Trim();
         }
 
         return value;

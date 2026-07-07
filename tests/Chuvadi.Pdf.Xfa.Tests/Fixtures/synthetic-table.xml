@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/2.8/">
+  <subform name="root" layout="tb">
+    <subform name="grid" layout="table" columnWidths="100pt 150pt 100pt" w="350pt">
+      <subform name="row1" layout="row" w="350pt" h="20pt">
+        <draw name="r1c1" w="100pt" h="20pt"><value><text>alpha</text></value></draw>
+        <draw name="r1c2" w="150pt" h="20pt"><value><text>beta</text></value></draw>
+        <draw name="r1c3" w="100pt" h="20pt"><value><text>gamma</text></value></draw>
+      </subform>
+      <subform name="row2" layout="row" w="350pt" h="30pt">
+        <draw name="r2c1" w="100pt" h="30pt"><value><text>delta</text></value></draw>
+        <draw name="r2c2" w="150pt" h="30pt"><value><text>epsilon</text></value></draw>
+        <draw name="r2c3" w="100pt" h="30pt"><value><text>zeta</text></value></draw>
+      </subform>
+    </subform>
+  </subform>
+</template>

@@ -1,8 +1,10 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  XFA 3.3 — pagination: contentArea sequencing, pageSet occurrence
-//        (orderedOccurrence), and forced breaks (breakBefore / breakAfter).
-// PHASE: LA-23b Phase C — pagination.
+//        (orderedOccurrence, duplexPaginated, simplexPaginated), forced breaks
+//        (breakBefore / breakAfter), and keep constraints (keep-with-previous /
+//        keep-with-next, honored via tentative placement with rollback).
+// PHASE: LA-23b Phases C + C2 — pagination.
 
 using System;
 using System.Collections.Generic;
@@ -29,13 +31,21 @@ internal sealed class XfaComposedPage
 /// Composes a parsed (and data-merged) template into a sequence of pages.
 /// Flowed root content fills the content areas of the current page in document
 /// order; when all content areas are full, a new page is instantiated per the
-/// page set's occurrence rules (orderedOccurrence). Forced breaks
-/// (<see cref="XfaNode.BreakBefore"/> / <see cref="XfaNode.BreakAfter"/>)
-/// advance to the next content area or page.
+/// page set's relation: <see cref="XfaPageSetRelation.OrderedOccurrence"/>
+/// walks the page areas honoring occurrence counts, while
+/// <see cref="XfaPageSetRelation.DuplexPaginated"/> /
+/// <see cref="XfaPageSetRelation.SimplexPaginated"/> select page areas by page
+/// parity (<see cref="XfaPageArea.OddOrEven"/>). Forced breaks advance to the
+/// next content area or page, and keep constraints
+/// (<see cref="XfaNode.KeepNext"/> / <see cref="XfaNode.KeepPrevious"/>) bind
+/// neighbouring blocks into groups that are re-placed together when a region
+/// transition would split them.
 /// </summary>
 internal sealed class XfaPaginator
 {
     private readonly List<XfaPageArea> _pageAreas;
+    private readonly XfaPageSetRelation _relation;
+    private readonly Dictionary<int, int> _instanceCounts = new Dictionary<int, int>();
     private readonly List<XfaComposedPage> _pages = new List<XfaComposedPage>();
 
     private int _areaCursor;
@@ -44,9 +54,10 @@ internal sealed class XfaPaginator
     private double _penY;
     private bool _currentPageHasContent;
 
-    private XfaPaginator(List<XfaPageArea> pageAreas)
+    private XfaPaginator(List<XfaPageArea> pageAreas, XfaPageSetRelation relation)
     {
         _pageAreas = pageAreas;
+        _relation = relation;
     }
 
     /// <summary>
@@ -60,13 +71,15 @@ internal sealed class XfaPaginator
     {
         ArgumentNullException.ThrowIfNull(root);
 
-        List<XfaPageArea> pageAreas = CollectPageAreas(root);
+        XfaPageSet? pageSet = FindFirstPageSet(root);
+        List<XfaPageArea> pageAreas = CollectPageAreas(pageSet);
         if (pageAreas.Count == 0)
         {
             pageAreas.Add(DefaultPageArea());
         }
 
-        XfaPaginator paginator = new XfaPaginator(pageAreas);
+        XfaPaginator paginator = new XfaPaginator(
+            pageAreas, pageSet?.Relation ?? XfaPageSetRelation.OrderedOccurrence);
         paginator.NewPage();
         paginator.ComposeRoot(root);
         return paginator._pages;
@@ -76,6 +89,7 @@ internal sealed class XfaPaginator
     {
         bool flowRoot = root.Layout is XfaLayout.TopToBottom or XfaLayout.Tb;
 
+        List<XfaNode> blocks = new List<XfaNode>();
         foreach (XfaNode child in root.Children)
         {
             if (child is XfaPageSet or XfaPageArea or XfaContentArea
@@ -86,12 +100,194 @@ internal sealed class XfaPaginator
 
             if (flowRoot)
             {
-                ComposeFlowedBlock(child);
+                blocks.Add(child);
             }
             else
             {
                 ComposePositionedBlock(child);
             }
+        }
+
+        if (!flowRoot)
+        {
+            return;
+        }
+
+        foreach ((List<XfaNode> group, XfaKeepScope scope) in GroupByKeep(blocks))
+        {
+            ComposeGroup(group, scope);
+        }
+    }
+
+    // Binds consecutive blocks into keep-groups: a block with keep-next binds to
+    // its successor; a block with keep-previous binds to its predecessor. The
+    // group's scope is the widest scope among its binding constraints.
+    private static List<(List<XfaNode> Group, XfaKeepScope Scope)> GroupByKeep(List<XfaNode> blocks)
+    {
+        List<(List<XfaNode> Group, XfaKeepScope Scope)> groups =
+            new List<(List<XfaNode> Group, XfaKeepScope Scope)>();
+
+        int i = 0;
+        while (i < blocks.Count)
+        {
+            List<XfaNode> group = new List<XfaNode> { blocks[i] };
+            XfaKeepScope scope = XfaKeepScope.None;
+
+            while (i + 1 < blocks.Count)
+            {
+                XfaKeepScope bindForward = blocks[i].KeepNext;
+                XfaKeepScope bindBackward = blocks[i + 1].KeepPrevious;
+                XfaKeepScope bind = Widest(bindForward, bindBackward);
+                if (bind == XfaKeepScope.None)
+                {
+                    break;
+                }
+
+                scope = Widest(scope, bind);
+                i++;
+                group.Add(blocks[i]);
+            }
+
+            groups.Add((group, scope));
+            i++;
+        }
+
+        return groups;
+    }
+
+    private static XfaKeepScope Widest(XfaKeepScope a, XfaKeepScope b) =>
+        (XfaKeepScope)Math.Max((int)a, (int)b);
+
+    // Places a keep-group. Single unconstrained blocks place directly. Bound
+    // groups place tentatively; if a region transition splits the group beyond
+    // its scope, the tentative placement is rolled back, the pager advances to
+    // a fresh region, and the group is re-placed (accepted on the second pass
+    // to guarantee forward progress even for over-sized groups).
+    private void ComposeGroup(List<XfaNode> group, XfaKeepScope scope)
+    {
+        if (group.Count == 1 && scope == XfaKeepScope.None)
+        {
+            ComposeFlowedBlock(group[0]);
+            return;
+        }
+
+        PaginatorSnapshot snapshot = TakeSnapshot();
+        List<(int Page, int ContentArea)> placements = PlaceGroup(group);
+
+        if (!ViolatesScope(placements, scope))
+        {
+            return;
+        }
+
+        Rollback(snapshot);
+        if (scope == XfaKeepScope.PageArea)
+        {
+            NewPage();
+        }
+        else
+        {
+            AdvanceContentArea();
+        }
+
+        PlaceGroup(group);
+    }
+
+    private List<(int Page, int ContentArea)> PlaceGroup(List<XfaNode> group)
+    {
+        List<(int Page, int ContentArea)> placements = new List<(int Page, int ContentArea)>();
+        foreach (XfaNode member in group)
+        {
+            placements.Add(ComposeFlowedBlock(member));
+        }
+
+        return placements;
+    }
+
+    private static bool ViolatesScope(
+        List<(int Page, int ContentArea)> placements, XfaKeepScope scope)
+    {
+        if (scope == XfaKeepScope.None || placements.Count < 2)
+        {
+            return false;
+        }
+
+        (int firstPage, int firstArea) = placements[0];
+        foreach ((int page, int area) in placements)
+        {
+            if (scope == XfaKeepScope.PageArea && page != firstPage)
+            {
+                return true;
+            }
+
+            if (scope == XfaKeepScope.ContentArea
+                && (page != firstPage || area != firstArea))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class PaginatorSnapshot
+    {
+        internal int PageCount;
+        internal List<int> BoxCounts = new List<int>();
+        internal int AreaCursor;
+        internal int InstancesOfCurrentArea;
+        internal int ContentAreaIndex;
+        internal double PenY;
+        internal bool CurrentPageHasContent;
+        internal Dictionary<int, int> InstanceCounts = new Dictionary<int, int>();
+    }
+
+    private PaginatorSnapshot TakeSnapshot()
+    {
+        PaginatorSnapshot snapshot = new PaginatorSnapshot
+        {
+            PageCount = _pages.Count,
+            AreaCursor = _areaCursor,
+            InstancesOfCurrentArea = _instancesOfCurrentArea,
+            ContentAreaIndex = _contentAreaIndex,
+            PenY = _penY,
+            CurrentPageHasContent = _currentPageHasContent,
+            InstanceCounts = new Dictionary<int, int>(_instanceCounts),
+        };
+
+        foreach (XfaComposedPage page in _pages)
+        {
+            snapshot.BoxCounts.Add(page.Boxes.Count);
+        }
+
+        return snapshot;
+    }
+
+    private void Rollback(PaginatorSnapshot snapshot)
+    {
+        while (_pages.Count > snapshot.PageCount)
+        {
+            _pages.RemoveAt(_pages.Count - 1);
+        }
+
+        for (int i = 0; i < _pages.Count; i++)
+        {
+            List<XfaBox> boxes = _pages[i].Boxes;
+            int keep = snapshot.BoxCounts[i];
+            while (boxes.Count > keep)
+            {
+                boxes.RemoveAt(boxes.Count - 1);
+            }
+        }
+
+        _areaCursor = snapshot.AreaCursor;
+        _instancesOfCurrentArea = snapshot.InstancesOfCurrentArea;
+        _contentAreaIndex = snapshot.ContentAreaIndex;
+        _penY = snapshot.PenY;
+        _currentPageHasContent = snapshot.CurrentPageHasContent;
+        _instanceCounts.Clear();
+        foreach (KeyValuePair<int, int> entry in snapshot.InstanceCounts)
+        {
+            _instanceCounts[entry.Key] = entry.Value;
         }
     }
 
@@ -108,7 +304,7 @@ internal sealed class XfaPaginator
         _currentPageHasContent = _currentPageHasContent || boxes.Count > 0;
     }
 
-    private void ComposeFlowedBlock(XfaNode child)
+    private (int Page, int ContentArea) ComposeFlowedBlock(XfaNode child)
     {
         if (child.BreakBefore is { } breakBefore)
         {
@@ -119,7 +315,7 @@ internal sealed class XfaPaginator
         double contentHeight = child.Height?.Points ?? MeasureHeight(child);
         double blockHeight = marginTop + contentHeight + marginBottom;
 
-        (int pageIndex, double x, double y) = Place(blockHeight);
+        (int pageIndex, int areaIndex, double x, double y) = Place(blockHeight);
 
         // The engine adds the child's own X (honored as a horizontal offset in
         // top-to-bottom flow) and its Y (cancelled: the flow pen governs y).
@@ -132,11 +328,13 @@ internal sealed class XfaPaginator
         {
             Break(breakAfter);
         }
+
+        return (pageIndex, areaIndex);
     }
 
     // Places a block of the given height into the current content area,
     // advancing to the next content area / page when it does not fit.
-    private (int PageIndex, double X, double Y) Place(double height)
+    private (int PageIndex, int AreaIndex, double X, double Y) Place(double height)
     {
         while (true)
         {
@@ -151,7 +349,7 @@ internal sealed class XfaPaginator
                 double x = contentArea?.X.Points ?? 0.0;
                 double y = (contentArea?.Y.Points ?? 0.0) + _penY;
                 _penY += height;
-                return (_pages.Count - 1, x, y);
+                return (_pages.Count - 1, _contentAreaIndex, x, y);
             }
 
             AdvanceContentArea();
@@ -197,10 +395,20 @@ internal sealed class XfaPaginator
         _currentPageHasContent = false;
     }
 
+    private XfaPageArea NextPageArea()
+    {
+        return _relation switch
+        {
+            XfaPageSetRelation.DuplexPaginated => NextPageAreaByParity(duplex: true),
+            XfaPageSetRelation.SimplexPaginated => NextPageAreaByParity(duplex: false),
+            _ => NextPageAreaOrdered(),
+        };
+    }
+
     // Walks the page areas per orderedOccurrence: each area is used up to its
     // MaxOccur count (-1 = unbounded), then the cursor advances. An exhausted
     // sequence reuses the final area so overflow always has a target.
-    private XfaPageArea NextPageArea()
+    private XfaPageArea NextPageAreaOrdered()
     {
         XfaPageArea current = _pageAreas[_areaCursor];
 
@@ -228,6 +436,43 @@ internal sealed class XfaPaginator
         _instancesOfCurrentArea++;
         return current;
     }
+
+    // Duplex: the next page's parity (1-based) selects among page areas whose
+    // oddOrEven matches (Any matches both). Simplex: every page is a front
+    // (odd) page. Occurrence counts are honored per area; when every matching
+    // area is exhausted, the last match is reused so overflow always lands.
+    private XfaPageArea NextPageAreaByParity(bool duplex)
+    {
+        int nextNumber = _pages.Count + 1;
+        bool odd = !duplex || (nextNumber % 2) == 1;
+
+        XfaPageArea? lastMatch = null;
+        for (int i = 0; i < _pageAreas.Count; i++)
+        {
+            XfaPageArea area = _pageAreas[i];
+            if (!ParityMatches(area.OddOrEven, odd))
+            {
+                continue;
+            }
+
+            lastMatch = area;
+            int used = _instanceCounts.TryGetValue(i, out int count) ? count : 0;
+            if (area.MaxOccur < 0 || used < area.MaxOccur)
+            {
+                _instanceCounts[i] = used + 1;
+                return area;
+            }
+        }
+
+        return lastMatch ?? _pageAreas[^1];
+    }
+
+    private static bool ParityMatches(XfaOddOrEven oddOrEven, bool odd) => oddOrEven switch
+    {
+        XfaOddOrEven.Odd => odd,
+        XfaOddOrEven.Even => !odd,
+        _ => true,
+    };
 
     private XfaContentArea? CurrentContentArea()
     {
@@ -278,13 +523,10 @@ internal sealed class XfaPaginator
             node.Margin.Left.Points, node.Margin.Right.Points);
     }
 
-    // Collects the page areas of the first pageSet under the root, in document
-    // order. (duplex/simplex pairing is handled in a later phase; the walk here
-    // implements orderedOccurrence.)
-    private static List<XfaPageArea> CollectPageAreas(XfaNode root)
+    // Collects the page areas of the given pageSet, in document order.
+    private static List<XfaPageArea> CollectPageAreas(XfaPageSet? pageSet)
     {
         List<XfaPageArea> areas = new List<XfaPageArea>();
-        XfaPageSet? pageSet = FindFirstPageSet(root);
         if (pageSet is null)
         {
             return areas;
