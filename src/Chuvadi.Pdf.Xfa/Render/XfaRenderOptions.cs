@@ -20,7 +20,7 @@ public enum XfaScriptMode
 /// <summary>Options controlling XFA rendering.</summary>
 public sealed class XfaRenderOptions
 {
-    /// <summary>Gets the default options: no scripting, best-effort rendering.</summary>
+    /// <summary>Gets the default options: full scripting, best-effort rendering.</summary>
     public static XfaRenderOptions Default { get; } = new XfaRenderOptions();
 
     /// <summary>
@@ -29,6 +29,6 @@ public sealed class XfaRenderOptions
     /// </summary>
     public bool FailOnUnsupported { get; init; }
 
-    /// <summary>Gets or sets how embedded scripts are handled. Defaults to <see cref="XfaScriptMode.None"/>.</summary>
-    public XfaScriptMode ScriptMode { get; init; } = XfaScriptMode.None;
+    /// <summary>Gets or sets how embedded scripts are handled. Defaults to <see cref="XfaScriptMode.Full"/>.</summary>
+    public XfaScriptMode ScriptMode { get; init; } = XfaScriptMode.Full;
 }

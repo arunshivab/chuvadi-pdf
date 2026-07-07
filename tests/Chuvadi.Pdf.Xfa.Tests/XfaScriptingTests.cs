@@ -317,21 +317,30 @@ public sealed class XfaScriptingTests
             .Should().StartWith("The Tax Deduction and Collection Account Number (TAN)");
     }
 
-    // ── Render integration: default mode leaves scripts off ────────────────────
+    // ── Render integration: None mode leaves scripts off ───────────────────────
 
     [Fact]
-    public void Render_DefaultMode_DoesNotRunScripts()
+    public void Render_NoneMode_DoesNotRunScripts()
     {
         using PdfDocument doc = PdfDocument.Open(
             Path.Combine(FixturesDir, "livecycle-coi-redacted.pdf"));
 
         using MemoryStream output = new MemoryStream();
-        XfaRenderer.Render(output, doc, XfaRenderOptions.Default);
+        XfaRenderer.Render(output, doc, new XfaRenderOptions { ScriptMode = XfaScriptMode.None });
 
         output.Length.Should().BeGreaterThan(1000);
         output.Position = 0;
         using PdfDocument rendered = PdfDocument.Open(output, leaveOpen: true);
         rendered.PageCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void RenderOptions_DefaultScriptModeIsFull()
+    {
+        // The shipped default runs scripts: real forms fill their scripted
+        // fields without the caller opting in.
+        XfaRenderOptions.Default.ScriptMode.Should().Be(XfaScriptMode.Full);
+        new XfaRenderOptions().ScriptMode.Should().Be(XfaScriptMode.Full);
     }
 
     [Fact]
