@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+  <subform name="form1" layout="tb">
+    <pageSet>
+      <pageArea name="Page1">
+        <contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/>
+        <medium short="8.5in" long="11in"/>
+      </pageArea>
+    </pageSet>
+
+    <field name="First" x="0.5in" y="0.5in" w="3in" h="0.3in">
+      <value><text>ada</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="Last" x="0.5in" y="1in" w="3in" h="0.3in">
+      <value><text>lovelace</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="Base" x="0.5in" y="1.5in" w="2in" h="0.3in">
+      <value><text>120</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <field name="Rate" x="0.5in" y="2in" w="2in" h="0.3in">
+      <value><text>3</text></value>
+      <ui><textEdit/></ui>
+    </field>
+
+    <!-- FormCalc via default contentType (no contentType attribute): & concat + Upper(). -->
+    <field name="FullName" x="0.5in" y="2.5in" w="5in" h="0.3in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script>FullName = Upper(First) &amp; " " &amp; Upper(Last)</script>
+      </event>
+    </field>
+
+    <!-- FormCalc arithmetic assignment. -->
+    <field name="Amount" x="0.5in" y="3in" w="3in" h="0.3in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script contentType="application/x-formcalc">Amount = Base * Rate</script>
+      </event>
+    </field>
+
+    <!-- FormCalc if/then/else + &-concat. -->
+    <field name="Tier" x="0.5in" y="3.5in" w="4in" h="0.3in">
+      <ui><textEdit/></ui>
+      <event activity="initialize">
+        <script>Tier = if (Base &gt; 100) then "premium" else "standard" endif</script>
+      </event>
+    </field>
+  </subform>
+</template>

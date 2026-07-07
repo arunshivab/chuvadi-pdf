@@ -15,6 +15,7 @@ namespace Chuvadi.Pdf.Xfa.Model;
 public abstract class XfaNode
 {
     private readonly List<XfaNode> _children = new List<XfaNode>();
+    private readonly List<XfaScript> _scripts = new List<XfaScript>();
 
     /// <summary>Gets the XFA element name (for example "subform", "field").</summary>
     public abstract string ElementName { get; }
@@ -65,6 +66,13 @@ public abstract class XfaNode
 
     /// <summary>Gets or sets the keep-with-next constraint scope.</summary>
     public XfaKeepScope KeepNext { get; set; }
+
+    /// <summary>Gets the scripts attached to this node via its events.</summary>
+    public IReadOnlyList<XfaScript> Scripts => _scripts;
+
+    /// <summary>Appends a script to this node.</summary>
+    /// <param name="script">The script to append.</param>
+    public void AddScript(XfaScript script) => _scripts.Add(script);
 
     /// <summary>Gets the child nodes in document order.</summary>
     public IReadOnlyList<XfaNode> Children => _children;

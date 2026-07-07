@@ -621,7 +621,9 @@ python tools/gen_api_docs.py
 | [XfaExclGroup](Xfa/XfaExclGroup.md) | class | A mutually-exclusive group of fields (for example radio buttons). |
 | [XfaField](Xfa/XfaField.md) | class | An interactive field with an optional caption, value, and UI widget. |
 | [XfaFont](Xfa/XfaFont.md) | class | A font descriptor applied to caption, value, or draw text. |
+| [XfaFormCalcEngine](Xfa/XfaFormCalcEngine.md) | class | A FormCalc interpreter covering the language features XFA form scripts use. |
 | [XfaHAlign](Xfa/XfaHAlign.md) | enum | Horizontal alignment of content within a box. |
+| [XfaJavaScriptEngine](Xfa/XfaJavaScriptEngine.md) | class | A small JavaScript interpreter covering the language subset that XFA form scripts use. |
 | [XfaKeepScope](Xfa/XfaKeepScope.md) | enum | The scope of a keep-together / keep-with constraint. |
 | [XfaLayout](Xfa/XfaLayout.md) | enum | The layout strategy a container applies to its children. |
 | [XfaLayoutEngine](Xfa/XfaLayoutEngine.md) | class | Resolves an XFA model subtree into a flat list of positioned `XfaBox`es in device space. |
@@ -636,10 +638,18 @@ python tools/gen_api_docs.py
 | [XfaRenderException](Xfa/XfaRenderException.md) | class | The exception thrown when an XFA template cannot be rendered. |
 | [XfaRenderOptions](Xfa/XfaRenderOptions.md) | class | Options controlling XFA rendering. |
 | [XfaRenderer](Xfa/XfaRenderer.md) | class | Renders a document's XFA template to a new PDF. |
+| [XfaScript](Xfa/XfaScript.md) | class | A script attached to a node through an XFA event. |
+| [XfaScriptEvent](Xfa/XfaScriptEvent.md) | enum | The event that triggers a script (the `activity` attribute). |
+| [XfaScriptException](Xfa/XfaScriptException.md) | class | Thrown when a script cannot be parsed or evaluated. |
+| [XfaScriptHost](Xfa/XfaScriptHost.md) | class | The host surface shared by the FormCalc and JavaScript engines. |
+| [XfaScriptLanguage](Xfa/XfaScriptLanguage.md) | enum | The scripting language of an XFA `&lt;script&gt;` element. |
 | [XfaScriptMode](Xfa/XfaScriptMode.md) | enum | How the renderer treats embedded XFA scripts. |
+| [XfaScriptRunner](Xfa/XfaScriptRunner.md) | class | Runs the scripts attached to a template's nodes for a given event. |
+| [XfaScriptValue](Xfa/XfaScriptValue.md) | struct | A dynamic script value: a string, a number, a boolean, a node reference, or null/undefined. |
 | [XfaSubform](Xfa/XfaSubform.md) | class | A container of fields and nested subforms; the primary layout unit. |
 | [XfaTemplateParser](Xfa/XfaTemplateParser.md) | class | Parses the XFA `template` packet XML into a typed `XfaNode` tree. |
 | [XfaUi](Xfa/XfaUi.md) | class | Describes the UI widget a field uses to present its value. |
 | [XfaUiKind](Xfa/XfaUiKind.md) | enum | The kind of widget a field uses to present its value. |
 | [XfaVAlign](Xfa/XfaVAlign.md) | enum | Vertical alignment of content within a box. |
+| [XfaValidationResult](Xfa/XfaValidationResult.md) | class | The result of running validate scripts: the nodes whose validation failed. |
 | [XfaValue](Xfa/XfaValue.md) | class | The value of a field or draw, carrying its resolved text content. |

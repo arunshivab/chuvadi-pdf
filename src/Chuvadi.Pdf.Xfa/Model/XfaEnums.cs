@@ -151,3 +151,35 @@ public enum XfaOddOrEven
     /// <summary>Usable only for even (back / verso) pages.</summary>
     Even,
 }
+
+/// <summary>The scripting language of an XFA <c>&lt;script&gt;</c> element.</summary>
+public enum XfaScriptLanguage
+{
+    /// <summary>FormCalc (the default when no contentType is given).</summary>
+    FormCalc,
+
+    /// <summary>JavaScript (<c>application/x-javascript</c>).</summary>
+    JavaScript,
+}
+
+/// <summary>The event that triggers a script (the <c>activity</c> attribute).</summary>
+public enum XfaScriptEvent
+{
+    /// <summary>Runs once when the form initializes.</summary>
+    Initialize,
+
+    /// <summary>Recomputes a field value when dependencies change.</summary>
+    Calculate,
+
+    /// <summary>Validates a field value.</summary>
+    Validate,
+
+    /// <summary>Runs before a signature is applied.</summary>
+    PreSign,
+
+    /// <summary>Runs after a signature is applied.</summary>
+    PostSign,
+
+    /// <summary>An interactive event with no source in static rendering.</summary>
+    Interactive,
+}

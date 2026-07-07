@@ -122,6 +122,14 @@ XfaKeepScope KeepNext
 
 Gets or sets the keep-with-next constraint scope.
 
+### `Scripts`
+
+```csharp
+IReadOnlyList<XfaScript> Scripts => _scripts
+```
+
+Gets the scripts attached to this node via its events.
+
 ### `Children`
 
 ```csharp
@@ -131,6 +139,18 @@ IReadOnlyList<XfaNode> Children => _children
 Gets the child nodes in document order.
 
 ## Methods
+
+### `AddScript`
+
+```csharp
+void AddScript(XfaScript script) => _scripts.Add(script)
+```
+
+Appends a script to this node.
+
+**Parameters**
+
+- `script` — The script to append.
 
 ### `AddChild`
 
