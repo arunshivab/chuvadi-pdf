@@ -125,3 +125,29 @@ public enum XfaPageSetRelation
     /// <summary>Generate single-sided pages.</summary>
     SimplexPaginated,
 }
+
+/// <summary>The scope of a keep-together / keep-with constraint.</summary>
+public enum XfaKeepScope
+{
+    /// <summary>No keep constraint.</summary>
+    None,
+
+    /// <summary>The constrained nodes must share one content area.</summary>
+    ContentArea,
+
+    /// <summary>The constrained nodes must share one page.</summary>
+    PageArea,
+}
+
+/// <summary>Which page parity a page area may be used for (duplex pagination).</summary>
+public enum XfaOddOrEven
+{
+    /// <summary>Usable for any page.</summary>
+    Any,
+
+    /// <summary>Usable only for odd (front / recto) pages.</summary>
+    Odd,
+
+    /// <summary>Usable only for even (back / verso) pages.</summary>
+    Even,
+}

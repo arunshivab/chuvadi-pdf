@@ -81,6 +81,12 @@ public static class XfaLayoutEngine
             case XfaLayout.LeftRightTopToBottom:
                 LayoutLeftRightTopToBottom(node, contentX, contentY, boxes);
                 break;
+            case XfaLayout.Table:
+                LayoutTable(node, contentX, contentY, boxes);
+                break;
+            case XfaLayout.Row:
+                LayoutRow(node, contentX, contentY, (node as XfaSubform)?.ColumnWidths, boxes);
+                break;
             default:
                 // Positioned (and table/row, handled in a later phase): each child
                 // is placed by its own x/y relative to this origin.
@@ -150,6 +156,71 @@ public static class XfaLayoutEngine
         }
     }
 
+    // Table layout: rows stack vertically; each row's cells are placed
+    // left-to-right using the table's columnWidths (falling back to each
+    // cell's own declared width when the table declares none).
+    private static void LayoutTable(XfaNode node, double x, double y, List<XfaBox> boxes)
+    {
+        IReadOnlyList<XfaMeasurement>? widths = (node as XfaSubform)?.ColumnWidths;
+        double penY = y;
+
+        foreach (XfaNode row in node.Children)
+        {
+            if (row.Presence is XfaPresence.Hidden or XfaPresence.Inactive
+                || IsNonFlowing(row))
+            {
+                continue;
+            }
+
+            (double marginTop, double marginBottom, _, _) = Margins(row);
+            penY += marginTop;
+            LayoutRow(row, x, penY, widths, boxes);
+            penY += RowHeight(row) + marginBottom;
+        }
+    }
+
+    // A single table row: cells advance left-to-right by column width.
+    private static void LayoutRow(
+        XfaNode row, double x, double y,
+        IReadOnlyList<XfaMeasurement>? columnWidths, List<XfaBox> boxes)
+    {
+        double penX = x;
+        int column = 0;
+
+        foreach (XfaNode cell in row.Children)
+        {
+            if (cell.Presence is XfaPresence.Hidden or XfaPresence.Inactive
+                || IsNonFlowing(cell))
+            {
+                continue;
+            }
+
+            double width = columnWidths is not null && column < columnWidths.Count
+                ? columnWidths[column].Points
+                : WidthOf(cell);
+
+            LayoutNode(cell, penX - cell.X.Points, y - cell.Y.Points, boxes);
+            penX += width;
+            column++;
+        }
+    }
+
+    private static double RowHeight(XfaNode row)
+    {
+        if (row.Height is { } declared)
+        {
+            return declared.Points;
+        }
+
+        double max = 0.0;
+        foreach (XfaNode cell in row.Children)
+        {
+            max = System.Math.Max(max, HeightOf(cell));
+        }
+
+        return max;
+    }
+
     private static XfaLayout LayoutOf(XfaNode node) => node switch
     {
         XfaSubform s => s.Layout,
@@ -197,6 +268,26 @@ public static class XfaLayoutEngine
         if (field.Ui?.Kind == XfaUiKind.CheckButton)
         {
             box.WidgetChecked = IsCheckedValue(field.Value?.Text);
+            box.WidgetRound = field.IsExclGroupMember;
+        }
+        else if (field.Ui?.Kind == XfaUiKind.PasswordEdit)
+        {
+            string? secret = ResolveText(field.Value);
+            box.Text = secret is null ? null : new string('*', secret.Length);
+            box.Font = field.Font;
+            box.HAlign = field.HAlign;
+            box.VAlign = field.VAlign;
+        }
+        else if (field.Ui?.Kind == XfaUiKind.ImageEdit)
+        {
+            // Assign via if/else: in a conditional expression the null branch
+            // would convert through ReadOnlyMemory's implicit byte[] operator,
+            // silently producing an empty (non-null) memory.
+            byte[]? payload = DecodeImage(field.Value?.ImageBase64);
+            if (payload is not null)
+            {
+                box.ImageBytes = new System.ReadOnlyMemory<byte>(payload);
+            }
         }
         else
         {
@@ -327,6 +418,25 @@ public static class XfaLayoutEngine
         }
 
         return builder.ToString().Trim();
+    }
+
+    // Decodes a base64 image payload, returning null when the payload is
+    // absent or malformed rather than failing the whole layout.
+    private static byte[]? DecodeImage(string? base64)
+    {
+        if (string.IsNullOrWhiteSpace(base64))
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Convert.FromBase64String(base64);
+        }
+        catch (System.FormatException)
+        {
+            return null;
+        }
     }
 
     private static bool IsCheckedValue(string? text) =>

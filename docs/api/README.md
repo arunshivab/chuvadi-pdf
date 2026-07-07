@@ -622,11 +622,13 @@ python tools/gen_api_docs.py
 | [XfaField](Xfa/XfaField.md) | class | An interactive field with an optional caption, value, and UI widget. |
 | [XfaFont](Xfa/XfaFont.md) | class | A font descriptor applied to caption, value, or draw text. |
 | [XfaHAlign](Xfa/XfaHAlign.md) | enum | Horizontal alignment of content within a box. |
+| [XfaKeepScope](Xfa/XfaKeepScope.md) | enum | The scope of a keep-together / keep-with constraint. |
 | [XfaLayout](Xfa/XfaLayout.md) | enum | The layout strategy a container applies to its children. |
 | [XfaLayoutEngine](Xfa/XfaLayoutEngine.md) | class | Resolves an XFA model subtree into a flat list of positioned `XfaBox`es in device space. |
 | [XfaMargin](Xfa/XfaMargin.md) | class | The four-sided margin (inset) box of a node. |
 | [XfaMeasurement](Xfa/XfaMeasurement.md) | struct | A linear measurement parsed from an XFA template attribute (for example "12.7mm", "0.5in", "36pt"). |
 | [XfaNode](Xfa/XfaNode.md) | class | Base type for every parsed XFA template node. |
+| [XfaOddOrEven](Xfa/XfaOddOrEven.md) | enum | Which page parity a page area may be used for (duplex pagination). |
 | [XfaPageArea](Xfa/XfaPageArea.md) | class | A single page area, defining its size and content region. |
 | [XfaPageSet](Xfa/XfaPageSet.md) | class | A page-geometry container holding one or more page areas. |
 | [XfaPageSetRelation](Xfa/XfaPageSetRelation.md) | enum | How a page set generates pages from its child page areas. |

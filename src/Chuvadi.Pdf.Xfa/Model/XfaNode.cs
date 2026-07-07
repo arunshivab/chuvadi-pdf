@@ -57,6 +57,15 @@ public abstract class XfaNode
     /// </summary>
     public XfaBreakTarget? BreakAfter { get; set; }
 
+    /// <summary>Gets or sets the keep-intact constraint (the node must not split).</summary>
+    public XfaKeepScope KeepIntact { get; set; }
+
+    /// <summary>Gets or sets the keep-with-previous constraint scope.</summary>
+    public XfaKeepScope KeepPrevious { get; set; }
+
+    /// <summary>Gets or sets the keep-with-next constraint scope.</summary>
+    public XfaKeepScope KeepNext { get; set; }
+
     /// <summary>Gets the child nodes in document order.</summary>
     public IReadOnlyList<XfaNode> Children => _children;
 
@@ -73,6 +82,13 @@ public sealed class XfaSubform : XfaNode
 
     /// <summary>Gets or sets the layout strategy applied to children.</summary>
     public XfaLayout Layout { get; set; } = XfaLayout.Position;
+
+    /// <summary>
+    /// Gets or sets the table column widths (from <c>columnWidths</c>), used
+    /// when <see cref="Layout"/> is <see cref="XfaLayout.Table"/>. Null when
+    /// the subform declares no column widths.
+    /// </summary>
+    public IReadOnlyList<XfaMeasurement>? ColumnWidths { get; set; }
 }
 
 /// <summary>A mutually-exclusive group of fields (for example radio buttons).</summary>
@@ -115,6 +131,12 @@ public sealed class XfaField : XfaNode
     /// packet. Null when the field has no data binding.
     /// </summary>
     public string? DataRef { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this field is a direct member of
+    /// an <c>exclGroup</c> (its check button renders as a radio button).
+    /// </summary>
+    public bool IsExclGroupMember { get; set; }
 }
 
 /// <summary>Static, non-interactive content such as boilerplate text or lines.</summary>
@@ -172,6 +194,9 @@ public sealed class XfaPageArea : XfaNode
     /// -1 means unbounded: the page area repeats for as long as overflow demands.
     /// </summary>
     public int MaxOccur { get; set; } = 1;
+
+    /// <summary>Gets or sets which page parity this area may serve (duplex pagination).</summary>
+    public XfaOddOrEven OddOrEven { get; set; } = XfaOddOrEven.Any;
 }
 
 /// <summary>The drawable region within a page area where content flows.</summary>
@@ -202,6 +227,12 @@ public sealed class XfaValue : XfaNode
     /// <c>exData</c> with an HTML content type. Null for plain values.
     /// </summary>
     public string? RichText { get; set; }
+
+    /// <summary>
+    /// Gets or sets the base64-encoded image payload (from an <c>&lt;image&gt;</c>
+    /// value), used by image fields. Null when the value carries no image.
+    /// </summary>
+    public string? ImageBase64 { get; set; }
 }
 
 /// <summary>A field caption: its text and placement relative to the value.</summary>

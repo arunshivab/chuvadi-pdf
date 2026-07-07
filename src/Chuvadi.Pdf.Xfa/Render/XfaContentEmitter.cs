@@ -32,11 +32,59 @@ internal static class XfaContentEmitter
                 continue;
             }
 
+            if (box.Widget == XfaUiKind.Signature)
+            {
+                XfaWidgetPainter.PaintSignature(page, box);
+                continue;
+            }
+
+            if (box.Widget == XfaUiKind.ImageEdit)
+            {
+                EmitImage(page, box);
+                continue;
+            }
+
             if (box.Text is { Length: > 0 })
             {
                 EmitText(page, box);
             }
         }
+    }
+
+    // Draws an image field's payload when present (JPEG/PNG/TIFF/BMP per the
+    // authoring layer), or a light placeholder outline when the field carries
+    // no usable image data.
+    private static void EmitImage(PageBuilder page, XfaBox box)
+    {
+        if (box.Width <= 0 || box.Height <= 0)
+        {
+            return;
+        }
+
+        if (box.ImageBytes is { } payload && IsSupportedImage(payload.Span))
+        {
+            page.DrawImage(payload.ToArray(), box.X, box.Y, box.Width, box.Height);
+            return;
+        }
+
+        page.DrawRectangle(box.X, box.Y, box.Width, box.Height,
+            fill: null, stroke: Colors.LightGray, strokeWidth: 0.5);
+    }
+
+    // Magic-number sniff for the formats the authoring layer decodes.
+    private static bool IsSupportedImage(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 4)
+        {
+            return false;
+        }
+
+        bool png = data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47;
+        bool jpeg = data[0] == 0xFF && data[1] == 0xD8;
+        bool bmp = data[0] == 0x42 && data[1] == 0x4D;
+        bool tiffLe = data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2A;
+        bool tiffBe = data[0] == 0x4D && data[1] == 0x4D && data[2] == 0x00 && data[3] == 0x2A;
+        return png || jpeg || bmp || tiffLe || tiffBe;
     }
 
     private static void EmitFillAndBorder(PageBuilder page, XfaBox box)

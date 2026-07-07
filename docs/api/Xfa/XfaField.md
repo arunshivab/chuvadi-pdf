@@ -74,6 +74,14 @@ string? DataRef
 
 Gets or sets the datasets bind reference (the SOM expression from `&lt;bind ref="..."&gt;`), used to merge a value from the datasets packet. Null when the field has no data binding.
 
+### `IsExclGroupMember`
+
+```csharp
+bool IsExclGroupMember
+```
+
+Gets or sets a value indicating whether this field is a direct member of an `exclGroup` (its check button renders as a radio button).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs`](../../../src/Chuvadi.Pdf.Xfa/Model/XfaNode.cs)_

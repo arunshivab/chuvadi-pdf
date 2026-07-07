@@ -98,6 +98,30 @@ XfaBreakTarget? BreakAfter
 
 Gets or sets a forced layout transition after this node lays out (from `&lt;breakAfter&gt;` or the legacy `&lt;break after&gt;`). Null when no break is requested.
 
+### `KeepIntact`
+
+```csharp
+XfaKeepScope KeepIntact
+```
+
+Gets or sets the keep-intact constraint (the node must not split).
+
+### `KeepPrevious`
+
+```csharp
+XfaKeepScope KeepPrevious
+```
+
+Gets or sets the keep-with-previous constraint scope.
+
+### `KeepNext`
+
+```csharp
+XfaKeepScope KeepNext
+```
+
+Gets or sets the keep-with-next constraint scope.
+
 ### `Children`
 
 ```csharp

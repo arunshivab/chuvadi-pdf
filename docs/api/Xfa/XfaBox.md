@@ -127,6 +127,22 @@ bool? WidgetChecked
 
 Gets or sets a value indicating whether the widget is in the "on" state (used by check buttons and radios). Null for non-toggle widgets.
 
+### `WidgetRound`
+
+```csharp
+bool WidgetRound
+```
+
+Gets or sets a value indicating whether a check-button widget renders as a radio button (round mark) rather than a square check box.
+
+### `ImageBytes`
+
+```csharp
+System.ReadOnlyMemory<byte>? ImageBytes
+```
+
+Gets or sets the decoded image payload for image fields. Null when the field carries no image data.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Xfa/Layout/XfaBox.cs`](../../../src/Chuvadi.Pdf.Xfa/Layout/XfaBox.cs)_
