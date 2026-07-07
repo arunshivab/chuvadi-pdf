@@ -18,7 +18,7 @@ __static__
 static XfaRenderOptions Default
 ```
 
-Gets the default options: no scripting, best-effort rendering.
+Gets the default options: full scripting, best-effort rendering.
 
 ### `FailOnUnsupported`
 
@@ -34,7 +34,7 @@ Gets or sets a value indicating whether to throw on unsupported template constru
 XfaScriptMode ScriptMode
 ```
 
-Gets or sets how embedded scripts are handled. Defaults to `XfaScriptMode.None`.
+Gets or sets how embedded scripts are handled. Defaults to `XfaScriptMode.Full`.
 
 ---
 
