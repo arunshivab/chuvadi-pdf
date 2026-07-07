@@ -234,7 +234,7 @@ public sealed class XfaFormCalcEngine
 
     private sealed class FcRef : FcNode
     {
-        internal string Path { get; init; } = string.Empty;
+        internal string Reference { get; init; } = string.Empty;
     }
 
     private sealed class FcCall : FcNode
@@ -679,7 +679,7 @@ public sealed class XfaFormCalcEngine
                 path.Append(Advance().Text);
             }
 
-            return new FcRef { Path = path.ToString() };
+            return new FcRef { Reference = path.ToString() };
         }
 
         private List<FcNode> ParseArguments()
@@ -768,13 +768,13 @@ public sealed class XfaFormCalcEngine
 
         private XfaScriptValue EvaluateRef(FcRef reference)
         {
-            if (_locals.TryGetValue(reference.Path, out XfaScriptValue local))
+            if (_locals.TryGetValue(reference.Reference, out XfaScriptValue local))
             {
                 return local;
             }
 
             // Split a trailing property (rawValue/value) from the node path.
-            (string nodePath, string property) = SplitProperty(reference.Path);
+            (string nodePath, string property) = SplitProperty(reference.Reference);
             XfaNode? node = _host.Resolve(nodePath, _thisNode);
             if (node is null)
             {
@@ -1049,7 +1049,7 @@ public sealed class XfaFormCalcEngine
         private XfaScriptValue EvaluateAssign(FcAssign assign)
         {
             XfaScriptValue value = Evaluate(assign.Value);
-            (string nodePath, string property) = SplitProperty(assign.Target.Path);
+            (string nodePath, string property) = SplitProperty(assign.Target.Reference);
             XfaNode? node = _host.Resolve(nodePath, _thisNode);
             if (node is not null)
             {
@@ -1058,7 +1058,7 @@ public sealed class XfaFormCalcEngine
             else
             {
                 // No such node: treat as a local variable assignment.
-                _locals[assign.Target.Path] = value;
+                _locals[assign.Target.Reference] = value;
             }
 
             return value;
