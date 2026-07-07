@@ -626,6 +626,25 @@ public sealed class PdfReader : IDisposable
             {
                 PdfDictionary sectionTrailer = LoadClassicXref(stream, offset, xref);
                 MergeTrailer(mergedTrailer, sectionTrailer);
+
+                // Hybrid-reference file (PDF 32000-1:2008 §7.5.8.4): a classic
+                // xref section's trailer may carry /XRefStm pointing to a
+                // cross-reference stream that lists the compressed (Type 2)
+                // objects the classic table cannot represent. Those objects —
+                // which for many writers (e.g. Word/Office) include the
+                // structure tree and other catalog entries — are otherwise
+                // invisible, making resolvable dictionaries such as
+                // /StructTreeRoot wrongly resolve to null. Load the hybrid xref
+                // stream so its compressed entries are merged in. LoadXrefStream
+                // only fills entries not already present, so the classic entries
+                // continue to take precedence as the spec requires.
+                int xrefStmOffset = sectionTrailer.GetInteger(PdfName.Intern("XRefStm"), -1);
+                if (xrefStmOffset >= 0 && !visited.Contains(xrefStmOffset))
+                {
+                    visited.Add(xrefStmOffset);
+                    LoadXrefStream(stream, xrefStmOffset, xref);
+                }
+
                 offset = sectionTrailer.GetInteger(PdfName.Prev, -1);
             }
             else
