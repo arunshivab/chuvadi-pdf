@@ -42,5 +42,5 @@ Gets the fill rule.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/FillPathOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/FillPathOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/FillPathOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/FillPathOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

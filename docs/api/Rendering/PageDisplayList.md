@@ -58,5 +58,5 @@ Gets the MediaBox height in PDF user-space points.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/PageDisplayList.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/PageDisplayList.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/PageDisplayList.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/PageDisplayList.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

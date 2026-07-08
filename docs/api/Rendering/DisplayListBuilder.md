@@ -40,5 +40,5 @@ Builds a display list for the page's content stream.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DisplayListBuilder.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/DisplayListBuilder.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/DisplayListBuilder.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

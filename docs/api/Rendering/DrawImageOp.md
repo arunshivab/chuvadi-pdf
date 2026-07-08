@@ -44,5 +44,5 @@ Gets the constant image opacity from ExtGState /ca (0..1). Multiplies the per-pi
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/DrawImageOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/DrawImageOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/DrawImageOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

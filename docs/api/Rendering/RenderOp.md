@@ -1,22 +1,30 @@
 # RenderOp
 
-**Class** in `Chuvadi.Pdf.Rendering.DisplayList` (Rendering)
+**Class** in `Chuvadi.Pdf.Rendering.Raster` (Rendering)
 
-Abstract base for all display-list operations.
+Abstract base for all operations in a `PageDisplayList`.
 
 ```csharp
 public abstract class RenderOp
 ```
 
+## Remarks
+
+Each `RenderOp` describes one painting action in PDF user space (Y up, origin at the bottom-left of the MediaBox). The CTM in effect at the moment the op was emitted has already been applied to the op's geometry — consumers do not need to track a CTM stack.  
+
+ Clipping is also pre-baked: `Clips` contains the list of clip paths active when this op was emitted. Empty when no clip is in effect (shares a single empty-array sentinel).  
+
+ Subclasses are sealed; the hierarchy is closed.
+
 ## Properties
 
-### `Kind`
+### `Clips`
 
 ```csharp
-abstract RenderOpKind Kind
+IReadOnlyList<ClipPath> Clips
 ```
 
-Discriminator for switch-pattern dispatch.
+Gets the clip paths active when this op was emitted. Empty when no clip is in effect.
 
 ### `BlendMode`
 
@@ -24,33 +32,17 @@ Discriminator for switch-pattern dispatch.
 PdfBlendMode BlendMode
 ```
 
-Blend mode for compositing this op against the backdrop (PDF §11.3.5).
+Gets the separable blend mode for compositing this op against the backdrop (PDF §11.3.5). Normal is source-over.
 
 ### `SoftMask`
 
 ```csharp
-SoftMaskInfo? SoftMask
+RasterSoftMaskInfo? SoftMask
 ```
 
-Active soft mask (ExtGState /SMask) gating this op, or null.
-
-### `Layers`
-
-```csharp
-IReadOnlyList<string> Layers
-```
-
-The optional-content-group (layer) names that this op belongs to, from the enclosing marked-content sequences (`/OC … BDC … EMC`), ordered outermost-first. Empty when the op is not inside any optional-content layer. Never null. PDF 32000-1:2008 §8.11.3.2.
-
-### `Clips`
-
-```csharp
-IReadOnlyList<PathGeometry> Clips
-```
-
-The clipping paths in effect when this op was emitted, ordered outermost-first (draw order), each already in page space (the CTM is applied, matching `PathOp.Geometry` and `ClipOp.Geometry`). The effective clip region is the intersection of all paths in the list. Empty when the op is not clipped. Never null. PDF 32000-1:2008 §8.5.4.
+Gets the active soft mask (ExtGState `/SMask`) gating this op, or null when no soft mask is in effect.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/RenderOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>
+      Chuvadi content-stream walker. Parses a PDF page's content stream into a
+      sequence of operator callbacks (IContentOperatorSink), shared by the
+      display-list and raster builders. Neutral, allocation-light, no rendering
+      policy of its own.
+    </Description>
+    <PackageId>Chuvadi.Pdf.Rendering.Walking</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.DisplayList" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.Raster" />
+  </ItemGroup>
+</Project>
