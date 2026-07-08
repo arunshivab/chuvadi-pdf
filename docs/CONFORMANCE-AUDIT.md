@@ -1,5 +1,15 @@
 # Conformance Audit — Phase A (code survey)
 
+> **Status: historical snapshot, partially superseded (last reconciled 2026-07-07,
+> v3.16.0).** This is the original Phase-A code survey dated 2026-06-15. Several
+> gaps it records have since shipped — notably shadings (`sh`), ExtGState
+> transparency (`gs`), non-device colourspaces, Type3 fonts, JBIG2 decode,
+> complex-script shaping, and XFA rendering. Inline **UPDATE** notes mark the
+> verdicts that have changed. For the current authoritative open list see
+> `docs/BACKLOG.md`; the technical-debt note in §9 (two parallel DisplayList
+> namespaces) is fully resolved — rendering is now three single-namespace
+> projects (Walking / DisplayList / Raster).
+
 **Date:** 2026-06-15 · **Against:** ISO 32000-1:2008 · **Method:** source survey
 with file:line evidence — no runtime corpus yet (that is Phase B).
 
@@ -22,6 +32,10 @@ CCITTFaxDecode decode is implemented (`Filters/CcittFaxFilter.cs:43`) but
 **encode throws** (`CcittFaxFilter.cs:68`). DCTDecode (JPEG) is handled at the
 image layer via `Images/JpegDecoder.cs`, not as a stream filter; PNG via
 `Images/PngDecoder.cs`.
+
+**UPDATE (v3.16.0): SHIPPED (decode).** `Filters/Jbig2/` implements JBIG2Decode
+(MQ arithmetic coder, generic + text regions, symbol dictionaries). Original
+Phase-A verdict follows.
 
 **Missing — JBIG2Decode.** No decoder exists anywhere in `src/`. Scanned bilevel
 images using JBIG2 render blank. *Large: arithmetic coding, symbol dictionaries,
@@ -58,7 +72,12 @@ interprets operands purely by **count** — 1→gray, 3→rgb, 4→cmyk (`:326-3
 
 - ICCBased fills work in practice (numeric `scn` re-validates by component count
   — a reasonable approximation).
-- **Separation / DeviceN → wrong colour:** the tint-transform function is ignored;
+- **UPDATE (v3.16.0): the raster sink now evaluates tint transforms** (Separation/
+DeviceN), Indexed lookup, ICCBased alternate, and Lab; the wrong-colour verdicts
+below describe the original Phase-A state and no longer hold for the raster path.
+The SVG sink still lacks `cs`/`scn` handling (§8, tracked as #11).
+
+**Separation / DeviceN → wrong colour:** the tint-transform function is ignored;
   raw tint values are used as device components.
 - **Indexed → wrong colour:** the index is used as a colour value.
 - **Pattern (`scn /P`) → suppressed:** a name operand sets the colour invalid
@@ -70,6 +89,11 @@ interprets operands purely by **count** — 1→gray, 3→rgb, 4→cmyk (`:326-3
 ---
 
 ## 3. Shadings & patterns
+
+**UPDATE (v3.16.0): SHIPPED.** Axial (type 2) and radial (type 3) shadings now
+render on both the raster sink (`PaintShading`/`ShadeOp` + per-pixel gradient
+rasterization) and the SVG sink (`PdfShading`/`PdfFunction`). Function-based (1)
+and mesh (4–7) remain. Original Phase-A verdict follows.
 
 **Missing — shadings (`sh`).** The `sh` operator is in the *recognised-no-ops*
 block shared by both sinks (`Walking/ContentStreamWalker.cs:403`, alongside `i`,
@@ -85,6 +109,10 @@ suppresses (§2 above); no pattern cell replay exists.
 ---
 
 ## 4. Transparency / graphics state
+
+**UPDATE (v3.16.0): SHIPPED.** `gs` now applies constant alpha (`ca`/`CA`),
+separable blend modes (`BM`), and ExtGState soft masks (`SMask`) on both sinks;
+isolated/knockout transparency groups remain. Original Phase-A verdict follows.
 
 **Missing — `gs` (ExtGState) is a no-op** (`Walking/ContentStreamWalker.cs:402`).
 Consequently constant alpha (`ca`/`CA`), blend modes (`BM`), soft masks
@@ -104,8 +132,14 @@ transparency above.
 `Type2Interpreter.cs`), Type1 (`Fonts.Rendering/Type1FontRenderer.cs`). Type0/CID
 is detected (`Fonts/PdfFont.cs:96`) and composite routing exists.
 
+**UPDATE (v3.16.0): SHIPPED.** Type3 glyphs (`CharProcs` content streams, `d0`/
+`d1`) render on both sinks. Original Phase-A verdict follows.
+
 **Missing — Type3 fonts.** No `CharProcs`/`d0`/`d1` handling anywhere in `src/`.
 Text set in a Type3 font (glyphs defined as content streams) does not render.
+
+**UPDATE (v3.16.0): SHIPPED.** `Chuvadi.Pdf.Text.Shaping` applies GSUB/GPOS with
+Indic reordering. Original Phase-A verdict follows.
 
 **Missing — complex-script (Indic/Arabic) shaping.** No GSUB/GPOS application or
 Indic reordering in the text path. Embedded fonts carry the tables; the shaping
@@ -125,6 +159,10 @@ ink, and other appearance-stream annotations do not appear on the page.
 
 ## 7. XFA forms
 
+**UPDATE (v3.16.0): SHIPPED.** `Chuvadi.Pdf.Xfa` renders XFA end to end (data
+merge, layout, pagination, widgets) and runs FormCalc + JavaScript form scripts.
+Original Phase-A verdict follows.
+
 **Missing — XFA rendering.** `PdfDocument.IsXfa` (v3.6.0) detects XFA but the
 content lives in `/AcroForm /XFA`, outside page content, so such documents render
 essentially blank. Full XFA needs its own template/layout/scripting engine.
@@ -141,9 +179,9 @@ routing.
 
 ## 9. Technical debt
 
-Two parallel `DisplayListBuilder` namespaces remain
-(`Rendering.DisplayList/` vs `Rendering/DisplayList/`); consolidation is a
-separate cleanup, not a conformance item.
+**RESOLVED (v3.16.0).** The parallel-namespace duplication is gone. Rendering is
+now three single-namespace projects with acyclic layering Walking → DisplayList
+→ Raster.
 
 ---
 

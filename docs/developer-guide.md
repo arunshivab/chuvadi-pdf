@@ -29,7 +29,9 @@ every byte is parsed and every pixel is rendered in managed C#.
 15. [Building an interactive viewer](#15-building-an-interactive-viewer)
 16. [Advanced: the display list and custom adapters](#16-advanced-the-display-list-and-custom-adapters)
 17. [Error handling and patterns](#17-error-handling-and-patterns)
-18. [Module map](#18-module-map)
+18. [XFA forms](#18-xfa-forms)
+19. [PDF/A output](#19-pdf-a-output)
+20. [Module map](#20-module-map)
 
 ---
 
@@ -635,7 +637,67 @@ catch (Exception ex)
 
 ---
 
-## 18. Module map
+## 18. XFA forms
+
+`Chuvadi.Pdf.Xfa` renders XFA (Adobe LiveCycle) forms — the dynamic form
+technology whose content lives in `/AcroForm /XFA`, outside the normal page
+content. Chuvadi performs data merge, positioned and flowing layout, pagination,
+and widget/table painting, and runs the form's embedded scripts.
+
+```csharp
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Xfa;
+
+using PdfDocument doc = PdfDocument.Open("livecycle-form.pdf");
+
+if (doc.IsXfa)
+{
+    using FileStream output = File.Create("form-rendered.pdf");
+    XfaRenderer.Render(output, doc, XfaRenderOptions.Default);
+}
+```
+
+`XfaRenderOptions.ScriptMode` **defaults to `Full`**: the form's initialize,
+calculate, and validate scripts run, so computed fields fill in. Chuvadi ships
+two script engines — a FormCalc interpreter and a JavaScript interpreter (both
+written from scratch, zero dependencies). To render the static form without
+executing scripts:
+
+```csharp
+XfaRenderOptions noScripts = new() { ScriptMode = XfaScriptMode.None };
+XfaRenderer.Render(output, doc, noScripts);
+```
+
+Unsupported script constructs fail soft, leaving form state untouched, so a
+single unsupported script never aborts the render. Interactive events
+(click/change/etc.) are parsed but dormant — a static render has no event source.
+
+---
+
+## 19. PDF/A output
+
+`Chuvadi.Pdf.PdfA` writes PDF/A-conformant output for archival requirements.
+
+```csharp
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.PdfA;
+
+using PdfDocument doc = PdfDocument.Open("input.pdf");
+using FileStream output = File.Create("archival.pdf");
+
+PdfAOptions options = new() { Conformance = PdfAConformance.PdfA2B };
+PdfAResult result = PdfAWriter.Write(output, doc, options);
+```
+
+`PdfAConformance` offers `PdfA1B` and `PdfA2B` (level B, visual conformance).
+The writer embeds the required output intent, ensures fonts are embedded, and
+sets the document metadata PDF/A expects; `PdfAResult` describes what it did.
+Note that generating a `/StructTreeRoot` for PDF/UA (level A tagging) is not yet
+implemented — see `docs/BACKLOG.md`.
+
+---
+
+## 20. Module map
 
 | You want to…                          | Package                            |
 |---------------------------------------|------------------------------------|
@@ -652,6 +714,9 @@ catch (Exception ex)
 | Read / add annotations                | `Chuvadi.Pdf.Annotations`          |
 | Author reports / images → PDF         | `Chuvadi.Pdf.Authoring`            |
 | Read / verify / create signatures     | `Chuvadi.Pdf.Signatures`           |
+| Render XFA (LiveCycle) forms          | `Chuvadi.Pdf.Xfa`                  |
+| PDF/A archival output                 | `Chuvadi.Pdf.PdfA`                 |
+| Complex-script (Indic) shaping        | `Chuvadi.Pdf.Text.Shaping`         |
 | Encode / decode images                | `Chuvadi.Pdf.Images`               |
 | WPF on-screen rendering (Windows)     | `Chuvadi.Pdf.Rendering.Wpf`        |
 | Everything (meta-package)             | `Chuvadi.Pdf`                      |

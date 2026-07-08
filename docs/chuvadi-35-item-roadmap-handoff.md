@@ -6,11 +6,16 @@
 > against the code on `main` at v3.11.1**. Hand this whole file to a new chat as the
 > starting context.
 >
-> **Status verification date:** 2026-06-20, re-verified against `main` @ **v3.14.0**
-> (the v3.11.1 statuses below were refreshed for items advanced by PRs #110–#119).
-> Each item is tagged ✅ DONE / 🟡 PARTIAL / ❌ NOT DONE / ⚠️ VERIFY. "VERIFY" means the
-> previous session inferred status but did not fully confirm in code — re-check before
-> trusting.
+> **Status verification date:** 2026-07-07, re-verified against `main` @ **v3.16.0**
+> (statuses refreshed again for items advanced since v3.14.0 — notably non-device
+> colourspaces, Indic shaping, and XFA, which have all shipped). Each item is tagged
+> ✅ DONE / 🟡 PARTIAL / ❌ NOT DONE / ⚠️ VERIFY. "VERIFY" means the previous session
+> inferred status but did not fully confirm in code — re-check before trusting.
+>
+> **Superseded note.** The open items in this roadmap are also tracked in
+> `docs/BACKLOG.md`, which is the canonical open-roadmap going forward. This
+> document is retained as the detailed 7-phase compression + rendering plan; when
+> the two disagree, verify against the code (both have drifted before).
 
 ---
 
@@ -185,10 +190,13 @@ preloads the full object graph (BFS from trailer) before assigning object number
 class of fix applied to PageStamper. No latent lazy-load gap remains.
 
 **2. [BL] DisplayList consolidation (merge the two parallel builders)** — ✅ **DONE**
-The old `src/Chuvadi.Pdf.Rendering/DisplayList/` directory is **gone**. Only
-`src/Chuvadi.Pdf.Rendering.DisplayList/` remains (with `DisplayListBuilder.cs` ~1222 lines and
-a `Raster/DisplayListBuilder.cs` ~1989 lines for the raster path). The "two parallel builders"
-technical debt is resolved.
+*v3.16.0 update: further consolidated. Rendering is now three single-namespace projects with
+acyclic layering Walking → DisplayList → Raster: `Chuvadi.Pdf.Rendering.Walking` (shared
+content-stream walker; exposes internals to the two builders via `InternalsVisibleTo`),
+`Chuvadi.Pdf.Rendering.DisplayList` (text/search display list), and
+`Chuvadi.Pdf.Rendering.Raster` (raster display list). The old cross-folder duplication
+(`src/Chuvadi.Pdf.Rendering/DisplayList/`) is gone; the "two parallel builders" debt is fully
+resolved.*
 
 **3. [CMP] Safety guard — detect signed/encrypted before any rewrite** — ✅ **DONE**
 `src/Chuvadi.Pdf.Operations/PdfCompressor.cs`. `CompressionOptions.AllowSignedRewrite` /
@@ -251,36 +259,36 @@ not yet implemented. *Remaining work: the granular per-category strip flags.*
 
 ### PHASE 2 — Rendering & parsing completeness (conformance "Phase B"; after the DisplayList merge)
 
-> All seven are confirmed **❌ NOT DONE** — these are the open rendering-conformance backlog
-> (BACKLOG.md items ~11–18). They were surfaced by a code-survey conformance audit
+> *v3.16.0 update: several of these have since shipped.* Items 11 (shadings), 12 (gs
+> transparency), and 13 (non-device colourspaces) are now **DONE** on the raster path;
+> 14 (SVG colour), 15 (patterns), 16 (SVG ImageMask), and 17 (annotation appearance
+> streams) remain **NOT DONE**. Surfaced originally by the code-survey conformance audit
 > (`docs/CONFORMANCE-AUDIT.md`, 2026-06-15). Ordered by real-world impact.
 
-**11. [BL] Shadings / gradients (`sh`)** — ✅ **DONE** (Phase 2 Bucket A)
-*Bucket A update: raster `sh` now implemented — `ShadeOp`/`GradientStop` plus per-pixel
-axial/radial gradient rasterization in `PageRasterizer` (clip- and Extend-aware). With the SVG
-sink already done, axial (2) + radial (3) `sh` render on both paths; mesh ShadingTypes 4–7
-remain (Bucket B). Covered by `ShadingRasterTests`.*
-*v3.14.0 update: PDF function + shading evaluators (axial/radial, `sh`) implemented in the **SVG sink** (`PdfFunction`, `PdfShading`, `ShadingOp`). The **raster sink still defers `sh`** (Raster/DisplayListBuilder.cs:42). Remaining: raster shadings + ShadingTypes 4–7.*
-`sh` is a recognised no-op; no ShadingType 1–7. Gradient fills/backgrounds render blank.
-Start with axial (type 2) + radial (type 3), then function-based (1), then mesh (4–7).
-*High impact.*
+**11. [BL] Shadings / gradients (`sh`)** — ✅ **DONE** (axial + radial, both sinks)
+*v3.16.0 update: `sh` renders on BOTH sinks. The raster sink implements `PaintShading`
+emitting `ShadeOp`, with per-pixel axial (type 2) and radial (type 3) rasterization in
+`PageRasterizer` (clip- and Extend-aware); the SVG sink emits gradient defs via
+`PdfFunction`/`PdfShading`. The earlier "raster still defers `sh`" note is stale. Remaining:
+function-based (type 1) and mesh (types 4–7) shadings. *High impact — the common gradient
+cases now render.**
 
-**12. [BL] ExtGState transparency (`gs`)** — ✅ **DONE** (Phase 2 Bucket A)
-*Bucket A update: blend modes (`/BM`, 12 separable; non-separable fall back to Normal) and
-ExtGState soft masks (`/SMask`, luminosity + alpha) now apply on BOTH the raster and SVG sinks.
-Raster composites per-pixel through `ScanlineRasterizer`; SVG emits `mix-blend-mode` groups and
-`<mask>` defs. With constant alpha already shipped, the one remaining sub-piece is
-isolated/knockout transparency-group compositing (deferred). Covered by `RasterBlendModeTests`,
-`RasterSoftMaskTests`, `BlendModeSvgTests`, `SoftMaskSvgTests`.*
-*v3.14.0 update: constant alpha `/ca` `/CA` is applied in the raster sink (`ApplyExtGState` → FillAlpha/StrokeAlpha). Still missing: blend modes (`/BM`), soft masks in an ExtGState (`/SMask` in `gs`), and transparency groups.*
-`gs` is a no-op, so constant alpha (`ca`/`CA`), blend modes (`BM`), ExtGState soft masks, and
-transparency groups are ignored — everything paints fully opaque/Normal. (Image `/SMask` is
-separate and already handled.) *High impact.*
+**12. [BL] ExtGState transparency (`gs`)** — ✅ **DONE**
+*v3.16.0 update: `gs` is fully honoured. `Raster/BuilderGraphicsState.cs` carries constant
+alpha (`/ca`, `/CA`), the active separable blend mode (`/BM`, PDF §11.3.5), and the active
+soft mask (`/SMask`); the raster sink composites these per-pixel through `ScanlineRasterizer`
+and the SVG sink emits `mix-blend-mode` groups and `<mask>` defs. The only remaining
+sub-piece is isolated/knockout transparency-group compositing (deferred). The earlier
+"still missing blend modes / soft masks" note is stale.*
 
-**13. [BL] Non-device colorspaces** — ❌ **NOT DONE**
-`scn` interprets operands by count, so Separation/DeviceN paint wrong (tint transform
-ignored), Indexed uses the index as a colour; Lab, raw DeviceCMYK samples, ICCBased N=4
-images not handled. Add tint-transform eval, Indexed lookup, Lab→RGB. *High/medium impact.*
+**13. [BL] Non-device colorspaces** — ✅ **DONE** (raster)
+*v3.16.0 update: the raster sink now resolves non-device fill/stroke and image colours
+through their colour space — Separation/DeviceN tint-transform evaluation, Indexed
+lookup, ICCBased alternate, Lab, and Cal* — in `Raster/DisplayListBuilder.cs`
+(SetColorN and the image sample path). The old "operands interpreted by count" behaviour
+is gone for the raster path. The SVG sink's `cs`/`scn` colour handling is still open —
+see item 14. Raw DeviceCMYK image samples and full CMYK render remain partial — see
+item 38.*
 
 **14. [BL] SVG `cs`/`scn` colorspace operators (pairs with 13)** — ❌ **NOT DONE**
 The SVG sink ignores `cs`/`scn` colour operators (raster implements some). Pair with item 13.
@@ -361,13 +369,22 @@ X-axis stem fitting — these are BACKLOG "Autohinter follow-ups," minor.)
 Depends on 19 (downsampling), 21 (bitonal detection/G4), 23 (JBIG2 encode). The big
 color-scan compression win.
 
-**30. [BL] Indic / complex-script shaping** — ❌ **NOT DONE**
-GSUB ligatures/conjuncts, GPOS mark positioning, Indic reordering. Embedded fonts already
-carry the tables; this is the shaping engine. *Large — HarfBuzz-class effort.*
+**30. [BL] Indic / complex-script shaping** — ✅ **DONE**
+*v3.16.0 update: shipped as `src/Chuvadi.Pdf.Text.Shaping/` — `TextShaper`, `LipiScript`,
+`ShapingFeatures`, `ShapedGlyph`. Applies OpenType GSUB/GPOS features (ligatures/conjuncts,
+mark positioning) with Indic reordering, driven from the tables the embedded fonts already
+carry. Covered by `Chuvadi.Pdf.Text.Shaping.Tests`.*
 
-**31. [BL] XFA** — ❌ **NOT DONE**
-`PdfDocument.IsXfa` detection exists (v3.6.0) but XFA content lives outside page content and
-renders blank. Needs a template/layout/scripting engine. *Very large.*
+**31. [BL] XFA** — ✅ **DONE**
+*v3.16.0 update: shipped as `src/Chuvadi.Pdf.Xfa/` — a complete template/layout/scripting
+engine (20 files across Parse/Model/Layout/Render/Scripting). Data merge
+(`XfaDataMerge`), positioned + flowed layout (`XfaLayoutEngine`), pagination with a
+duplex/keep solver (`XfaPaginator`), tables and widgets (`XfaWidgetPainter`,
+`XfaContentEmitter`), and the FormCalc + JavaScript scripting engines
+(`XfaFormCalcEngine`, `XfaJavaScriptEngine`, `XfaScriptHost`, `XfaScriptRunner`,
+`XfaScriptValue`). `XfaRenderOptions.ScriptMode` defaults to `Full`, so
+initialize/calculate/validate scripts run by default (pass `ScriptMode.None` to opt out).
+Covered by `Chuvadi.Pdf.Xfa.Tests` (82 tests).*
 
 ### PHASE 6 — Perceptual, delivery & app-facing
 
@@ -439,13 +456,15 @@ Findings (verified against `main`):
 
 ## Item 38 — CMYK image support  [Phase 2 — rendering completeness, pairs with #13]
 
-Status: ❌ NOT DONE.
+Status: 🟡 PARTIAL.
 
-Today every embedded image is forced to DeviceRGB/DeviceGray: a CMYK or YCCK
-JPEG is decoded and re-embedded as RGB (`ImageEmbedder`,
-`BuildFromFrame(JpegDecoder.Decode(...))`), and there is no DeviceCMYK raw-sample
-path. CMYK to RGB is lossy and wrong for print/prepress — the exact ink values
-are discarded.
+*v3.16.0 update: CMYK/YCCK JPEG passthrough now SHIPS. `ImageEmbedder` embeds a
+4-component JPEG directly under DCTDecode with `/ColorSpace /DeviceCMYK` and the
+Adobe-inversion `/Decode` array when the APP14 marker signals it, instead of
+decoding to RGB — the exact ink values are preserved for print/prepress. What
+remains: raw (non-JPEG) DeviceCMYK sample embedding under FlateDecode, and full
+CMYK-to-output conversion in the raster/SVG sinks so CMYK images display in
+rendered output. Pairs with item 13 for ICCBased-CMYK.*
 
 Scope:
 - Embed: preserve DeviceCMYK images — CMYK JPEG (4-component) passthrough under

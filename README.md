@@ -9,7 +9,7 @@ string removed — owned by this repository, auditable line by line.
 
 - **License:** Apache-2.0
 - **Target:** .NET 10
-- **Version:** 2.7.0
+- **Version:** 3.16.0
 
 **New to Chuvadi?** Start with the [Getting Started guide](docs/getting-started.md)
 — 10 minutes from `git clone` to working code.
@@ -33,35 +33,41 @@ where **every line of code in the dependency tree matters**: clinical
 informatics, financial document processing, government, defence,
 air-gap-deployed kiosks.
 
+It is a general-purpose library, not shaped around any single consumer.
+Applications compose only the modules they need; each `src/` module ships as
+its own NuGet package, with a `Chuvadi.Pdf` meta-package for the common case.
+
 ---
 
 ## What's in the box
 
-| Capability                             | Module                          |
-|----------------------------------------|---------------------------------|
-| Read PDF 1.4–2.0 (xref + xref streams) | Chuvadi.Pdf.IO                  |
-| Standard filters (incl. CCITT Group 3/4) | Chuvadi.Pdf.Filters           |
-| Text extraction (3 strategies)         | Chuvadi.Pdf.Text                |
-| Page rasterisation → PNG/BMP/TIFF/JPEG | Chuvadi.Pdf.Rendering           |
-| TrueType / OpenType glyph extraction   | Chuvadi.Pdf.Fonts.Rendering     |
-| Text and image watermarks              | Chuvadi.Pdf.Watermark           |
-| **True PHI-safe redaction**            | Chuvadi.Pdf.Redaction           |
-| AcroForm read and fill                 | Chuvadi.Pdf.Forms               |
-| Document outlines (bookmarks)          | Chuvadi.Pdf.Forms               |
-| Merge / split / delete / rotate        | Chuvadi.Pdf.Operations          |
-| PDF compression (GC + restream)        | Chuvadi.Pdf.Operations          |
-| PDF authoring (text, tables, images)   | Chuvadi.Pdf.Authoring           |
-| Report layout (flowing pages, tables)  | Chuvadi.Pdf.Authoring           |
-| Image → PDF (JPEG/PNG/TIFF/BMP)        | Chuvadi.Pdf.Authoring           |
-| Image codecs (decode + encode)         | Chuvadi.Pdf.Images              |
-| Annotations (read + create)            | Chuvadi.Pdf.Annotations         |
-| Digital signatures                     | Chuvadi.Pdf.Signatures          |
-| Encryption (read + write)              | Chuvadi.Pdf.Encryption          |
-| TrueType hinting + autohinter          | Chuvadi.Pdf.Fonts.Rendering     |
-| SVG page rendering                     | Chuvadi.Pdf.Svg                 |
-| Command-line tool (17 verbs)           | tools/Chuvadi.Pdf.Cli           |
+| Capability                               | Module                            |
+|------------------------------------------|-----------------------------------|
+| Read PDF 1.4–2.0 (classic, stream, and hybrid xref) | Chuvadi.Pdf.IO         |
+| Standard filters (incl. CCITT Group 3/4, LZW, Flate) | Chuvadi.Pdf.Filters   |
+| Text extraction (operator / layout / glyph)         | Chuvadi.Pdf.Text       |
+| Complex-script shaping (OpenType GSUB/GPOS)         | Chuvadi.Pdf.Text.Shaping |
+| Page rasterisation → PNG/BMP/TIFF/JPEG   | Chuvadi.Pdf.Rendering             |
+| Raster / display-list / walker split     | Chuvadi.Pdf.Rendering.{Raster,DisplayList,Walking} |
+| SVG page rendering (selectable text)     | Chuvadi.Pdf.Svg                   |
+| TrueType bytecode hinting + autohinter   | Chuvadi.Pdf.Fonts.Rendering       |
+| WOFF2 decode (in-house Brotli)           | Chuvadi.Pdf.Fonts.Woff2           |
+| Text and image watermarks                | Chuvadi.Pdf.Watermark             |
+| **True PHI-safe redaction**              | Chuvadi.Pdf.Redaction             |
+| AcroForm read and fill; outlines         | Chuvadi.Pdf.Forms                 |
+| XFA form rendering + FormCalc/JS scripting | Chuvadi.Pdf.Xfa                 |
+| Merge / split / delete / rotate; compression; imposition | Chuvadi.Pdf.Operations |
+| PDF authoring (text, tables, images); report layout; image→PDF | Chuvadi.Pdf.Authoring |
+| Image codecs (decode + encode)           | Chuvadi.Pdf.Images                |
+| Annotations (read + create)              | Chuvadi.Pdf.Annotations           |
+| Digital signatures (verify, sign, timestamp, LTV) | Chuvadi.Pdf.Signatures   |
+| Encryption (read + write, RC4/AES-128/AES-256) | Chuvadi.Pdf.Encryption       |
+| PDF/A conformance output                 | Chuvadi.Pdf.PdfA                  |
+| High-level reader facade                 | Chuvadi.Pdf.Reader                |
+| Command-line tool (17 verbs)             | tools/Chuvadi.Pdf.Cli             |
 
 Full module list and dependency graph: see `docs/BASELINE.md`.
+Distribution and packaging: see `docs/DISTRIBUTION.md`.
 Decision history: see `docs/CHANGE-LOG.md`.
 
 API reference (one Markdown file per public type, auto-generated from XML doc
@@ -125,7 +131,7 @@ Redactor.Apply(output, doc, opts);
 
 The redacted text is **byte-by-byte absent** from `patient_chart_redacted.pdf`.
 No content-stream operator and no indirect object holds the removed data.
-See `BASELINE.md` §B15 for the formal definition.
+See `docs/BASELINE.md` §B15 for the formal definition.
 
 ```csharp
 using Chuvadi.Pdf.Authoring;
@@ -147,6 +153,21 @@ ReportBuilder.Create()
 
 // One call from image to PDF (JPEG, PNG, TIFF, BMP; alpha preserved).
 ImagePdfConverter.ConvertFile("scan.png", "scan.pdf");
+```
+
+XFA forms render with their embedded scripts run by default, so computed
+fields fill in:
+
+```csharp
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Xfa;
+
+using PdfDocument doc = PdfDocument.Open("livecycle-form.pdf");
+using FileStream output = File.Create("form-rendered.pdf");
+
+// ScriptMode defaults to Full: initialize/calculate/validate scripts execute.
+// Pass new XfaRenderOptions { ScriptMode = XfaScriptMode.None } to opt out.
+XfaRenderer.Render(output, doc, XfaRenderOptions.Default);
 ```
 
 ---
@@ -179,7 +200,7 @@ Run `chuvadi help` for the full verb surface.
 
 ## Architectural invariants
 
-The library is structured around 16 invariants that NEVER change without
+The library is structured around a set of invariants that NEVER change without
 an explicit CHANGE-LOG entry superseding them. The most consequential:
 
 - **B01** — zero NuGet packages in `src/`.
@@ -195,31 +216,55 @@ Full list: `docs/BASELINE.md`.
 
 ```
 chuvadi/
-├── src/                       # production code (no NuGet deps)
-│   ├── Chuvadi.Pdf.Primitives/
-│   ├── Chuvadi.Pdf.Filters/
-│   ├── Chuvadi.Pdf.Objects/
-│   ├── Chuvadi.Pdf.IO/
-│   ├── Chuvadi.Pdf.Documents/
-│   ├── Chuvadi.Pdf.Fonts/
-│   ├── Chuvadi.Pdf.Content/
-│   ├── Chuvadi.Pdf.Text/
-│   ├── Chuvadi.Pdf.Operations/
-│   ├── Chuvadi.Pdf.Graphics/
-│   ├── Chuvadi.Pdf.Images/
-│   ├── Chuvadi.Pdf.Fonts.Rendering/
-│   ├── Chuvadi.Pdf.Rendering/
-│   ├── Chuvadi.Pdf.Watermark/
-│   ├── Chuvadi.Pdf.Redaction/
-│   └── Chuvadi.Pdf.Forms/
-├── tests/                     # xUnit, FluentAssertions
+├── src/                       # production code (no NuGet deps), 33 packages
+│   ├── Chuvadi.Pdf.Primitives/        # tokens, names, primitive objects
+│   ├── Chuvadi.Pdf.Filters/           # Flate, LZW, ASCII*, RunLength, CCITT
+│   ├── Chuvadi.Pdf.Objects/           # indirect object store, resolution
+│   ├── Chuvadi.Pdf.IO/                # xref (classic/stream/hybrid), reader/writer
+│   ├── Chuvadi.Pdf.Documents/         # PdfDocument, pages, catalog, metadata
+│   ├── Chuvadi.Pdf.Encryption/        # RC4/AES read + write
+│   ├── Chuvadi.Cryptography/          # managed crypto primitives
+│   ├── Chuvadi.Pdf.Content/           # content-stream tokenizer/parser
+│   ├── Chuvadi.Pdf.Fonts/             # font program inspection
+│   ├── Chuvadi.Pdf.Fonts.Rendering/   # glyph outlines + TrueType hinting
+│   ├── Chuvadi.Pdf.Fonts.Woff2/       # WOFF2 decode (in-house Brotli)
+│   ├── Chuvadi.Pdf.Text/              # text extraction strategies
+│   ├── Chuvadi.Pdf.Text.Shaping/      # complex-script shaping (GSUB/GPOS)
+│   ├── Chuvadi.Pdf.Graphics/          # geometry, color, path primitives
+│   ├── Chuvadi.Pdf.Color/             # color spaces
+│   ├── Chuvadi.Pdf.Images/            # image codecs (decode + encode)
+│   ├── Chuvadi.Pdf.Rendering.Walking/ # shared content-stream walker
+│   ├── Chuvadi.Pdf.Rendering.DisplayList/ # text/search display list
+│   ├── Chuvadi.Pdf.Rendering.Raster/  # raster display list
+│   ├── Chuvadi.Pdf.Rendering/         # scanline rasterizer → PNG/BMP/TIFF/JPEG
+│   ├── Chuvadi.Pdf.Rendering.Wpf/     # WPF surface (Windows-only)
+│   ├── Chuvadi.Pdf.Svg/               # SVG page rendering
+│   ├── Chuvadi.Pdf.Operations/        # merge/split/rotate, compression, imposition
+│   ├── Chuvadi.Pdf.Authoring/         # authoring, report layout, image→PDF
+│   ├── Chuvadi.Pdf.Watermark/         # text and image watermarks
+│   ├── Chuvadi.Pdf.Redaction/         # PHI-safe byte-level redaction
+│   ├── Chuvadi.Pdf.Annotations/       # annotation read + create
+│   ├── Chuvadi.Pdf.Forms/             # AcroForm read/fill, outlines
+│   ├── Chuvadi.Pdf.Xfa/               # XFA rendering + FormCalc/JS scripting
+│   ├── Chuvadi.Pdf.Signatures/        # verify, sign, timestamp, LTV
+│   ├── Chuvadi.Pdf.PdfA/              # PDF/A conformance output
+│   ├── Chuvadi.Pdf.Reader/            # high-level facade
+│   └── Chuvadi.Pdf/                   # meta-package
+├── tests/                     # xUnit, FluentAssertions (32 test projects)
+├── examples/                  # 11 runnable example projects
 ├── tools/
-│   └── Chuvadi.Pdf.Cli/       # the `chuvadi` executable
+│   ├── Chuvadi.Pdf.Cli/       # the `chuvadi` executable
+│   ├── check_style.py         # in-repo style checker
+│   └── gen_api_docs.py        # API-doc generator
 └── docs/
     ├── BASELINE.md            # invariants (B01–B16)
-    ├── CHANGE-LOG.md          # decision history (A01–A17)
+    ├── CHANGE-LOG.md          # decision history (A01–ANN)
     ├── SESSION-STATE.md       # current build state
-    └── BACKLOG.md             # planned features for 1.1+
+    ├── BACKLOG.md             # open roadmap
+    ├── DISTRIBUTION.md        # packaging and versioning
+    ├── getting-started.md     # 10-minute onboarding
+    ├── developer-guide.md     # deeper API tour
+    └── archive/               # point-in-time planning snapshots
 ```
 
 ---
@@ -227,11 +272,11 @@ chuvadi/
 ## Building
 
 ```bash
-dotnet build
-dotnet test
+dotnet build Chuvadi.slnx -c Release
+dotnet test  Chuvadi.slnx -c Release
 ```
 
-Requires .NET 10 SDK. **~564 tests across 19 test projects, 0 failures.**
+Requires the .NET 10 SDK. **2,392 tests across 30 test projects, 0 failures.**
 
 ---
 
@@ -248,9 +293,10 @@ Run it on every changed file before committing.
 
 ## Roadmap
 
-See `docs/BACKLOG.md`. Phase 1.1 targets: annotations, pattern-based
-redaction, digital signatures, encryption, linearization, vector page
-creation.
+See `docs/BACKLOG.md` for the open roadmap. Major recent milestones — XFA form
+rendering with FormCalc/JavaScript scripting, TrueType bytecode hinting, digital
+signing with LTV, PDF/A output, and complex-script shaping — have all shipped;
+the changelog records the release-by-release detail.
 
 ---
 

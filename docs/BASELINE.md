@@ -25,24 +25,61 @@ Violation signal: a `<PackageReference>` appearing in any src/ csproj.
 
 ## B02 — Dependency Direction Is Strictly Bottom-Up
 
-The project dependency graph flows in one direction only:
+The project dependency graph flows in one direction only: no project may
+reference a project above it in the stack, and there are no circular
+dependencies under any circumstances.
+
+Leaf modules (no Chuvadi dependencies): `Chuvadi.Pdf.Primitives`,
+`Chuvadi.Pdf.Graphics`, `Chuvadi.Pdf.Color`, `Chuvadi.Pdf.Fonts.Woff2`,
+`Chuvadi.Cryptography`.
+
+Core read/write stack (each depends only on those below it):
 
 ```
-Chuvadi.Pdf.Operations
-  └── Chuvadi.Pdf.Text
-        └── Chuvadi.Pdf.Fonts
-        └── Chuvadi.Pdf.Content
-              └── Chuvadi.Pdf.Documents
-                    └── Chuvadi.Pdf.IO
-                          └── Chuvadi.Pdf.Objects
-                                └── Chuvadi.Pdf.Filters
-                                └── Chuvadi.Pdf.Primitives
+Chuvadi.Pdf.Primitives                     (leaf)
+  ← Chuvadi.Pdf.Filters
+  ← Chuvadi.Pdf.Objects        (Primitives, Filters)
+  ← Chuvadi.Pdf.Encryption     (Primitives)
+  ← Chuvadi.Pdf.IO             (Primitives, Filters, Encryption, Objects)
+  ← Chuvadi.Pdf.Documents      (Primitives, Objects, Encryption, IO)
+  ← Chuvadi.Pdf.Content        (… Documents, Filters, Fonts)
 ```
 
-No project may reference a project above it in this graph.
-No circular dependencies under any circumstances.
+Fonts and text build on the core:
 
-Violation signal: a `<ProjectReference>` that points upward in the stack.
+```
+Chuvadi.Pdf.Fonts              (Primitives, Objects, Filters)
+  ← Chuvadi.Pdf.Fonts.Rendering  (Fonts, Graphics, Objects, Primitives)
+       ← Chuvadi.Pdf.Text.Shaping (Fonts.Rendering)
+Chuvadi.Pdf.Text               (… Documents, Content, Fonts)
+```
+
+Rendering is layered Walking → DisplayList → Raster, with the scanline
+rasterizer and SVG sink on top:
+
+```
+Chuvadi.Pdf.Rendering.Walking      (Primitives, Objects, Filters) — shared walker
+  ← Chuvadi.Pdf.Rendering.DisplayList (… Content, Fonts.Rendering, Walking)
+       ← Chuvadi.Pdf.Rendering.Raster  (… Walking, DisplayList) — shared value types
+            ← Chuvadi.Pdf.Rendering     (DisplayList, Raster, …) — scanline rasterizer
+  ← Chuvadi.Pdf.Svg                  (… DisplayList)
+  ← Chuvadi.Pdf.Rendering.Wpf        (Documents, DisplayList) — Windows-only
+```
+
+Higher-level operations depend on the layers below them — for example
+`Chuvadi.Pdf.Operations` (merge/split/compress/impose) pulls in Authoring,
+Content, Forms, Text, Images; `Chuvadi.Pdf.Xfa` builds on Documents, Authoring,
+and Text.Shaping; `Chuvadi.Pdf.Reader` is a thin facade over Documents, Forms,
+Rendering, DisplayList, Images, and Svg. `Chuvadi.Pdf.Signatures` is the only
+module that depends on `Chuvadi.Cryptography`.
+
+`Chuvadi.Pdf` is the top-of-stack meta-package: it has no code and references
+the shipping modules as dependencies.
+
+Violation signal: a `<ProjectReference>` that points upward in the stack, or any
+cycle. `Rendering.Walking` exposes its internals to `Rendering.DisplayList` and
+`Rendering.Raster` via `<InternalsVisibleTo>`; that is a one-directional grant,
+not a dependency reversal.
 
 ---
 
@@ -179,16 +216,14 @@ tests pass on the CI matrix (Windows, macOS, Linux).
 
 Arun never manually edits files in the project.
 Claude generates complete files — never snippets, never diffs.
-Every generated file is registered in deploy.ps1 in the same batch.
-The deploy script is the handoff mechanism between generation and
-the local project.
+Every generated file is delivered in a batch that Arun copies into the
+repository, followed by a clean build and the full test gate.
 
-Deploy script invariants:
-  - CRLF line endings (Windows PowerShell 5.1 compatibility)
-  - ASCII-only characters (no Unicode, no smart quotes)
-  - Flat hashtable structure: filename -> destination path
-  - Source folder: %USERPROFILE%\Downloads\chuvadi\
-  - Script lives in repo root alongside Chuvadi.slnx
+Delivery invariants:
+  - UTF-8, no BOM, LF line endings for all source and docs
+  - Complete files only — never snippets, diffs, or anchored-replace
+  - The full gate (clean bin/obj → build → test → format → docs → style)
+    runs green before anything is committed
 
 ---
 
@@ -238,10 +273,12 @@ All crypto goes through System.Security.Cryptography (BCL-provided,
 cross-platform from .NET 5+).
 
 The CI matrix builds and tests on Ubuntu and macOS precisely to
-catch platform regressions before they reach NuGet.org.
+catch platform regressions. The one deliberate exception is
+`Chuvadi.Pdf.Rendering.Wpf`, which targets `net10.0-windows`, is packed
+only on Windows, and is not referenced by the cross-platform meta-package.
 
 Violation signal: any ifdef WIN32, RuntimeInformation.IsOSPlatform check,
-or DllImport in src/ without a documented cross-platform fallback.
+or DllImport in a cross-platform src/ project without a documented fallback.
 
 ---
 
@@ -249,20 +286,15 @@ or DllImport in src/ without a documented cross-platform fallback.
 
 The library is named Chuvadi (சுவடி), Tamil for palm-leaf manuscript.
 The NuGet package root namespace is Chuvadi.Pdf.*.
-The GitHub organisation/user hosting the repo is chuvadi (TBD — lock
-before first public release).
+The repository is the public GitHub repo `arunshivab/chuvadi-pdf`
+(https://github.com/arunshivab/chuvadi-pdf).
 
 No commercial tier, no dual licensing, no proprietary extensions.
 Apache 2.0 for all code in this repository, forever.
 
-Sustainability model: to be decided post-Phase-1. Options include
-GitHub Sponsors, paid support contracts, or employer-sponsored open source.
-The sustainability model does not affect the license or the code.
-
----
-
-*End of BASELINE.md*
-*Last updated: 2025-05-09 — A10, A11 decisions reflected.*
+Sustainability model: to be decided. Options include GitHub Sponsors,
+paid support contracts, or employer-sponsored open source. The
+sustainability model does not affect the license or the code.
 
 ---
 
@@ -329,3 +361,10 @@ the input, where the rewriting module read `document.Objects.Objects`
 without a preload.
 
 Reference: CHANGE-LOG A16.
+
+---
+
+*End of BASELINE.md*
+*Last updated: 2026-07-07 — B02 dependency graph and B14 repository home
+refreshed for the v3.16.0 module set (33 packages, three-project rendering
+split).*
