@@ -44,5 +44,5 @@ Gets the backdrop luminosity for unpainted areas, in [0, 1].
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/RasterSoftMaskInfo.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/RasterSoftMaskInfo.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/RasterSoftMaskInfo.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/RasterSoftMaskInfo.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

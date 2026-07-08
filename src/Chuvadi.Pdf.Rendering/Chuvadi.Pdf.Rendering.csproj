@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Raster\Chuvadi.Pdf.Rendering.Raster.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />

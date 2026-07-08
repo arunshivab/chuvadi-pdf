@@ -92,5 +92,5 @@ Gets the sampled colour stops in increasing offset order.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/Raster/ShadeOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/Raster/ShadeOp.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

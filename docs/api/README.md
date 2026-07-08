@@ -518,8 +518,8 @@ python tools/gen_api_docs.py
 | [PdfPageExtensions](Rendering/PdfPageExtensions.md) | class | Extensions on `PdfDocument` and `PdfPage` for the display-list and text-run APIs. |
 | [RasterSoftMaskInfo](Rendering/RasterSoftMaskInfo.md) | class | An active soft mask (ExtGState `/SMask`): the masking transparency group plus how to derive and place its per-pixel coverage. |
 | [Rect](Rendering/Rect.md) | record struct | An axis-aligned bounding rectangle in PDF user-space coords. |
-| [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all operations in a `PageDisplayList`. |
 | [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all display-list operations. |
+| [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all operations in a `PageDisplayList`. |
 | [RenderOpBounds](Rendering/RenderOpBounds.md) | class | Axis-aligned bounds accessors for `RenderOp` subtypes. |
 | [RenderOpKind](Rendering/RenderOpKind.md) | enum | Tag identifying the concrete `RenderOp` subtype. |
 | [RenderOptions](Rendering/RenderOptions.md) | class | Options that control how a PDF page is rasterized. |
