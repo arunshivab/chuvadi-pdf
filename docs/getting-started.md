@@ -31,8 +31,8 @@ dotnet build
 dotnet test
 ```
 
-Expected: ~25 projects build, ~589 tests pass. First build takes 1–2 minutes;
-later builds are seconds.
+Expected: 33 packable projects plus tests build, and 2,392 tests pass across 30
+in-solution test projects. First build takes 1–2 minutes; later builds are seconds.
 
 If the build fails, the most likely cause is an SDK mismatch. Run
 `dotnet --list-sdks` and confirm a 10.x SDK is installed.
@@ -57,7 +57,7 @@ content-stream interpreter, font handling, and text reconstruction.
 
 ---
 
-## The seven capabilities
+## The eight capabilities
 
 Each capability is a focused module under `src/`. Pick the one you need; the
 rest stay out of your dependency tree.
@@ -258,6 +258,30 @@ StrikeOut, Stamp, Ink. Other subtypes read as `GenericAnnotation`.
 
 Runnable demo: [`examples/Chuvadi.Examples.Annotations`](../examples/Chuvadi.Examples.Annotations/README.md)
 
+### 8. XFA forms — `Chuvadi.Pdf.Xfa`
+
+```csharp
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Xfa;
+
+using PdfDocument doc = PdfDocument.Open("livecycle-form.pdf");
+
+if (doc.IsXfa)
+{
+    using FileStream output = File.Create("form-rendered.pdf");
+
+    // ScriptMode defaults to Full: the form's initialize/calculate/validate
+    // scripts run, so computed fields fill in. Pass
+    // new XfaRenderOptions { ScriptMode = XfaScriptMode.None } to opt out.
+    XfaRenderer.Render(output, doc, XfaRenderOptions.Default);
+}
+```
+
+Chuvadi renders XFA (Adobe LiveCycle) forms — data merge, positioned and flowing
+layout, pagination, tables, and widgets — and runs the embedded FormCalc and
+JavaScript form scripts. Unsupported script constructs fail soft, leaving form
+state untouched, so one bad script never aborts a render.
+
 ---
 
 ## Using the CLI
@@ -288,9 +312,27 @@ Run `chuvadi help` for the full verb list. Debug verbs (`tokenize`,
 
 ## Using Chuvadi from your own project
 
-Chuvadi isn't published to NuGet yet. Two ways to integrate:
+Chuvadi is packaged (33 mono-versioned packages) but published to **local folder
+feeds only**, not nuget.org. Three ways to integrate:
 
-### Option A — Project reference
+### Option A — Local NuGet feed (recommended)
+
+`build\pack.ps1 -Version x.y.z` writes the full `.nupkg` set to
+`artifacts\nupkg`. Copy those files into a folder your project treats as a NuGet
+source (a `nuget.config` `<packageSources>` entry pointing at the folder), then
+reference packages normally:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Chuvadi.Pdf.Documents" Version="3.16.0" />
+  <PackageReference Include="Chuvadi.Pdf.Text"      Version="3.16.0" />
+</ItemGroup>
+```
+
+Or install the `Chuvadi.Pdf` meta-package to pull in the whole cross-platform
+stack at once.
+
+### Option B — Project reference
 
 If your project lives alongside Chuvadi (e.g. you cloned it as a sibling):
 
@@ -304,7 +346,7 @@ If your project lives alongside Chuvadi (e.g. you cloned it as a sibling):
 Reference only the modules you actually use. Their dependencies are pulled
 in transitively, but the explicit references document your contract.
 
-### Option B — Compile to DLLs and reference them
+### Option C — Compile to DLLs and reference them
 
 ```bash
 cd chuvadi
@@ -314,7 +356,8 @@ dotnet publish src/Chuvadi.Pdf.Text      -c Release -o /path/to/your-libs
 
 Then reference the resulting `.dll` files from your project.
 
-NuGet packaging is planned but not yet set up — see [BACKLOG.md](BACKLOG.md).
+Public nuget.org publishing is a future step — see [DISTRIBUTION.md](DISTRIBUTION.md)
+and [BACKLOG.md](BACKLOG.md).
 
 ---
 
@@ -334,8 +377,9 @@ Bottom-up only. If you reference a module, everything below it comes too.
                 Primitives
 
 Higher-level (depend on Documents + others):
-  Text, Operations, Rendering, Forms, Annotations,
-  Watermark, Redaction, Graphics, Images, Fonts.Rendering
+  Text, Text.Shaping, Operations, Rendering (Walking/DisplayList/Raster),
+  Svg, Forms, Annotations, Watermark, Redaction, Authoring, Xfa,
+  Signatures, PdfA, Reader, Graphics, Color, Images, Fonts.Rendering
 ```
 
 Strict bottom-up direction is invariant [B02](BASELINE.md). No circular

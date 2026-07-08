@@ -9,17 +9,30 @@
 
 ## Last Updated
 
-2026-05-20 — v1.10.0 shipped (parser fuzz harness + two real bug fixes
-the harness surfaced on its first run).
+2026-07-07 — v3.16.0 released (XFA FormCalc + JavaScript scripting engines,
+`XfaRenderOptions.ScriptMode` defaulting to `Full`, hybrid-reference `/XRefStm`
+resolution, and the rendering split into Walking / DisplayList / Raster
+projects).
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 752 tests across 22 src modules, 0 failures.**
+**Last known passing total: 2,392 tests across 30 in-solution test projects,
+0 failures.** (Two further test projects — the WPF surface and the WASM smoke
+test — build and run outside the default solution test pass.)
 
-### Phase 1 — Core PDF library (v1.0.0)
+The library is **33 packable `src/` projects** (32 modules plus the
+`Chuvadi.Pdf` meta-package), all on .NET 10, all with zero NuGet dependencies
+in production code (B01).
 
+---
+
+## Module Status
+
+All modules are Complete and shipping. Grouped by role:
+
+### Core read/write pipeline
 | Module                          | Status   |
 |---------------------------------|----------|
 | Chuvadi.Pdf.Primitives          | Complete |
@@ -27,153 +40,103 @@ the harness surfaced on its first run).
 | Chuvadi.Pdf.Objects             | Complete |
 | Chuvadi.Pdf.IO                  | Complete |
 | Chuvadi.Pdf.Documents           | Complete |
-| Chuvadi.Pdf.Fonts               | Complete |
 | Chuvadi.Pdf.Content             | Complete |
-| Chuvadi.Pdf.Text                | Complete |
-| Chuvadi.Pdf.Operations          | Complete |
+| Chuvadi.Pdf.Encryption          | Complete |
+| Chuvadi.Cryptography            | Complete |
 
-### Phase 2 — Rendering, editing, CLI (v1.0.0)
-
+### Fonts and text
 | Module                          | Status   |
 |---------------------------------|----------|
-| Chuvadi.Pdf.Graphics            | Complete |
-| Chuvadi.Pdf.Images              | Complete |
-| Chuvadi.Pdf.Fonts.Rendering     | Complete |
-| Chuvadi.Pdf.Rendering           | Complete |
+| Chuvadi.Pdf.Fonts               | Complete |
+| Chuvadi.Pdf.Fonts.Rendering     | Complete (TrueType bytecode hinting) |
+| Chuvadi.Pdf.Fonts.Woff2         | Complete |
+| Chuvadi.Pdf.Text                | Complete |
+| Chuvadi.Pdf.Text.Shaping        | Complete (OpenType GSUB/GPOS) |
+
+### Rendering
+| Module                            | Status   |
+|-----------------------------------|----------|
+| Chuvadi.Pdf.Graphics              | Complete |
+| Chuvadi.Pdf.Color                 | Complete |
+| Chuvadi.Pdf.Images                | Complete |
+| Chuvadi.Pdf.Rendering.Walking     | Complete (shared content-stream walker) |
+| Chuvadi.Pdf.Rendering.DisplayList | Complete (text/search display list) |
+| Chuvadi.Pdf.Rendering.Raster      | Complete (raster display list) |
+| Chuvadi.Pdf.Rendering             | Complete (scanline rasterizer) |
+| Chuvadi.Pdf.Rendering.Wpf         | Complete (Windows-only) |
+| Chuvadi.Pdf.Svg                   | Complete |
+
+### Documents, editing, output
+| Module                          | Status   |
+|---------------------------------|----------|
+| Chuvadi.Pdf.Operations          | Complete |
+| Chuvadi.Pdf.Authoring           | Complete |
 | Chuvadi.Pdf.Watermark           | Complete |
 | Chuvadi.Pdf.Redaction           | Complete |
+| Chuvadi.Pdf.Annotations         | Complete |
 | Chuvadi.Pdf.Forms               | Complete |
-| Chuvadi.Pdf.Cli                 | Complete |
-
-### Phase 1.1 — Backlog clear (v1.1.0–v1.7.0)
-
-| Module                          | Status   | Tag     |
-|---------------------------------|----------|---------|
-| Chuvadi.Pdf.Annotations         | Complete | v1.1.0  |
-| Chuvadi.Cryptography            | Complete | v1.3.0  |
-| Chuvadi.Pdf.Encryption          | Complete | v1.3/4.0|
-| Chuvadi.Pdf.Signatures          | Complete | v1.7.0  |
-| Chuvadi.Pdf.Authoring           | Complete | v1.6.0  |
-
-### Phase 2.2 — WOFF2 / Brotli (v1.8.0–v1.9.0)
-
-| Module                          | Status   |
-|---------------------------------|----------|
-| Chuvadi.Pdf.Fonts.Woff2         | Complete |
-
-### Phase 2.3 — Hardening (v1.10.0)
-
-| Component                       | Status   |
-|---------------------------------|----------|
-| tests/Chuvadi.Pdf.Fuzz          | Complete |
+| Chuvadi.Pdf.Xfa                 | Complete (rendering + FormCalc/JS scripting) |
+| Chuvadi.Pdf.Signatures          | Complete (verify, sign, timestamp, LTV) |
+| Chuvadi.Pdf.PdfA                | Complete |
+| Chuvadi.Pdf.Reader              | Complete (high-level facade) |
+| Chuvadi.Pdf                     | Complete (meta-package) |
 
 ---
 
-## Phase Status
+## Current Architecture Notes
 
-**Phase 1** — Read pipeline + Phase 1 modules — **Complete** (373 tests at v1.0.0).
-**Phase 2** — Rendering, watermarking, redaction, forms, CLI — **Complete** (~564 total at v1.0.0).
-**Phase 1.1** — Backlog clear (annotations, encryption, signatures, linearization,
-                pattern redaction, Form XObject redaction, OCG, CMYK, TIFF) — **Complete**.
-**Phase 2.2** — WOFF2 / Brotli encoder — **Complete to within ~1% of `BrotliStream` Optimal**.
-                RFC 7932 §7 (context modeling) and §8 (static dictionary) deferred to v1.11.0.
-**Phase 2.3** — Parser fuzz harness — **Complete**. Two real bugs found and fixed on
-                first run (page-tree stack overflow, integer-overflow leak).
-
----
-
-## Version
-
-**1.10.0** — 752 tests across 22 src modules, all green.
-
----
-
-## What Ships in 1.10
-
-Inherits the v1.0.0 baseline (read pipeline, text extraction, rendering, page
-operations, redaction, watermarking, forms, outlines, CLI) plus:
-
-**Annotations** (v1.1.0)
-- Read and create per PDF 32000-1 §12.5.
-- Types: Text, FreeText, Link, Stamp, Ink, Markup, Generic.
-
-**Pattern-based redaction** (v1.3.0)
-- Regex matchers (SSN, email, phone, ICD-10, NHS, etc.) layered on top
-  of the v1.0.0 rectangle redaction. Same PHI guarantee (byte-level removal).
-
-**Form XObject & image redaction** (v1.5.0)
-- `Do` operator traced with CTM intersection. Form XObjects and images
-  overlapping a redaction rect are dropped from the rewritten stream.
-
-**Optional content / layers** (v1.5.0)
-- `OptionalContentReader` + `OptionalContentGroup`; reads `/OCProperties`,
-  `/OCGs`, default config, resolved visibility (`/ON`, `/OFF`, `BaseState`).
-
-**CMYK render output** (v1.5.0)
-- Rasterizer and TIFF encoder write CMYK pixel buffers (photometric=5).
-
-**TIFF I/O** (v1.3.0)
-- TIFF baseline 6.0 read and write. Uncompressed, PackBits, LZW.
-  Multi-page TIFFs via chained IFDs.
-
-**Encryption** (read in v1.3.0, write in v1.4.0)
-- AES-128 and AES-256 read+write. RC4-40 and RC4-128 read.
-- Public API: `PdfDocument.Open(stream, password)`,
-  `PdfWriter.Write(..., EncryptionOptions)`.
-- PDF Algorithms 3/5 (R=4) and ISO 32000-2 Algorithms 8/9 (R=6).
-
-**Linearization** (v1.6.0)
-- Read: detects linearization, exposes `/Linearized` parameter dictionary.
-- Write: produces linearized PDFs with primary hint stream.
-- Spec-conformant per ISO 32000-1 Annex F. Viewer compatibility
-  (Acrobat, Foxit, browsers) not yet verified end-to-end.
-
-**Digital signature verification** (v1.7.0)
-- PKCS#7/CMS detached signature parsing (PDF §12.8.3.3).
-- Certificate chain extraction, signing-time recovery, byte-range
-  verification. Verification only; signing is on the backlog.
-
-**WOFF2 / Brotli encoder** (v1.8.0–v1.9.0)
-- Brotli compressed encoder with LZ77 multi-command emission.
-- Within ~1% of `System.IO.Compression.BrotliStream` Optimal on real
-  data; remaining gap is RFC §7 + §8 (planned for v1.11.0).
-
-**Parser fuzz harness** (v1.10.0)
-- `tests/Chuvadi.Pdf.Fuzz` with three targets (pdf-open, content-stream,
-  truetype). No NuGet deps. Saved-crash files include full stack traces.
-- Already shipped two real-bug fixes: cyclic page-tree stack overflow
-  (PdfPageCollection depth guard) and integer-overflow exception leak
-  in PdfObjectParser (ParseInt32 helper).
+- **XFA arc complete.** `Chuvadi.Pdf.Xfa` renders XFA forms end to end: data
+  merge, positioned/flowed layout, pagination, duplex + keep solver, tables,
+  widgets, and the FormCalc + JavaScript scripting engines
+  (`Xfa/Scripting`: `XfaScriptHost`, `XfaScriptValue`, `XfaJavaScriptEngine`,
+  `XfaFormCalcEngine`, `XfaScriptRunner`, `XfaScript`). `XfaRenderOptions.ScriptMode`
+  **defaults to `Full`** — initialize/calculate/validate scripts run by default;
+  pass `ScriptMode.None` to opt out. Unsupported script constructs fail soft.
+- **Rendering is three single-namespace projects**, acyclic layering
+  Walking → DisplayList → Raster. `Rendering.Walking` is a leaf (Filters/Objects/
+  Primitives) exposing its internals to the two builders via `InternalsVisibleTo`.
+  The old cross-folder DisplayList duplication is gone.
+- **Hybrid-reference xref works.** `PdfReader.LoadXrefChain` reads `/XRefStm`
+  in the classic-xref branch, so compressed objects (e.g. `/StructTreeRoot`,
+  `/MarkInfo`) on Word/Office PDFs resolve; `HasStructTree` / `IsTagged` are correct.
+- **Redaction-grade crop is done.** `PageCropMode.ClipOnly` (lossless) and
+  `PageCropMode.Scrub` (byte-scrub via `PageScrubber`/`ScrubGeometry`).
 
 ---
 
-## Backlog (post-1.10)
+## Packaging / Release
 
-**PR 2.1 — Parser throw tightening** (next):
-- TrueTypeLoader bounds checks (IndexOutOfRangeException found by
-  fuzz harness, currently deferred).
-- PdfName.Intern / FromRawBytes ArgumentException → PdfTokenizerException
-  at three call sites (content-stream parser and xref/page-tree path).
-- After PR 2.1: remove `typeof(ArgumentException)` safety valves from
-  PdfOpenTarget and ContentStreamTarget expected-exception lists.
+`build\pack.ps1 -Version x.y.z` cleans, builds Release, runs the full test
+suite, then writes 33 mono-versioned `.nupkg` to `artifacts\nupkg`. Publish by
+flat-copying `artifacts\nupkg\*.nupkg` into the two local feeds
+(`C:\Users\aruns\Documents\local-nuget` and the Chuvadi Reader's `localpackages`)
+— never `dotnet nuget push` (it creates a mismatched hierarchical layout). Tag
+`vX.Y.Z` after packing. Latest released version: **3.16.0**.
 
-**v1.11.0 — Brotli encoder gap close:**
-- RFC 7932 §7 (literal context modeling).
-- RFC 7932 §8 (static dictionary).
+Releases publish to local folder feeds only, never to nuget.org.
 
-**v2.0.0 — API review across 22 modules; breaking changes welcome.**
+---
 
-**Open items (no version assigned):**
-- Digital signature **signing** (verification shipped in v1.7.0).
-- Linearization viewer compatibility verification (Acrobat/Foxit/browser
-  end-to-end).
-- Vector PDF authoring expansion (basic authoring shipped via
-  `Chuvadi.Pdf.Authoring`; broader content-stream-creation API on
-  the longer-term roadmap).
+## Open / Deferred
+
+- **Deferred visual check:** confirm the `ScriptMode.Full` default fills the
+  COI's scripted fields via the Reader app once it references 3.16.0. CI-green
+  is not the same as visually confirmed.
+- **Meta-package coverage:** `Chuvadi.Pdf` does not yet reference the newer
+  modules (Xfa, PdfA, Text.Shaping, Color, Rendering.Raster, Rendering.Walking).
+  Consumers of the umbrella get most of the graph transitively, but the direct
+  dependency list is worth reconciling.
+- **Future-ticket candidates (low priority):** `gen_api_docs.py` doc-filename
+  collision for the two `DisplayListBuilder` / `PageDisplayList` type-name pairs
+  (cosmetic); moving shared value types (PdfBlendMode, BlendModes, Type3Font,
+  geometry) out of `Rendering.DisplayList` into a shared/common project so
+  `Rendering.Raster` need not depend on the text display list.
+
+See `docs/BACKLOG.md` for the full open roadmap.
 
 ---
 
 ## Deploy Script Status
 
-`deploy.ps1` — registers every module in the current solution.
-Single-backslash paths, CRLF line endings. Audit on each release.
+`build\pack.ps1` / `build\publish.ps1` drive packaging and local-feed
+distribution. Single-backslash Windows paths; audit on each release.
