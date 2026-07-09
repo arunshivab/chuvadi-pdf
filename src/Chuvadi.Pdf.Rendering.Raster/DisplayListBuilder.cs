@@ -73,7 +73,7 @@ public static class DisplayListBuilder
 
         Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback);
         byte[] content = ContentStreamLoader.Load(page.Contents, objects);
-        return worker.BuildFromBytes(content, page.Resources, page.Width, page.Height);
+        return worker.BuildFromPage(content, page);
     }
 
     /// <summary>
@@ -200,6 +200,35 @@ public static class DisplayListBuilder
             ContentStreamWalker.Walk(content, this);
 
             return new PageDisplayList(_ops, pageWidth, pageHeight);
+        }
+
+        // Builds the display list for a page: the page content stream followed
+        // by the page's annotation normal appearances (/AP /N), the way an
+        // interactive viewer paints them. Each appearance form is placed onto
+        // the annotation /Rect by the §12.5.5 algorithm via a ConcatMatrix, so
+        // the shared form-XObject path applies the form's own /Matrix and
+        // /Resources on top. Hybrid XFA/AcroForm documents carry their field
+        // values in widget appearance streams, so this is what makes those
+        // values visible in rasterized output.
+        // PDF 32000-1:2008 §12.5.5 — Appearance streams.
+        public PageDisplayList BuildFromPage(byte[] content, PdfPage page)
+        {
+            _resources = page.Resources;
+            ContentStreamWalker.Walk(content, this);
+
+            IReadOnlyList<AnnotationAppearance> appearances =
+                PageAnnotationAppearances.Collect(page, _objects);
+
+            for (int i = 0; i < appearances.Count; i++)
+            {
+                AnnotationAppearance ap = appearances[i];
+                SaveState();
+                ConcatMatrix(ap.ScaleX, 0, 0, ap.ScaleY, ap.OffsetX, ap.OffsetY);
+                EmitFormXObject(ap.Appearance, _resources);
+                RestoreState();
+            }
+
+            return new PageDisplayList(_ops, page.Width, page.Height);
         }
 
         // ── Graphics state operators ──────────────────────────────────────

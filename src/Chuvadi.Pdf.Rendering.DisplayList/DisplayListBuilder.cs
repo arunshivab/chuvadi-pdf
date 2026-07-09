@@ -136,6 +136,7 @@ public static class DisplayListBuilder
             _resources = page.Resources;
             byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
             ContentStreamWalker.Walk(content, this);
+            EmitAnnotationAppearances(page);
             int rotation = 0;
             if (page.Dictionary.TryGetValue(PdfName.Intern("Rotate"), out PdfPrimitive? rv)
                 && rv is PdfInteger ri) { rotation = ri.Value; }
@@ -143,6 +144,29 @@ public static class DisplayListBuilder
             IReadOnlyList<RenderOp> ops = flattenTransforms ? WithoutTransformOps(_ops) : _ops;
             return new PageDisplayList(
                 ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers);
+        }
+
+        // Draws the page's annotation normal appearances (/AP /N) after the
+        // page content, the way an interactive viewer paints them. Each
+        // appearance is a form XObject placed onto the annotation /Rect by the
+        // §12.5.5 algorithm; the form's own /Matrix and /Resources are applied
+        // by the shared form-XObject path. Hybrid XFA/AcroForm documents carry
+        // their field values in widget appearance streams, so this is also what
+        // makes such values visible in SVG output and searchable text.
+        // PDF 32000-1:2008 §12.5.5 — Appearance streams.
+        private void EmitAnnotationAppearances(PdfPage page)
+        {
+            IReadOnlyList<AnnotationAppearance> appearances =
+                PageAnnotationAppearances.Collect(page, _doc.Objects);
+
+            for (int i = 0; i < appearances.Count; i++)
+            {
+                AnnotationAppearance ap = appearances[i];
+                SaveState();
+                ConcatMatrix(ap.ScaleX, 0, 0, ap.ScaleY, ap.OffsetX, ap.OffsetY);
+                EmitFormXObject(ap.Appearance);
+                RestoreState();
+            }
         }
 
         // Returns a copy of the op list with every TransformOp removed. Safe

@@ -158,6 +158,7 @@ public sealed class XfaPackets
 
         IReadOnlyList<XfaDatasetsWalker.Leaf> leaves = XfaDatasetsWalker.Walk(datasets.Text);
         Dictionary<string, XfaGeometry> widgets = BuildWidgetIndex();
+        Dictionary<string, string> binds = BuildTemplateBindMap();
         List<XfaDataField> fields = new List<XfaDataField>(leaves.Count);
 
         for (int i = 0; i < leaves.Count; i++)
@@ -171,10 +172,168 @@ public sealed class XfaPackets
                 geometry = match;
             }
 
+            // The dataset node name rarely matches the widget's field name
+            // directly (e.g. dataset COMPANY_NAME vs widget CompanyName). The
+            // XFA template carries the authoritative mapping: each template
+            // <field name="X"> binds to a dataset node via
+            // <bind match="dataRef" ref="$record.PATH"/>. Resolve through that
+            // map when the direct name lookup misses. XFA 3.3 §2.5 — binding.
+            if (geometry is null && binds.Count > 0)
+            {
+                foreach (KeyValuePair<string, string> bind in binds)
+                {
+                    if (!PathEndsWith(leaf.NodePath, bind.Key))
+                    {
+                        continue;
+                    }
+
+                    if (widgets.TryGetValue(bind.Value, out XfaGeometry? bound))
+                    {
+                        geometry = bound;
+                    }
+
+                    break;
+                }
+            }
+
             fields.Add(new XfaDataField(leaf.NodePath, leaf.Value, geometry));
         }
 
         return fields;
+    }
+
+    // True when the dotted dataset path ends with the dotted bind path on a
+    // segment boundary (e.g. "data.ROOT.NAME" ends with "ROOT.NAME" but not
+    // with "OT.NAME").
+    private static bool PathEndsWith(string nodePath, string bindPath)
+    {
+        if (bindPath.Length == 0 || nodePath.Length < bindPath.Length)
+        {
+            return false;
+        }
+
+        if (!nodePath.EndsWith(bindPath, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int boundary = nodePath.Length - bindPath.Length;
+        return boundary == 0 || nodePath[boundary - 1] == '.';
+    }
+
+    /// <summary>
+    /// Parses the template packet for field-to-data bindings: each
+    /// <c>&lt;field name="X"&gt;</c> with a <c>&lt;bind ref="…"&gt;</c> child
+    /// maps the normalized bind path to the field name, which is also the
+    /// AcroForm widget's partial name in a hybrid document. Returns an empty
+    /// map when there is no template or it cannot be parsed. XFA 3.3 §2.5.
+    /// </summary>
+    private Dictionary<string, string> BuildTemplateBindMap()
+    {
+        Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
+        XfaPacket? template = Template;
+
+        if (template is null || template.Text.Length == 0)
+        {
+            return map;
+        }
+
+        try
+        {
+            using System.IO.StringReader text = new System.IO.StringReader(template.Text);
+            System.Xml.XmlReaderSettings settings = new System.Xml.XmlReaderSettings
+            {
+                DtdProcessing = System.Xml.DtdProcessing.Ignore,
+                ConformanceLevel = System.Xml.ConformanceLevel.Fragment,
+            };
+
+            using System.Xml.XmlReader reader = System.Xml.XmlReader.Create(text, settings);
+            string? currentField = null;
+            int fieldDepth = -1;
+
+            while (reader.Read())
+            {
+                if (reader.NodeType == System.Xml.XmlNodeType.Element)
+                {
+                    if (reader.LocalName == "field")
+                    {
+                        currentField = reader.GetAttribute("name");
+                        fieldDepth = reader.Depth;
+                    }
+                    else if (reader.LocalName == "bind"
+                        && currentField is not null
+                        && reader.Depth == fieldDepth + 1)
+                    {
+                        string? reference = reader.GetAttribute("ref");
+                        string normalized = NormalizeBindRef(reference);
+
+                        if (normalized.Length > 0 && !map.ContainsKey(normalized))
+                        {
+                            map[normalized] = currentField;
+                        }
+                    }
+                }
+                else if (reader.NodeType == System.Xml.XmlNodeType.EndElement
+                    && reader.LocalName == "field"
+                    && reader.Depth == fieldDepth)
+                {
+                    currentField = null;
+                    fieldDepth = -1;
+                }
+            }
+        }
+        catch (System.Xml.XmlException)
+        {
+            // A malformed template packet must not break data-field
+            // enumeration; geometry simply stays null for unmatched fields.
+            map.Clear();
+        }
+
+        return map;
+    }
+
+    // Normalizes an XFA SOM bind ref to a dotted dataset path: strips the
+    // "$record."/"$data."/"$." context prefixes and any "[n]" occurrence
+    // predicates, e.g. "$record.ROOT.NAME[0]" → "ROOT.NAME".
+    private static string NormalizeBindRef(string? reference)
+    {
+        if (string.IsNullOrEmpty(reference))
+        {
+            return string.Empty;
+        }
+
+        string value = reference.Trim();
+
+        if (value.StartsWith("$record.", StringComparison.Ordinal))
+        {
+            value = value.Substring("$record.".Length);
+        }
+        else if (value.StartsWith("$data.", StringComparison.Ordinal))
+        {
+            value = value.Substring("$data.".Length);
+        }
+        else if (value.StartsWith("$.", StringComparison.Ordinal))
+        {
+            value = value.Substring(2);
+        }
+
+        int bracket = value.IndexOf('[');
+
+        while (bracket >= 0)
+        {
+            int close = value.IndexOf(']', bracket);
+
+            if (close < 0)
+            {
+                value = value.Substring(0, bracket);
+                break;
+            }
+
+            value = value.Remove(bracket, close - bracket + 1);
+            bracket = value.IndexOf('[');
+        }
+
+        return value;
     }
 
     private Dictionary<string, XfaGeometry> BuildWidgetIndex()
@@ -249,13 +408,33 @@ public sealed class XfaPackets
 
         string last = LastSegment(name);
 
-        if (last.Length == 0 || map.ContainsKey(last))
+        if (last.Length == 0)
         {
             return;
         }
 
         int pageIndex = annotPage.TryGetValue(id, out int page) ? page : -1;
-        map[last] = new XfaGeometry(pageIndex, rectangle);
+        XfaGeometry geometry = new XfaGeometry(pageIndex, rectangle);
+
+        if (!map.ContainsKey(last))
+        {
+            map[last] = geometry;
+        }
+
+        // AcroForm partial names in hybrid XFA documents carry an occurrence
+        // suffix ("CompanyName[0]"); the XFA template field name does not.
+        // Index the stripped form too so template-bind lookups resolve.
+        int bracket = last.IndexOf('[');
+
+        if (bracket > 0)
+        {
+            string stripped = last.Substring(0, bracket);
+
+            if (!map.ContainsKey(stripped))
+            {
+                map[stripped] = geometry;
+            }
+        }
     }
 
     private Dictionary<PdfObjectId, int> BuildAnnotPageMap()

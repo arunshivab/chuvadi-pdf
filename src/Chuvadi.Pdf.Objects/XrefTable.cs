@@ -101,6 +101,25 @@ public sealed class XrefTable
     }
 
     /// <summary>
+    /// Returns true when the object number has an entry of any kind —
+    /// in-use, compressed, or free.
+    /// </summary>
+    /// <remarks>
+    /// Incremental-update chains are read newest-section-first, and the entry
+    /// in the most recent section supersedes all earlier ones regardless of
+    /// kind (PDF 32000-1:2008 §7.5.6): a free entry in a newer section marks
+    /// the object as deleted and must shadow any older definition. Merge
+    /// logic therefore keys "already decided" off this method, not
+    /// <see cref="Contains"/> (which reports only in-use entries and would let
+    /// an older section resurrect a deleted object or replace a compressed
+    /// entry).
+    /// </remarks>
+    public bool ContainsAny(int objectNumber)
+    {
+        return _entries.ContainsKey(objectNumber);
+    }
+
+    /// <summary>
     /// Gets the byte offset for an in-use object.
     /// Returns -1 when the object is not in the table or is free.
     /// </summary>

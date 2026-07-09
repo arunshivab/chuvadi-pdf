@@ -87,13 +87,12 @@ public sealed class TextExtractor
 
         byte[] contentBytes = ReadContentBytes(page);
 
-        if (contentBytes.Length == 0)
-        {
-            return string.Empty;
-        }
-
         ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources);
-        List<TextFragment> fragments = parser.Parse(contentBytes);
+        List<TextFragment> fragments = contentBytes.Length > 0
+            ? parser.Parse(contentBytes)
+            : new List<TextFragment>();
+
+        AppendAnnotationFragments(page, fragments);
 
         if (fragments.Count == 0)
         {
@@ -125,13 +124,70 @@ public sealed class TextExtractor
 
         byte[] contentBytes = ReadContentBytes(page);
 
-        if (contentBytes.Length == 0)
-        {
-            return new List<TextFragment>();
-        }
-
         ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources);
-        return parser.Parse(contentBytes);
+        List<TextFragment> fragments = contentBytes.Length > 0
+            ? parser.Parse(contentBytes)
+            : new List<TextFragment>();
+
+        AppendAnnotationFragments(page, fragments);
+        return fragments;
+    }
+
+    // ── Private: annotation appearance text ───────────────────────────────
+
+    /// <summary>
+    /// Appends text fragments from the page's annotation normal appearance
+    /// streams (<c>/AP /N</c>), positioned into page space by the §12.5.5
+    /// placement so layout reconstruction interleaves them correctly with the
+    /// page content. Hybrid XFA/AcroForm documents carry their field values in
+    /// widget appearance streams, so without this pass extraction returns the
+    /// static template labels but not the filled values.
+    /// PDF 32000-1:2008 §12.5.5 — Appearance streams.
+    /// </summary>
+    private void AppendAnnotationFragments(PdfPage page, List<TextFragment> fragments)
+    {
+        IReadOnlyList<AnnotationAppearance> appearances =
+            PageAnnotationAppearances.Collect(page, _objects);
+
+        for (int i = 0; i < appearances.Count; i++)
+        {
+            AnnotationAppearance ap = appearances[i];
+            byte[] apBytes;
+
+            try
+            {
+                apBytes = DecodeStream(ap.Appearance);
+            }
+            catch (PdfException)
+            {
+                continue;
+            }
+
+            if (apBytes.Length == 0)
+            {
+                continue;
+            }
+
+            ContentStreamParser apParser = new ContentStreamParser(_objects, ap.Resources);
+            List<TextFragment> apFragments = apParser.Parse(apBytes);
+
+            for (int j = 0; j < apFragments.Count; j++)
+            {
+                TextFragment fragment = apFragments[j];
+
+                // Form matrix first, then the §12.5.5 placement, mapping the
+                // fragment's position from appearance space into page space.
+                double formX = (ap.MatrixA * fragment.X) + (ap.MatrixC * fragment.Y) + ap.MatrixE;
+                double formY = (ap.MatrixB * fragment.X) + (ap.MatrixD * fragment.Y) + ap.MatrixF;
+                double pageX = (ap.ScaleX * formX) + ap.OffsetX;
+                double pageY = (ap.ScaleY * formY) + ap.OffsetY;
+                double matrixYScale = Math.Sqrt(
+                    (ap.MatrixB * ap.MatrixB) + (ap.MatrixD * ap.MatrixD));
+                double fontSize = fragment.FontSize * Math.Abs(ap.ScaleY) * matrixYScale;
+
+                fragments.Add(new TextFragment(fragment.Text, pageX, pageY, fontSize));
+            }
+        }
     }
 
     // ── Private: content stream loading ──────────────────────────────────

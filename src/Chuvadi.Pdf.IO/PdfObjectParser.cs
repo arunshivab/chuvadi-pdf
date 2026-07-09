@@ -316,96 +316,18 @@ internal sealed class PdfObjectParser
 
     private static PdfString ParseLiteralString(PdfToken token)
     {
-        // Raw bytes include surrounding parentheses.
-        // Handle backslash escape sequences per PDF 32000-1:2008 §7.3.4.2.
-        byte[] raw = token.RawBytes;
-        int start = (raw.Length > 0 && raw[0] == 40) ? 1 : 0;      // 40 = '('
-        int end = (raw.Length > start && raw[raw.Length - 1] == 41) // 41 = ')'
-            ? raw.Length - 1 : raw.Length;
-
-        List<byte> decoded = new List<byte>(end - start);
-        int i = start;
-
-        while (i < end)
-        {
-            if (raw[i] == 92 && i + 1 < end) // 92 = backslash
-            {
-                i++;
-                byte escaped = raw[i];
-
-                if (escaped == 110) { decoded.Add(10); }  // n -> LF
-                else if (escaped == 114) { decoded.Add(13); }  // r -> CR
-                else if (escaped == 116) { decoded.Add(9); }  // t -> TAB
-                else if (escaped == 40) { decoded.Add(40); }  // ( -> (
-                else if (escaped == 41) { decoded.Add(41); }  // ) -> )
-                else if (escaped == 92) { decoded.Add(92); }  // \ -> \
-                else { decoded.Add(escaped); }
-            }
-            else
-            {
-                decoded.Add(raw[i]);
-            }
-
-            i++;
-        }
-
-        return new PdfString([.. decoded]);
+        // Single authoritative escape decoder (§7.3.4.2) — see
+        // PdfString.DecodeLiteralToken. Handles the full escape set including
+        // octal \ddd, \b, \f, line continuations, and unescaped end-of-line
+        // normalization, which the previous inline decoder lacked.
+        return new PdfString(PdfString.DecodeLiteralToken(token.RawBytes));
     }
 
     private static PdfString ParseHexString(PdfToken token)
     {
-        // Raw bytes include surrounding angle brackets.
-        // PDF 32000-1:2008 §7.3.4.3.
-        byte[] raw = token.RawBytes;
-        int start = (raw.Length > 0 && raw[0] == 60) ? 1 : 0;       // 60 = '<'
-        int end = (raw.Length > start && raw[raw.Length - 1] == 62)  // 62 = '>'
-            ? raw.Length - 1 : raw.Length;
-
-        List<byte> decoded = new List<byte>((end - start + 1) / 2);
-        int highNibble = -1;
-
-        for (int i = start; i < end; i++)
-        {
-            byte b = raw[i];
-
-            // Skip whitespace (space=32, tab=9, LF=10, CR=13, FF=12).
-            if (b == 32 || b == 9 || b == 10 || b == 13 || b == 12)
-            {
-                continue;
-            }
-
-            int nibble = HexNibble(b);
-
-            if (nibble < 0)
-            {
-                continue;
-            }
-
-            if (highNibble < 0)
-            {
-                highNibble = nibble;
-            }
-            else
-            {
-                decoded.Add((byte)((highNibble << 4) | nibble));
-                highNibble = -1;
-            }
-        }
-
-        if (highNibble >= 0)
-        {
-            decoded.Add((byte)(highNibble << 4));
-        }
-
-        return new PdfString([.. decoded]);
-    }
-
-    private static int HexNibble(byte b)
-    {
-        if (b >= 48 && b <= 57) { return b - 48; }       // '0'-'9'
-        if (b >= 65 && b <= 70) { return b - 55; }       // 'A'-'F'
-        if (b >= 97 && b <= 102) { return b - 87; }       // 'a'-'f'
-        return -1;
+        // Single authoritative hex decoder (§7.3.4.3) — see
+        // PdfString.DecodeHexToken.
+        return new PdfString(PdfString.DecodeHexToken(token.RawBytes));
     }
 
     // ── Stream helpers ────────────────────────────────────────────────────

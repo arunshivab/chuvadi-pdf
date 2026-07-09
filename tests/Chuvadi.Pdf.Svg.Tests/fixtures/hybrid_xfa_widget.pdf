@@ -1,0 +1,62 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 8 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>
+endobj
+4 0 obj
+<<  /Length 46 >>
+stream
+BT /F1 12 Tf 50 150 Td (Label\050X\051:) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (NameField[0]) /V (HELLO-VALUE) /F 4 /Rect [100 100 300 120] /AP << /N 7 0 R >> /P 3 0 R >>
+endobj
+7 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 200 20] /Resources << /Font << /F1 5 0 R >> >> /Length 39 >>
+stream
+BT /F1 12 Tf 2 6 Td (HELLO-VALUE) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Fields [6 0 R] /XFA [(template) 9 0 R (datasets) 10 0 R] >>
+endobj
+9 0 obj
+<<  /Length 256 >>
+stream
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"><subform name="ROOT"><field name="NameField" x="10mm" y="10mm" w="60mm" h="8mm"><bind match="dataRef" ref="$record.ROOT.NAME_FIELD"/></field></subform></subform></template>
+endstream
+endobj
+10 0 obj
+<<  /Length 151 >>
+stream
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><ROOT><NAME_FIELD>HELLO-VALUE</NAME_FIELD></ROOT></xfa:data></xfa:datasets>
+endstream
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000015 00000 n 
+0000000080 00000 n 
+0000000137 00000 n 
+0000000279 00000 n 
+0000000376 00000 n 
+0000000446 00000 n 
+0000000597 00000 n 
+0000000774 00000 n 
+0000000853 00000 n 
+0000001161 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+1365
+%%EOF

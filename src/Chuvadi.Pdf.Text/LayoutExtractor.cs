@@ -84,7 +84,15 @@ public sealed class LayoutExtractor
                 TextFragment current = line[i];
                 double xGap = current.X - (prev.X + EstimateWidth(prev));
 
-                if (xGap > prev.FontSize * 0.3)
+                // Insert a separating space on a positional gap — but not when
+                // the fragments already carry one (many writers end each
+                // word-run with an explicit trailing space; width estimation
+                // errors on such runs would otherwise produce double spaces).
+                bool alreadySeparated =
+                    (prev.Text.Length > 0 && prev.Text[prev.Text.Length - 1] == ' ')
+                    || (current.Text.Length > 0 && current.Text[0] == ' ');
+
+                if (xGap > prev.FontSize * 0.3 && !alreadySeparated)
                 {
                     sb.Append(' ');
                 }

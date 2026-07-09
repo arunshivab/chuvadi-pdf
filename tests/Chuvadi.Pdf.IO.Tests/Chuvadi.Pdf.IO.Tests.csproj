@@ -26,6 +26,12 @@
 
   <!-- Test fixtures: copy to bin/ so File.Exists("fixtures/...") works at runtime -->
   <ItemGroup>
+    <None Update="fixtures\incremental_free_shadowing.pdf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="fixtures\incremental_object_update.pdf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="fixtures\cff_type1c.pdf">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

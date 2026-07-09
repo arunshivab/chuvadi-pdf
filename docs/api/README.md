@@ -213,10 +213,12 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [AnnotationAppearance](Documents/AnnotationAppearance.md) | class | A page annotation's resolved normal appearance and its placement on the page, per PDF 32000-1:2008 §12.5.5. |
 | [EncryptionInfo](Documents/EncryptionInfo.md) | class | Describes the encryption properties of a `PdfDocument`. |
 | [OptionalContentGroup](Documents/OptionalContentGroup.md) | class | An Optional Content Group (OCG) — a named, toggleable layer in a PDF. |
 | [OptionalContentReader](Documents/OptionalContentReader.md) | class | Reads optional content groups (layers) from a PDF document. |
 | [OptionalContentWriter](Documents/OptionalContentWriter.md) | class | Writes optional-content (layer) visibility changes to a PDF document. |
+| [PageAnnotationAppearances](Documents/PageAnnotationAppearances.md) | class | Collects the drawable annotation appearances of a page: every annotation with a resolvable normal appearance stream that is not hidden and not a popup, together with its §12.5.5 placement. |
 | [PdfDocument](Documents/PdfDocument.md) | class | Represents an opened PDF document. |
 | [PdfDocumentAsync](Documents/PdfDocumentAsync.md) | class | Async-capable entry points for `PdfDocument`. |
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |
@@ -283,7 +285,7 @@ python tools/gen_api_docs.py
 | [RenderableFont](Fonts/RenderableFont.md) | class | A PDF font that supports both text decoding (character codes to Unicode) and glyph rendering (character codes to vector outlines + metrics). |
 | [Standard14GlyphWidths](Fonts/Standard14GlyphWidths.md) | class | Per-character widths for the PDF Standard 14 fonts. |
 | [Standard14Outlines](Fonts/Standard14Outlines.md) | class | Provides glyph outlines for the PDF Standard 14 fonts from an embedded resource, so they work even on hosts that lack the fonts (Blazor WASM, headless servers). |
-| [Standard14Widths](Fonts/Standard14Widths.md) | class | Provides advance-width metrics for the PDF Standard 14 fonts in 1/1000-em font design units. |
+| [Standard14Widths](Fonts/Standard14Widths.md) | class | Exact per-glyph advance-width metrics for the PDF Standard 14 fonts in 1/1000-em font design units. |
 | [TrueTypeFontPatch](Fonts/TrueTypeFontPatch.md) | class | Rewrites the cmap table of an embedded TrueType font program so the browser can locate the embedded glyph by its semantic Unicode code point rather than the font's legacy encoding code point. |
 | [TrueTypeLoader](Fonts/TrueTypeLoader.md) | class | Loads a TrueType or OpenType font from raw bytes and provides access to glyph outlines and metrics. |
 | [Type1FontRenderer](Fonts/Type1FontRenderer.md) | class | Renders glyphs from an embedded Type1 (PostScript) font program — the `FontFile` stream of a simple Type1 font. |

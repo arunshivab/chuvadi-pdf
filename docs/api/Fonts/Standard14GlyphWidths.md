@@ -10,7 +10,7 @@ public static class Standard14GlyphWidths
 
 ## Remarks
 
-When a PDF font dictionary does not include a /Widths array — as is permitted for Standard 14 fonts — these tables fill in the gap so that glyph-level positioning works correctly. Stage 9 will supplement this with full per-glyph outline data from Liberation/URW.
+When a PDF font dictionary does not include a /Widths array — as is permitted for Standard 14 fonts — these widths fill in the gap so that glyph-level positioning works correctly. Delegates to `Standard14Widths`, the single authoritative source of the exact Adobe Core 14 AFM tables, mapping the character through WinAnsi (cp1252); the two width surfaces can never disagree.
 
 ## Methods
 
@@ -32,7 +32,7 @@ __static__
 static int Width(string baseFont, char ch)
 ```
 
-Returns the width in 1/1000 em of the given character.
+Returns the width in 1/1000 em of the given character. <exception cref="ArgumentNullException"> Thrown when `baseFont` is null. </exception>
 
 ---
 
