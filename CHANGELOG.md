@@ -10,6 +10,29 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.17.1] - 2026-07-09
+
+### Fixed
+- **Redaction rectangles no longer capture neighbouring lines they never
+  touched.** The hit test inflated every glyph's box by 0.25 em + 1.5 pt below
+  its baseline, so a rectangle drawn around one word — with its top edge in
+  the blank gap under the line above — "intersected" that line's phantom
+  descent and silently deleted words the user never covered (redacting a body
+  word ate part of the section heading above it). Hit testing now uses tight
+  per-glyph ink bounds: descender glyphs (g j p q y, low punctuation,
+  brackets) keep a deep bottom, x-height-only lowercase a shorter top, and
+  everything else spans baseline-guard to ascender height. Removal of
+  anything genuinely hit is unchanged (still over-redacting, B15): a
+  rectangle covering only a descender tail still removes those glyphs, and
+  the generous box is still used for the drawn overlay. A rectangle placed
+  entirely in inter-line whitespace now removes nothing.
+
+### Tests
+- 4 new tests (2,417 total): gap-box leaves the line above intact,
+  baseline-crossing box still redacts it, descender-tail-only box still hits,
+  pure-whitespace box removes nothing.
+
+---
 ## [3.17.0] - 2026-07-08
 
 Hybrid XFA documents "just work": a consumer opens a PDF through the ordinary
