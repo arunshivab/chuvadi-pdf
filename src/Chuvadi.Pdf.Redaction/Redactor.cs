@@ -1735,7 +1735,7 @@ public static class Redactor
             glyphX0[i] = cursor;
             glyphX1[i] = cursor + advUser;
             bool inRegion = MatchSpan(
-                cursor, cursor + advUser, state, local, contexts, out string? replacement);
+                cursor, cursor + advUser, text[i], state, local, contexts, out string? replacement);
             drop[i] = inRegion;
             glyphReplacement[i] = replacement;
 
@@ -1941,7 +1941,7 @@ public static class Redactor
             glyphX0[i] = cursor;
             glyphX1[i] = cursor + advUser;
             bool inRegion = MatchSpan(
-                cursor, cursor + advUser, state, local, contexts, out string? replacement);
+                cursor, cursor + advUser, (char)chars[i], state, local, contexts, out string? replacement);
             drop[i] = inRegion;
             glyphReplacement[i] = replacement;
 
@@ -2203,6 +2203,9 @@ public static class Redactor
     // (text-space y = 0). Generous ascent/descent fractions plus a small margin
     // make the box fully cover ascenders and descender tails (g, y, p, q)
     // without clipping; over-coverage is safe and intended for a redaction box.
+    // Used for DRAWN OVERLAY boxes only — hit testing uses the tight per-glyph
+    // ink bounds below, so a rectangle placed in the blank gap between lines
+    // does not capture a neighbouring line it never touched.
     private const double TextAscentEm = 0.80;
     private const double TextDescentEm = 0.25;
     private const double GlyphBoxMarginPoints = 1.5;
@@ -2217,12 +2220,87 @@ public static class Redactor
         return -((TextDescentEm * state.FontSize) + GlyphBoxMarginPoints);
     }
 
+    // ── Tight per-glyph ink bounds (hit testing) ───────────────────────────
+    //
+    // Deciding whether a redaction rectangle TARGETS a glyph must use the
+    // glyph's actual ink extent, not an inflated line box: with the generous
+    // box above, a rectangle drawn in the whitespace between two lines
+    // "intersected" the line above (its phantom descent) and silently deleted
+    // words the user never covered. Two vertical classes per edge:
+    //
+    //   top:    x-height-only lowercase (a c e g m n o p q r s u v w x z)
+    //           reach ~0.53 em; everything else (caps, digits, ascenders,
+    //           dotted i/j, accents, symbols) up to ~0.78 em.
+    //   bottom: descender glyphs (g j p q y, low punctuation, brackets, @, Q)
+    //           reach ~-0.22 em; everything else sits on the baseline with a
+    //           small guard for rounded-glyph overshoot.
+    //
+    // Once a glyph IS hit, removal stays as over-redacting as before (B15) —
+    // only the detection geometry is tight.
+    private const double InkTopTallEm = 0.80;
+    private const double InkTopXHeightEm = 0.60;
+    private const double InkBottomDescenderEm = 0.25;
+    private const double InkBottomBaselineEm = 0.04;
+
+    private static double GlyphInkTop(RedactState state, char glyph)
+    {
+        bool xHeightOnly = glyph is 'a' or 'c' or 'e' or 'g' or 'm' or 'n'
+            or 'o' or 'p' or 'q' or 'r' or 's' or 'u' or 'v' or 'w' or 'x'
+            or 'z' or ' ' or '-';
+        double em = xHeightOnly ? InkTopXHeightEm : InkTopTallEm;
+        return em * state.FontSize;
+    }
+
+    private static double GlyphInkBottom(RedactState state, char glyph)
+    {
+        bool descender = glyph is 'g' or 'j' or 'p' or 'q' or 'y'
+            or ',' or ';' or '_' or '(' or ')' or '[' or ']' or '{' or '}'
+            or '@' or 'Q' or '$' or '\u00B5' or '\u00E7' or '\u00FD'
+            or '\u00FF' or '\u00FE' or '\u201A' or '\u201E' or '\u00B8';
+        double em = descender ? InkBottomDescenderEm : InkBottomBaselineEm;
+        return -(em * state.FontSize);
+    }
+
+    private static double RunInkTop(RedactState state, string text)
+    {
+        double top = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            double glyphTop = GlyphInkTop(state, text[i]);
+
+            if (glyphTop > top)
+            {
+                top = glyphTop;
+            }
+        }
+
+        return top > 0 ? top : InkTopXHeightEm * state.FontSize;
+    }
+
+    private static double RunInkBottom(RedactState state, string text)
+    {
+        double bottom = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            double glyphBottom = GlyphInkBottom(state, text[i]);
+
+            if (glyphBottom < bottom)
+            {
+                bottom = glyphBottom;
+            }
+        }
+
+        return bottom < 0 ? bottom : -(InkBottomBaselineEm * state.FontSize);
+    }
+
     // True when a glyph occupying [x0, x1] in text space (advance from the line
-    // origin), spanning the font's descent-to-ascent vertical extent, maps into
-    // any redaction rectangle for some context. Outputs the in-place replacement
-    // string of the first matched rectangle, if any.
+    // origin), spanning the glyph's tight ink extent, maps into any redaction
+    // rectangle for some context. Outputs the in-place replacement string of
+    // the first matched rectangle, if any.
     private static bool MatchSpan(
-        double x0, double x1, RedactState state, Transform local,
+        double x0, double x1, char glyph, RedactState state, Transform local,
         IReadOnlyList<RedactContext> contexts, out string? replacement)
     {
         replacement = null;
@@ -2230,8 +2308,8 @@ public static class Redactor
         {
             RedactContext context = contexts[c];
             Transform combined = local.Multiply(context.BaseCtm);
-            PointF originDev = combined.TransformPoint(new PointF(x0, GlyphBottom(state)));
-            PointF endDev = combined.TransformPoint(new PointF(x1, GlyphTop(state)));
+            PointF originDev = combined.TransformPoint(new PointF(x0, GlyphInkBottom(state, glyph)));
+            PointF endDev = combined.TransformPoint(new PointF(x1, GlyphInkTop(state, glyph)));
             RectangleF box = RectangleF.FromCorners(originDev.X, originDev.Y, endDev.X, endDev.Y);
 
             for (int r = 0; r < context.Rects.Count; r++)
@@ -2288,9 +2366,9 @@ public static class Redactor
             RedactContext context = contexts[c];
             Transform combined = local.Multiply(context.BaseCtm);
             PointF originDev = combined.TransformPoint(
-                new PointF(state.TextX, GlyphBottom(state)));
+                new PointF(state.TextX, RunInkBottom(state, text)));
             PointF endDev = combined.TransformPoint(
-                new PointF(state.TextX + width, GlyphTop(state)));
+                new PointF(state.TextX + width, RunInkTop(state, text)));
 
             RectangleF textBox = RectangleF.FromCorners(
                 originDev.X, originDev.Y, endDev.X, endDev.Y);
