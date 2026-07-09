@@ -42,6 +42,15 @@ Rendering / codecs verified shipped:
 - **XFA form rendering + scripting** — `Chuvadi.Pdf.Xfa`: data merge, layout,
   pagination, duplex/keep, tables, widgets, and the FormCalc + JavaScript
   scripting engines. `XfaRenderOptions.ScriptMode` defaults to `Full`.
+- **Annotation appearance rendering (§12.5.5)** — all sinks (raster, SVG,
+  text display list) draw each visible annotation's `/AP /N` form placed onto
+  its `/Rect`; text extraction includes appearance text; hybrid XFA field
+  values render, extract, and flatten. Public API:
+  `PageAnnotationAppearances.Collect` / `AnnotationAppearance` (Documents).
+- **Xref chain precedence (§7.5.6)** — the entry in the most recent
+  incremental-update section supersedes all earlier ones of any kind; free
+  entries shadow older definitions and compressed entries are not replaced.
+  Signed/filled government certificates resolve their newest generation.
 - **Hybrid-reference (`/XRefStm`) resolution** — compressed objects on
   Word/Office PDFs resolve; `HasStructTree`/`IsTagged` correct.
 - **Object streams + xref streams (writer)** — `PdfWriter` packs compressible
@@ -63,7 +72,7 @@ Rendering / codecs verified shipped:
 
 ## Open roadmap
 
-Status verified against code at v3.16.0. Items are independent and may be
+Status verified against code at v3.17.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -76,39 +85,34 @@ not painted — a `scn` pattern name marks the colour invalid, so pattern-filled
 regions are suppressed. Needs pattern-cell replay and shading-pattern fill.
 *Medium impact.*
 
-**3. Annotation appearance rendering.** The render pipeline does not draw page
-`/Annots` `/AP /N` appearance streams, so form fields, widgets, stamps, and ink
-annotations are invisible in rendered output even though they are readable and
-creatable. *Medium/high impact.*
-
-**4. ImageMask stencil compositing in the SVG path.** Raster handles
+**3. ImageMask stencil compositing in the SVG path.** Raster handles
 `/ImageMask true`; the SVG renderer skips such 1-bit stencils. Reuse the RGBA-PNG
 machinery from the `/SMask` path to paint the stencil with the current fill
 colour. (`/SMask` soft-mask alpha is already handled in SVG — separate feature.)
 
-**5. SVG sink colour follow-ups.** The SVG sink does not implement `cs`/`CS`/
+**4. SVG sink colour follow-ups.** The SVG sink does not implement `cs`/`CS`/
 `sc`/`scn`/`SCN` colour operators (raster does), and does not recurse into form
 XObjects; the raster quote operators (`'`/`"`) bypass composite-font routing.
 *Small — one tidy PR.*
 
 ### Fonts
-**6. Autohinter follow-ups.** Composite-glyph Y-fitting in unhinted fonts;
+**5. Autohinter follow-ups.** Composite-glyph Y-fitting in unhinted fonts;
 optional X-axis stem fitting for mono/low-DPI. (Base composite hinting for
 hinted fonts shipped in v2.6.0.)
 
 ### Accessibility / archival
-**7. Tagged-PDF structure generation.** PDF/A *output* ships
+**6. Tagged-PDF structure generation.** PDF/A *output* ships
 (`Chuvadi.Pdf.PdfA`), and hybrid `/StructTreeRoot` on real files now resolves,
 but generating a `/StructTreeRoot` during page creation (PDF/UA-1 tagging) is
 not yet implemented. *Large.*
 
 ### Performance
-**8. Automated benchmark regression diffing.** The BenchmarkDotNet suite (Brotli,
+**7. Automated benchmark regression diffing.** The BenchmarkDotNet suite (Brotli,
 parser-open, rasterizer) exists; per-release baseline capture + auto-compare in
 CI remain (a compression-ratio baseline gate already exists — extend the pattern).
 
 ### Input robustness / recovery
-**9. General xref-offset recovery on load.** When a classic xref entry points at
+**8. General xref-offset recovery on load.** When a classic xref entry points at
 the wrong byte offset, the affected object resolves to the wrong primitive. The
 narrow case — a page-tree `/Kids` entry that resolves to a non-dictionary — is
 recovered in-walk and surfaced via `PdfDocument.Warnings`/`IsRecovered`. The
@@ -123,35 +127,35 @@ dedup, max-level re-deflate, content minification, granular stripping, JPEG
 re-encode). These image-recoding and perceptual items remain, mostly gated on
 each other; the detailed plan lives in `docs/chuvadi-35-item-roadmap-handoff.md`.
 
-**10. Image downsampling to target DPI.** Resampling exists inside the rasterizer
+**9. Image downsampling to target DPI.** Resampling exists inside the rasterizer
 but not as a compression-path "downsample image XObjects to a target DPI" step.
 Dependency for MRC and the perceptual target.
 
-**11. Smart per-image codec selection.** Per-image codec / bit-depth / palette /
+**10. Smart per-image codec selection.** Per-image codec / bit-depth / palette /
 colourspace-and-ICC-reduction decision logic (indexed/palette detection, bit-depth
 reduction). Not yet present.
 
-**12. CMYK image completeness.** CMYK/YCCK JPEG passthrough ships (embeds as real
+**11. CMYK image completeness.** CMYK/YCCK JPEG passthrough ships (embeds as real
 `DeviceCMYK` under DCTDecode with the Adobe-inversion `/Decode`). Remaining: raw
 DeviceCMYK sample embedding under FlateDecode, and CMYK-to-output conversion in
 the raster and SVG sinks so CMYK images display. Pairs with non-device colour
 (ICCBased-CMYK).
 
-**13. JBIG2 encode.** Decode ships (`Filters/Jbig2/`); the encoder (sharing the
+**12. JBIG2 encode.** Decode ships (`Filters/Jbig2/`); the encoder (sharing the
 segment model) does not. Gates the bitonal path of MRC.
 
-**14. JPX / JPEG2000 encode.** Only worth doing if it beats DCT+MRC; depends on a
+**13. JPX / JPEG2000 encode.** Only worth doing if it beats DCT+MRC; depends on a
 JPX decoder (also open).
 
-**15. MRC (Mixed Raster Content).** The colour-scan compression differentiator —
-foreground/background/mask separation. Depends on downsampling (#10), bitonal
-detection + G4, and JBIG2 encode (#13).
+**14. MRC (Mixed Raster Content).** The colour-scan compression differentiator —
+foreground/background/mask separation. Depends on downsampling (#9), bitonal
+detection + G4, and JBIG2 encode (#12).
 
-**16. SSIM perceptual target.** SSIM *measurement* exists in the benchmark suite;
+**15. SSIM perceptual target.** SSIM *measurement* exists in the benchmark suite;
 the optimisation *target knob* ("smallest file at visually lossless") that would
 drive the image-recoding stack does not.
 
-**17. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench" image-processing
+**16. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench" image-processing
 feature (4-point perspective correction / deskew). Application-adjacent.
 
 ---

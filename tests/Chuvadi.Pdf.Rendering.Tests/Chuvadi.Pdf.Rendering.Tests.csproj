@@ -28,4 +28,12 @@
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+
+  <!-- Test fixtures: copy to bin/ so File.Exists("...") works at runtime -->
+  <ItemGroup>
+    <None Update="Fixtures\hybrid_xfa_widget.pdf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

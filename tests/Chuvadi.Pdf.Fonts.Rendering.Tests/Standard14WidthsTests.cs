@@ -48,21 +48,32 @@ public sealed class Standard14WidthsTests
     // ── Non-space characters in variable-width families ───────────────────
 
     [Fact]
-    public void GetWidth_Helvetica_NonSpace_ReturnsAverage()
+    public void GetWidth_Helvetica_ReturnsExactAfmWidths()
     {
-        Standard14Widths.GetWidth("Helvetica", 'A').Should().Be(556);
+        Standard14Widths.GetWidth("Helvetica", 'A').Should().Be(667);
+        Standard14Widths.GetWidth("Helvetica", 'i').Should().Be(222);
+        Standard14Widths.GetWidth("Helvetica", 'W').Should().Be(944);
+        Standard14Widths.GetWidth("Helvetica-Bold", 'i').Should().Be(278);
     }
 
     [Fact]
-    public void GetWidth_TimesRoman_NonSpace_ReturnsAverage()
+    public void GetWidth_TimesRoman_ReturnsExactAfmWidths()
     {
-        Standard14Widths.GetWidth("Times-Roman", 'A').Should().Be(500);
+        // Exact Adobe Core 14 AFM values, not approximations.
+        Standard14Widths.GetWidth("Times-Roman", 'A').Should().Be(722);
+        Standard14Widths.GetWidth("Times-Roman", 'I').Should().Be(333);
+        Standard14Widths.GetWidth("Times-Roman", 'M').Should().Be(889);
+        Standard14Widths.GetWidth("Times-Roman", 'i').Should().Be(278);
+        Standard14Widths.GetWidth("Times-Roman", '0').Should().Be(500);
+        Standard14Widths.GetWidth("Times-Bold", 'I').Should().Be(389);
+        Standard14Widths.GetWidth("Times-Bold", 'M').Should().Be(944);
     }
 
     [Fact]
-    public void GetWidth_ZapfDingbats_NonSpace_ReturnsAverage()
+    public void GetWidth_ZapfDingbats_ReturnsExactAfmWidth()
     {
-        Standard14Widths.GetWidth("ZapfDingbats", 0x21).Should().Be(750);
+        // Built-in encoding: code 0x21 is the a1 dingbat, 974/1000 em.
+        Standard14Widths.GetWidth("ZapfDingbats", 0x21).Should().Be(974);
     }
 
     // ── Non-Standard 14 fallback ──────────────────────────────────────────
@@ -76,7 +87,8 @@ public sealed class Standard14WidthsTests
     [Fact]
     public void GetWidth_UnknownFontName_Space_ReturnsFallback()
     {
-        Standard14Widths.GetWidth("NotAFont", 0x20).Should().Be(250);
+        // Unknown fonts return the flat em-half default for every code.
+        Standard14Widths.GetWidth("NotAFont", 0x20).Should().Be(500);
     }
 
     // ── Null guards ───────────────────────────────────────────────────────

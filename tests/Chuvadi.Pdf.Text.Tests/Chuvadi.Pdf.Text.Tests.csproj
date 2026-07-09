@@ -20,4 +20,12 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
   </ItemGroup>
 
+
+  <!-- Test fixtures: copy to bin/ so File.Exists("...") works at runtime -->
+  <ItemGroup>
+    <None Update="fixtures\hybrid_xfa_widget.pdf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

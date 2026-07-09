@@ -1,6 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  Adobe AFM data for the Standard 14 fonts
+// SPEC:  Adobe AFM data for the Standard 14 fonts;
+//        PDF 32000-1:2008 Annex D — WinAnsiEncoding
 // PHASE: Phase 2.1 — glyph-level text positioning
 
 using System;
@@ -13,9 +14,11 @@ namespace Chuvadi.Pdf.Fonts.Rendering;
 /// </summary>
 /// <remarks>
 /// When a PDF font dictionary does not include a /Widths array — as is
-/// permitted for Standard 14 fonts — these tables fill in the gap so that
-/// glyph-level positioning works correctly. Stage 9 will supplement this
-/// with full per-glyph outline data from Liberation/URW.
+/// permitted for Standard 14 fonts — these widths fill in the gap so that
+/// glyph-level positioning works correctly. Delegates to
+/// <see cref="Standard14Widths"/>, the single authoritative source of the
+/// exact Adobe Core 14 AFM tables, mapping the character through WinAnsi
+/// (cp1252); the two width surfaces can never disagree.
 /// </remarks>
 public static class Standard14GlyphWidths
 {
@@ -35,227 +38,96 @@ public static class Standard14GlyphWidths
     }
 
     /// <summary>Returns the width in 1/1000 em of the given character.</summary>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="baseFont"/> is null.
+    /// </exception>
     public static int Width(string baseFont, char ch)
     {
         ArgumentNullException.ThrowIfNull(baseFont);
-        if (baseFont.StartsWith("Courier", StringComparison.Ordinal)) { return 600; }
+        return Standard14Widths.GetWidth(NormalizeName(baseFont), ToWinAnsiCode(ch));
+    }
+
+    // Maps a Unicode character to its WinAnsi (cp1252) code: Latin-1 is
+    // identity; the C1 range 0x80–0x9F carries the cp1252 specials
+    // (PDF 32000-1:2008 Annex D). Unmappable characters return 0, which the
+    // width tables resolve to the per-font average.
+    private static int ToWinAnsiCode(char ch)
+    {
+        if (ch <= 0x7F || (ch >= 0xA0 && ch <= 0xFF))
+        {
+            return ch;
+        }
+
+        return ch switch
+        {
+            '\u20AC' => 0x80, // Euro sign
+            '\u201A' => 0x82, // single low-9 quotation mark
+            '\u0192' => 0x83, // latin small letter f with hook
+            '\u201E' => 0x84, // double low-9 quotation mark
+            '\u2026' => 0x85, // horizontal ellipsis
+            '\u2020' => 0x86, // dagger
+            '\u2021' => 0x87, // double dagger
+            '\u02C6' => 0x88, // modifier letter circumflex accent
+            '\u2030' => 0x89, // per mille sign
+            '\u0160' => 0x8A, // latin capital letter s with caron
+            '\u2039' => 0x8B, // single left-pointing angle quotation mark
+            '\u0152' => 0x8C, // latin capital ligature oe
+            '\u017D' => 0x8E, // latin capital letter z with caron
+            '\u2018' => 0x91, // left single quotation mark
+            '\u2019' => 0x92, // right single quotation mark
+            '\u201C' => 0x93, // left double quotation mark
+            '\u201D' => 0x94, // right double quotation mark
+            '\u2022' => 0x95, // bullet
+            '\u2013' => 0x96, // en dash
+            '\u2014' => 0x97, // em dash
+            '\u02DC' => 0x98, // small tilde
+            '\u2122' => 0x99, // trade mark sign
+            '\u0161' => 0x9A, // latin small letter s with caron
+            '\u203A' => 0x9B, // single right-pointing angle quotation mark
+            '\u0153' => 0x9C, // latin small ligature oe
+            '\u017E' => 0x9E, // latin small letter z with caron
+            '\u0178' => 0x9F, // latin capital letter y with diaeresis
+            _ => 0,
+        };
+    }
+
+    // Maps family prefixes to canonical Standard 14 PostScript names so
+    // shorthand base-font values still hit the exact tables.
+    private static string NormalizeName(string baseFont)
+    {
+        if (Standard14Widths.IsStandard14(baseFont))
+        {
+            return baseFont;
+        }
+
+        bool bold = baseFont.Contains("Bold", StringComparison.Ordinal);
+        bool italic = baseFont.Contains("Italic", StringComparison.Ordinal)
+            || baseFont.Contains("Oblique", StringComparison.Ordinal);
+
         if (baseFont.StartsWith("Times", StringComparison.Ordinal))
         {
-            int w = TimesWidth(ch, isBold: baseFont.Contains("Bold"));
-            return w == 0 ? AverageOf(baseFont) : w;
+            if (bold && italic) { return "Times-BoldItalic"; }
+            if (bold) { return "Times-Bold"; }
+            if (italic) { return "Times-Italic"; }
+            return "Times-Roman";
         }
+
         if (baseFont.StartsWith("Helvetica", StringComparison.Ordinal))
         {
-            int w = HelveticaWidth(ch, isBold: baseFont.Contains("Bold"));
-            return w == 0 ? AverageOf(baseFont) : w;
+            if (bold && italic) { return "Helvetica-BoldOblique"; }
+            if (bold) { return "Helvetica-Bold"; }
+            if (italic) { return "Helvetica-Oblique"; }
+            return "Helvetica";
         }
-        return AverageOf(baseFont);
-    }
 
-    private static int AverageOf(string baseFont) => baseFont switch
-    {
-        "Helvetica" or "Helvetica-Oblique" => 528,
-        "Helvetica-Bold" or "Helvetica-BoldOblique" => 565,
-        "Times-Roman" or "Times-Italic" => 492,
-        "Times-Bold" => 518,
-        "Times-BoldItalic" => 506,
-        "Courier" or "Courier-Bold" or "Courier-Oblique" or "Courier-BoldOblique" => 600,
-        "Symbol" => 525,
-        "ZapfDingbats" => 752,
-        _ => 500,
-    };
-
-    private static int HelveticaWidth(char ch, bool isBold)
-    {
-        int w = ch switch
+        if (baseFont.StartsWith("Courier", StringComparison.Ordinal))
         {
-            ' ' => 278,
-            '!' => 278,
-            '"' => 355,
-            '#' => 556,
-            '$' => 556,
-            '%' => 889,
-            '&' => 667,
-            '\'' => 191,
-            '(' => 333,
-            ')' => 333,
-            '*' => 389,
-            '+' => 584,
-            ',' => 278,
-            '-' => 333,
-            '.' => 278,
-            '/' => 278,
-            ':' => 278,
-            ';' => 278,
-            '<' => 584,
-            '=' => 584,
-            '>' => 584,
-            '?' => 556,
-            '@' => 1015,
-            'A' => 667,
-            'B' => 667,
-            'C' => 722,
-            'D' => 722,
-            'E' => 667,
-            'F' => 611,
-            'G' => 778,
-            'H' => 722,
-            'I' => 278,
-            'J' => 500,
-            'K' => 667,
-            'L' => 556,
-            'M' => 833,
-            'N' => 722,
-            'O' => 778,
-            'P' => 667,
-            'Q' => 778,
-            'R' => 722,
-            'S' => 667,
-            'T' => 611,
-            'U' => 722,
-            'V' => 667,
-            'W' => 944,
-            'X' => 667,
-            'Y' => 667,
-            'Z' => 611,
-            '[' => 278,
-            '\\' => 278,
-            ']' => 278,
-            '^' => 469,
-            '_' => 556,
-            '`' => 333,
-            'a' => 556,
-            'b' => 556,
-            'c' => 500,
-            'd' => 556,
-            'e' => 556,
-            'f' => 278,
-            'g' => 556,
-            'h' => 556,
-            'i' => 222,
-            'j' => 222,
-            'k' => 500,
-            'l' => 222,
-            'm' => 833,
-            'n' => 556,
-            'o' => 556,
-            'p' => 556,
-            'q' => 556,
-            'r' => 333,
-            's' => 500,
-            't' => 278,
-            'u' => 556,
-            'v' => 500,
-            'w' => 722,
-            'x' => 500,
-            'y' => 500,
-            'z' => 500,
-            '{' => 334,
-            '|' => 260,
-            '}' => 334,
-            '~' => 584,
-            _ => 0,
-        };
-        if (isBold && w != 0)
-        {
-            // Bold is slightly wider on average — approximate ratio ~1.07
-            w = (int)(w * 1.07);
+            if (bold && italic) { return "Courier-BoldOblique"; }
+            if (bold) { return "Courier-Bold"; }
+            if (italic) { return "Courier-Oblique"; }
+            return "Courier";
         }
-        return w;
-    }
 
-    private static int TimesWidth(char ch, bool isBold)
-    {
-        int w = ch switch
-        {
-            ' ' => 250,
-            '!' => 333,
-            '"' => 408,
-            '#' => 500,
-            '$' => 500,
-            '%' => 833,
-            '&' => 778,
-            '\'' => 180,
-            '(' => 333,
-            ')' => 333,
-            '*' => 500,
-            '+' => 564,
-            ',' => 250,
-            '-' => 333,
-            '.' => 250,
-            '/' => 278,
-            ':' => 278,
-            ';' => 278,
-            '<' => 564,
-            '=' => 564,
-            '>' => 564,
-            '?' => 444,
-            '@' => 921,
-            'A' => 722,
-            'B' => 667,
-            'C' => 667,
-            'D' => 722,
-            'E' => 611,
-            'F' => 556,
-            'G' => 722,
-            'H' => 722,
-            'I' => 333,
-            'J' => 389,
-            'K' => 722,
-            'L' => 611,
-            'M' => 889,
-            'N' => 722,
-            'O' => 722,
-            'P' => 556,
-            'Q' => 722,
-            'R' => 667,
-            'S' => 556,
-            'T' => 611,
-            'U' => 722,
-            'V' => 722,
-            'W' => 944,
-            'X' => 722,
-            'Y' => 722,
-            'Z' => 611,
-            '[' => 333,
-            '\\' => 278,
-            ']' => 333,
-            '^' => 469,
-            '_' => 500,
-            '`' => 333,
-            'a' => 444,
-            'b' => 500,
-            'c' => 444,
-            'd' => 500,
-            'e' => 444,
-            'f' => 333,
-            'g' => 500,
-            'h' => 500,
-            'i' => 278,
-            'j' => 278,
-            'k' => 500,
-            'l' => 278,
-            'm' => 778,
-            'n' => 500,
-            'o' => 500,
-            'p' => 500,
-            'q' => 500,
-            'r' => 333,
-            's' => 389,
-            't' => 278,
-            'u' => 500,
-            'v' => 500,
-            'w' => 722,
-            'x' => 500,
-            'y' => 500,
-            'z' => 444,
-            '{' => 480,
-            '|' => 200,
-            '}' => 480,
-            '~' => 541,
-            _ => 0,
-        };
-        if (isBold && w != 0) { w = (int)(w * 1.05); }
-        return w;
+        return baseFont;
     }
 }

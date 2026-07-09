@@ -10,6 +10,146 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.17.0] - 2026-07-08
+
+Hybrid XFA documents "just work": a consumer opens a PDF through the ordinary
+render / extract / flatten APIs and gets the finished document — no
+XFA-awareness required. Driven by the Government-of-India MCA Certificate of
+Incorporation class of files (hybrid XFA, signed, incrementally updated).
+
+### Added
+- **Annotation appearance rendering (PDF 32000-1:2008 §12.5.5).** All render
+  sinks — raster, SVG, and the text display list — now draw each visible
+  annotation's normal appearance (`/AP /N`, honouring the `/AS` state
+  selector) placed onto its `/Rect` by the §12.5.5 algorithm. Form-field
+  widgets, stamps, and ink annotations paint the way an interactive viewer
+  paints them; hybrid XFA/AcroForm files show their filled field values.
+  New public API in `Chuvadi.Pdf.Documents`: `PageAnnotationAppearances.Collect`
+  and `AnnotationAppearance` — the single shared resolver consumed by
+  rendering, extraction, and flattening, so an annotation paints, extracts,
+  and flattens at exactly the same place.
+- **Text extraction includes annotation appearance text.** `TextExtractor`
+  (`ExtractText` and `ExtractFragments`) appends fragments from each visible
+  appearance stream, transformed into page space, so field values are
+  searchable and copyable. On the reference certificate, extraction grows from
+  the bare template labels to the full document including company name, CIN,
+  PAN, TAN, and signatory.
+- **`XfaDataField.Geometry` populated via the template bind map.** The XFA
+  template's `<field name="…"><bind ref="$record.…"/>` pairs are parsed and
+  correlated with the AcroForm widget rects, so dataset nodes whose names
+  differ from their widget names (COMPANY_NAME vs CompanyName[0]) still
+  resolve a page index and rectangle — enabling search-hit highlighting and
+  per-field redaction.
+- **`XrefTable.ContainsAny`** — presence check for an entry of any kind
+  (in-use, compressed, or free), used by the chain merge below.
+- **`PdfString.DecodeLiteralToken` / `PdfString.DecodeHexToken`** — the single
+  authoritative §7.3.4 string-token decoders (full escape set: octal `\ddd`,
+  `\b`, `\f`, line continuations, unescaped end-of-line normalization).
+
+### Fixed
+- **Cross-reference chain precedence (§7.5.6).** The entry for an object in
+  the most recent incremental-update section now supersedes all earlier ones
+  regardless of kind: a free entry in a newer section marks a deleted object
+  and shadows older definitions (no resurrection), and a compressed (Type 2)
+  entry is no longer replaced by an older uncompressed one. In a hybrid
+  section, `/XRefStm` entries merge before the classic table's, per §7.5.8.4.
+  Previously, signed and incrementally-filled files (e.g. government
+  certificates) resolved their pre-fill page tree — widgets without `/V` or
+  `/AP` — so values were invisible on every path.
+- **Literal-string escape decoding unified.** The content-stream parser
+  passed string bytes through unescaped (octal `\050` surfaced verbatim in
+  extracted text), and the object parser lacked octal/`\b`/`\f`/continuation
+  handling. Both now delegate to `PdfString`, as does the content-stream
+  walker.
+- **Layout extraction no longer double-spaces.** A positional word gap after a
+  fragment that already ends in a space (Adobe appearance generators end each
+  word-run with one) inserted a second separator, breaking exact-substring
+  search over extracted text.
+- **Standard 14 font metrics are now exact.** `Standard14Widths` previously
+  returned a single per-font *average* for every non-space character (a
+  documented v2.0.0 stopgap), so unembedded Times/Helvetica text — the norm in
+  LiveCycle/government documents — rendered with jumbled word spacing, lines
+  overflowing the page edge, and a distorted type impression. The class now
+  carries the complete Adobe Core 14 AFM tables (codegenned from the canonical
+  URW base-35 AFM files, WinAnsi-indexed via the Adobe Glyph List);
+  `Standard14GlyphWidths` delegates to the same data, so the raster,
+  display-list, and redaction width paths can never disagree. Rendering the
+  reference certificate now matches a poppler reference at 97.8% binary-ink
+  agreement with every text line's extents within ±2 px at 110 dpi.
+- **`AnnotationFlattener` content loss (BASELINE B16).** The flattener
+  iterated the lazy object store without a preload, silently dropping every
+  not-yet-resolved object — a 536 KB certificate flattened to a 6.7 KB empty
+  page. The worker now force-resolves the object graph first.
+- **Flatten produces a truly static PDF.** Widgets selected for flattening
+  that have no usable normal appearance are dropped (industry-standard
+  semantics) instead of kept live, so the AcroForm — and the `/XFA` entry
+  inside it — is removed: flattening a hybrid XFA document yields
+  `IsXfa == false` with all values baked into the page content.
+
+### Tests
+- 21 new tests (2,413 total): xref precedence (update supersedes, free
+  shadows), appearance collection and §12.5.5 placement, geometry binding,
+  extraction (values, octal escapes, spacing), SVG and raster appearance
+  output, flatten content preservation and XFA removal, and an end-to-end
+  suite over a sanitised MCA certificate fixture.
+- New fixtures: `hybrid_xfa_widget.pdf` (minimal hybrid XFA with a widget
+  appearance), `incremental_object_update.pdf` and
+  `incremental_free_shadowing.pdf` (hand-built xref chains).
+
+---
+## [3.16.0] - 2026-07-07
+
+### Added
+- **XFA form scripting — FormCalc and JavaScript engines.** Completes the XFA
+  renderer arc: embedded form scripts now execute during rendering, so real
+  LiveCycle forms fill their computed fields instead of rendering blank. New
+  public types in `Chuvadi.Pdf.Xfa` (`Scripting` namespace): `XfaScriptHost`
+  (SOM reference resolution and property get/set), `XfaScriptValue` (a dynamic
+  value type shared by both engines), `XfaJavaScriptEngine` (a from-scratch
+  lexer, parser, and tree-walking interpreter for the JavaScript subset XFA
+  forms use), `XfaFormCalcEngine` (a full FormCalc interpreter: `&` concat,
+  `if/then/endif`, `for/upto/endfor`, `while/endwhile`, and the common builtins
+  Concat/Left/Right/Len/Substr/Upper/Lower/Sum/Avg/Min/Max/Round/Abs/At/Replace/
+  Stuff/Space), `XfaScriptRunner` (fires initialize/calculate/validate across
+  the template tree, failing soft per script), `XfaScript`, `XfaScriptException`,
+  and `XfaValidationResult`. Interactive events (click/change/etc.) are parsed
+  and attached but dormant — a static render has no event source. Unsupported
+  script constructs fail soft, leaving form state untouched, so one bad script
+  never aborts a render. (#171)
+
+### Changed
+- **`XfaRenderOptions.ScriptMode` now defaults to `Full`.** Rendering an XFA
+  document via `XfaRenderOptions.Default` runs its initialize, calculate, and
+  validate scripts, so scripted fields fill without the caller opting in. Pass
+  `new XfaRenderOptions { ScriptMode = XfaScriptMode.None }` to restore the
+  previous no-script behaviour. This is a behavioural change to the default, not
+  an API break — no signatures changed. (#172)
+- **Rendering split into three single-namespace projects.** The former
+  `Chuvadi.Pdf.Rendering.DisplayList` project housed three namespaces; it is now
+  three projects, one namespace each, with acyclic layering
+  Walking → DisplayList → Raster: `Chuvadi.Pdf.Rendering.Walking` (the shared
+  content-stream walker, a leaf depending only on Filters/Objects/Primitives and
+  exposing its internals to the two builders via `InternalsVisibleTo`),
+  `Chuvadi.Pdf.Rendering.DisplayList` (the text/search display list), and
+  `Chuvadi.Pdf.Rendering.Raster` (the raster display list for the scanline
+  rasterizer). Behaviour is unchanged; consumers of the raster or walker types
+  reference the new packages, which are pulled in transitively by the meta
+  package and `Chuvadi.Pdf.Rendering`. (#174)
+
+### Fixed
+- **Compressed objects in hybrid-reference PDFs now resolve
+  (`HasStructTree`/`IsTagged` work on Word/Office output).** A hybrid-reference
+  file (PDF 32000-1:2008 §7.5.8.4) has a classic `xref` table whose trailer also
+  carries `/XRefStm`, pointing to a cross-reference stream that lists the
+  compressed (Type 2) objects the classic table cannot represent — for many
+  Office writers, that includes `/StructTreeRoot` and `/MarkInfo`.
+  `PdfReader.LoadXrefChain` followed `/Prev` but ignored `/XRefStm`, so those
+  objects were invisible and `HasStructTree`, `IsTagged`, and `StructTreeRoot`
+  wrongly reported absent/null. The classic-xref branch now also reads
+  `/XRefStm`, merging its entries without overriding the classic ones (classic
+  wins, per the spec). (#173)
+
+---
 ## [3.14.0] - 2026-06-19
 
 ### Added

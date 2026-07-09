@@ -624,20 +624,18 @@ public sealed class PdfReader : IDisposable
 
             if (peekText.StartsWith("xref", StringComparison.Ordinal))
             {
-                PdfDictionary sectionTrailer = LoadClassicXref(stream, offset, xref);
+                (XrefTable section, PdfDictionary sectionTrailer) =
+                    LoadClassicXref(stream, offset);
                 MergeTrailer(mergedTrailer, sectionTrailer);
 
                 // Hybrid-reference file (PDF 32000-1:2008 §7.5.8.4): a classic
                 // xref section's trailer may carry /XRefStm pointing to a
                 // cross-reference stream that lists the compressed (Type 2)
-                // objects the classic table cannot represent. Those objects —
-                // which for many writers (e.g. Word/Office) include the
-                // structure tree and other catalog entries — are otherwise
-                // invisible, making resolvable dictionaries such as
-                // /StructTreeRoot wrongly resolve to null. Load the hybrid xref
-                // stream so its compressed entries are merged in. LoadXrefStream
-                // only fills entries not already present, so the classic entries
-                // continue to take precedence as the spec requires.
+                // objects the classic table cannot represent. §7.5.8.4 hides
+                // such objects from pre-1.5 consumers by marking them FREE in
+                // the classic table, so the stream's entries must be merged
+                // BEFORE the classic entries of the same section — otherwise
+                // the free placeholders would shadow the real definitions.
                 int xrefStmOffset = sectionTrailer.GetInteger(PdfName.Intern("XRefStm"), -1);
                 if (xrefStmOffset >= 0 && !visited.Contains(xrefStmOffset))
                 {
@@ -645,6 +643,7 @@ public sealed class PdfReader : IDisposable
                     LoadXrefStream(stream, xrefStmOffset, xref);
                 }
 
+                MergeEntries(xref, section);
                 offset = sectionTrailer.GetInteger(PdfName.Prev, -1);
             }
             else
@@ -656,24 +655,34 @@ public sealed class PdfReader : IDisposable
         }
     }
 
-    private static PdfDictionary LoadClassicXref(
+    /// <summary>
+    /// Merges a section's entries into the chain-wide table. The chain is
+    /// walked newest-section-first, and per PDF 32000-1:2008 §7.5.6 the entry
+    /// in the most recent section supersedes all earlier ones — including
+    /// free entries, which mark deleted objects and must shadow older
+    /// definitions. First entry seen for an object number therefore wins,
+    /// regardless of kind.
+    /// </summary>
+    private static void MergeEntries(XrefTable xref, XrefTable section)
+    {
+        foreach (XrefEntry entry in section.Entries)
+        {
+            if (!xref.ContainsAny(entry.ObjectNumber))
+            {
+                xref.Set(entry);
+            }
+        }
+    }
+
+    private static (XrefTable Section, PdfDictionary Trailer) LoadClassicXref(
         Stream stream,
-        long offset,
-        XrefTable xref)
+        long offset)
     {
         // Parse the xref entries. XrefTable.Parse handles the "xref" keyword
         // itself (it skips it if present). Note: Parse uses StreamReader internally
         // which buffers ahead, so the stream position after Parse is unreliable.
         stream.Seek(offset, SeekOrigin.Begin);
         XrefTable section = XrefTable.Parse(stream);
-
-        foreach (XrefEntry entry in section.Entries)
-        {
-            if (!xref.Contains(entry.ObjectNumber) || entry.IsFree)
-            {
-                xref.Set(entry);
-            }
-        }
 
         // Because StreamReader in XrefTable.Parse buffers ahead, the stream
         // position after Parse may be past the "trailer" keyword.
@@ -698,7 +707,7 @@ public sealed class PdfReader : IDisposable
                 $"Trailer must be a dictionary, got {trailerValue.GetType().Name}.");
         }
 
-        return trailerDict;
+        return (section, trailerDict);
     }
 
     /// <summary>
@@ -765,7 +774,12 @@ public sealed class PdfReader : IDisposable
 
         foreach (XrefEntry entry in streamTable.Entries)
         {
-            if (!xref.Contains(entry.ObjectNumber) || entry.IsFree)
+            // Newest-section-first chain: the first entry seen for an object
+            // number wins, regardless of kind (§7.5.6) — a free entry in a
+            // newer section marks a deleted object and shadows any older
+            // definition; a compressed entry must not be replaced by an older
+            // uncompressed one.
+            if (!xref.ContainsAny(entry.ObjectNumber))
             {
                 xref.Set(entry);
             }

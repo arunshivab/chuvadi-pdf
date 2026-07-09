@@ -166,6 +166,184 @@ public sealed class PdfString : PdfPrimitive, IEquatable<PdfString>
         return new PdfString(withBom, preferHexForm: true);
     }
 
+    /// <summary>
+    /// Decodes a literal string token's raw bytes into string content bytes,
+    /// resolving every escape defined by PDF 32000-1:2008 §7.3.4.2.
+    /// </summary>
+    /// <remarks>
+    /// Accepts the raw token with or without the wrapping parentheses.
+    /// Handles: <c>\n \r \t \b \f \( \) \\</c>; one-to-three-digit octal
+    /// escapes (high-order overflow ignored per spec); a reverse solidus at
+    /// end-of-line as a line continuation (the solidus and the end-of-line
+    /// marker are both dropped, CR LF counting as one marker); a reverse
+    /// solidus before any other character is dropped, keeping the character;
+    /// and an unescaped end-of-line marker inside the string is normalized to
+    /// a single LF (0x0A) byte.
+    /// This is the single authoritative decoder — the object parser, the
+    /// content-stream parser, and the content-stream walker all delegate here
+    /// so a string decodes identically on every path.
+    /// </remarks>
+    /// <param name="raw">The token bytes, optionally including the parentheses.</param>
+    /// <returns>The decoded string content bytes.</returns>
+    public static byte[] DecodeLiteralToken(ReadOnlySpan<byte> raw)
+    {
+        int start = (raw.Length > 0 && raw[0] == (byte)'(') ? 1 : 0;
+        int end = (raw.Length > start && raw[raw.Length - 1] == (byte)')')
+            ? raw.Length - 1
+            : raw.Length;
+
+        System.Collections.Generic.List<byte> decoded =
+            new System.Collections.Generic.List<byte>(end - start);
+        int i = start;
+
+        while (i < end)
+        {
+            byte b = raw[i];
+
+            if (b == (byte)'\\' && i + 1 < end)
+            {
+                i++;
+                byte escaped = raw[i];
+
+                switch (escaped)
+                {
+                    case (byte)'n': decoded.Add(0x0A); i++; break;
+                    case (byte)'r': decoded.Add(0x0D); i++; break;
+                    case (byte)'t': decoded.Add(0x09); i++; break;
+                    case (byte)'b': decoded.Add(0x08); i++; break;
+                    case (byte)'f': decoded.Add(0x0C); i++; break;
+                    case (byte)'(': decoded.Add((byte)'('); i++; break;
+                    case (byte)')': decoded.Add((byte)')'); i++; break;
+                    case (byte)'\\': decoded.Add((byte)'\\'); i++; break;
+                    case 0x0D:
+                        // Line continuation: \CR or \CRLF — drop both.
+                        i++;
+                        if (i < end && raw[i] == 0x0A)
+                        {
+                            i++;
+                        }
+
+                        break;
+                    case 0x0A:
+                        // Line continuation: \LF — drop both.
+                        i++;
+                        break;
+                    default:
+                        if (escaped >= (byte)'0' && escaped <= (byte)'7')
+                        {
+                            // Octal escape: one to three digits (§7.3.4.2).
+                            int value = 0;
+                            int digits = 0;
+
+                            while (digits < 3 && i < end
+                                && raw[i] >= (byte)'0' && raw[i] <= (byte)'7')
+                            {
+                                value = (value << 3) | (raw[i] - (byte)'0');
+                                i++;
+                                digits++;
+                            }
+
+                            decoded.Add((byte)(value & 0xFF));
+                        }
+                        else
+                        {
+                            // Unknown escape: the reverse solidus is ignored.
+                            decoded.Add(escaped);
+                            i++;
+                        }
+
+                        break;
+                }
+            }
+            else if (b == 0x0D)
+            {
+                // Unescaped end-of-line inside a string: CR or CRLF reads as
+                // a single LF byte (§7.3.4.2).
+                decoded.Add(0x0A);
+                i++;
+
+                if (i < end && raw[i] == 0x0A)
+                {
+                    i++;
+                }
+            }
+            else
+            {
+                decoded.Add(b);
+                i++;
+            }
+        }
+
+        return decoded.ToArray();
+    }
+
+    /// <summary>
+    /// Decodes a hexadecimal string token's raw bytes into string content
+    /// bytes per PDF 32000-1:2008 §7.3.4.3. Accepts the raw token with or
+    /// without the wrapping angle brackets; whitespace between digits is
+    /// ignored and a trailing odd digit is padded with zero.
+    /// </summary>
+    /// <param name="raw">The token bytes, optionally including the brackets.</param>
+    /// <returns>The decoded string content bytes.</returns>
+    public static byte[] DecodeHexToken(ReadOnlySpan<byte> raw)
+    {
+        int start = (raw.Length > 0 && raw[0] == (byte)'<') ? 1 : 0;
+        int end = (raw.Length > start && raw[raw.Length - 1] == (byte)'>')
+            ? raw.Length - 1
+            : raw.Length;
+
+        System.Collections.Generic.List<byte> decoded =
+            new System.Collections.Generic.List<byte>((end - start + 1) / 2);
+        int highNibble = -1;
+
+        for (int i = start; i < end; i++)
+        {
+            int nibble = HexNibble(raw[i]);
+
+            if (nibble < 0)
+            {
+                continue;
+            }
+
+            if (highNibble < 0)
+            {
+                highNibble = nibble;
+            }
+            else
+            {
+                decoded.Add((byte)((highNibble << 4) | nibble));
+                highNibble = -1;
+            }
+        }
+
+        if (highNibble >= 0)
+        {
+            decoded.Add((byte)(highNibble << 4));
+        }
+
+        return decoded.ToArray();
+    }
+
+    private static int HexNibble(byte b)
+    {
+        if (b >= (byte)'0' && b <= (byte)'9')
+        {
+            return b - (byte)'0';
+        }
+
+        if (b >= (byte)'A' && b <= (byte)'F')
+        {
+            return b - (byte)'A' + 10;
+        }
+
+        if (b >= (byte)'a' && b <= (byte)'f')
+        {
+            return b - (byte)'a' + 10;
+        }
+
+        return -1;
+    }
+
     /// <summary>Implicit conversion from a .NET string using Latin-1 encoding.</summary>
     public static implicit operator PdfString(string value) => new(value);
 }

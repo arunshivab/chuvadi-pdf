@@ -592,40 +592,16 @@ public sealed class ContentStreamParser
 
     private static PdfString ParseLiteralString(byte[] raw)
     {
-        int start = (raw.Length > 0 && raw[0] == 40) ? 1 : 0;
-        int end = (raw.Length > start && raw[raw.Length - 1] == 41)
-            ? raw.Length - 1 : raw.Length;
-        return new PdfString(raw.AsSpan()[start..end]);
+        // Single authoritative escape decoder (§7.3.4.2) — see
+        // PdfString.DecodeLiteralToken. Previously this path passed the raw
+        // bytes through unescaped, so octal escapes such as \050 surfaced
+        // verbatim in extracted text.
+        return new PdfString(PdfString.DecodeLiteralToken(raw));
     }
 
     private static PdfString ParseHexString(byte[] raw)
     {
-        int start = (raw.Length > 0 && raw[0] == 60) ? 1 : 0;
-        int end = (raw.Length > start && raw[raw.Length - 1] == 62)
-            ? raw.Length - 1 : raw.Length;
-        List<byte> decoded = new List<byte>();
-        int highNibble = -1;
-
-        for (int i = start; i < end; i++)
-        {
-            byte b = raw[i];
-            if (b == 32 || b == 9 || b == 10 || b == 13) { continue; }
-            int n = HexNibble(b);
-            if (n < 0) { continue; }
-            if (highNibble < 0) { highNibble = n; }
-            else { decoded.Add((byte)((highNibble << 4) | n)); highNibble = -1; }
-        }
-
-        if (highNibble >= 0) { decoded.Add((byte)(highNibble << 4)); }
-        return new PdfString([.. decoded]);
-    }
-
-    private static int HexNibble(byte b)
-    {
-        if (b >= 48 && b <= 57) { return b - 48; }
-        if (b >= 65 && b <= 70) { return b - 55; }
-        if (b >= 97 && b <= 102) { return b - 87; }
-        return -1;
+        return new PdfString(PdfString.DecodeHexToken(raw));
     }
 
     private static double GetDouble(List<PdfPrimitive> ops, int index)

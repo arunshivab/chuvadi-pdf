@@ -67,6 +67,14 @@ public static class AnnotationFlattener
             _options = options;
             _store = document.Objects;
 
+            // BASELINE B16: the object store is lazy — Objects.Objects returns
+            // only what has been explicitly resolved. Without a full preload,
+            // the output pass below sees an incomplete snapshot and silently
+            // drops every not-yet-resolved object (page content streams, fonts,
+            // images), producing an empty page. Force-resolve everything
+            // reachable from the catalog and trailer first.
+            PreloadAllObjects(document);
+
             _nextObjectNumber = 1;
             foreach (PdfIndirectObject obj in _document.Objects.Objects)
             {
@@ -80,6 +88,69 @@ public static class AnnotationFlattener
                 && sizePrim is PdfInteger size && size.Value >= _nextObjectNumber)
             {
                 _nextObjectNumber = size.Value;
+            }
+        }
+
+        // ── BASELINE B16 preload ───────────────────────────────────────────
+
+        private static void PreloadAllObjects(PdfDocument document)
+        {
+            HashSet<int> visited = new HashSet<int>();
+
+            Visit(document.Objects, document.Catalog, visited);
+
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                Visit(document.Objects, document.Pages[i].Dictionary, visited);
+            }
+
+            if (document.Trailer.TryGetValue(PdfName.Intern("Info"), out PdfPrimitive? info))
+            {
+                Visit(document.Objects, info, visited);
+            }
+        }
+
+        private static void Visit(PdfObjectStore store, PdfPrimitive? primitive, HashSet<int> visited)
+        {
+            if (primitive is null)
+            {
+                return;
+            }
+
+            if (primitive is PdfReference reference)
+            {
+                if (!visited.Add(reference.ObjectId.ObjectNumber))
+                {
+                    return;
+                }
+
+                PdfPrimitive resolved = store.Resolve(reference);
+                Visit(store, resolved, visited);
+                return;
+            }
+
+            if (primitive is PdfArray array)
+            {
+                for (int i = 0; i < array.Count; i++)
+                {
+                    Visit(store, array[i], visited);
+                }
+
+                return;
+            }
+
+            if (primitive is PdfStream stream)
+            {
+                Visit(store, stream.Dictionary, visited);
+                return;
+            }
+
+            if (primitive is PdfDictionary dictionary)
+            {
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                {
+                    Visit(store, entry.Value, visited);
+                }
             }
         }
 
@@ -314,17 +385,19 @@ public static class AnnotationFlattener
                     || !TryReadRect(annot, out double rx0, out double ry0, out double rx1, out double ry1)
                     || !TryComputePlacement(appearance, rx0, ry0, rx1, ry1, out double sx, out double sy, out double tx, out double ty))
                 {
-                    if (_options.DropRemainingAnnotations)
+                    // A selected widget with no usable normal appearance has
+                    // nothing to bake — flattening a form removes its fields
+                    // (the industry-standard semantics), so drop it rather than
+                    // keep it live; keeping it would retain the whole AcroForm
+                    // (and any /XFA inside it) in the output. Non-widget
+                    // annotations keep the previous conservative behaviour.
+                    if (isWidget || _options.DropRemainingAnnotations)
                     {
                         changed = true;
                     }
                     else
                     {
                         kept.Add(entry);
-                        if (isWidget)
-                        {
-                            _keptWidgetLive = true;
-                        }
                     }
 
                     continue;

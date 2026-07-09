@@ -9,16 +9,18 @@
 
 ## Last Updated
 
-2026-07-07 — v3.16.0 released (XFA FormCalc + JavaScript scripting engines,
-`XfaRenderOptions.ScriptMode` defaulting to `Full`, hybrid-reference `/XRefStm`
-resolution, and the rendering split into Walking / DisplayList / Raster
-projects).
+2026-07-08 — hybrid-XFA "just works" arc merged (targeting v3.17.0):
+annotation appearance rendering (§12.5.5) on all sinks, appearance text in
+extraction, `XfaDataField.Geometry` via the template bind map, xref-chain
+precedence fix (§7.5.6 — newest section supersedes, free entries shadow),
+consolidated literal-string escape decoding, and the flattener B16 preload
+fix. Last released version: v3.16.0.
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,392 tests across 30 in-solution test projects,
+**Last known passing total: 2,413 tests across 30 in-solution test projects,
 0 failures.** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
@@ -99,6 +101,17 @@ All modules are Complete and shipping. Grouped by role:
 - **Hybrid-reference xref works.** `PdfReader.LoadXrefChain` reads `/XRefStm`
   in the classic-xref branch, so compressed objects (e.g. `/StructTreeRoot`,
   `/MarkInfo`) on Word/Office PDFs resolve; `HasStructTree` / `IsTagged` are correct.
+- **Annotation appearances render everywhere.** All three sinks draw each
+  visible annotation's `/AP /N` form placed per §12.5.5
+  (`PageAnnotationAppearances` in Documents is the shared resolver); text
+  extraction includes appearance text. Hybrid XFA documents (MCA certificates
+  and similar) show, search, and flatten their field values through the
+  ordinary open/render/extract/flatten APIs — no XFA-awareness needed in
+  consumers.
+- **Xref chains follow §7.5.6.** The newest incremental-update section
+  supersedes older ones for entries of any kind; free entries shadow older
+  definitions (no resurrection) and compressed entries are not replaced by
+  older uncompressed ones.
 - **Redaction-grade crop is done.** `PageCropMode.ClipOnly` (lossless) and
   `PageCropMode.Scrub` (byte-scrub via `PageScrubber`/`ScrubGeometry`).
 
