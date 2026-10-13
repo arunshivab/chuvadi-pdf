@@ -127,3 +127,30 @@ jobs:
           tests/Chuvadi.Pdf.WasmSmoke/Chuvadi.Pdf.WasmSmoke.csproj
           --no-restore
           --configuration Release
+
+  perf-baseline:
+    # Non-required job (not in branch protection): catches pathological
+    # performance regressions against the committed perf baseline with a
+    # generous multiplicative tolerance. Noise on shared runners is expected,
+    # so a failure here is a prompt to look, never a merge blocker.
+    name: Perf Baseline (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore benchmarks/Chuvadi.Benchmarks/Chuvadi.Benchmarks.csproj
+
+      - name: Perf report vs baseline
+        run: >
+          dotnet run
+          --project benchmarks/Chuvadi.Benchmarks
+          --configuration Release
+          -- --perf-report

@@ -1369,7 +1369,23 @@ public sealed class TrueTypeLoader
 
         if (raw is null)
         {
-            // Composite glyph: assemble from hinted components.
+            // Composite glyph. In a font with no hinting machinery at all,
+            // the geometric autohinter Y-fits the FLATTENED composite (3.18),
+            // so accented glyphs stay consistent with their autohinted bases;
+            // in a hinted font, assemble from hinted components as before.
+            if (autohintFallback && !HasHintingPrograms)
+            {
+                RawGlyph? flattened = BuildFlattenedCompositeRaw(glyphId, depth: 1);
+                if (flattened is not null && flattened.ContourCount > 0)
+                {
+                    GlyphOutline? autohinted = BuildAutohintedOutline(flattened, glyphId, ppem);
+                    if (autohinted is not null)
+                    {
+                        return autohinted;
+                    }
+                }
+            }
+
             return GetHintedCompositeOutline(glyphId, ppem, light);
         }
 
@@ -1471,6 +1487,84 @@ public sealed class TrueTypeLoader
     // Y-axis only (blue-zone anchoring, stroke fitting, interpolation),
     // X positions naturally scaled — the Light philosophy. Returns null on
     // degenerate input so callers fall back to the unhinted outline.
+    // 3.18 — flattens an unscaled composite glyph into one raw point set in
+    // font units (each component's points translated by its offset, contours
+    // merged), so the geometric autohinter can Y-fit composite glyphs of
+    // unhinted fonts exactly like simple ones. Returns null outside the
+    // hinted-composite scope (scaled or point-matched components) or past the
+    // nesting cap.
+    private RawGlyph? BuildFlattenedCompositeRaw(int glyphId, int depth)
+    {
+        if (depth > 3)
+        {
+            return null;
+        }
+
+        uint offset = GetGlyfOffset(glyphId);
+        if (offset == 0)
+        {
+            return null;
+        }
+
+        int numberOfContours = ReadInt16(offset);
+        if (numberOfContours >= 0)
+        {
+            return BuildRawGlyph(glyphId);
+        }
+
+        List<HintedComponent>? components = ParseHintedComponents(offset, out _);
+        if (components is null || components.Count == 0)
+        {
+            return null;
+        }
+
+        List<int> xs = new List<int>();
+        List<int> ys = new List<int>();
+        List<bool> onCurve = new List<bool>();
+        List<int> contourEnds = new List<int>();
+
+        foreach (HintedComponent component in components)
+        {
+            RawGlyph? child = BuildFlattenedCompositeRaw(component.GlyphId, depth + 1);
+            if (child is null)
+            {
+                return null;
+            }
+
+            int baseIndex = xs.Count;
+            for (int i = 0; i < child.RealPointCount; i++)
+            {
+                xs.Add(child.X[i] + component.Dx);
+                ys.Add(child.Y[i] + component.Dy);
+                onCurve.Add(child.OnCurve[i]);
+            }
+
+            foreach (int end in child.ContourEnds)
+            {
+                contourEnds.Add(baseIndex + end);
+            }
+        }
+
+        if (xs.Count == 0)
+        {
+            return null;
+        }
+
+        // Four zero phantom points for shape parity with BuildRawGlyph; the
+        // autohinter path reads only the real contour points.
+        int realPoints = xs.Count;
+        for (int i = 0; i < 4; i++)
+        {
+            xs.Add(0);
+            ys.Add(0);
+            onCurve.Add(false);
+        }
+
+        return new RawGlyph(
+            xs.ToArray(), ys.ToArray(), onCurve.ToArray(), contourEnds.ToArray(),
+            Array.Empty<byte>(), realPoints);
+    }
+
     private GlyphOutline? BuildAutohintedOutline(RawGlyph raw, int glyphId, int ppem)
     {
         int realPoints = raw.RealPointCount;

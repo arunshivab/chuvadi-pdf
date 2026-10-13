@@ -50,6 +50,27 @@ public sealed record CompressionOptions
     /// </summary>
     public int MinImagePixelsToRecompress { get; init; } = 4096;
 
+    /// <summary>
+    /// Target resolution, in DPI, for image downsampling. <c>0</c> (default)
+    /// disables downsampling. When set (and <see cref="RecompressImages"/> is
+    /// enabled), eligible image XObjects whose effective placement resolution
+    /// exceeds 1.25× this value are box-resampled down to it before
+    /// re-encoding. Effective resolution comes from scanning each page's own
+    /// content stream for the image's largest placement; images referenced
+    /// only from nested form XObjects are not downsampled.
+    /// </summary>
+    public double DownsampleImagesToDpi { get; init; }
+
+    /// <summary>
+    /// Per-image codec selection. When enabled (and
+    /// <see cref="RecompressImages"/> is on), each eligible image is stored in
+    /// whichever encoding is smallest: an Indexed palette under FlateDecode
+    /// when it has at most 256 distinct colours, one-bit-per-pixel under
+    /// FlateDecode when it is bilevel grayscale, JPEG at
+    /// <see cref="JpegQuality"/>, or its original bytes. Off by default.
+    /// </summary>
+    public bool SmartCodecSelection { get; init; }
+
     /// <summary>Drop the catalog /Metadata (XMP) stream. Off by default.</summary>
     public bool RemoveMetadata { get; init; }
 
@@ -267,6 +288,31 @@ public static partial class PdfCompressor
         }
 
         // ── 3. Copy with remapped references and stream reduction ────────
+        // Image placements (largest painted extent per image object) feed the
+        // optional downsample-to-DPI step.
+        Dictionary<int, (double WidthPts, double HeightPts)>? placements =
+            options.RecompressImages && options.DownsampleImagesToDpi > 0
+                ? ImagePlacementScanner.Scan(document)
+                : null;
+
+        // Streams referenced as another image's /SMask must stay DeviceGray
+        // (PDF 32000-1:2008 §11.6.5.2) — the palette recoding would make them
+        // Indexed/DeviceRGB and viewers could drop the transparency.
+        HashSet<int> softMaskObjects = new HashSet<int>();
+        if (options.RecompressImages)
+        {
+            foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
+            {
+                if (entry.Value is PdfStream candidate
+                    && candidate.Dictionary.TryGetValue(
+                        PdfName.Intern("SMask"), out PdfPrimitive? smRef)
+                    && smRef is PdfReference reference)
+                {
+                    softMaskObjects.Add(reference.ObjectId.ObjectNumber);
+                }
+            }
+        }
+
         int streamsCompressed = 0;
         int imagesRecompressed = 0;
         int contentStreamsMinified = 0;
@@ -288,8 +334,17 @@ public static partial class PdfCompressor
                 }
                 else
                 {
+                    (double WidthPts, double HeightPts)? placement = null;
+                    if (placements is not null
+                        && placements.TryGetValue(entry.Key, out (double WidthPts, double HeightPts) extent))
+                    {
+                        placement = extent;
+                    }
+
                     PdfStream? recompressed = options.RecompressImages
-                        ? TryRecompressImage(stream, document.Objects, options)
+                        ? TryRecompressImage(
+                            stream, document.Objects, options, placement,
+                            isSoftMask: softMaskObjects.Contains(entry.Key))
                         : null;
                     if (recompressed is not null)
                     {
@@ -1236,7 +1291,8 @@ public static partial class PdfCompressor
     // Re-encodes an eligible 8-bit RGB/grayscale image as baseline JPEG.
     // Returns null when the image isn't eligible or JPEG doesn't shrink it.
     private static PdfStream? TryRecompressImage(
-        PdfStream stream, PdfObjectStore resolver, CompressionOptions options)
+        PdfStream stream, PdfObjectStore resolver, CompressionOptions options,
+        (double WidthPts, double HeightPts)? placement = null, bool isSoftMask = false)
     {
         PdfDictionary dict = stream.Dictionary;
 
@@ -1291,9 +1347,45 @@ public static partial class PdfCompressor
             return null;
         }
 
-        if (samples.Length < width * height * components)
+        if (samples.Length < (long)width * height * components)
         {
             return null;
+        }
+
+        // ── Downsample to target DPI (opt-in) ─────────────────────────────
+        // The image's effective resolution is its pixel size over its largest
+        // painted extent. Above 1.25× the target it is box-resampled down.
+        bool downsampled = false;
+        if (options.DownsampleImagesToDpi > 0
+            && placement is (double widthPts, double heightPts)
+            && widthPts > 1 && heightPts > 1)
+        {
+            double target = options.DownsampleImagesToDpi;
+            double dpiX = width / (widthPts / 72.0);
+            double dpiY = height / (heightPts / 72.0);
+            if (dpiX > target * 1.25 || dpiY > target * 1.25)
+            {
+                int newWidth = Math.Max(1, (int)Math.Round(widthPts / 72.0 * target));
+                int newHeight = Math.Max(1, (int)Math.Round(heightPts / 72.0 * target));
+                if (newWidth < width && newHeight < height)
+                {
+                    samples = BoxResample(samples, width, height, components, newWidth, newHeight);
+                    width = newWidth;
+                    height = newHeight;
+                    downsampled = true;
+                }
+            }
+        }
+
+        // ── Codec selection (opt-in) ──────────────────────────────────────
+        // Pick the smallest of: Indexed palette under Flate (lossless for
+        // ≤256 distinct colours, including bilevel at 1 bpc), JPEG, or the
+        // original bytes (only when not downsampled).
+        if (options.SmartCodecSelection)
+        {
+            return SelectSmallestEncoding(
+                stream, dict, samples, width, height, components, options, downsampled,
+                isSoftMask);
         }
 
         ImageFrame frame = ImageFrame.Create(
@@ -1328,7 +1420,7 @@ public static partial class PdfCompressor
             return null;
         }
 
-        if (jpeg.Length >= stream.RawBytes.Length)
+        if (!downsampled && jpeg.Length >= stream.RawBytes.Length)
         {
             return null;
         }
@@ -1337,10 +1429,246 @@ public static partial class PdfCompressor
         newDict.Set(PdfName.Intern("Filter"), PdfName.Intern("DCTDecode"));
         newDict.Remove(PdfName.Intern("DecodeParms"));
         newDict.Remove(PdfName.Intern("Decode"));
+        newDict.Set(PdfName.Intern("Width"), width);
+        newDict.Set(PdfName.Intern("Height"), height);
         newDict.Set(
             PdfName.Intern("ColorSpace"),
             PdfName.Intern(components == 1 ? "DeviceGray" : "DeviceRGB"));
         return new PdfStream(newDict, jpeg);
+    }
+
+    // ── 3.18 image recoding helpers ───────────────────────────────────────
+
+    // Box-filter resample of interleaved 8-bit samples.
+    private static byte[] BoxResample(
+        byte[] samples, int width, int height, int channels, int newWidth, int newHeight)
+    {
+        byte[] output = new byte[newWidth * newHeight * channels];
+        for (int oy = 0; oy < newHeight; oy++)
+        {
+            int y0 = (int)((long)oy * height / newHeight);
+            int y1 = Math.Max(y0 + 1, (int)((long)(oy + 1) * height / newHeight));
+            for (int ox = 0; ox < newWidth; ox++)
+            {
+                int x0 = (int)((long)ox * width / newWidth);
+                int x1 = Math.Max(x0 + 1, (int)((long)(ox + 1) * width / newWidth));
+
+                for (int ch = 0; ch < channels; ch++)
+                {
+                    long sum = 0;
+                    int count = 0;
+                    for (int sy = y0; sy < y1; sy++)
+                    {
+                        for (int sx = x0; sx < x1; sx++)
+                        {
+                            sum += samples[(((sy * width) + sx) * channels) + ch];
+                            count++;
+                        }
+                    }
+
+                    output[(((oy * newWidth) + ox) * channels) + ch] = (byte)(sum / count);
+                }
+            }
+        }
+
+        return output;
+    }
+
+    // Picks the smallest of palette/Flate, JPEG, or (when untouched) the
+    // original encoding, and builds the winning stream.
+    private static PdfStream? SelectSmallestEncoding(
+        PdfStream stream, PdfDictionary dict, byte[] samples,
+        int width, int height, int components, CompressionOptions options, bool downsampled,
+        bool isSoftMask)
+    {
+        byte[]? paletteStream = null;
+        PdfPrimitive? paletteColorSpace = null;
+        int paletteBpc = 0;
+
+        // A soft mask must stay DeviceGray (§11.6.5.2): the Indexed palette
+        // candidate is skipped; the JPEG candidate (DCT DeviceGray) is legal.
+        if (!isSoftMask && TryBuildPalette(samples, width, height, components,
+            out byte[] indices, out byte[] paletteRgb, out int bpc))
+        {
+            try
+            {
+                paletteStream = FlateEncode(indices);
+                paletteBpc = bpc;
+                PdfArray indexed = new PdfArray(new PdfPrimitive[]
+                {
+                    PdfName.Intern("Indexed"),
+                    PdfName.Intern("DeviceRGB"),
+                    new PdfInteger((paletteRgb.Length / 3) - 1),
+                    new PdfString(paletteRgb),
+                });
+                paletteColorSpace = indexed;
+            }
+            catch (FilterException)
+            {
+                paletteStream = null;
+            }
+        }
+
+        byte[]? jpeg = EncodeJpegCandidate(samples, width, height, components, options.JpegQuality);
+
+        long best = long.MaxValue;
+        if (paletteStream is not null)
+        {
+            best = paletteStream.Length;
+        }
+
+        if (jpeg is not null && jpeg.Length < best)
+        {
+            best = jpeg.Length;
+        }
+
+        if (!downsampled && stream.RawBytes.Length <= best)
+        {
+            // The original bytes are already the smallest choice.
+            return null;
+        }
+
+        if (best == long.MaxValue)
+        {
+            return null;
+        }
+
+        PdfDictionary newDict = (PdfDictionary)DeepCopy(dict, EmptyRemap);
+        newDict.Remove(PdfName.Intern("DecodeParms"));
+        newDict.Remove(PdfName.Intern("Decode"));
+        newDict.Set(PdfName.Intern("Width"), width);
+        newDict.Set(PdfName.Intern("Height"), height);
+
+        if (paletteStream is not null && paletteStream.Length == best)
+        {
+            newDict.Set(PdfName.Intern("Filter"), PdfName.Intern("FlateDecode"));
+            newDict.Set(PdfName.Intern("ColorSpace"), paletteColorSpace!);
+            newDict.Set(PdfName.Intern("BitsPerComponent"), paletteBpc);
+            return new PdfStream(newDict, paletteStream);
+        }
+
+        newDict.Set(PdfName.Intern("Filter"), PdfName.Intern("DCTDecode"));
+        newDict.Set(PdfName.Intern("BitsPerComponent"), 8);
+        newDict.Set(
+            PdfName.Intern("ColorSpace"),
+            PdfName.Intern(components == 1 ? "DeviceGray" : "DeviceRGB"));
+        return new PdfStream(newDict, jpeg!);
+    }
+
+    // Builds an indexed-palette representation when the image has at most 256
+    // distinct colours: byte-aligned rows of palette indices at the smallest
+    // sufficient bit depth (1/2/4/8), plus the RGB palette. Lossless.
+    private static bool TryBuildPalette(
+        byte[] samples, int width, int height, int components,
+        out byte[] indices, out byte[] paletteRgb, out int bitsPerComponent)
+    {
+        indices = Array.Empty<byte>();
+        paletteRgb = Array.Empty<byte>();
+        bitsPerComponent = 0;
+
+        Dictionary<int, byte> palette = new Dictionary<int, byte>();
+        byte[] flat = new byte[width * height];
+        for (int p = 0; p < width * height; p++)
+        {
+            int key;
+            if (components == 1)
+            {
+                byte v = samples[p];
+                key = (v << 16) | (v << 8) | v;
+            }
+            else
+            {
+                int si = p * 3;
+                key = (samples[si] << 16) | (samples[si + 1] << 8) | samples[si + 2];
+            }
+
+            if (!palette.TryGetValue(key, out byte index))
+            {
+                if (palette.Count == 256)
+                {
+                    return false;
+                }
+
+                index = (byte)palette.Count;
+                palette[key] = index;
+            }
+
+            flat[p] = index;
+        }
+
+        paletteRgb = new byte[palette.Count * 3];
+        foreach (KeyValuePair<int, byte> entry in palette)
+        {
+            paletteRgb[entry.Value * 3] = (byte)(entry.Key >> 16);
+            paletteRgb[(entry.Value * 3) + 1] = (byte)((entry.Key >> 8) & 0xFF);
+            paletteRgb[(entry.Value * 3) + 2] = (byte)(entry.Key & 0xFF);
+        }
+
+        bitsPerComponent = palette.Count <= 2 ? 1
+            : palette.Count <= 4 ? 2
+            : palette.Count <= 16 ? 4
+            : 8;
+
+        // Pack indices into byte-aligned rows (PDF §8.9.3).
+        int stride = ((width * bitsPerComponent) + 7) / 8;
+        indices = new byte[stride * height];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int value = flat[(y * width) + x];
+                int bitPos = x * bitsPerComponent;
+                int byteIndex = (y * stride) + (bitPos >> 3);
+                int shift = 8 - bitsPerComponent - (bitPos & 7);
+                indices[byteIndex] |= (byte)(value << shift);
+            }
+        }
+
+        return true;
+    }
+
+    private static byte[]? EncodeJpegCandidate(
+        byte[] samples, int width, int height, int components, int quality)
+    {
+        ImageFrame frame = ImageFrame.Create(
+            width, height, components == 1 ? ImageColorFormat.Gray8 : ImageColorFormat.Rgb24);
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if (components == 1)
+                {
+                    byte v = samples[(y * width) + x];
+                    frame.Pixels.SetPixelBgra(x, y, v, v, v, 255);
+                }
+                else
+                {
+                    int si = ((y * width) + x) * 3;
+                    frame.Pixels.SetPixelBgra(
+                        x, y, samples[si + 2], samples[si + 1], samples[si], 255);
+                }
+            }
+        }
+
+        try
+        {
+            using MemoryStream encoded = new();
+            JpegEncoder.Encode(frame, encoded, quality);
+            return encoded.ToArray();
+        }
+        catch (ImageException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] FlateEncode(byte[] raw)
+    {
+        DeflateFilter filter = new DeflateFilter();
+        using MemoryStream input = new MemoryStream(raw);
+        using MemoryStream output = new MemoryStream();
+        filter.Encode(input, output);
+        return output.ToArray();
     }
 
     // ── Dictionary helpers ────────────────────────────────────────────────

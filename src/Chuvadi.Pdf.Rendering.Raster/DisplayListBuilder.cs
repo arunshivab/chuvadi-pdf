@@ -128,6 +128,13 @@ public static class DisplayListBuilder
     /// </summary>
     private sealed class Worker : IContentOperatorSink
     {
+        // Nesting depth across sub-workers (form XObjects, tiling-pattern
+        // cells, soft-mask groups, Type 3 glyphs). A self-referential pattern
+        // or form would otherwise recurse until the process dies with an
+        // un-catchable StackOverflowException.
+        private const int MaxNestingDepth = 16;
+        private int _nestingDepth;
+
         private readonly PdfObjectStore _objects;
         private readonly double _hintingScale;
         private readonly bool _lightHinting;
@@ -297,6 +304,7 @@ public static class DisplayListBuilder
             _state.FillColor = ColorF.FromGray((float)gray);
             _state.FillValid = true;
             _state.FillColorSpace = null;
+            _state.FillPattern = null;
         }
 
         /// <inheritdoc />
@@ -315,6 +323,7 @@ public static class DisplayListBuilder
             _state.FillColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.FillValid = true;
             _state.FillColorSpace = null;
+            _state.FillPattern = null;
         }
 
         /// <inheritdoc />
@@ -333,6 +342,7 @@ public static class DisplayListBuilder
             _state.FillColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.FillValid = true;
             _state.FillColorSpace = null;
+            _state.FillPattern = null;
         }
 
         /// <inheritdoc />
@@ -365,6 +375,7 @@ public static class DisplayListBuilder
             {
                 _state.FillColorSpace = space;
                 _state.FillValid = valid;
+                _state.FillPattern = null;
             }
         }
 
@@ -455,7 +466,66 @@ public static class DisplayListBuilder
             {
                 _state.FillColor = c;
                 _state.FillValid = true;
+                _state.FillPattern = null;
             }
+        }
+
+        /// <inheritdoc />
+        public void SetPatternColor(string name, double[] components, bool stroke)
+        {
+            if (_suppressColorOps) { return; }
+
+            if (stroke)
+            {
+                // Stroke patterns are not painted (follow-up): keep the legacy
+                // behaviour of suppressing pattern-stroked geometry.
+                _state.StrokeValid = false;
+                return;
+            }
+
+            // A pattern is not a flat paintable colour, so flat fills stay
+            // suppressed; the pattern itself paints through OpFill. The numeric
+            // operands before the name are the underlying colour of an
+            // uncoloured (PaintType 2) tiling pattern — record it as the cell
+            // replay's starting colour.
+            _state.FillValid = false;
+            switch (components.Length)
+            {
+                case 1:
+                    _state.FillColor = ColorF.FromGray((float)components[0]);
+                    break;
+                case 3:
+                    _state.FillColor = ColorF.FromRgb(
+                        (float)components[0], (float)components[1], (float)components[2]);
+                    break;
+                case 4:
+                    _state.FillColor = ColorF.FromCmyk(
+                        (float)components[0], (float)components[1],
+                        (float)components[2], (float)components[3]);
+                    break;
+                default:
+                    break;
+            }
+
+            _state.FillPattern = ResolvePattern(name);
+        }
+
+        private PdfPrimitive? ResolvePattern(string name)
+        {
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv))
+            {
+                return null;
+            }
+
+            PdfDictionary? patterns = _objects.ResolveAs<PdfDictionary>(pv);
+            if (patterns is null
+                || !patterns.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry))
+            {
+                return null;
+            }
+
+            return _objects.Resolve(entry);
         }
 
         // ── Path construction ─────────────────────────────────────────────
@@ -669,7 +739,13 @@ public static class DisplayListBuilder
                 groupResources = r;
             }
 
+            if (_nestingDepth >= MaxNestingDepth)
+            {
+                return new PageDisplayList(new List<RenderOp>(), 0, 0);
+            }
+
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            sub._nestingDepth = _nestingDepth + 1;
 
             byte[] content;
             try
@@ -747,6 +823,17 @@ public static class DisplayListBuilder
             if (shadings is null) { return; }
             if (!shadings.TryGetValue(PdfName.Intern(name), out PdfPrimitive? shadingRef)) { return; }
 
+            // The CTM at the sh operator maps shading space to page space.
+            TryEmitShadeOp(shadingRef, _state.Ctm, SnapshotClips());
+        }
+
+        // Emits a ShadeOp for a shading dictionary under the given
+        // shading-space-to-page transform and clip set. Returns false when the
+        // shading type is unsupported (e.g. mesh shadings 4-7) — the paint is
+        // skipped rather than failing the whole page.
+        private bool TryEmitShadeOp(
+            PdfPrimitive shadingRef, Transform ctm, IReadOnlyList<ClipPath>? clips)
+        {
             PdfShading shading;
             try
             {
@@ -754,15 +841,11 @@ public static class DisplayListBuilder
             }
             catch (ContentException)
             {
-                // Unsupported shading type (e.g. mesh shadings 4-7) — skip the
-                // paint rather than failing the whole page.
-                return;
+                return false;
             }
 
-            // The CTM at the sh operator maps shading space to page space; raster
-            // op geometry is already baked to page space, so the gradient must be
-            // too. Radii scale by the CTM's unit-vector length.
-            Transform ctm = _state.Ctm;
+            // Raster op geometry is baked to page space, so the gradient must
+            // be too. Radii scale by the transform's unit-vector length.
             PointF unit = ctm.TransformVector(1.0, 0.0);
             double scale = Math.Sqrt((unit.X * unit.X) + (unit.Y * unit.Y));
 
@@ -777,8 +860,6 @@ public static class DisplayListBuilder
                 (double r, double g, double b) = shading.EvaluateRgb(t);
                 stops.Add(new GradientStop(t, ColorF.FromRgb((float)r, (float)g, (float)b)));
             }
-
-            IReadOnlyList<ClipPath>? clips = SnapshotClips();
 
             if (shading.IsRadial)
             {
@@ -814,6 +895,226 @@ public static class DisplayListBuilder
                     clips: clips)
                 { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
             }
+
+            return true;
+        }
+
+        // ── Pattern fills (PDF 32000-1:2008 §8.7.3) ──────────────────────
+
+        // Paints the current path with the current fill pattern: a PatternType
+        // 2 (shading) pattern fills the path with its gradient; a PatternType
+        // 1 (tiling) pattern replays its cell across the path. The path acts
+        // as an additional clip in both cases. The pattern matrix maps pattern
+        // space to this content stream's default space (identity in worker
+        // coordinates; an enclosing form's placement composes afterwards).
+        private void EmitPatternFill(FillRule rule)
+        {
+            PdfPrimitive pattern = _state.FillPattern!;
+            PdfDictionary? dict = pattern as PdfDictionary ?? (pattern as PdfStream)?.Dictionary;
+            if (dict is null)
+            {
+                return;
+            }
+
+            Path device = TransformPath(_currentPath, _state.Ctm);
+            List<ClipPath> clips = new List<ClipPath>();
+            IReadOnlyList<ClipPath>? active = SnapshotClips();
+            if (active is not null)
+            {
+                clips.AddRange(active);
+            }
+
+            clips.Add(new ClipPath(device, rule));
+
+            Transform patternMatrix = ReadMatrixEntry(dict, "Matrix");
+            int patternType = ReadIntEntry(dict, "PatternType");
+
+            if (patternType == 2)
+            {
+                if (dict.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shadingRef))
+                {
+                    TryEmitShadeOp(shadingRef, patternMatrix, clips);
+                }
+
+                return;
+            }
+
+            if (patternType == 1 && pattern is PdfStream cell)
+            {
+                EmitTilingPattern(cell, dict, patternMatrix, clips, device);
+            }
+        }
+
+        // Replays a tiling pattern's cell across the filled region: the cell's
+        // content stream is built once into a sub-display-list, then placed
+        // once per tile via NestedDisplayListOp, clipped to the filled path.
+        private void EmitTilingPattern(
+            PdfStream cell, PdfDictionary dict, Transform patternMatrix,
+            List<ClipPath> clips, Path devicePath)
+        {
+            const int MaxTiles = 4096;
+
+            double[]? bbox = ReadRectEntry(dict, "BBox");
+            if (bbox is null)
+            {
+                return;
+            }
+
+            double cellWidth = Math.Abs(bbox[2] - bbox[0]);
+            double cellHeight = Math.Abs(bbox[3] - bbox[1]);
+            double xStep = Math.Abs(ReadDoubleEntry(dict, "XStep", cellWidth));
+            double yStep = Math.Abs(ReadDoubleEntry(dict, "YStep", cellHeight));
+            if (xStep < 1e-6) { xStep = cellWidth; }
+            if (yStep < 1e-6) { yStep = cellHeight; }
+            if (xStep < 1e-6 || yStep < 1e-6)
+            {
+                return;
+            }
+
+            // The filled region's bounding box mapped into pattern space picks
+            // the tile range. A singular pattern matrix paints nothing.
+            Transform inverse;
+            try
+            {
+                inverse = patternMatrix.Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+
+            RectangleF bounds = devicePath.EndpointBounds();
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+            Span<PointF> corners = stackalloc PointF[4]
+            {
+                new PointF(bounds.X, bounds.Y),
+                new PointF(bounds.Right, bounds.Y),
+                new PointF(bounds.Right, bounds.Top),
+                new PointF(bounds.X, bounds.Top),
+            };
+            foreach (PointF corner in corners)
+            {
+                PointF ps = inverse.TransformPoint(corner);
+                minX = Math.Min(minX, ps.X);
+                minY = Math.Min(minY, ps.Y);
+                maxX = Math.Max(maxX, ps.X);
+                maxY = Math.Max(maxY, ps.Y);
+            }
+
+            int i0 = (int)Math.Floor((minX - bbox[0] - cellWidth) / xStep) + 1;
+            int i1 = (int)Math.Ceiling((maxX - bbox[0]) / xStep);
+            int j0 = (int)Math.Floor((minY - bbox[1] - cellHeight) / yStep) + 1;
+            int j1 = (int)Math.Ceiling((maxY - bbox[1]) / yStep);
+
+            long tiles = (long)(i1 - i0 + 1) * (j1 - j0 + 1);
+            if (tiles <= 0 || tiles > MaxTiles)
+            {
+                return;
+            }
+
+            // Build the cell sub-list once. An uncoloured pattern (PaintType 2)
+            // paints with the underlying colour recorded by SetPatternColor.
+            if (_nestingDepth >= MaxNestingDepth)
+            {
+                return;
+            }
+
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            sub._nestingDepth = _nestingDepth + 1;
+            sub._state.FillAlpha = _state.FillAlpha;
+            sub._state.StrokeAlpha = _state.StrokeAlpha;
+            if (ReadIntEntry(dict, "PaintType") == 2)
+            {
+                sub._state.FillColor = _state.FillColor;
+                sub._state.StrokeColor = _state.FillColor;
+                sub._suppressColorOps = true;
+            }
+
+            byte[] content;
+            try
+            {
+                content = ContentStreamLoader.Decode(cell, _objects);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            PdfDictionary? cellResources = null;
+            if (cell.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? resPrim))
+            {
+                cellResources = _objects.ResolveAs<PdfDictionary>(resPrim ?? PdfNull.Value);
+            }
+
+            sub._resources = cellResources ?? _resources;
+            if (content.Length > 0)
+            {
+                ContentStreamWalker.Walk(content, sub);
+            }
+
+            if (sub._ops.Count == 0)
+            {
+                return;
+            }
+
+            PageDisplayList inner = new PageDisplayList(sub._ops, 0, 0);
+            for (int j = j0; j <= j1; j++)
+            {
+                for (int i = i0; i <= i1; i++)
+                {
+                    Transform composition = Transform
+                        .CreateTranslation(i * xStep, j * yStep)
+                        .Multiply(patternMatrix);
+                    _ops.Add(new NestedDisplayListOp(inner, composition, clips)
+                    {
+                        BlendMode = _state.BlendMode,
+                        SoftMask = _state.SoftMask,
+                    });
+                }
+            }
+        }
+
+        private Transform ReadMatrixEntry(PdfDictionary dict, string key)
+        {
+            if (dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+                && _objects.Resolve(value) is PdfArray arr
+                && arr.Count >= 6)
+            {
+                return new Transform(
+                    AsDouble(arr[0]), AsDouble(arr[1]),
+                    AsDouble(arr[2]), AsDouble(arr[3]),
+                    AsDouble(arr[4]), AsDouble(arr[5]));
+            }
+
+            return Transform.Identity;
+        }
+
+        private double ReadDoubleEntry(PdfDictionary dict, string key, double fallback)
+        {
+            if (dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value))
+            {
+                PdfPrimitive resolved = _objects.Resolve(value);
+                if (resolved is PdfInteger i) { return i.Value; }
+                if (resolved is PdfReal r) { return r.Value; }
+            }
+
+            return fallback;
+        }
+
+        private double[]? ReadRectEntry(PdfDictionary dict, string key)
+        {
+            if (dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+                && _objects.Resolve(value) is PdfArray arr
+                && arr.Count >= 4)
+            {
+                return new double[]
+                {
+                    AsDouble(arr[0]), AsDouble(arr[1]), AsDouble(arr[2]), AsDouble(arr[3]),
+                };
+            }
+
+            return null;
         }
 
         // Paint colours with the constant ExtGState alpha (/ca, /CA) folded in.
@@ -831,7 +1132,11 @@ public static class DisplayListBuilder
 
         private void OpFill(FillRule rule)
         {
-            if (_state.FillValid && !_currentPath.IsEmpty)
+            if (!_currentPath.IsEmpty && _state.FillPattern is not null)
+            {
+                EmitPatternFill(rule);
+            }
+            else if (_state.FillValid && !_currentPath.IsEmpty)
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
@@ -872,7 +1177,11 @@ public static class DisplayListBuilder
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 IReadOnlyList<ClipPath>? snapshot = SnapshotClips();
 
-                if (_state.FillValid)
+                if (_state.FillPattern is not null)
+                {
+                    EmitPatternFill(rule);
+                }
+                else if (_state.FillValid)
                 {
                     _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
@@ -1397,7 +1706,13 @@ public static class DisplayListBuilder
                 return cached;
             }
 
+            if (_nestingDepth >= MaxNestingDepth)
+            {
+                return new PageDisplayList(new List<RenderOp>(), 0, 0);
+            }
+
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            sub._nestingDepth = _nestingDepth + 1;
             sub._resources = type3.Resources ?? _resources;
             sub.SeedType3Fill(fill);
 
@@ -2128,6 +2443,26 @@ public static class DisplayListBuilder
                 return;
             }
 
+            // Stencil mask (/ImageMask true, PDF 32000-1:2008 §8.9.6.2): a
+            // 1-bpc image whose painted samples take the current fill colour
+            // and whose masked samples paint nothing. Composed as an RGBA
+            // frame so the ordinary image path (clip, alpha, blend, soft
+            // mask) applies unchanged.
+            if (ReadBoolEntry(xobjStream.Dictionary, "ImageMask"))
+            {
+                ImageFrame? stencil = StencilFrame(xobjStream, imageBytes);
+                if (stencil is not null)
+                {
+                    _ops.Add(new DrawImageOp(stencil, _state.Ctm, SnapshotClips(), _state.FillAlpha)
+                    {
+                        BlendMode = _state.BlendMode,
+                        SoftMask = _state.SoftMask,
+                    });
+                }
+
+                return;
+            }
+
             ImageFrame? frame = null;
 
             try
@@ -2253,6 +2588,44 @@ public static class DisplayListBuilder
                             x, y, samples[si + 2], samples[si + 1], samples[si], 255);
                     }
                 }
+                return frame;
+            }
+
+            // 8-bpc DeviceCMYK (or ICCBased with N=4): converted to RGB with
+            // the standard subtractive formula so CMYK images display. A
+            // /Decode [1 0 …] inversion (Adobe CMYK convention) is honoured.
+            if (components == 4 && bpc == 8)
+            {
+                if (samples.Length < (long)width * height * 4)
+                {
+                    return null;
+                }
+
+                ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        int si = ((y * width) + x) * 4;
+                        double c = samples[si] / 255.0;
+                        double m = samples[si + 1] / 255.0;
+                        double yc = samples[si + 2] / 255.0;
+                        double k = samples[si + 3] / 255.0;
+                        if (invert)
+                        {
+                            c = 1 - c;
+                            m = 1 - m;
+                            yc = 1 - yc;
+                            k = 1 - k;
+                        }
+
+                        byte r = (byte)Math.Round(255.0 * (1 - c) * (1 - k));
+                        byte g = (byte)Math.Round(255.0 * (1 - m) * (1 - k));
+                        byte b = (byte)Math.Round(255.0 * (1 - yc) * (1 - k));
+                        frame.Pixels.SetPixelBgra(x, y, b, g, r, 255);
+                    }
+                }
+
                 return frame;
             }
 
@@ -2392,6 +2765,7 @@ public static class DisplayListBuilder
                 {
                     "DeviceGray" or "CalGray" or "G" => 1,
                     "DeviceRGB" or "CalRGB" or "RGB" => 3,
+                    "DeviceCMYK" or "CMYK" => 4,
                     _ => 0,
                 };
             }
@@ -2404,7 +2778,7 @@ public static class DisplayListBuilder
                     icc.Dictionary.TryGetValue(PdfName.Intern("N"), out PdfPrimitive? n) &&
                     n is PdfInteger count)
                 {
-                    return count.Value is 1 or 3 ? count.Value : 0;
+                    return count.Value is 1 or 3 or 4 ? count.Value : 0;
                 }
             }
 
@@ -2413,6 +2787,53 @@ public static class DisplayListBuilder
 
         // True when /Decode is [1 0] for a single-component image (inverted
         // gray, common in scanned PDFs).
+        // Builds an RGBA frame for a stencil mask: painted bits take the
+        // current fill colour at full alpha; masked bits are fully
+        // transparent. Default /Decode [0 1] paints sample 0; [1 0] flips.
+        private ImageFrame? StencilFrame(PdfStream stream, byte[] samples)
+        {
+            PdfDictionary dict = stream.Dictionary;
+            int width = ReadIntEntry(dict, "Width");
+            int height = ReadIntEntry(dict, "Height");
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            int stride = (width + 7) / 8;
+            if ((long)samples.Length < (long)stride * height)
+            {
+                return null;
+            }
+
+            bool onePaints = GrayDecodeInverted(dict);
+            ColorF fill = _state.FillColor.ToRgb();
+            byte r = (byte)Math.Round(Math.Clamp(fill.R, 0f, 1f) * 255f);
+            byte g = (byte)Math.Round(Math.Clamp(fill.G, 0f, 1f) * 255f);
+            byte b = (byte)Math.Round(Math.Clamp(fill.B, 0f, 1f) * 255f);
+
+            PixelBuffer buffer = new PixelBuffer(width, height);
+            for (int y = 0; y < height; y++)
+            {
+                int rowStart = y * stride;
+                for (int x = 0; x < width; x++)
+                {
+                    int bit = (samples[rowStart + (x >> 3)] >> (7 - (x & 7))) & 1;
+                    bool paint = onePaints ? bit == 1 : bit == 0;
+                    if (paint)
+                    {
+                        buffer.SetPixelBgra(x, y, b, g, r, 255);
+                    }
+                    else
+                    {
+                        buffer.SetPixelBgra(x, y, 0, 0, 0, 0);
+                    }
+                }
+            }
+
+            return new ImageFrame(buffer, ImageColorFormat.Rgba32);
+        }
+
         private bool GrayDecodeInverted(PdfDictionary dict)
         {
             if (!dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? decodeRef))
@@ -2476,7 +2897,13 @@ public static class DisplayListBuilder
 
             // Build the sub-display-list in form-local space with a fresh
             // worker (identity CTM, fresh path/text state, fresh stack).
+            if (_nestingDepth >= MaxNestingDepth)
+            {
+                return;
+            }
+
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            sub._nestingDepth = _nestingDepth + 1;
 
             // A non-group form XObject inherits the graphics state in effect at
             // the Do, including the constant alpha (ExtGState /ca and /CA). The

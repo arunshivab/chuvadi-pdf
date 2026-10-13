@@ -68,104 +68,140 @@ Rendering / codecs verified shipped:
   (`PageCropMode.ClipOnly`/`Scrub`), and the **rendering project split**
   (Walking/DisplayList/Raster).
 
+Shipped in v3.17.x:
+- **Hybrid XFA "just works"** — open / extract / geometry / flatten through the
+  ordinary `PdfDocument` APIs; exact Standard-14 AFM widths; literal/hex string
+  decoding in extraction.
+- **Tight redaction ink bounds** — rectangle hit testing uses per-glyph ink
+  extents, so a box in a line gap no longer eats the line above.
+
+Shipped in v3.18.0:
+- **Precise vector redaction** — `VectorRedactionMode.SubtractPrecise`
+  (default): untouched subpaths survive, straight stroked segments split at
+  region boundaries, axis-aligned rectangle fills decompose; whole-path drop
+  remains as `DropIntersecting` and as the doubt fallback.
+- **SVG density handling** — consecutive same-style path batching (always on),
+  `PathSimplifyTolerance`, `MaxVectorOps` budget with `Simplify`/`Rasterize`
+  fallbacks.
+- **CompressToTarget rasterize fallback** — opt-in
+  (`AllowRasterizeFallback`), descending-DPI image-only PDF when the vector
+  floor exceeds the target.
+- **Scrub-crop gaps closed** — off-box annotations removed with their
+  appearance streams, inline images consumed as a unit and dropped when fully
+  off-box, `sh` dropped under a fully off-box clip; `PageCropper` preloads the
+  object graph (B16) so crops no longer drop lazily-unloaded objects.
+- **Dynamic XFA auto-compose** — `XfaRenderer.OpenComposed` returns the
+  composed static document for `/NeedsRendering` files, the original otherwise.
+- **ImageMask stencils** — composited with the current fill colour in BOTH the
+  raster and SVG pipelines (the earlier raster claim was aspirational).
+- **Pattern fills** — tiling (PatternType 1, coloured + uncoloured) and
+  shading (PatternType 2) patterns paint in the raster pipeline; shading
+  patterns paint in the SVG pipeline.
+- **Compression image recoding** — `DownsampleImagesToDpi` (placement-aware),
+  `SmartCodecSelection` (indexed palette at 1/2/4/8 bpc vs JPEG vs original).
+- **CMYK completeness** — raw DeviceCMYK embedding under Flate (separated
+  TIFF frames), CMYK display in the raster sink (SVG already converted).
+- **Composite autohinting in unhinted fonts** — composites flatten and Y-fit
+  through the geometric autohinter like simple glyphs.
+- **Xref-offset recovery** — a provably wrong classic xref offset (wrong
+  object number at the offset, or unparseable bytes) falls back to a
+  full-file definition scan; healthy files keep the strict fast path.
+- **Perf regression baseline** — `--perf-report` /
+  `--update-perf-baseline` micro-suite plus an advisory (non-required) CI job.
+- **SVG sink colour follow-ups verified shipped** — `cs`/`CS`/`sc`/`scn`/`SCN`
+  conversion, form-XObject recursion, and quote-operator text routing all
+  landed with the rendering consolidation (the open items were stale).
+
 ---
 
 ## Open roadmap
 
-Status verified against code at v3.17.0. Items are independent and may be
+Status verified against code at v3.18.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
 **1. JPXDecode (JPEG 2000).** Recognised but not decoded; JPX image bytes fall
-through and render blank/garbage. *Very large (wavelets, EBCOT).*
+through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
 
-### Rendering fidelity
-**2. Patterns.** Tiling (PatternType 1) and shading (PatternType 2) patterns are
-not painted — a `scn` pattern name marks the colour invalid, so pattern-filled
-regions are suppressed. Needs pattern-cell replay and shading-pattern fill.
-*Medium impact.*
+### Rendering follow-ups
+**2. Tiling patterns in the SVG pipeline.** Shading patterns (PatternType 2)
+ship in SVG (clip + gradient); tiling patterns (PatternType 1) still fall back
+to the previous flat colour. Needs `<pattern>` element emission or cell
+pre-rasterization.
 
-**3. ImageMask stencil compositing in the SVG path.** Raster handles
-`/ImageMask true`; the SVG renderer skips such 1-bit stencils. Reuse the RGBA-PNG
-machinery from the `/SMask` path to paint the stencil with the current fill
-colour. (`/SMask` soft-mask alpha is already handled in SVG — separate feature.)
-
-**4. SVG sink colour follow-ups.** The SVG sink does not implement `cs`/`CS`/
-`sc`/`scn`/`SCN` colour operators (raster does), and does not recurse into form
-XObjects; the raster quote operators (`'`/`"`) bypass composite-font routing.
-*Small — one tidy PR.*
+**3. Stroke patterns in the raster pipeline.** Fill patterns ship; a pattern
+set as the STROKE colour still suppresses the stroke (legacy behaviour).
 
 ### Fonts
-**5. Autohinter follow-ups.** Composite-glyph Y-fitting in unhinted fonts;
-optional X-axis stem fitting for mono/low-DPI. (Base composite hinting for
-hinted fonts shipped in v2.6.0.)
+**4. Autohinter X-axis stem fitting.** Optional X-axis fitting for mono/low-DPI
+rendering. (Composite Y-fitting in unhinted fonts shipped in v3.18.0.)
 
 ### Accessibility / archival
-**6. Tagged-PDF structure generation.** PDF/A *output* ships
-(`Chuvadi.Pdf.PdfA`), and hybrid `/StructTreeRoot` on real files now resolves,
-but generating a `/StructTreeRoot` during page creation (PDF/UA-1 tagging) is
-not yet implemented. *Large.*
+**5. Tagged-PDF structure generation.** PDF/A *output* ships
+(`Chuvadi.Pdf.PdfA`), and hybrid `/StructTreeRoot` on real files resolves, but
+generating a `/StructTreeRoot` during page creation (PDF/UA-1 tagging) is not
+yet implemented. *Large — long-horizon.*
 
-### Performance
-**7. Automated benchmark regression diffing.** The BenchmarkDotNet suite (Brotli,
-parser-open, rasterizer) exists; per-release baseline capture + auto-compare in
-CI remain (a compression-ratio baseline gate already exists — extend the pattern).
+### Architecture
+**6. Shared value-types move (documented defer).** `PdfBlendMode`,
+`BlendModes`, `Type3Font`/`Type3Glyph` live in
+`Chuvadi.Pdf.Rendering.DisplayList` and are consumed by Raster via aliases.
+The clean move is into `Chuvadi.Pdf.Rendering.Walking` (Type3Font already
+depends on Walking) with `[assembly: TypeForwardedTo(...)]` shims left in
+DisplayList for binary compatibility, after which Raster can drop its
+DisplayList reference. Deferred: touches the public surface of three packaged
+assemblies for zero user-visible gain; do it at a major-version boundary.
 
-### Input robustness / recovery
-**8. General xref-offset recovery on load.** When a classic xref entry points at
-the wrong byte offset, the affected object resolves to the wrong primitive. The
-narrow case — a page-tree `/Kids` entry that resolves to a non-dictionary — is
-recovered in-walk and surfaced via `PdfDocument.Warnings`/`IsRecovered`. The
-broader, deferred work: validate any resolved object against its xref offset and
-fall back to a full-file definition scan when the offset is provably wrong.
-Should be opt-in or confined to objects that fail a type/role check so healthy
-files keep the fast strict path.
+### Scrub-crop residuals
+**7. Partial-overlap inline images under Scrub.** A fully off-box inline image
+is removed; one OVERLAPPING the crop box is kept verbatim (visually confined
+by the backstop clip), so its off-box bytes remain. Byte-level cropping needs
+inline-image re-encoding.
 
-### Compression workstream (from the 7-phase roadmap)
-The lossless compression core has shipped (object/xref-stream writing, GC +
-dedup, max-level re-deflate, content minification, granular stripping, JPEG
-re-encode). These image-recoding and perceptual items remain, mostly gated on
-each other; the detailed plan lives in `docs/chuvadi-35-item-roadmap-handoff.md`.
+**8. Downsample placements inside nested forms.** The compression-path
+placement scanner walks page content only. Since 3.18's verification round,
+any image also referenced from a form XObject's resources (or on a page whose
+content failed to decode) is excluded from downsampling outright, so nothing
+undershoots; walking form content for real placements remains open.
 
-**9. Image downsampling to target DPI.** Resampling exists inside the rasterizer
-but not as a compression-path "downsample image XObjects to a target DPI" step.
-Dependency for MRC and the perceptual target.
+**9. Known-accepted recovery/fidelity limits (3.18 adversarial review).**
+(a) A tiling-pattern fill needing more than 4,096 tile placements paints
+nothing (bounded memory beats a plausible-looking partial paint);
+(b) the xref recovery scan matches `N G obj` with single spaces only
+(`5 0\nobj` is legal but unrecovered) and, when the scan finds nothing,
+falls back to the object parsed at the stale offset (the pre-3.18 behaviour).
 
-**10. Smart per-image codec selection.** Per-image codec / bit-depth / palette /
-colourspace-and-ICC-reduction decision logic (indexed/palette detection, bit-depth
-reduction). Not yet present.
+### Compression workstream (long-horizon engines)
+The image-recoding base has shipped (downsample-to-DPI, per-image codec
+selection, CMYK completeness). The remaining items are multi-week engines,
+mostly gated on each other; the detailed plan lives in
+`docs/chuvadi-35-item-roadmap-handoff.md`.
 
-**11. CMYK image completeness.** CMYK/YCCK JPEG passthrough ships (embeds as real
-`DeviceCMYK` under DCTDecode with the Adobe-inversion `/Decode`). Remaining: raw
-DeviceCMYK sample embedding under FlateDecode, and CMYK-to-output conversion in
-the raster and SVG sinks so CMYK images display. Pairs with non-device colour
-(ICCBased-CMYK).
-
-**12. JBIG2 encode.** Decode ships (`Filters/Jbig2/`); the encoder (sharing the
+**10. JBIG2 encode.** Decode ships (`Filters/Jbig2/`); the encoder (sharing the
 segment model) does not. Gates the bitonal path of MRC.
 
-**13. JPX / JPEG2000 encode.** Only worth doing if it beats DCT+MRC; depends on a
-JPX decoder (also open).
+**11. JPX / JPEG2000 encode.** Only worth doing if it beats DCT+MRC; depends
+on a JPX decoder (#1, also open).
 
-**14. MRC (Mixed Raster Content).** The colour-scan compression differentiator —
-foreground/background/mask separation. Depends on downsampling (#9), bitonal
-detection + G4, and JBIG2 encode (#12).
+**12. MRC (Mixed Raster Content).** The colour-scan compression differentiator
+— foreground/background/mask separation. Downsampling (shipped) was a
+dependency; still needs bitonal detection + G4 and JBIG2 encode (#10).
 
-**15. SSIM perceptual target.** SSIM *measurement* exists in the benchmark suite;
-the optimisation *target knob* ("smallest file at visually lossless") that would
-drive the image-recoding stack does not.
+**13. SSIM perceptual target.** SSIM *measurement* exists in the benchmark
+suite; the optimisation *target knob* ("smallest file at visually lossless")
+that would drive the image-recoding stack does not.
 
-**16. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench" image-processing
-feature (4-point perspective correction / deskew). Application-adjacent.
+### Application-adjacent
+**14. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench"
+image-processing feature; belongs to the Reader Bench arc.
 
 ---
 
 ## Pre-1.0 / distribution housekeeping (separate track)
 Publish to nuget.org (currently local-feed only), reserve the `Chuvadi` package
-prefix, add a real `icon.png`, and reconcile the `Chuvadi.Pdf` meta-package's
-direct dependencies so it lists the newer modules (Xfa, PdfA, Text.Shaping,
-Color, Rendering.Raster, Rendering.Walking) rather than relying solely on
-transitive resolution.
+prefix, and add a real `icon.png`. (The `Chuvadi.Pdf` meta-package's direct
+dependencies were reconciled in v3.18.0 — it now lists Xfa, PdfA,
+Text.Shaping, Rendering.Raster and Rendering.Walking directly.)
 
 ---
 

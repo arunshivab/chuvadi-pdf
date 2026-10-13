@@ -1,0 +1,9 @@
+{
+  "toleranceFactor": 3.0,
+  "scenarios": {
+    "open-mixed": { "medianMs": 0.128 },
+    "rasterize-mixed-72dpi": { "medianMs": 9.030 },
+    "svg-mixed": { "medianMs": 24.113 },
+    "compress-mixed": { "medianMs": 10.042 }
+  }
+}

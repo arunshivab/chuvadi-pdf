@@ -178,6 +178,7 @@ public static class Redactor
         // stream can be rewritten. Text inside a form is otherwise never removed
         // — the form is only covered by the overlay, leaving it copyable.
         RedactRun run = new RedactRun(document.Objects, pipeline);
+        run.VectorMode = options.VectorMode;
         for (int i = 0; i < work.Count; i++)
         {
             CollectForms(
@@ -545,13 +546,14 @@ public static class Redactor
                 if (IsPathPaintOp(op))
                 {
                     // "n" paints nothing, so it never leaks; a clipped path is
-                    // preserved. Otherwise drop the path when it hits a region.
-                    bool dropPath = path.Active
+                    // preserved. Otherwise the path hits a region and must lose
+                    // (at least) the geometry inside it.
+                    bool hitsRegion = path.Active
                         && !path.HasClip
                         && op != "n"
                         && PathBoxIntersects(path, contexts);
 
-                    if (!dropPath)
+                    if (!hitsRegion)
                     {
                         MemoryStream sink = Sink();
                         FlushPath(sink, path);
@@ -559,19 +561,33 @@ public static class Redactor
                         byte[] paintBytes = Encoding.Latin1.GetBytes(op + "\n");
                         sink.Write(paintBytes, 0, paintBytes.Length);
                     }
+                    else if (run.VectorMode == VectorRedactionMode.SubtractPrecise)
+                    {
+                        // Keep the provably untouched geometry; null means the
+                        // construct was too doubtful to subtract precisely and
+                        // the whole path drops (the legacy behaviour).
+                        string? surviving = VectorSubtractor.TrySubtract(
+                            path.Buffer, op, state, contexts);
+                        if (!string.IsNullOrEmpty(surviving))
+                        {
+                            WriteRaw(Sink(), surviving);
+                        }
+                    }
 
                     path.Reset();
                     pendingOperands.Clear();
                     continue;
                 }
 
-                // A non-path operator while a path is buffered (unusual in valid
-                // content): emit the buffered path verbatim before handling it.
-                if (path.Buffer.Count > 0)
-                {
-                    FlushPath(Sink(), path);
-                    path.Reset();
-                }
+                // A non-path operator while a path is buffered (illegal in
+                // valid content but rendered by viewers): keep the path
+                // BUFFERED across it. Flushing it here would emit the
+                // construction operators with no region check, letting a
+                // crafted "m … l … 5 w … S" keep ink inside a redaction
+                // rectangle. The state operator itself is handled normally
+                // below; since construction operators consume no graphics
+                // state until the paint operator, re-emitting them after the
+                // state operator is semantically identical.
 
                 // Marked-content sequences: BDC (tag + property list), BMC (tag),
                 // EMC. A sequence carrying an inline /ActualText or /Alt is
@@ -1072,6 +1088,25 @@ public static class Redactor
             case "q": state.PushGraphicsState(); return false;
             case "Q": state.PopGraphicsState(); return false;
             case "cm": ApplyCm(operands, state); return false;
+            case "w":
+                // Viewers consume the LAST operand (stack semantics), so a
+                // crafted "0.1 50 w" must model width 50, not 0.1.
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
+                {
+                    state.LineWidth = ParseDouble(operands[^1]);
+                }
+
+                return false;
+            case "M":
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
+                {
+                    state.MiterLimit = ParseDouble(operands[^1]);
+                }
+
+                return false;
+            case "gs":
+                ApplyGs(operands, state, resources, run.Store);
+                return false;
 
             // ── Text state ─────────────────────────────────────────────────
             case "BT": state.BeginText(); return false;
@@ -1082,16 +1117,16 @@ public static class Redactor
             case "Tm": ApplyTm(operands, state); return false;
             case "T*": state.NextLine(); return false;
             case "Tc":
-                if (operands.Count >= 1 && operands[0].IsNumeric)
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
                 {
-                    state.CharSpacing = ParseDouble(operands[0]);
+                    state.CharSpacing = ParseDouble(operands[^1]);
                 }
 
                 return false;
             case "Tw":
-                if (operands.Count >= 1 && operands[0].IsNumeric)
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
                 {
-                    state.WordSpacing = ParseDouble(operands[0]);
+                    state.WordSpacing = ParseDouble(operands[^1]);
                 }
 
                 return false;
@@ -1112,8 +1147,8 @@ public static class Redactor
                 if (operands.Count >= 3)
                 {
                     state.NextLine();
-                    // Pass only the string operand to detection
-                    List<PdfToken> stringOnly = new List<PdfToken> { operands[2] };
+                    // Pass only the string operand (the LAST operand) to detection.
+                    List<PdfToken> stringOnly = new List<PdfToken> { operands[^1] };
                     return ShouldRedactTj(stringOnly, state, contexts);
                 }
                 return false;
@@ -1146,25 +1181,19 @@ public static class Redactor
         PdfTokenizer tok, byte[] content, MemoryStream output,
         RedactState state, IReadOnlyList<RedactContext> contexts, long biStart)
     {
-        // Read the inline-image dictionary tokens until the ID keyword; the
-        // binary image data begins immediately after it.
-        while (true)
+        // Exact-extent consumption (3.18): /W /H /BPC /CS give the data length
+        // for unfiltered images, so a byte pair that merely looks like "EI"
+        // inside the binary cannot end the image early (which would
+        // re-tokenise — and leak — the image's tail).
+        int eiEnd = FindInlineImageEnd(tok, content);
+        if (eiEnd < 0)
         {
-            PdfToken t = tok.Read();
-            if (t.IsEndOfStream)
-            {
-                // Malformed (no ID): copy from BI to end and stop.
-                output.Write(content, (int)biStart, content.Length - (int)biStart);
-                return;
-            }
-
-            if (t.Type == PdfTokenType.Keyword && t.RawText == "ID")
-            {
-                break;
-            }
+            // No terminating EI (malformed): the rest of the stream is
+            // unknowable — keep it verbatim rather than guessing what to drop.
+            output.Write(content, (int)biStart, content.Length - (int)biStart);
+            tok.Seek(content.Length);
+            return;
         }
-
-        int eiEnd = FindInlineImageEnd(content, (int)tok.Position);
 
         if (!ShouldRedactImageAtCtm(state, contexts))
         {
@@ -1176,12 +1205,159 @@ public static class Redactor
     }
 
     /// <summary>
-    /// Finds the offset just past the <c>EI</c> that ends an inline image's
-    /// data, scanning from <paramref name="dataStart"/> for a whitespace-
-    /// delimited <c>EI</c>. Returns the content length if none is found.
+    /// Consumes the inline image's dictionary tokens (the tokenizer sits just
+    /// after <c>BI</c>) through <c>ID</c>, then returns the offset just past
+    /// the terminating <c>EI</c>, or <c>-1</c> when none exists. For an
+    /// unfiltered image the data length is computed exactly from
+    /// <c>/W /H /BPC /CS</c> (<c>/ImageMask</c>), so false <c>EI</c> pairs
+    /// inside the binary data cannot end the scan early; filtered or
+    /// underspecified images fall back to the whitespace-delimited scan.
     /// </summary>
-    private static int FindInlineImageEnd(byte[] content, int dataStart)
+    private static int FindInlineImageEnd(PdfTokenizer tok, byte[] content)
     {
+        int width = 0;
+        int height = 0;
+        int bpc = 8;
+        int components = -1;
+        bool filtered = false;
+        bool imageMask = false;
+        string? pendingKey = null;
+
+        while (true)
+        {
+            PdfToken t = tok.Read();
+            if (t.IsEndOfStream)
+            {
+                return -1;
+            }
+
+            if (t.Type == PdfTokenType.Keyword && t.RawText == "ID")
+            {
+                break;
+            }
+
+            if (t.Type == PdfTokenType.ArrayStart)
+            {
+                if (pendingKey is "F" or "Filter")
+                {
+                    filtered = true;
+                }
+
+                while (true)
+                {
+                    PdfToken inner = tok.Read();
+                    if (inner.IsEndOfStream)
+                    {
+                        return -1;
+                    }
+
+                    if (inner.Type == PdfTokenType.ArrayEnd)
+                    {
+                        break;
+                    }
+                }
+
+                pendingKey = null;
+                continue;
+            }
+
+            if (t.Type == PdfTokenType.Name)
+            {
+                string name = t.RawText.TrimStart('/');
+                if (pendingKey is null)
+                {
+                    pendingKey = name;
+                    continue;
+                }
+
+                switch (pendingKey)
+                {
+                    case "CS":
+                    case "ColorSpace":
+                        components = name switch
+                        {
+                            "G" or "DeviceGray" or "CalGray" => 1,
+                            "RGB" or "DeviceRGB" or "CalRGB" => 3,
+                            "CMYK" or "DeviceCMYK" => 4,
+                            "I" or "Indexed" => 1,
+                            _ => -1,
+                        };
+                        break;
+                    case "F":
+                    case "Filter":
+                        filtered = true;
+                        break;
+                    default:
+                        break;
+                }
+
+                pendingKey = null;
+                continue;
+            }
+
+            if (pendingKey is not null)
+            {
+                if (t.IsNumeric)
+                {
+                    double value = ParseDouble(t);
+                    switch (pendingKey)
+                    {
+                        case "W" or "Width":
+                            width = (int)value;
+                            break;
+                        case "H" or "Height":
+                            height = (int)value;
+                            break;
+                        case "BPC" or "BitsPerComponent":
+                            bpc = (int)value;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                else if (t.Type == PdfTokenType.Keyword && t.RawText == "true"
+                    && pendingKey is "IM" or "ImageMask")
+                {
+                    imageMask = true;
+                }
+
+                pendingKey = null;
+            }
+        }
+
+        // Data begins after the single whitespace byte following ID (§8.9.7).
+        int dataStart = (int)tok.Position;
+        if (dataStart < content.Length && IsWhitespaceByte(content[dataStart]))
+        {
+            dataStart++;
+        }
+
+        if (imageMask)
+        {
+            components = 1;
+            bpc = 1;
+        }
+
+        if (!filtered && width > 0 && height > 0 && components > 0 && bpc > 0)
+        {
+            long rowBytes = (((long)width * components * bpc) + 7) / 8;
+            long afterData = dataStart + (rowBytes * height);
+            if (afterData <= content.Length)
+            {
+                long k = afterData;
+                while (k < content.Length && IsWhitespaceByte(content[k]))
+                {
+                    k++;
+                }
+
+                if (k + 1 < content.Length
+                    && content[k] == (byte)'E' && content[k + 1] == (byte)'I')
+                {
+                    return (int)k + 2;
+                }
+            }
+        }
+
         for (int i = dataStart; i + 1 < content.Length; i++)
         {
             if (content[i] == (byte)'E' && content[i + 1] == (byte)'I'
@@ -1192,7 +1368,7 @@ public static class Redactor
             }
         }
 
-        return content.Length;
+        return -1;
     }
 
     private static bool IsWhitespaceByte(byte b) =>
@@ -1215,22 +1391,24 @@ public static class Redactor
     private static void AccumulatePathBox(
         string op, List<PdfToken> operands, RedactState state, PathAccumulator path)
     {
+        // Last-n operands throughout: a viewer consumes the TOP of the
+        // operand stack, so crafted extra operands must not shift the box.
         switch (op)
         {
             case "m":
             case "l":
                 if (operands.Count >= 2)
                 {
-                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
+                    path.AddPoint(ParseDouble(operands[^2]), ParseDouble(operands[^1]), state);
                 }
                 break;
 
             case "c":
                 if (operands.Count >= 6)
                 {
-                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
-                    path.AddPoint(ParseDouble(operands[2]), ParseDouble(operands[3]), state);
-                    path.AddPoint(ParseDouble(operands[4]), ParseDouble(operands[5]), state);
+                    path.AddPoint(ParseDouble(operands[^6]), ParseDouble(operands[^5]), state);
+                    path.AddPoint(ParseDouble(operands[^4]), ParseDouble(operands[^3]), state);
+                    path.AddPoint(ParseDouble(operands[^2]), ParseDouble(operands[^1]), state);
                 }
                 break;
 
@@ -1238,18 +1416,18 @@ public static class Redactor
             case "y":
                 if (operands.Count >= 4)
                 {
-                    path.AddPoint(ParseDouble(operands[0]), ParseDouble(operands[1]), state);
-                    path.AddPoint(ParseDouble(operands[2]), ParseDouble(operands[3]), state);
+                    path.AddPoint(ParseDouble(operands[^4]), ParseDouble(operands[^3]), state);
+                    path.AddPoint(ParseDouble(operands[^2]), ParseDouble(operands[^1]), state);
                 }
                 break;
 
             case "re":
                 if (operands.Count >= 4)
                 {
-                    double x = ParseDouble(operands[0]);
-                    double y = ParseDouble(operands[1]);
-                    double w = ParseDouble(operands[2]);
-                    double h = ParseDouble(operands[3]);
+                    double x = ParseDouble(operands[^4]);
+                    double y = ParseDouble(operands[^3]);
+                    double w = ParseDouble(operands[^2]);
+                    double h = ParseDouble(operands[^1]);
                     path.AddPoint(x, y, state);
                     path.AddPoint(x + w, y + h, state);
                 }
@@ -1429,10 +1607,13 @@ public static class Redactor
             return;
         }
 
+        // Last-6 operands: viewers consume the top of the operand stack, so
+        // crafted extra operands must not shift the modelled matrix.
+        int b = operands.Count - 6;
         Transform ctm = new Transform(
-            ParseDouble(operands[0]), ParseDouble(operands[1]),
-            ParseDouble(operands[2]), ParseDouble(operands[3]),
-            ParseDouble(operands[4]), ParseDouble(operands[5]));
+            ParseDouble(operands[b]), ParseDouble(operands[b + 1]),
+            ParseDouble(operands[b + 2]), ParseDouble(operands[b + 3]),
+            ParseDouble(operands[b + 4]), ParseDouble(operands[b + 5]));
         state.Ctm = ctm.Multiply(state.Ctm);
     }
 
@@ -1441,9 +1622,45 @@ public static class Redactor
     {
         if (operands.Count >= 2)
         {
-            state.FontSize = ParseDouble(operands[1]);
-            state.GlyphWidths = BuildGlyphWidths(operands[0], resources, store);
-            state.Font = BuildFont(operands[0], resources, store, state.FontCache);
+            state.FontSize = ParseDouble(operands[^1]);
+            state.GlyphWidths = BuildGlyphWidths(operands[^2], resources, store);
+            state.Font = BuildFont(operands[^2], resources, store, state.FontCache);
+        }
+    }
+
+    // Applies the stroke-relevant entries of a named ExtGState (PDF 8.4.5):
+    // /LW (line width) and /ML (miter limit). When the named state cannot be
+    // resolved the stroke geometry becomes unknown, so the precise vector
+    // subtractor stops keeping stroked geometry (StrokeStateReliable = false)
+    // and falls back to whole-path dropping for strokes.
+    private static void ApplyGs(
+        List<PdfToken> operands, RedactState state, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (operands.Count < 1 || operands[0].Type != PdfTokenType.Name)
+        {
+            state.StrokeStateReliable = false;
+            return;
+        }
+
+        string gsName = operands[0].RawText.TrimStart('/');
+        if (resources is null
+            || !resources.TryGetValue(PdfName.Intern("ExtGState"), out PdfPrimitive? extValue)
+            || store.Resolve(extValue) is not PdfDictionary states
+            || !states.TryGetValue(PdfName.Intern(gsName), out PdfPrimitive? entry)
+            || store.Resolve(entry) is not PdfDictionary gsDict)
+        {
+            state.StrokeStateReliable = false;
+            return;
+        }
+
+        if (gsDict.TryGetValue(PdfName.Intern("LW"), out PdfPrimitive? lw))
+        {
+            state.LineWidth = PdfReal.ToDouble(store.Resolve(lw));
+        }
+
+        if (gsDict.TryGetValue(PdfName.Intern("ML"), out PdfPrimitive? ml))
+        {
+            state.MiterLimit = PdfReal.ToDouble(store.Resolve(ml));
         }
     }
 
@@ -1549,8 +1766,8 @@ public static class Redactor
     {
         if (operands.Count >= 2)
         {
-            double tx = ParseDouble(operands[0]);
-            double ty = ParseDouble(operands[1]);
+            double tx = ParseDouble(operands[^2]);
+            double ty = ParseDouble(operands[^1]);
 
             // PDF text model: Td moves the text line matrix by (tx, ty) in text
             // space (Tlm' = translate(tx, ty) x Tlm) and starts a fresh in-line
@@ -1566,7 +1783,7 @@ public static class Redactor
     {
         if (operands.Count >= 2)
         {
-            double ty = ParseDouble(operands[1]);
+            double ty = ParseDouble(operands[^1]);
             state.Leading = -ty;
             ApplyTd(operands, state);
         }
@@ -1584,10 +1801,11 @@ public static class Redactor
         // Earlier code also copied the translation into TextX/TextY and then
         // transformed that point by the same matrix, double-applying the
         // translation and missing every glyph under a non-identity Tm.
+        int b = operands.Count - 6;
         state.TextMatrix = new Transform(
-            ParseDouble(operands[0]), ParseDouble(operands[1]),
-            ParseDouble(operands[2]), ParseDouble(operands[3]),
-            ParseDouble(operands[4]), ParseDouble(operands[5]));
+            ParseDouble(operands[b]), ParseDouble(operands[b + 1]),
+            ParseDouble(operands[b + 2]), ParseDouble(operands[b + 3]),
+            ParseDouble(operands[b + 4]), ParseDouble(operands[b + 5]));
         state.TextX = 0;
         state.TextY = 0;
     }
@@ -2594,21 +2812,8 @@ public static class Redactor
     // Consumes an inline image during collection (no output needed).
     private static void SkipInlineImage(PdfTokenizer tok, byte[] content)
     {
-        while (true)
-        {
-            PdfToken t = tok.Read();
-            if (t.IsEndOfStream)
-            {
-                return;
-            }
-            if (t.Type == PdfTokenType.Keyword && t.RawText == "ID")
-            {
-                break;
-            }
-        }
-
-        int eiEnd = FindInlineImageEnd(content, (int)tok.Position);
-        tok.Seek(eiEnd);
+        int eiEnd = FindInlineImageEnd(tok, content);
+        tok.Seek(eiEnd < 0 ? content.Length : eiEnd);
     }
 
     // Rewrites every collected form XObject's content stream in place (same
@@ -3336,11 +3541,30 @@ internal sealed class RedactState
     private readonly Stack<double> _charSpacingStack = new Stack<double>();
     private readonly Stack<double> _wordSpacingStack = new Stack<double>();
 
+    // Stroke geometry state (PDF 8.4.3), used by the precise vector subtractor
+    // to bound how far a stroked path's ink can reach from its centreline.
+    // Saved/restored by q/Q like the rest of the graphics state. Defaults per
+    // the spec: line width 1.0, miter limit 10.0.
+    internal double LineWidth { get; set; } = 1.0;
+    internal double MiterLimit { get; set; } = 10.0;
+
+    // False once an ExtGState whose /LW or /ML could not be resolved has been
+    // applied: the stroke ink allowance is then unknown and the vector
+    // subtractor must fall back to whole-path dropping for strokes.
+    internal bool StrokeStateReliable { get; set; } = true;
+
+    private readonly Stack<double> _lineWidthStack = new Stack<double>();
+    private readonly Stack<double> _miterLimitStack = new Stack<double>();
+    private readonly Stack<bool> _strokeReliableStack = new Stack<bool>();
+
     internal void PushGraphicsState()
     {
         _ctmStack.Push(Ctm);
         _charSpacingStack.Push(CharSpacing);
         _wordSpacingStack.Push(WordSpacing);
+        _lineWidthStack.Push(LineWidth);
+        _miterLimitStack.Push(MiterLimit);
+        _strokeReliableStack.Push(StrokeStateReliable);
     }
 
     internal void PopGraphicsState()
@@ -3358,6 +3582,21 @@ internal sealed class RedactState
         if (_wordSpacingStack.Count > 0)
         {
             WordSpacing = _wordSpacingStack.Pop();
+        }
+
+        if (_lineWidthStack.Count > 0)
+        {
+            LineWidth = _lineWidthStack.Pop();
+        }
+
+        if (_miterLimitStack.Count > 0)
+        {
+            MiterLimit = _miterLimitStack.Pop();
+        }
+
+        if (_strokeReliableStack.Count > 0)
+        {
+            StrokeStateReliable = _strokeReliableStack.Pop();
         }
     }
 
@@ -3435,6 +3674,9 @@ internal sealed class RedactRun
 
     /// <summary>The filter pipeline used to decode form content streams.</summary>
     public FilterPipeline Pipeline { get; }
+
+    /// <summary>How painted vector paths intersecting a region are removed.</summary>
+    public VectorRedactionMode VectorMode { get; set; } = VectorRedactionMode.SubtractPrecise;
 
     /// <summary>Form object number to the placements at which it is invoked.</summary>
     public Dictionary<int, List<RedactContext>> FormInvocations { get; } = new();

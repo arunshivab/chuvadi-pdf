@@ -34,6 +34,30 @@ CompressionOptions BaseOptions
 
 The base compression options (stripping flags, rewrite-hazard opt-ins). `CompressionOptions.RecompressImages` and `CompressionOptions.JpegQuality` are overridden per search step.
 
+### `AllowRasterizeFallback`
+
+```csharp
+bool AllowRasterizeFallback
+```
+
+Opt-in: when even the lowest JPEG quality cannot meet the target (the vector-only floor — content streams and fonts dominate and there are no images left to shrink), rasterize every page to a JPEG image and write an image-only PDF, descending from `RasterizeDpi` to `MinRasterizeDpi` until the target is met. Default `false`: rasterizing destroys text selection, search and accessibility, so it never happens silently.
+
+### `RasterizeDpi`
+
+```csharp
+double RasterizeDpi
+```
+
+The resolution of the rasterize fallback's first attempt. Default 150 DPI.
+
+### `MinRasterizeDpi`
+
+```csharp
+double MinRasterizeDpi
+```
+
+The floor of the rasterize fallback's DPI descent. Default 72 DPI.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/CompressToTargetOptions.cs`](../../../src/Chuvadi.Pdf.Operations/CompressToTargetOptions.cs)_

@@ -501,7 +501,7 @@ internal static class ContentStreamWalker
         List<PdfToken> operands, IContentOperatorSink sink, bool stroke)
     {
         List<double> components = new(operands.Count);
-        bool hasName = false;
+        string? patternName = null;
 
         foreach (PdfToken t in operands)
         {
@@ -511,11 +511,18 @@ internal static class ContentStreamWalker
             }
             else if (t.Type == PdfTokenType.Name)
             {
-                hasName = true;
+                patternName = ContentStrings.ExtractName(t);
             }
         }
 
-        sink.SetColorN(components.ToArray(), hasName, stroke);
+        if (patternName is not null && patternName.Length > 0)
+        {
+            sink.SetPatternColor(patternName, components.ToArray(), stroke);
+        }
+        else
+        {
+            sink.SetColorN(components.ToArray(), hasName: false, stroke);
+        }
     }
 
     private static IReadOnlyList<TextArrayElement> ParseTextArray(List<PdfToken> operands)

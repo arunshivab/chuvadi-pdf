@@ -33,6 +33,7 @@
     <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Content\Chuvadi.Pdf.Content.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />

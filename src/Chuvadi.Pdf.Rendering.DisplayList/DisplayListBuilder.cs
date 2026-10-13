@@ -356,6 +356,7 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Gray(gray);
             _stack.Current.FillColorSpace = null;
+            _stack.Current.FillShadingPattern = null;
         }
 
         /// <inheritdoc />
@@ -372,6 +373,7 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Rgb(r, g, b);
             _stack.Current.FillColorSpace = null;
+            _stack.Current.FillShadingPattern = null;
         }
 
         /// <inheritdoc />
@@ -388,6 +390,7 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.FillColor = PdfColor.Cmyk(c, m, y, k);
             _stack.Current.FillColorSpace = null;
+            _stack.Current.FillShadingPattern = null;
         }
 
         /// <inheritdoc />
@@ -416,6 +419,7 @@ public static class DisplayListBuilder
             else
             {
                 _stack.Current.FillColorSpace = space;
+                _stack.Current.FillShadingPattern = null;
             }
         }
 
@@ -470,7 +474,74 @@ public static class DisplayListBuilder
             else
             {
                 _stack.Current.FillColor = color;
+                _stack.Current.FillShadingPattern = null;
             }
+        }
+
+        /// <inheritdoc />
+        public void SetPatternColor(string name, double[] components, bool stroke)
+        {
+            if (_suppressColorOps) { return; }
+
+            // Legacy behaviour for the parts that stay unpainted: the flat
+            // colour is left unchanged. A PatternType 2 (shading) fill pattern
+            // is recorded so fills paint its gradient clipped to the path;
+            // tiling patterns and stroke patterns are deferred in this
+            // pipeline.
+            SetColorN(components, hasName: true, stroke);
+            if (stroke)
+            {
+                return;
+            }
+
+            BuilderState current = _stack.Current;
+            current.FillShadingPattern = null;
+            current.FillPatternMatrix = AffineMatrix.Identity;
+
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv))
+            {
+                return;
+            }
+
+            PdfDictionary? patterns = _doc.Objects.ResolveAs<PdfDictionary>(pv);
+            if (patterns is null
+                || !patterns.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry))
+            {
+                return;
+            }
+
+            PdfPrimitive resolved = _doc.Objects.Resolve(entry);
+            PdfDictionary? dict = resolved as PdfDictionary ?? (resolved as PdfStream)?.Dictionary;
+            if (dict is null
+                || IntOf(dict, "PatternType", 0) != 2
+                || !dict.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shadingRef))
+            {
+                return;
+            }
+
+            AffineMatrix matrix = AffineMatrix.Identity;
+            if (dict.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mPrim)
+                && _doc.Objects.Resolve(mPrim) is PdfArray arr
+                && arr.Count >= 6)
+            {
+                matrix = new AffineMatrix(
+                    NumOf(arr[0]), NumOf(arr[1]), NumOf(arr[2]),
+                    NumOf(arr[3]), NumOf(arr[4]), NumOf(arr[5]));
+            }
+
+            current.FillShadingPattern = shadingRef;
+            current.FillPatternMatrix = matrix;
+        }
+
+        private double NumOf(PdfPrimitive p)
+        {
+            return _doc.Objects.Resolve(p) switch
+            {
+                PdfInteger i => i.Value,
+                PdfReal r => r.Value,
+                _ => 0.0,
+            };
         }
 
         private ResolvedColorSpace? ResolveColorSpace(string name)
@@ -1063,6 +1134,17 @@ public static class DisplayListBuilder
             if (shadings is null) { return; }
             if (!shadings.TryGetValue(PdfName.Intern(name), out PdfPrimitive? shadingRef)) { return; }
 
+            // The CTM at the sh operator maps shading space to page space. Path
+            // coordinates in this builder are already baked to page space, so
+            // the gradient geometry must be too.
+            EmitShadingOp(shadingRef, _stack.Current.Ctm);
+        }
+
+        // Emits a ShadingOp for a shading dictionary under the given
+        // shading-space-to-page transform. An unsupported shading type (e.g.
+        // mesh shadings 4-7) skips the paint rather than failing the page.
+        private void EmitShadingOp(PdfPrimitive shadingRef, AffineMatrix ctm)
+        {
             PdfShading shading;
             try
             {
@@ -1070,15 +1152,9 @@ public static class DisplayListBuilder
             }
             catch (ContentException)
             {
-                // Unsupported shading type (e.g. mesh shadings 4-7) — skip the
-                // paint rather than failing the whole page.
                 return;
             }
 
-            // The CTM at the sh operator maps shading space to page space. Path
-            // coordinates in this builder are already baked to page space, so the
-            // gradient geometry must be too.
-            AffineMatrix ctm = _stack.Current.Ctm;
             (double ox, double oy) = ctm.Apply(0.0, 0.0);
             (double ux, double uy) = ctm.Apply(1.0, 0.0);
             double scale = Math.Sqrt(((ux - ox) * (ux - ox)) + ((uy - oy) * (uy - oy)));
@@ -1150,6 +1226,36 @@ public static class DisplayListBuilder
         private void EmitPath(BuilderState s, PaintMode mode, FillRule rule)
         {
             if (!s.HasCurrentPath) { return; }
+
+            // A PatternType 2 (shading) fill pattern paints its gradient
+            // clipped to the path instead of a flat fill. A combined
+            // fill-and-stroke still strokes the outline afterwards.
+            if (mode != PaintMode.Stroke && s.FillShadingPattern is not null)
+            {
+                Add(new TransformOp { Push = true, Ctm = s.Ctm });
+                Add(new ClipOp
+                {
+                    Geometry = s.CurrentPath,
+                    FillRule = rule,
+                });
+                EmitShadingOp(s.FillShadingPattern, s.FillPatternMatrix);
+                Add(new TransformOp { Push = false, Ctm = s.Ctm });
+
+                if (mode == PaintMode.FillAndStroke)
+                {
+                    EmitPathCore(s, PaintMode.Stroke, rule);
+                }
+
+                s.ResetPath();
+                return;
+            }
+
+            EmitPathCore(s, mode, rule);
+            s.ResetPath();
+        }
+
+        private void EmitPathCore(BuilderState s, PaintMode mode, FillRule rule)
+        {
             StrokeStyle? stroke = mode != PaintMode.Fill ? new StrokeStyle(
                 LineWidth: s.LineWidth * Math.Max(Math.Abs(s.Ctm.A), Math.Abs(s.Ctm.D)),
                 Cap: s.LineCap,
@@ -1172,7 +1278,6 @@ public static class DisplayListBuilder
                 FillOpacity = s.FillAlpha,
                 StrokeOpacity = s.StrokeAlpha,
             });
-            s.ResetPath();
         }
 
         private void ResetGapTracking()
@@ -1840,6 +1945,17 @@ public static class DisplayListBuilder
             int bpc = IntOf(stream.Dictionary, "BitsPerComponent", 8);
             if (width <= 0 || height <= 0) { return; }
 
+            // Stencil mask (/ImageMask true, PDF 32000-1:2008 §8.9.6.2): the
+            // 1-bit samples select where the CURRENT FILL COLOUR paints and
+            // where nothing paints. Emitted as an 8-bpc RGB image with a
+            // per-pixel alpha channel so the existing RGBA machinery (the
+            // /SMask path) renders it.
+            if (BoolOf(stream.Dictionary, "ImageMask"))
+            {
+                EmitStencilImage(stream, s, width, height);
+                return;
+            }
+
             string? filterName = ExtractFilterName(stream.Dictionary);
             ImageFormat format;
             byte[] pixelData;
@@ -2021,6 +2137,75 @@ public static class DisplayListBuilder
         }
 
         // True when /Decode is [1 0] for a single-component image (inverts samples).
+        // Emits a stencil mask (/ImageMask true) as a fill-coloured RGB image
+        // with a 0/255 alpha channel built from the 1-bit samples. Default
+        // /Decode [0 1] paints sample 0; [1 0] flips.
+        private void EmitStencilImage(PdfStream stream, BuilderState s, int width, int height)
+        {
+            byte[] bits;
+            try
+            {
+                bits = ContentStreamLoader.Decode(stream, _doc.Objects);
+            }
+            catch
+            {
+                return;
+            }
+
+            int stride = (width + 7) / 8;
+            if ((long)bits.Length < (long)stride * height)
+            {
+                return;
+            }
+
+            bool onePaints = IsDecodeInverted(stream.Dictionary);
+            (double fr, double fg, double fb) = s.FillColor.ToSrgb();
+            byte r = (byte)Math.Round(Math.Clamp(fr, 0, 1) * 255);
+            byte g = (byte)Math.Round(Math.Clamp(fg, 0, 1) * 255);
+            byte b = (byte)Math.Round(Math.Clamp(fb, 0, 1) * 255);
+
+            byte[] rgb = new byte[width * height * 3];
+            byte[] alpha = new byte[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                int rowStart = y * stride;
+                for (int x = 0; x < width; x++)
+                {
+                    int bit = (bits[rowStart + (x >> 3)] >> (7 - (x & 7))) & 1;
+                    bool paint = onePaints ? bit == 1 : bit == 0;
+                    int p = (y * width) + x;
+                    rgb[p * 3] = r;
+                    rgb[(p * 3) + 1] = g;
+                    rgb[(p * 3) + 2] = b;
+                    alpha[p] = paint ? (byte)255 : (byte)0;
+                }
+            }
+
+            Add(new ImageOp
+            {
+                BlendMode = _stack.Current.BlendMode,
+                SoftMask = _stack.Current.SoftMask,
+                PixelData = rgb,
+                Format = ImageFormat.Raw,
+                Width = width,
+                Height = height,
+                BitsPerComponent = 8,
+                ColorSpace = PdfColorSpace.DeviceRgb,
+                SoftMaskAlpha = alpha,
+                SoftMaskWidth = width,
+                SoftMaskHeight = height,
+                Alpha = s.FillAlpha,
+                Transform = s.Ctm,
+            });
+        }
+
+        private static bool BoolOf(PdfDictionary dict, string key)
+        {
+            return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+                && value is PdfBoolean b
+                && b.Value;
+        }
+
         private static bool IsDecodeInverted(PdfDictionary dict)
         {
             if (dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? d)

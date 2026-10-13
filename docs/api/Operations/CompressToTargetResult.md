@@ -42,6 +42,22 @@ CompressionSkipReason SkipReason
 
 The reason compression was skipped, or `CompressionSkipReason.None`. When skipped, the original document is re-serialized to the output unchanged.
 
+### `UsedRasterizeFallback`
+
+```csharp
+bool UsedRasterizeFallback
+```
+
+`true` when the written output is the rasterize fallback (an image-only PDF) rather than the original document with recompressed images. Only possible when `CompressToTargetOptions.AllowRasterizeFallback` was opted in.
+
+### `RasterizeDpiUsed`
+
+```csharp
+double RasterizeDpiUsed
+```
+
+The resolution of the written rasterize-fallback output, or zero when the fallback was not used.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/CompressToTargetResult.cs`](../../../src/Chuvadi.Pdf.Operations/CompressToTargetResult.cs)_

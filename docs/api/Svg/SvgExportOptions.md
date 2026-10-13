@@ -58,6 +58,38 @@ ColorF? Background
 
 Opaque colour for the page sheet, emitted as a full-page background rectangle behind all content. Defaults to `ColorF.White`, matching the rasteriser's default white paper. Set to `null` for a transparent SVG (useful when compositing over another background).
 
+### `PathSimplifyTolerance`
+
+```csharp
+double PathSimplifyTolerance
+```
+
+Tolerance (page points) for simplifying straight-segment runs in path geometry (Ramer–Douglas–Peucker) before emission. `0` (default) disables simplification. Curves and clip paths are never simplified. Typical values: 0.1–0.5 for CAD-style line work.
+
+### `MaxVectorOps`
+
+```csharp
+int MaxVectorOps
+```
+
+Budget on the number of vector painting operations (paths and shadings) per page before `DensityFallback` kicks in. `0` (default) means unlimited — every page renders fully vector.
+
+### `DensityFallback`
+
+```csharp
+SvgDensityFallback DensityFallback
+```
+
+What happens when a page exceeds `MaxVectorOps`. Defaults to `SvgDensityFallback.Simplify`.
+
+### `RasterFallbackDpi`
+
+```csharp
+double RasterFallbackDpi
+```
+
+Resolution used when `DensityFallback` is `SvgDensityFallback.Rasterize` and the budget is exceeded. Default: 150 DPI.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Svg/SvgExportOptions.cs`](../../../src/Chuvadi.Pdf.Svg/SvgExportOptions.cs)_

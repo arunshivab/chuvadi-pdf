@@ -27,6 +27,7 @@ using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
+using Chuvadi.Pdf.Rendering;
 using Chuvadi.Pdf.Rendering.DisplayList;
 using ColorF = Chuvadi.Pdf.Graphics.ColorF;
 
@@ -113,6 +114,17 @@ public sealed class SvgRenderer
     // v2.1.2 minimum visible thickness for axis-aligned rectangular fills.
     private const double MinVisibleThickness = 0.75;
 
+    // Automatic simplification tolerance (page points) applied when a page
+    // exceeds MaxVectorOps under the Simplify density fallback: fine enough
+    // to be invisible at normal zoom, coarse enough to collapse the
+    // near-collinear point runs CAD exporters emit.
+    private const double AutoSimplifyTolerance = 0.3;
+
+    // Simplification tolerance in effect for the current render: the explicit
+    // option, raised to AutoSimplifyTolerance when the op budget is exceeded.
+    // 0 disables simplification.
+    private double _activeSimplifyTolerance;
+
     // v2.1.3 — peephole merge tolerance for adjacent same-fill rectangles.
     // Word emits a single row background as multiple abutting rectangles
     // (one per table cell); the sub-pixel overlaps and exact touches at
@@ -141,6 +153,14 @@ public sealed class SvgRenderer
     {
         ArgumentNullException.ThrowIfNull(document);
         PageDisplayList list = DisplayListBuilder.Build(document, pageIndex);
+
+        if (_opts.MaxVectorOps > 0
+            && _opts.DensityFallback == SvgDensityFallback.Rasterize
+            && CountVectorOps(list) > _opts.MaxVectorOps)
+        {
+            return RenderPageAsRasterSvg(document, pageIndex, list);
+        }
+
         return Render(list, document.Objects);
     }
 
@@ -185,6 +205,17 @@ public sealed class SvgRenderer
         ArgumentNullException.ThrowIfNull(list);
         _emittedMasks.Clear();
         _maskSeq = 0;
+
+        // Density handling: an explicit tolerance always applies; exceeding the
+        // vector-op budget forces at least the automatic tolerance (the
+        // Rasterize fallback is handled in RenderPage — a pre-built display
+        // list has no document to rasterize, so it simplifies instead).
+        _activeSimplifyTolerance = _opts.PathSimplifyTolerance;
+        if (_opts.MaxVectorOps > 0 && CountVectorOps(list) > _opts.MaxVectorOps)
+        {
+            _activeSimplifyTolerance = Math.Max(_activeSimplifyTolerance, AutoSimplifyTolerance);
+        }
+
         SvgWriter w = new(_opts.Precision);
         w.StartSvg(list.MediaWidth, list.MediaHeight);
 
@@ -211,6 +242,50 @@ public sealed class SvgRenderer
         return w.ToSvgString();
     }
 
+    // Counts the vector painting operations (paths and shadings) in a display
+    // list, for the MaxVectorOps density budget. Text and images are excluded:
+    // they are bounded by content, not by plot density.
+    private static int CountVectorOps(PageDisplayList list)
+    {
+        int count = 0;
+        foreach (RenderOp op in list)
+        {
+            if (op is PathOp || op is ShadingOp)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // Density fallback: rasterizes the whole page at RasterFallbackDpi and
+    // emits a single <image> SVG, so a CAD-density page produces a bounded
+    // output instead of tens of thousands of vector elements.
+    private string RenderPageAsRasterSvg(PdfDocument document, int pageIndex, PageDisplayList list)
+    {
+        PageRasterizer rasterizer = new PageRasterizer(
+            document.Objects,
+            new RenderOptions
+            {
+                Dpi = _opts.RasterFallbackDpi,
+            });
+        byte[] png = rasterizer.RasterizeToPng(document.Pages[pageIndex]);
+        string dataUrl = "data:image/png;base64," + Convert.ToBase64String(png);
+
+        SvgWriter w = new(_opts.Precision);
+        w.StartSvg(list.MediaWidth, list.MediaHeight);
+        if (_opts.Background is ColorF background)
+        {
+            w.EmitPageBackground(list.MediaWidth, list.MediaHeight, ToHexColor(background));
+        }
+
+        // The raster is top-down, matching SVG's y-down coordinates: no page
+        // flip is opened, and the image covers the page box exactly.
+        w.EmitImage(dataUrl, 0, 0, list.MediaWidth, list.MediaHeight, preserveAspectRatio: "none");
+        return w.ToSvgString();
+    }
+
     // Renders one display list's ops into the writer. Reused for the page
     // body and for soft-mask group sub-lists (rendered inside a <mask> def).
     private void RenderOpList(
@@ -229,6 +304,13 @@ public sealed class SvgRenderer
         // other op so paint order is strictly preserved.
         PendingFillRect? pendingFillRect = null;
 
+        // v3.18 — batch buffer for consecutive same-style paths. CAD exports
+        // draw tens of thousands of short strokes that share one style; one
+        // <path> element per style run keeps viewers responsive. Merging is
+        // restricted to cases that are paint-order exact (see
+        // TryBuildBatchStyle); any other op flushes first.
+        PendingPathBatch? pendingBatch = null;
+
         foreach (RenderOp op in list)
         {
             switch (op)
@@ -237,11 +319,19 @@ public sealed class SvgRenderer
                     if (p.BlendMode == PdfBlendMode.Normal && p.SoftMask is null
                         && TryBuildFillRectCandidate(p, out PendingFillRect cand))
                     {
+                        FlushPendingPathBatch(ref pendingBatch, w);
                         BufferOrEmitFillRect(cand, ref pendingFillRect, w);
+                    }
+                    else if (p.BlendMode == PdfBlendMode.Normal && p.SoftMask is null
+                        && TryBuildBatchStyle(p, out PathBatchStyle style))
+                    {
+                        FlushPendingFillRect(ref pendingFillRect, w);
+                        BufferOrBatchPath(p, style, ref pendingBatch, w);
                     }
                     else
                     {
                         FlushPendingFillRect(ref pendingFillRect, w);
+                        FlushPendingPathBatch(ref pendingBatch, w);
                         int wrapP = OpenOpWrappers(p, w, familyByBaseFont, resolver);
                         EmitPath(p, w);
                         CloseWrappers(w, wrapP);
@@ -249,6 +339,7 @@ public sealed class SvgRenderer
                     break;
                 case TextOp t:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapT = OpenOpWrappers(t, w, familyByBaseFont, resolver);
                     EmitTextWithSnap(t, w, familyByBaseFont,
                         ref accumulatedShift, ref prevLineY, ref prevEndX);
@@ -256,16 +347,19 @@ public sealed class SvgRenderer
                     break;
                 case ImageOp i:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapI = OpenOpWrappers(i, w, familyByBaseFont, resolver);
                     EmitImage(i, w);
                     CloseWrappers(w, wrapI);
                     break;
                 case ClipOp c:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     EmitClip(c, w, clipsOpenedPerScope);
                     break;
                 case TransformOp xf:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     if (xf.Push)
                     {
                         w.OpenGroup();
@@ -280,6 +374,7 @@ public sealed class SvgRenderer
                     break;
                 case OpacityOp op2:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     if (op2.Push)
                     {
                         string attrs = $"opacity=\"{op2.Alpha.ToString("0.###", CultureInfo.InvariantCulture)}\"";
@@ -296,6 +391,7 @@ public sealed class SvgRenderer
                     break;
                 case BlendModeOp bm:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     if (bm.Push)
                     {
                         w.OpenGroup(extraAttrs: $"style=\"mix-blend-mode:{BlendModeCss(bm.Mode)}\"");
@@ -310,12 +406,14 @@ public sealed class SvgRenderer
                     break;
                 case ShadingOp sh:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapSh = OpenOpWrappers(sh, w, familyByBaseFont, resolver);
                     EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
                     CloseWrappers(w, wrapSh);
                     break;
                 case Type3UseOp t3:
                     FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapT3 = OpenOpWrappers(t3, w, familyByBaseFont, resolver);
                     w.OpenGroup(transform: t3.Composition.ToSvgMatrix());
                     RenderOpList(t3.Glyph, w, familyByBaseFont, resolver);
@@ -326,6 +424,7 @@ public sealed class SvgRenderer
             }
         }
         FlushPendingFillRect(ref pendingFillRect, w);
+        FlushPendingPathBatch(ref pendingBatch, w);
 
         int rootClipsToClose = clipsOpenedPerScope.Pop();
         for (int i = 0; i < rootClipsToClose; i++) { w.CloseGroup(); }
@@ -618,7 +717,10 @@ public sealed class SvgRenderer
         }
         else
         {
-            d = PathToSvg(op.Geometry, _opts.Precision);
+            PathGeometry geometry = _activeSimplifyTolerance > 0
+                ? PathSimplifier.Simplify(op.Geometry, _activeSimplifyTolerance)
+                : op.Geometry;
+            d = PathToSvg(geometry, _opts.Precision);
         }
 
         w.EmitPath(d, fillCol, strokeCol, strokeWidth, fillRule, extra);
@@ -736,6 +838,194 @@ public sealed class SvgRenderer
         if (pending is not PendingFillRect p) { return; }
         string d = BuildRectanglePath(p.MinX, p.MinY, p.MaxX, p.MaxY, _opts.Precision);
         w.EmitPath(d, p.FillCss, null, 0, p.FillRule, null);
+        pending = null;
+    }
+
+    /// <summary>
+    /// v3.18 — the style of a batchable path: every attribute that must match
+    /// for two consecutive paths to merge into one element.
+    /// </summary>
+    private readonly record struct PathBatchStyle(
+        string? FillCss, string? StrokeCss, double StrokeWidth, string FillRule, string? DashAttr);
+
+    /// <summary>
+    /// v3.18 — pending batch of consecutive same-style paths, merged into a
+    /// single <c>&lt;path&gt;</c> element on flush.
+    /// </summary>
+    private sealed class PendingPathBatch
+    {
+        public PendingPathBatch(PathBatchStyle style)
+        {
+            Style = style;
+        }
+
+        public PathBatchStyle Style { get; }
+
+        public StringBuilder Data { get; } = new StringBuilder();
+
+        // Accumulated bounding box of the batched geometry. Used to refuse
+        // merging OVERLAPPING fills: two separate nonzero fills each paint
+        // solid, but merged into one element their windings interact — a CW
+        // subpath over a CCW one cancels to an unpainted hole.
+        public double MinX { get; set; } = double.PositiveInfinity;
+
+        public double MinY { get; set; } = double.PositiveInfinity;
+
+        public double MaxX { get; set; } = double.NegativeInfinity;
+
+        public double MaxY { get; set; } = double.NegativeInfinity;
+    }
+
+    /// <summary>
+    /// v3.18 — decides whether a path can merge with same-style neighbours
+    /// without changing paint results, and computes the merge style. Merging
+    /// is paint-order exact only for: pure strokes at full opacity (overlaps
+    /// re-paint the same opaque colour; SVG restarts dash patterns per
+    /// subpath, matching separate elements), and pure non-zero fills at full
+    /// opacity (overlapping same-colour regions fill identically merged or
+    /// separate). Fill-and-stroke, even-odd fills (overlaps would punch
+    /// holes), and translucent paints never merge.
+    /// </summary>
+    private static bool TryBuildBatchStyle(PathOp op, out PathBatchStyle style)
+    {
+        style = default;
+        bool fill = op.Mode is PaintMode.Fill or PaintMode.FillAndStroke;
+        bool stroke = op.Mode is PaintMode.Stroke or PaintMode.FillAndStroke;
+
+        if (fill && stroke)
+        {
+            return false;
+        }
+
+        if (stroke)
+        {
+            if (op.StrokeOpacity < 1.0)
+            {
+                return false;
+            }
+
+            string? dashAttr = null;
+            if (op.Stroke?.DashArray is { Length: > 0 } da)
+            {
+                StringBuilder ds = new();
+                for (int i = 0; i < da.Length; i++)
+                {
+                    if (i > 0) { ds.Append(','); }
+                    ds.Append(da[i].ToString("0.##", CultureInfo.InvariantCulture));
+                }
+                dashAttr = $"stroke-dasharray=\"{ds}\"";
+            }
+
+            style = new PathBatchStyle(
+                null, SrgbCss(op.StrokeColor), op.Stroke?.LineWidth ?? 0, "nonzero", dashAttr);
+            return true;
+        }
+
+        if (fill)
+        {
+            if (op.FillOpacity < 1.0 || op.FillRule == FillRule.EvenOdd)
+            {
+                return false;
+            }
+
+            style = new PathBatchStyle(SrgbCss(op.FillColor), null, 0, "nonzero", null);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// v3.18 — appends a path's data to the pending batch when the style
+    /// matches, or flushes the batch and starts a new one.
+    /// </summary>
+    private void BufferOrBatchPath(
+        PathOp op, PathBatchStyle style, ref PendingPathBatch? pending, SvgWriter w)
+    {
+        if (pending is not null && pending.Style != style)
+        {
+            FlushPendingPathBatch(ref pending, w);
+        }
+
+        PathGeometry geometry = _activeSimplifyTolerance > 0
+            ? PathSimplifier.Simplify(op.Geometry, _activeSimplifyTolerance)
+            : op.Geometry;
+
+        (double minX, double minY, double maxX, double maxY) = GeometryBounds(geometry);
+
+        // Fills only merge when they cannot overlap the batched geometry —
+        // overlapping nonzero fills with opposite winding would cancel to a
+        // hole inside one merged element. Strokes overlap safely (each
+        // repaints the same opaque colour).
+        if (pending is not null
+            && style.FillCss is not null
+            && minX < pending.MaxX && maxX > pending.MinX
+            && minY < pending.MaxY && maxY > pending.MinY)
+        {
+            FlushPendingPathBatch(ref pending, w);
+        }
+
+        pending ??= new PendingPathBatch(style);
+        if (pending.Data.Length > 0)
+        {
+            pending.Data.Append(' ');
+        }
+
+        pending.Data.Append(PathToSvg(geometry, _opts.Precision));
+        pending.MinX = Math.Min(pending.MinX, minX);
+        pending.MinY = Math.Min(pending.MinY, minY);
+        pending.MaxX = Math.Max(pending.MaxX, maxX);
+        pending.MaxY = Math.Max(pending.MaxY, maxY);
+    }
+
+    private static (double MinX, double MinY, double MaxX, double MaxY) GeometryBounds(
+        PathGeometry geometry)
+    {
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+
+        void Grow(double x, double y)
+        {
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
+        }
+
+        foreach (PathSegment seg in geometry.Segments)
+        {
+            switch (seg.Command)
+            {
+                case PathCommand.MoveTo:
+                case PathCommand.LineTo:
+                    Grow(seg.X1, seg.Y1);
+                    break;
+                case PathCommand.CubicTo:
+                    Grow(seg.X1, seg.Y1);
+                    Grow(seg.X2, seg.Y2);
+                    Grow(seg.X3, seg.Y3);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        return (minX, minY, maxX, maxY);
+    }
+
+    /// <summary>
+    /// v3.18 — emits the pending batch as one <c>&lt;path&gt;</c> element.
+    /// </summary>
+    private static void FlushPendingPathBatch(ref PendingPathBatch? pending, SvgWriter w)
+    {
+        if (pending is null)
+        {
+            return;
+        }
+
+        w.EmitPath(
+            pending.Data.ToString(), pending.Style.FillCss, pending.Style.StrokeCss,
+            pending.Style.StrokeWidth, pending.Style.FillRule, pending.Style.DashAttr);
         pending = null;
     }
 

@@ -55,12 +55,22 @@ public static class PageCropper
         private readonly List<PdfIndirectObject> _extraObjects = new List<PdfIndirectObject>();
         private readonly List<(PdfObjectId Id, PdfDictionary Dict)> _modifiedPages =
             new List<(PdfObjectId, PdfDictionary)>();
+
+        // Object numbers of annotations (and their appearance streams) dropped
+        // by a Scrub crop because they lie entirely outside the crop box; these
+        // objects are omitted from the output so their content does not leak.
+        private readonly HashSet<int> _droppedObjects = new HashSet<int>();
         private int _nextObjectNumber;
 
         internal Worker(PdfDocument document, IReadOnlyList<PageCrop> crops)
         {
             _document = document;
             _store = document.Objects;
+
+            // B16: the store is lazy; without a full graph preload the output
+            // would silently omit every object the crop never resolved
+            // (annotations, fonts, outlines).
+            ObjectGraphPreloader.Preload(document);
 
             foreach (PageCrop crop in crops)
             {
@@ -106,9 +116,15 @@ public static class PageCropper
                 replaced.Add(id.ObjectNumber);
             }
 
+            // An appearance stream can be SHARED: only omit dropped objects
+            // that no surviving annotation still references.
+            HashSet<int> retained = CollectRetainedAnnotationObjects(pageIds);
+            _droppedObjects.ExceptWith(retained);
+
             foreach (PdfIndirectObject obj in _document.Objects.Objects)
             {
-                if (!replaced.Contains(obj.Id.ObjectNumber))
+                if (!replaced.Contains(obj.Id.ObjectNumber)
+                    && !_droppedObjects.Contains(obj.Id.ObjectNumber))
                 {
                     all.Add(obj);
                 }
@@ -140,6 +156,12 @@ public static class PageCropper
                 PdfArray scrubContents = new PdfArray([]);
                 scrubContents.Add(new PdfReference(NextStreamFromBytes(result.Content)));
                 newPage.Set(PdfName.Contents, scrubContents);
+
+                // Scrub-grade: annotations whose /Rect lies entirely outside
+                // the crop box are removed from /Annots and their objects (and
+                // appearance streams) omitted from the output — an off-box
+                // annotation otherwise keeps its full content in the file.
+                FilterAnnotations(newPage, cropBox);
             }
             else
             {
@@ -310,6 +332,174 @@ public static class PageCropper
 
             resDict.Set(PdfName.Intern("XObject"), xobjDict);
             newPage.Set(PdfName.Resources, resDict);
+        }
+
+        // Collects the object numbers of every annotation that SURVIVES in the
+        // output (modified pages use their rewritten dictionaries; untouched
+        // pages keep their originals), plus those annotations' /AP objects, so
+        // shared appearance streams are never omitted with a dropped sibling.
+        private HashSet<int> CollectRetainedAnnotationObjects(
+            Dictionary<int, PdfObjectId> pageIds)
+        {
+            HashSet<int> retained = new HashSet<int>();
+
+            Dictionary<int, PdfDictionary> modified = new Dictionary<int, PdfDictionary>();
+            foreach ((PdfObjectId id, PdfDictionary dict) in _modifiedPages)
+            {
+                modified[id.ObjectNumber] = dict;
+            }
+
+            for (int i = 0; i < _document.PageCount; i++)
+            {
+                PdfDictionary pageDict =
+                    pageIds.TryGetValue(i, out PdfObjectId pageId)
+                        && modified.TryGetValue(pageId.ObjectNumber, out PdfDictionary? replacedPage)
+                    ? replacedPage
+                    : _document.Pages[i].Dictionary;
+
+                if (!pageDict.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsPrim)
+                    || _store.Resolve(annotsPrim) is not PdfArray annots)
+                {
+                    continue;
+                }
+
+                foreach (PdfPrimitive item in annots)
+                {
+                    if (item is PdfReference annotRef)
+                    {
+                        retained.Add(annotRef.ObjectId.ObjectNumber);
+                    }
+
+                    if (_store.Resolve(item) is PdfDictionary annot
+                        && annot.TryGetValue(PdfName.Intern("AP"), out PdfPrimitive? apPrim))
+                    {
+                        if (apPrim is PdfReference apRef)
+                        {
+                            retained.Add(apRef.ObjectId.ObjectNumber);
+                        }
+
+                        if (_store.Resolve(apPrim) is PdfDictionary ap)
+                        {
+                            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in ap)
+                            {
+                                if (entry.Value is PdfReference directRef)
+                                {
+                                    retained.Add(directRef.ObjectId.ObjectNumber);
+                                }
+
+                                if (_store.Resolve(entry.Value) is PdfDictionary states)
+                                {
+                                    foreach (KeyValuePair<PdfName, PdfPrimitive> state in states)
+                                    {
+                                        if (state.Value is PdfReference stateRef)
+                                        {
+                                            retained.Add(stateRef.ObjectId.ObjectNumber);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return retained;
+        }
+
+        // Removes from /Annots every annotation whose /Rect lies entirely
+        // outside the crop box, and records the annotation objects (plus their
+        // /AP appearance streams, one level deep) for omission from the output.
+        // Annotations overlapping the box, and annotations without a parseable
+        // /Rect, are kept (conservative). Dangling references left elsewhere
+        // (e.g. AcroForm /Fields) resolve to null per §7.3.10.
+        private void FilterAnnotations(PdfDictionary newPage, RectangleF cropBox)
+        {
+            PdfName annotsName = PdfName.Intern("Annots");
+            if (!newPage.TryGetValue(annotsName, out PdfPrimitive? annotsPrim)
+                || _store.Resolve(annotsPrim) is not PdfArray annots)
+            {
+                return;
+            }
+
+            PdfArray kept = new PdfArray([]);
+            foreach (PdfPrimitive item in annots)
+            {
+                if (_store.Resolve(item) is not PdfDictionary annot
+                    || !IsEntirelyOutside(annot, cropBox))
+                {
+                    kept.Add(item);
+                    continue;
+                }
+
+                if (item is PdfReference annotRef)
+                {
+                    _droppedObjects.Add(annotRef.ObjectId.ObjectNumber);
+                }
+
+                CollectAppearanceObjects(annot);
+            }
+
+            if (kept.Count == 0)
+            {
+                newPage.Remove(annotsName);
+            }
+            else
+            {
+                newPage.Set(annotsName, kept);
+            }
+        }
+
+        private bool IsEntirelyOutside(PdfDictionary annot, RectangleF cropBox)
+        {
+            if (!annot.TryGetValue(PdfName.Intern("Rect"), out PdfPrimitive? rectPrim)
+                || _store.Resolve(rectPrim) is not PdfArray rect
+                || rect.Count < 4)
+            {
+                return false;
+            }
+
+            double rx0 = PdfReal.ToDouble(_store.Resolve(rect[0]));
+            double ry0 = PdfReal.ToDouble(_store.Resolve(rect[1]));
+            double rx1 = PdfReal.ToDouble(_store.Resolve(rect[2]));
+            double ry1 = PdfReal.ToDouble(_store.Resolve(rect[3]));
+            double lowX = Math.Min(rx0, rx1);
+            double highX = Math.Max(rx0, rx1);
+            double lowY = Math.Min(ry0, ry1);
+            double highY = Math.Max(ry0, ry1);
+
+            return highX <= cropBox.X || lowX >= cropBox.Right
+                || highY <= cropBox.Y || lowY >= cropBox.Top;
+        }
+
+        // Records a dropped annotation's /AP appearance objects (the N/R/D
+        // entries, and one level of state sub-dictionaries) for omission.
+        private void CollectAppearanceObjects(PdfDictionary annot)
+        {
+            if (!annot.TryGetValue(PdfName.Intern("AP"), out PdfPrimitive? apPrim)
+                || _store.Resolve(apPrim) is not PdfDictionary ap)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in ap)
+            {
+                if (entry.Value is PdfReference directRef)
+                {
+                    _droppedObjects.Add(directRef.ObjectId.ObjectNumber);
+                }
+
+                // A state dictionary maps appearance-state names to streams.
+                if (_store.Resolve(entry.Value) is PdfDictionary states)
+                {
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> state in states)
+                    {
+                        if (state.Value is PdfReference stateRef)
+                        {
+                            _droppedObjects.Add(stateRef.ObjectId.ObjectNumber);
+                        }
+                    }
+                }
+            }
         }
 
         private PdfObjectId FindCatalogId()

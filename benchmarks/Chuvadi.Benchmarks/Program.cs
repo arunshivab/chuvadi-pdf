@@ -32,6 +32,17 @@ internal static class Program
             return 0;
         }
 
+        if (args.Length > 0 && args[0] == "--perf-report")
+        {
+            return PerfReport.Print();
+        }
+
+        if (args.Length > 0 && args[0] == "--update-perf-baseline")
+        {
+            PerfReport.UpdateBaseline(PerfReport.ResolvePath(args));
+            return 0;
+        }
+
         // Use BenchmarkSwitcher so users can pass --filter, --list, etc.
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, DefaultConfig.Instance);
         return 0;

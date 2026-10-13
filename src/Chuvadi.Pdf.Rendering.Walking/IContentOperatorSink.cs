@@ -150,6 +150,20 @@ internal interface IContentOperatorSink
     {
     }
 
+    /// <summary>
+    /// scn / SCN with a trailing pattern name operand: sets the pattern named
+    /// <paramref name="name"/> (a key into the resources /Pattern dictionary)
+    /// as the current colour. <paramref name="components"/> holds the numeric
+    /// operands preceding the name (the underlying colour of an uncoloured
+    /// PaintType 2 tiling pattern). The default implementation preserves the
+    /// pre-pattern behaviour by forwarding to
+    /// <see cref="SetColorN(double[], bool, bool)"/> with <c>hasName</c> true.
+    /// </summary>
+    void SetPatternColor(string name, double[] components, bool stroke)
+    {
+        SetColorN(components, hasName: true, stroke);
+    }
+
     // ── Path construction ─────────────────────────────────────────────────
 
     /// <summary>m — begin a new subpath.</summary>

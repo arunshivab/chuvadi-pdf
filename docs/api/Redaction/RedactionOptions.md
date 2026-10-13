@@ -56,6 +56,14 @@ double PatternPadding
 
 Gets or initialises the padding (PDF points) added around each pattern-derived rectangle to compensate for font-metric approximation. Default: 1.0.
 
+### `VectorMode`
+
+```csharp
+VectorRedactionMode VectorMode
+```
+
+Gets or initialises how painted vector paths (fills and strokes) that intersect a redaction region are removed. Default: `VectorRedactionMode.SubtractPrecise` — geometry whose ink provably misses every redaction rectangle survives, and only the intersecting geometry is removed (byte-level). Use `VectorRedactionMode.DropIntersecting` for the pre-3.18 whole-path drop.
+
 ### `MaxDegreeOfParallelism`
 
 ```csharp

@@ -88,6 +88,15 @@ internal static class PageScrubber
         double curX = 0, curY = 0, startX = 0, startY = 0;
         bool pendingClip = false;
 
+        // Approximate active clip region: the intersection of the device-space
+        // bounding boxes of every clip path set so far (infinite until a W/W*
+        // takes effect), saved/restored with q/Q. Used to drop `sh` operators
+        // whose paintable region lies entirely outside the crop box.
+        double clipMinX = double.NegativeInfinity, clipMinY = double.NegativeInfinity;
+        double clipMaxX = double.PositiveInfinity, clipMaxY = double.PositiveInfinity;
+        Stack<(double MinX, double MinY, double MaxX, double MaxY)> clipStack =
+            new Stack<(double MinX, double MinY, double MaxX, double MaxY)>();
+
         using MemoryStream ms = new MemoryStream(content);
         using PdfTokenizer tok = new PdfTokenizer(ms, leaveOpen: false);
 
@@ -96,6 +105,37 @@ internal static class PageScrubber
             subpaths = new List<List<(double X, double Y)>>();
             rawPath.Clear();
             pendingClip = false;
+        }
+
+        // Intersects the tracked clip box with the pending clip path's
+        // device-space bounding box. Called at the paint operator that makes a
+        // W/W* take effect. An empty clip path is left untracked (conservative:
+        // the region stays as-is, so nothing is dropped on its account).
+        void ApplyPendingClip(Matrix3x3 currentCtm)
+        {
+            if (!pendingClip || subpaths.Count == 0)
+            {
+                return;
+            }
+
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+            foreach (List<(double X, double Y)> subpath in subpaths)
+            {
+                foreach ((double px, double py) in subpath)
+                {
+                    (double dx, double dy) = ScrubGeometry.Transform(currentCtm, px, py);
+                    minX = Math.Min(minX, dx);
+                    minY = Math.Min(minY, dy);
+                    maxX = Math.Max(maxX, dx);
+                    maxY = Math.Max(maxY, dy);
+                }
+            }
+
+            clipMinX = Math.Max(clipMinX, minX);
+            clipMinY = Math.Max(clipMinY, minY);
+            clipMaxX = Math.Min(clipMaxX, maxX);
+            clipMaxY = Math.Min(clipMaxY, maxY);
         }
 
         while (true)
@@ -123,11 +163,13 @@ internal static class PageScrubber
             switch (op)
             {
                 case "cm":
+                    // Last-6 operands (stack semantics): crafted extras must
+                    // not shift the modelled matrix away from the viewer's.
                     if (operandNums.Count >= 6)
                     {
                         Matrix3x3 m = new Matrix3x3(
-                            operandNums[0], operandNums[1], operandNums[2],
-                            operandNums[3], operandNums[4], operandNums[5]);
+                            operandNums[^6], operandNums[^5], operandNums[^4],
+                            operandNums[^3], operandNums[^2], operandNums[^1]);
                         ctm = m.Multiply(ctm);
                     }
 
@@ -137,6 +179,7 @@ internal static class PageScrubber
                 case "q":
                     ctmStack.Push(ctm);
                     textStack.Push(Clone(text));
+                    clipStack.Push((clipMinX, clipMinY, clipMaxX, clipMaxY));
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
@@ -149,6 +192,11 @@ internal static class PageScrubber
                     if (textStack.Count > 0)
                     {
                         text = textStack.Pop();
+                    }
+
+                    if (clipStack.Count > 0)
+                    {
+                        (clipMinX, clipMinY, clipMaxX, clipMaxY) = clipStack.Pop();
                     }
 
                     EchoVerbatim(output, operandTexts, op);
@@ -166,10 +214,14 @@ internal static class PageScrubber
                     break;
 
                 case "Tf":
-                    if (operandTexts.Count >= 1)
+                    for (int ti = operandTexts.Count - 1; ti >= 0; ti--)
                     {
-                        string fontName = operandTexts[0].TrimStart('/');
-                        text.Font = ResolveMetrics(fontName, resources, resolver, fontCache);
+                        if (operandTexts[ti].StartsWith('/'))
+                        {
+                            string fontName = operandTexts[ti].TrimStart('/');
+                            text.Font = ResolveMetrics(fontName, resources, resolver, fontCache);
+                            break;
+                        }
                     }
 
                     if (operandNums.Count >= 1)
@@ -183,7 +235,7 @@ internal static class PageScrubber
                 case "Td":
                     if (operandNums.Count >= 2)
                     {
-                        ApplyTd(text, operandNums[0], operandNums[1]);
+                        ApplyTd(text, operandNums[^2], operandNums[^1]);
                     }
 
                     EchoVerbatim(output, operandTexts, op);
@@ -192,8 +244,8 @@ internal static class PageScrubber
                 case "TD":
                     if (operandNums.Count >= 2)
                     {
-                        text.Leading = -operandNums[1];
-                        ApplyTd(text, operandNums[0], operandNums[1]);
+                        text.Leading = -operandNums[^1];
+                        ApplyTd(text, operandNums[^2], operandNums[^1]);
                     }
 
                     EchoVerbatim(output, operandTexts, op);
@@ -203,8 +255,8 @@ internal static class PageScrubber
                     if (operandNums.Count >= 6)
                     {
                         Matrix3x3 tm = new Matrix3x3(
-                            operandNums[0], operandNums[1], operandNums[2],
-                            operandNums[3], operandNums[4], operandNums[5]);
+                            operandNums[^6], operandNums[^5], operandNums[^4],
+                            operandNums[^3], operandNums[^2], operandNums[^1]);
                         text.Tm = tm;
                         text.Tlm = tm;
                     }
@@ -218,27 +270,27 @@ internal static class PageScrubber
                     break;
 
                 case "Tc":
-                    if (operandNums.Count >= 1) { text.CharSpacing = operandNums[0]; }
+                    if (operandNums.Count >= 1) { text.CharSpacing = operandNums[^1]; }
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
                 case "Tw":
-                    if (operandNums.Count >= 1) { text.WordSpacing = operandNums[0]; }
+                    if (operandNums.Count >= 1) { text.WordSpacing = operandNums[^1]; }
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
                 case "Tz":
-                    if (operandNums.Count >= 1) { text.HScale = operandNums[0] / 100.0; }
+                    if (operandNums.Count >= 1) { text.HScale = operandNums[^1] / 100.0; }
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
                 case "TL":
-                    if (operandNums.Count >= 1) { text.Leading = operandNums[0]; }
+                    if (operandNums.Count >= 1) { text.Leading = operandNums[^1]; }
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
                 case "Ts":
-                    if (operandNums.Count >= 1) { text.Rise = operandNums[0]; }
+                    if (operandNums.Count >= 1) { text.Rise = operandNums[^1]; }
                     EchoVerbatim(output, operandTexts, op);
                     break;
 
@@ -246,7 +298,7 @@ internal static class PageScrubber
                 case "Tj":
                     if (operandTexts.Count >= 1)
                     {
-                        RewriteShow(output, ParseStringBytes(operandTexts[0]), text, ctm, x0, y0, x1, y1);
+                        RewriteShow(output, ParseStringBytes(operandTexts[^1]), text, ctm, x0, y0, x1, y1);
                     }
 
                     break;
@@ -268,10 +320,10 @@ internal static class PageScrubber
                 case "\"":
                     if (operandNums.Count >= 2)
                     {
-                        text.WordSpacing = operandNums[0];
-                        text.CharSpacing = operandNums[1];
-                        output.Append(F(operandNums[0])).Append(" Tw ")
-                              .Append(F(operandNums[1])).Append(" Tc\n");
+                        text.WordSpacing = operandNums[^2];
+                        text.CharSpacing = operandNums[^1];
+                        output.Append(F(operandNums[^2])).Append(" Tw ")
+                              .Append(F(operandNums[^1])).Append(" Tc\n");
                     }
 
                     ApplyTd(text, 0, -text.Leading);
@@ -287,8 +339,8 @@ internal static class PageScrubber
                 case "m":
                     if (operandNums.Count >= 2)
                     {
-                        curX = operandNums[0];
-                        curY = operandNums[1];
+                        curX = operandNums[^2];
+                        curY = operandNums[^1];
                         startX = curX;
                         startY = curY;
                         subpaths.Add(new List<(double X, double Y)> { (curX, curY) });
@@ -300,8 +352,8 @@ internal static class PageScrubber
                 case "l":
                     if (operandNums.Count >= 2)
                     {
-                        curX = operandNums[0];
-                        curY = operandNums[1];
+                        curX = operandNums[^2];
+                        curY = operandNums[^1];
                         AddPoint(subpaths, curX, curY);
                     }
 
@@ -312,10 +364,10 @@ internal static class PageScrubber
                     if (operandNums.Count >= 6)
                     {
                         FlattenCubic(subpaths, curX, curY,
-                            operandNums[0], operandNums[1], operandNums[2],
-                            operandNums[3], operandNums[4], operandNums[5]);
-                        curX = operandNums[4];
-                        curY = operandNums[5];
+                            operandNums[^6], operandNums[^5], operandNums[^4],
+                            operandNums[^3], operandNums[^2], operandNums[^1]);
+                        curX = operandNums[^2];
+                        curY = operandNums[^1];
                     }
 
                     AppendRaw(rawPath, operandTexts, op);
@@ -325,9 +377,9 @@ internal static class PageScrubber
                     if (operandNums.Count >= 4)
                     {
                         FlattenCubic(subpaths, curX, curY, curX, curY,
-                            operandNums[0], operandNums[1], operandNums[2], operandNums[3]);
-                        curX = operandNums[2];
-                        curY = operandNums[3];
+                            operandNums[^4], operandNums[^3], operandNums[^2], operandNums[^1]);
+                        curX = operandNums[^2];
+                        curY = operandNums[^1];
                     }
 
                     AppendRaw(rawPath, operandTexts, op);
@@ -337,10 +389,10 @@ internal static class PageScrubber
                     if (operandNums.Count >= 4)
                     {
                         FlattenCubic(subpaths, curX, curY,
-                            operandNums[0], operandNums[1], operandNums[2], operandNums[3],
-                            operandNums[2], operandNums[3]);
-                        curX = operandNums[2];
-                        curY = operandNums[3];
+                            operandNums[^4], operandNums[^3], operandNums[^2], operandNums[^1],
+                            operandNums[^2], operandNums[^1]);
+                        curX = operandNums[^2];
+                        curY = operandNums[^1];
                     }
 
                     AppendRaw(rawPath, operandTexts, op);
@@ -349,10 +401,10 @@ internal static class PageScrubber
                 case "re":
                     if (operandNums.Count >= 4)
                     {
-                        double rx = operandNums[0];
-                        double ry = operandNums[1];
-                        double rw = operandNums[2];
-                        double rh = operandNums[3];
+                        double rx = operandNums[^4];
+                        double ry = operandNums[^3];
+                        double rw = operandNums[^2];
+                        double rh = operandNums[^1];
                         subpaths.Add(new List<(double X, double Y)>
                         {
                             (rx, ry), (rx + rw, ry), (rx + rw, ry + rh), (rx, ry + rh),
@@ -386,6 +438,7 @@ internal static class PageScrubber
                 case "B*":
                 case "b":
                 case "b*":
+                    ApplyPendingClip(ctm);
                     EmitPaintedPath(output, subpaths, rawPath.ToString(), op, ctm,
                         x0, y0, x1, y1, pendingClip, isStroke: false);
                     ResetPath();
@@ -393,12 +446,14 @@ internal static class PageScrubber
 
                 case "S":
                 case "s":
+                    ApplyPendingClip(ctm);
                     EmitPaintedPath(output, subpaths, rawPath.ToString(), op, ctm,
                         x0, y0, x1, y1, pendingClip, isStroke: true);
                     ResetPath();
                     break;
 
                 case "n":
+                    ApplyPendingClip(ctm);
                     output.Append(rawPath).Append("n\n");
                     ResetPath();
                     break;
@@ -406,6 +461,28 @@ internal static class PageScrubber
                 case "Do":
                     HandleDo(output, operandTexts, ctm, resources, resolver,
                         x0, y0, x1, y1, newXObjects);
+                    break;
+
+                // A shading paints the full active clip region. When that
+                // region (approximated by the tracked clip box) lies entirely
+                // outside the crop box, the operator is dead bytes and is
+                // dropped; otherwise it is kept — the hard-clip backstop
+                // confines its paint to the crop box.
+                case "sh":
+                    if (Math.Min(clipMaxX, x1) > Math.Max(clipMinX, x0)
+                        && Math.Min(clipMaxY, y1) > Math.Max(clipMinY, y0))
+                    {
+                        EchoVerbatim(output, operandTexts, op);
+                    }
+
+                    break;
+
+                // Inline image: BI <dict> ID <binary> EI. The binary data is
+                // not tokenizable, so the whole run is consumed as a unit and
+                // dropped when the unit square it paints (under the CTM) lies
+                // entirely outside the crop box.
+                case "BI":
+                    HandleInlineImage(output, tok, content, ctm, x0, y0, x1, y1, token.ByteOffset);
                     break;
 
                 default:
@@ -772,6 +849,52 @@ internal static class PageScrubber
     }
 
     // ── Images ───────────────────────────────────────────────────────────────
+
+    // Consumes an inline image (BI <dict> ID <binary> EI) as one unit — the
+    // binary data is not tokenizable — and drops it when the unit square it
+    // paints (mapped by the CTM) lies entirely outside the crop box. An image
+    // overlapping the box is kept verbatim: the hard-clip backstop confines
+    // its visible paint, and inline images are small by construction (§8.9.7
+    // recommends at most 4 KB), so the residual off-box bytes are bounded.
+    private static void HandleInlineImage(
+        StringBuilder output, PdfTokenizer tok, byte[] content, Matrix3x3 ctm,
+        double x0, double y0, double x1, double y1, long biStart)
+    {
+        // Exact-extent consumption (3.18): the dictionary's /W /H /BPC /CS
+        // give the data length for unfiltered images, so a byte pair that
+        // merely looks like "EI" inside the binary cannot end the image early
+        // (which would re-tokenise — and leak — the image's tail).
+        int eiEnd = InlineImageExtent.FindEnd(tok, content);
+        if (eiEnd < 0)
+        {
+            // No terminating EI (malformed): the rest of the stream is
+            // unknowable — keep it verbatim rather than guessing what to drop.
+            output.Append(Encoding.Latin1.GetString(
+                content, (int)biStart, content.Length - (int)biStart));
+            tok.Seek(content.Length);
+            return;
+        }
+
+        List<(double X, double Y)> quad = ScrubGeometry.TransformRectCorners(ctm, 0, 0, 1, 1);
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach ((double qx, double qy) in quad)
+        {
+            minX = Math.Min(minX, qx);
+            minY = Math.Min(minY, qy);
+            maxX = Math.Max(maxX, qx);
+            maxY = Math.Max(maxY, qy);
+        }
+
+        bool outside = maxX <= x0 || minX >= x1 || maxY <= y0 || minY >= y1;
+        if (!outside)
+        {
+            output.Append(Encoding.Latin1.GetString(content, (int)biStart, eiEnd - (int)biStart));
+            output.Append('\n');
+        }
+
+        tok.Seek(eiEnd);
+    }
 
     private static void HandleDo(
         StringBuilder output, List<string> operandTexts, Matrix3x3 ctm,

@@ -42,6 +42,22 @@ int MinImagePixelsToRecompress
 
 Minimum pixel count (width × height) for an image to be considered for JPEG recompression. Default 4096 (e.g. 64×64).
 
+### `DownsampleImagesToDpi`
+
+```csharp
+double DownsampleImagesToDpi
+```
+
+Target resolution, in DPI, for image downsampling. `0` (default) disables downsampling. When set (and `RecompressImages` is enabled), eligible image XObjects whose effective placement resolution exceeds 1.25× this value are box-resampled down to it before re-encoding. Effective resolution comes from scanning each page's own content stream for the image's largest placement; images referenced only from nested form XObjects are not downsampled.
+
+### `SmartCodecSelection`
+
+```csharp
+bool SmartCodecSelection
+```
+
+Per-image codec selection. When enabled (and `RecompressImages` is on), each eligible image is stored in whichever encoding is smallest: an Indexed palette under FlateDecode when it has at most 256 distinct colours, one-bit-per-pixel under FlateDecode when it is bilevel grayscale, JPEG at `JpegQuality`, or its original bytes. Off by default.
+
 ### `RemoveMetadata`
 
 ```csharp

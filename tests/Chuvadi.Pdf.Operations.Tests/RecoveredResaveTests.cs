@@ -28,7 +28,11 @@ public sealed class RecoveredResaveTests
         using (MemoryStream ms = new MemoryStream(corrupt, writable: false))
         using (PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true))
         {
-            doc.IsRecovered.Should().BeTrue();
+            // 3.18: the general xref-offset recovery fixes the stale entry
+            // transparently at load (no page-tree warning path, so
+            // IsRecovered stays false); the merge must still produce a clean
+            // reopenable file either way.
+            doc.PageCount.Should().Be(2);
 
             using MemoryStream output = new MemoryStream();
             PageOperations.Merge(output, doc);

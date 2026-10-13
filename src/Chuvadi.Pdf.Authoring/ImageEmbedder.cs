@@ -90,6 +90,38 @@ internal static class ImageEmbedder
         int w = frame.Width;
         int h = frame.Height;
 
+        // A CMYK frame (e.g. a separated TIFF) stores C,M,Y,K in the B,G,R,A
+        // pixel slots (see TiffDecoder). Embed the raw four-channel samples as
+        // DeviceCMYK under FlateDecode — converting to RGB here would silently
+        // discard the source's ink separation.
+        if (frame.OriginalFormat == ImageColorFormat.Cmyk32)
+        {
+            byte[] cmyk = new byte[w * h * 4];
+            int ci = 0;
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    (byte c, byte m, byte yellow, byte k) = frame.Pixels.GetPixelBgra(x, y);
+                    cmyk[ci++] = c;
+                    cmyk[ci++] = m;
+                    cmyk[ci++] = yellow;
+                    cmyk[ci++] = k;
+                }
+            }
+
+            byte[] cmykCompressed = FlateCompress(cmyk);
+            PdfDictionary cmykDict = NewImageDictionary(w, h, "DeviceCMYK", "FlateDecode");
+            cmykDict.Set(PdfName.Length, cmykCompressed.Length);
+            return new EmbeddedImage
+            {
+                ImageDictionary = cmykDict,
+                ImageData = cmykCompressed,
+                Width = w,
+                Height = h,
+            };
+        }
+
         bool hasAlpha = false;
         for (int y = 0; y < h && !hasAlpha; y++)
         {

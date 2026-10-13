@@ -26,4 +26,25 @@ public sealed record CompressToTargetOptions
     /// <see cref="CompressionOptions.JpegQuality"/> are overridden per search step.
     /// </summary>
     public CompressionOptions BaseOptions { get; init; } = new CompressionOptions();
+
+    /// <summary>
+    /// Opt-in: when even the lowest JPEG quality cannot meet the target (the
+    /// vector-only floor — content streams and fonts dominate and there are no
+    /// images left to shrink), rasterize every page to a JPEG image and write
+    /// an image-only PDF, descending from <see cref="RasterizeDpi"/> to
+    /// <see cref="MinRasterizeDpi"/> until the target is met. Default
+    /// <see langword="false"/>: rasterizing destroys text selection, search
+    /// and accessibility, so it never happens silently.
+    /// </summary>
+    public bool AllowRasterizeFallback { get; init; }
+
+    /// <summary>
+    /// The resolution of the rasterize fallback's first attempt. Default 150 DPI.
+    /// </summary>
+    public double RasterizeDpi { get; init; } = 150;
+
+    /// <summary>
+    /// The floor of the rasterize fallback's DPI descent. Default 72 DPI.
+    /// </summary>
+    public double MinRasterizeDpi { get; init; } = 72;
 }

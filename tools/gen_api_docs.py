@@ -599,6 +599,27 @@ def render_type(t: TypeDecl) -> str:
     return "\n".join(out)
 
 
+def doc_filename(t: TypeDecl, duplicate_names: set[str]) -> str:
+    """Filename for a type's page. Two types in the same module can share a
+    short name across namespaces (e.g. DisplayListBuilder in both
+    Rendering.DisplayList and Rendering.Raster); such names are suffixed with
+    the last namespace segment so neither page overwrites the other."""
+    if t.name not in duplicate_names:
+        return f"{t.name}.md"
+    suffix = t.namespace.split(".")[-1]
+    return f"{t.name}.{suffix}.md"
+
+
+def duplicate_names_in(types: list[TypeDecl]) -> set[str]:
+    seen: set[str] = set()
+    dups: set[str] = set()
+    for t in types:
+        if t.name in seen:
+            dups.add(t.name)
+        seen.add(t.name)
+    return dups
+
+
 def render_index(types_by_module: dict[str, list[TypeDecl]]) -> str:
     """Render the top-level API index."""
     out: list[str] = []
@@ -614,7 +635,8 @@ def render_index(types_by_module: dict[str, list[TypeDecl]]) -> str:
     out.append("")
 
     for module in sorted(types_by_module.keys()):
-        types = sorted(types_by_module[module], key=lambda t: t.name)
+        types = sorted(types_by_module[module], key=lambda t: (t.name, t.namespace))
+        dups = duplicate_names_in(types)
         # Render heading based on whether this module is under Chuvadi.Pdf or top-level Chuvadi.
         sample_ns = types[0].namespace if types else ""
         if sample_ns.startswith("Chuvadi.Pdf."):
@@ -635,7 +657,7 @@ def render_index(types_by_module: dict[str, list[TypeDecl]]) -> str:
                 summary = summary[:m.start() + 1]
             # Truncate at first newline too
             summary = summary.split("\n")[0]
-            out.append(f"| [{t.name}]({module}/{t.name}.md) | {kind} | {summary or '—'} |")
+            out.append(f"| [{t.name}]({module}/{doc_filename(t, dups)}) | {kind} | {summary or '—'} |")
         out.append("")
 
     return "\n".join(out)
@@ -678,8 +700,9 @@ def main() -> int:
     for module, types in types_by_module.items():
         mod_dir = OUT_DIR / module
         mod_dir.mkdir(parents=True, exist_ok=True)
+        dups = duplicate_names_in(types)
         for t in types:
-            md_path = mod_dir / f"{t.name}.md"
+            md_path = mod_dir / doc_filename(t, dups)
             md_path.write_text(render_type(t), encoding="utf-8", newline="\n")
 
     # Top-level index

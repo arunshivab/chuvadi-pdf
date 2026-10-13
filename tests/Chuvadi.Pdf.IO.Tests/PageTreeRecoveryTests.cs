@@ -38,16 +38,20 @@ public sealed class PageTreeRecoveryTests
     }
 
     [Fact]
-    public void Open_CorruptPageXref_RecoversPageAndRaisesWarning()
+    public void Open_CorruptPageXref_RecoversTransparently()
     {
         byte[] pdf = BuildCorruptPdf();
 
         using MemoryStream ms = new MemoryStream(pdf, writable: false);
         using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: true);
 
-        doc.IsRecovered.Should().BeTrue();
-        doc.Warnings.Should().ContainSingle();
-        doc.Warnings[0].Should().Contain("Page-tree object");
+        // 3.18: the general xref-offset recovery in the loader fixes the
+        // stale entry at first load (the object number at the offset does not
+        // match), so the narrower page-tree recovery never needs to fire and
+        // no warning is raised — the document simply resolves correctly.
+        doc.IsRecovered.Should().BeFalse();
+        doc.Warnings.Should().BeEmpty();
+        doc.PageCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
