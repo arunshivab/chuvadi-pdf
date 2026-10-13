@@ -869,7 +869,12 @@ public sealed class PdfReader : IDisposable
     }
 
     /// <summary>
-    /// Reads a classic in-use indirect object at the given byte offset.
+    /// Reads a classic in-use indirect object at the given byte offset,
+    /// recovering from a provably wrong xref offset (3.18): when the bytes at
+    /// the offset parse to a DIFFERENT object number, or do not parse at all,
+    /// the file is scanned for the object's real definition. Healthy files
+    /// never pay for the scan — it only runs once an entry has failed the
+    /// object-number check that every load performs anyway.
     /// </summary>
     private static PdfIndirectObject LoadInUseObject(
         PdfObjectParser parser,
@@ -879,10 +884,34 @@ public sealed class PdfReader : IDisposable
         try
         {
             parser.Seek(offset);
-            return parser.ReadIndirectObject();
+            PdfIndirectObject obj = parser.ReadIndirectObject();
+            if (obj.Id.ObjectNumber == id.ObjectNumber)
+            {
+                return obj;
+            }
+
+            // Wrong object at the offset: the xref entry is provably stale.
+            PdfIndirectObject? recovered = parser.ScanForObject(id);
+            return recovered ?? obj;
+        }
+        catch (PdfParseException)
+        {
+            PdfIndirectObject? recovered = parser.ScanForObject(id);
+            if (recovered is not null)
+            {
+                return recovered;
+            }
+
+            throw;
         }
         catch (Exception ex) when (ex is not PdfParseException)
         {
+            PdfIndirectObject? recovered = parser.ScanForObject(id);
+            if (recovered is not null)
+            {
+                return recovered;
+            }
+
             throw new PdfParseException(
                 $"Error reading object {id} at offset {offset}.", ex);
         }

@@ -176,10 +176,10 @@ public sealed class RasterRawImageTests
     }
 
     [Fact]
-    public void ImageMask_IsStillSkipped()
+    public void ImageMask_EmitsAStencilFrame()
     {
-        // Stencil masks need fill-colour compositing the rasterizer doesn't
-        // do yet (recorded follow-up): they must not emit a frame.
+        // 3.18: stencil masks composite with the current fill colour (see
+        // RasterStencilMaskTests for the pixel-level contract).
         byte[] samples = [0xF0];
         PdfDictionary dict = ImageDict(8, 1, 1, "DeviceGray");
         dict.Set(PdfName.Intern("ImageMask"), true);
@@ -187,17 +187,20 @@ public sealed class RasterRawImageTests
 
         PageDisplayList list = BuildWithImage(image);
 
-        list.Ops.OfType<DrawImageOp>().Should().BeEmpty();
+        list.Ops.OfType<DrawImageOp>().Should().HaveCount(1);
     }
 
     [Fact]
-    public void UnsupportedColorSpace_IsSkippedNotThrown()
+    public void RawCmyk_RendersConvertedToRgb()
     {
-        byte[] samples = [1, 2, 3, 4];
+        // 3.18: DeviceCMYK samples convert through the standard subtractive
+        // formula. Pure cyan (C=255) → RGB (0, 255, 255).
+        byte[] samples = [255, 0, 0, 0];
         PdfStream image = new(ImageDict(1, 1, 8, "DeviceCMYK"), samples);
 
         PageDisplayList list = BuildWithImage(image);
 
-        list.Ops.OfType<DrawImageOp>().Should().BeEmpty();
+        DrawImageOp op = SingleImageOp(list);
+        op.Image.Pixels.GetPixelBgra(0, 0).Should().Be(((byte)255, (byte)255, (byte)0, (byte)255));
     }
 }

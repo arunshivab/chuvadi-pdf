@@ -149,6 +149,13 @@ internal sealed class BuilderGraphicsState
     public Type3Font? Type3 { get; set; }
 
     /// <summary>
+    /// The resolved /Pattern resource selected as the fill colour by
+    /// <c>scn /Name</c>, or null when the fill colour is an ordinary colour.
+    /// Cleared by every non-pattern fill-colour operator.
+    /// </summary>
+    public PdfPrimitive? FillPattern { get; set; }
+
+    /// <summary>
     /// Returns a deep copy of this state suitable for pushing onto the
     /// q/Q stack. The clip list is defensively copied; primitive fields
     /// are value-copied; the dash pattern array reference is shared
@@ -186,6 +193,7 @@ internal sealed class BuilderGraphicsState
             BlendMode = BlendMode,
             SoftMask = SoftMask,
             Type3 = Type3,
+            FillPattern = FillPattern,
             ActiveClips = new List<ClipPath>(ActiveClips),
         };
     }

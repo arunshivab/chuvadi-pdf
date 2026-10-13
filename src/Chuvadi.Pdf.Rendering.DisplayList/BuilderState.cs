@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using Chuvadi.Pdf.Content;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
 
@@ -29,6 +30,13 @@ internal sealed class BuilderState
 
     // Parsed Type 3 font for the current font resource, or null.
     internal Type3Font? Type3 { get; set; }
+
+    // The /Shading of a PatternType 2 (shading) pattern selected as the fill
+    // colour by scn, with its pattern matrix, or null when the fill is an
+    // ordinary colour. Cleared by every non-pattern fill-colour operator.
+    // (Tiling patterns are not painted in this pipeline — deferred.)
+    internal PdfPrimitive? FillShadingPattern { get; set; }
+    internal AffineMatrix FillPatternMatrix { get; set; } = AffineMatrix.Identity;
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -141,6 +149,8 @@ internal sealed class BuilderState
         BlendMode = BlendMode,
         SoftMask = SoftMask,
         Type3 = Type3,
+        FillShadingPattern = FillShadingPattern,
+        FillPatternMatrix = FillPatternMatrix,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

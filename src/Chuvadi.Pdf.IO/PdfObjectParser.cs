@@ -49,6 +49,212 @@ internal sealed class PdfObjectParser
         _pending2 = null;
     }
 
+    /// <summary>
+    /// Scans the whole stream for a definition of the given object
+    /// (<c>N G obj</c>) and parses the LAST one whose object number matches
+    /// (incremental updates append newer definitions). Returns null when no
+    /// parseable definition exists. This is a linear scan over the file, so it
+    /// is only called by xref-offset recovery once an entry is provably wrong;
+    /// healthy files never pay for it.
+    /// </summary>
+    internal PdfIndirectObject? ScanForObject(PdfObjectId id)
+    {
+        byte[] pattern = Encoding.ASCII.GetBytes(
+            id.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " "
+            + id.Generation.ToString(CultureInfo.InvariantCulture) + " obj");
+
+        List<long> hits = FindPatternOffsets(pattern);
+
+        // Object-shaped bytes INSIDE a stream body (a decoy, or an embedded
+        // PDF) must not shadow the real definition: hits inside any
+        // stream…endstream extent are excluded. If that filters everything,
+        // the unfiltered hits remain a last resort (a damaged file may have
+        // lost its endstream keywords).
+        List<(long Start, long End)> extents = FindStreamExtents();
+        List<long> outside = new List<long>(hits.Count);
+        foreach (long hit in hits)
+        {
+            bool inside = false;
+            foreach ((long start, long end) in extents)
+            {
+                if (hit > start && hit < end)
+                {
+                    inside = true;
+                    break;
+                }
+            }
+
+            if (!inside)
+            {
+                outside.Add(hit);
+            }
+        }
+
+        if (outside.Count > 0)
+        {
+            hits = outside;
+        }
+
+        // Newest-first (incremental updates append newer definitions). A real
+        // definition ends with `endobj`; object-shaped bytes inside a stream's
+        // data usually do not, so endobj-terminated candidates win outright
+        // and unterminated ones are only a last resort.
+        PdfIndirectObject? unterminated = null;
+        for (int i = hits.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                Seek(hits[i]);
+                PdfIndirectObject candidate = ReadIndirectObject(out bool terminated);
+                if (candidate.Id.ObjectNumber != id.ObjectNumber)
+                {
+                    continue;
+                }
+
+                if (terminated)
+                {
+                    return candidate;
+                }
+
+                unterminated ??= candidate;
+            }
+            catch (PdfParseException)
+            {
+                // A false positive (e.g. the pattern inside a stream): try the
+                // next-older definition.
+            }
+        }
+
+        return unterminated;
+    }
+
+    // Finds every offset at which the pattern occurs on a token boundary:
+    // preceded by a non-digit (or the start of the file) and followed by a
+    // non-regular character (or the end of the file).
+    private List<long> FindPatternOffsets(byte[] pattern)
+    {
+        const int ChunkSize = 1 << 16;
+        List<long> hits = new List<long>();
+        long length = _stream.Length;
+        byte[] buffer = new byte[ChunkSize + pattern.Length + 1];
+
+        long position = 0;
+        while (position < length)
+        {
+            // Read one extra leading byte (when available) for the boundary
+            // check before the match.
+            long readFrom = position == 0 ? 0 : position - 1;
+            _stream.Position = readFrom;
+            int filled = 0;
+            while (filled < buffer.Length)
+            {
+                int read = _stream.Read(buffer, filled, buffer.Length - filled);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                filled += read;
+            }
+
+            int lead = position == 0 ? 0 : 1;
+            for (int i = lead; i + pattern.Length <= filled; i++)
+            {
+                if (!MatchesAt(buffer, i, pattern))
+                {
+                    continue;
+                }
+
+                bool startOk = (readFrom + i == 0) || !IsRegularByte(buffer[i - 1]);
+                int afterIndex = i + pattern.Length;
+                bool endOk = readFrom + afterIndex >= length
+                    || (afterIndex < filled && !IsRegularByte(buffer[afterIndex]));
+
+                if (startOk && endOk)
+                {
+                    long hit = readFrom + i;
+                    if (hits.Count == 0 || hits[hits.Count - 1] != hit)
+                    {
+                        hits.Add(hit);
+                    }
+                }
+            }
+
+            position += ChunkSize;
+        }
+
+        return hits;
+    }
+
+    // Finds every stream…endstream extent in the file (token-boundary
+    // keyword matches, paired in order; an unclosed stream extends to the end
+    // of the file). Used to exclude object-shaped bytes inside stream data
+    // from the recovery scan.
+    private List<(long Start, long End)> FindStreamExtents()
+    {
+        List<long> streamStarts = FindPatternOffsets(Encoding.ASCII.GetBytes("stream"));
+        List<long> streamEnds = FindPatternOffsets(Encoding.ASCII.GetBytes("endstream"));
+
+        List<(long Start, long End)> extents = new List<(long Start, long End)>();
+        int endIndex = 0;
+        long openAt = -1;
+
+        foreach (long start in streamStarts)
+        {
+            if (openAt >= 0)
+            {
+                continue;
+            }
+
+            // Close any extent that ended before this start.
+            openAt = start;
+            while (endIndex < streamEnds.Count && streamEnds[endIndex] <= start)
+            {
+                endIndex++;
+            }
+
+            if (endIndex < streamEnds.Count)
+            {
+                extents.Add((openAt, streamEnds[endIndex] + "endstream".Length));
+                endIndex++;
+                openAt = -1;
+            }
+            else
+            {
+                extents.Add((openAt, long.MaxValue));
+                openAt = -1;
+            }
+        }
+
+        return extents;
+    }
+
+    private static bool MatchesAt(byte[] buffer, int index, byte[] pattern)
+    {
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            if (buffer[index + i] != pattern[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // A "regular" byte continues a token (PDF 32000-1:2008 §7.2.2): anything
+    // that is neither whitespace nor a delimiter.
+    private static bool IsRegularByte(byte b)
+    {
+        return b switch
+        {
+            0x00 or 0x09 or 0x0A or 0x0C or 0x0D or 0x20 => false,
+            (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'['
+                or (byte)']' or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%' => false,
+            _ => true,
+        };
+    }
+
     // ── Token buffer ──────────────────────────────────────────────────────
 
     private PdfToken NextToken()
@@ -146,6 +352,17 @@ internal sealed class PdfObjectParser
     /// </summary>
     internal PdfIndirectObject ReadIndirectObject()
     {
+        return ReadIndirectObject(out _);
+    }
+
+    /// <summary>
+    /// Reads an indirect object and reports whether a terminating
+    /// <c>endobj</c> was present — recovery scans use this to prefer real
+    /// definitions over object-shaped bytes inside stream data.
+    /// </summary>
+    internal PdfIndirectObject ReadIndirectObject(out bool terminated)
+    {
+        terminated = false;
         PdfToken numToken = NextToken();
 
         if (numToken.Type != PdfTokenType.Integer)
@@ -180,6 +397,7 @@ internal sealed class PdfObjectParser
         if (next.Type == PdfTokenType.ObjectEnd)
         {
             NextToken();
+            terminated = true;
         }
 
         PdfObjectId id = new PdfObjectId(objectNumber, generation);

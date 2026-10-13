@@ -10,6 +10,124 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.18.0] - 2026-10-14
+
+A backlog-drain release: one large PR closing the verified-open items of the
+post-3.17 roadmap.
+
+### Added
+- **Precise vector redaction** (`VectorRedactionMode`, default
+  `SubtractPrecise`): a painted path intersecting a redaction region loses only
+  the geometry whose ink can touch the region — untouched subpaths survive
+  verbatim, straight stroked segments split at the region boundary (expanded
+  by the stroke ink allowance: half line width × miter limit, with `w`/`M`/
+  ExtGState `/LW`/`/ML` tracked), and axis-aligned rectangle fills decompose
+  into the surviving sub-rectangles. Everything doubtful (curves crossing a
+  region, fill-rule interactions, non-invertible matrices, unresolvable stroke
+  state) still drops whole, and removal stays byte-level (B15).
+  `DropIntersecting` preserves the pre-3.18 whole-path drop.
+- **SVG density handling** for CAD-scale vector pages: consecutive same-style
+  paths batch into one `<path>` element when paint-order exact (12,036 → 567
+  elements, −31 % bytes on the reference LINAC room plan);
+  `SvgExportOptions.PathSimplifyTolerance` (Ramer–Douglas–Peucker on straight
+  runs), `MaxVectorOps` budget, and `SvgDensityFallback.Simplify`/`Rasterize`
+  (whole-page `<image>` at `RasterFallbackDpi`).
+- **`CompressToTarget` rasterize fallback** (opt-in,
+  `CompressToTargetOptions.AllowRasterizeFallback`): when the JPEG-quality
+  search hits the vector floor, pages rasterize to a descending-DPI image-only
+  PDF until the target is met; reported via
+  `CompressToTargetResult.UsedRasterizeFallback`/`RasterizeDpiUsed`.
+- **Dynamic XFA auto-compose**: `XfaRenderer.OpenComposed(stream)` returns the
+  composed static document for `/NeedsRendering` files and the original
+  document for everything else (hybrid and static XFA included), falling back
+  to the original when no usable template exists.
+- **ImageMask stencils render** (`/ImageMask true`): composited with the
+  current fill colour in BOTH the raster and SVG pipelines, honouring
+  `/Decode [1 0]`.
+- **Pattern fills**: tiling patterns (PatternType 1, coloured and uncoloured)
+  replay their cell across the filled region and shading patterns
+  (PatternType 2) fill with their gradient in the raster pipeline; shading
+  patterns also fill in the SVG pipeline (clip + gradient). The content-stream
+  walker gained `IContentOperatorSink.SetPatternColor` (a default interface
+  method — existing sinks are unaffected).
+- **Compression image recoding**: `CompressionOptions.DownsampleImagesToDpi`
+  (box-resample to a target DPI, driven by each image's largest painted
+  placement scanned from page content) and
+  `CompressionOptions.SmartCodecSelection` (per-image smallest-of: indexed
+  palette under Flate at 1/2/4/8 bpc, JPEG, or the original bytes).
+- **CMYK image completeness**: decoded CMYK frames (separated TIFFs) embed as
+  raw DeviceCMYK under FlateDecode (the K channel is no longer mistaken for
+  alpha), and the raster sink converts 8-bpc DeviceCMYK/ICC-4 samples for
+  display (the SVG sink already did).
+- **Composite autohinting in unhinted fonts**: composite glyphs flatten and
+  Y-fit through the geometric autohinter exactly like simple glyphs, so
+  accented letters grid-fit consistently with their bases.
+- **Xref-offset recovery**: a classic xref entry whose offset is provably
+  wrong (a different object number at the offset, or unparseable bytes) now
+  recovers by scanning the file for the object's real definition — newest
+  definition wins. Healthy files keep the strict fast path; the earlier
+  narrow page-tree recovery is subsumed.
+- **Perf regression baseline**: `dotnet run --project benchmarks/Chuvadi.Benchmarks
+  -- --perf-report` times a deterministic micro-suite (open, rasterize, SVG,
+  compress on the synthetic corpus) against a committed baseline
+  (`--update-perf-baseline` refreshes it); a non-required, advisory CI job
+  runs it on every push.
+
+### Fixed
+- **Scrub-mode crop gaps**: annotations entirely outside the crop box are
+  removed from `/Annots` and their objects (and `/AP` appearance streams)
+  omitted from the output; inline images (`BI`/`ID`/`EI`) are consumed as a
+  unit (no more token-stream corruption) and dropped when fully off-box; `sh`
+  under a fully off-box clip is dropped as dead bytes.
+- **`PageCropper` no longer drops lazily-unloaded objects**: the crop pipeline
+  preloads the reachable object graph (B16) before re-emitting, so
+  annotations, fonts and outlines the crop never touched survive in both
+  `ClipOnly` and `Scrub` output (previously any object not already resolved
+  was silently omitted, and new object numbers could collide).
+- **`Chuvadi.Pdf` meta-package** now lists the newer modules directly
+  (Xfa, PdfA, Text.Shaping, Rendering.Raster, Rendering.Walking).
+- **`tools/gen_api_docs.py` filename collisions**: two types sharing a short
+  name within one module (the DisplayList/Raster `DisplayListBuilder` and
+  `PageDisplayList` pairs) no longer overwrite each other's page — duplicates
+  are suffixed with their namespace tail.
+
+### Hardened (independent adversarial review of this release)
+An independent review agent probed the release's changes and its findings were
+fixed and swept library-wide:
+- **Operand stack semantics**: the redaction and scrub interpreters now model
+  the LAST n operands of every operator (matrix, text-state, path, line-width),
+  matching viewer stack semantics, so crafted extra operands can no longer
+  shift the modelled geometry away from what a viewer paints; the precise
+  vector subtractor additionally refuses (whole-path drop) any construction
+  operator with surplus operands rather than re-emitting them.
+- **Buffered paths survive interleaved state operators**: a state operator
+  between path construction and paint (illegal but rendered by viewers) no
+  longer flushes the buffered path verbatim past the region check.
+- **SVG fill batching** refuses to merge fills whose geometry overlaps the
+  batch (opposite-winding overlaps would cancel to holes under nonzero).
+- **Soft-mask streams are exempt from palette recoding** (must stay
+  DeviceGray per §11.6.5.2).
+- **Inline images end exactly**: the data length of unfiltered inline images
+  is computed from /W /H /BPC /CS, so a byte pair that merely looks like "EI"
+  inside the data cannot end the image early (scrub leak / stream corruption);
+  with no terminating EI the remainder is kept verbatim instead of dropped.
+- **Xref recovery ignores decoys**: scan hits inside stream…endstream extents
+  are excluded and endobj-terminated definitions are preferred.
+- **Shared appearance streams survive scrub-crop** (only AP objects no kept
+  annotation references are omitted); **self-referential patterns/forms**
+  are depth-capped instead of overflowing the stack; **downsampling excludes
+  images also referenced from form XObjects**; fill-piece emission inflates
+  the subtracted region past coordinate-rounding error; a sample-size guard
+  overflow and a stream leak in `XfaRenderer.OpenComposed` were fixed.
+
+### Verified (no code change needed)
+- The SVG sink's `cs`/`CS`/`sc`/`scn`/`SCN` colour conversion, form-XObject
+  recursion, and quote-operator composite-font routing all shipped with the
+  rendering consolidation — the backlog entries were stale.
+- The four COI dataset nodes without `XfaDataField.Geometry` have no
+  corresponding template field; all laid-out fields carry geometry.
+
+---
 ## [3.17.1] - 2026-07-09
 
 ### Fixed

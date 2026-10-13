@@ -17,9 +17,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="perf-baseline.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Svg\Chuvadi.Pdf.Svg.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
     <ProjectReference Include="..\Chuvadi.Benchmarks.Compression\Chuvadi.Benchmarks.Compression.csproj" />
   </ItemGroup>

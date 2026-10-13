@@ -9,12 +9,16 @@
 
 ## Last Updated
 
-2026-07-08 — hybrid-XFA "just works" arc merged (targeting v3.17.0):
-annotation appearance rendering (§12.5.5) on all sinks, appearance text in
-extraction, `XfaDataField.Geometry` via the template bind map, xref-chain
-precedence fix (§7.5.6 — newest section supersedes, free entries shadow),
-consolidated literal-string escape decoding, and the flattener B16 preload
-fix. Last released version: v3.16.0.
+2026-10-14 — v3.18.0 backlog-drain arc (one large PR): precise vector
+redaction (`VectorRedactionMode`), SVG density handling (path batching,
+simplify tolerance, op budget, raster fallback), CompressToTarget rasterize
+fallback, scrub-crop gaps (/Annots, inline images, `sh`, PageCropper B16
+preload), dynamic-XFA auto-compose (`XfaRenderer.OpenComposed`), ImageMask
+stencils in both pipelines, pattern fills (tiling + shading in raster,
+shading in SVG), compression image recoding (downsample-to-DPI, smart codec
+selection), CMYK completeness, composite autohinting in unhinted fonts,
+xref-offset recovery, perf baseline + advisory CI job, meta-package direct
+deps, gen_api_docs collision fix. Last released version: v3.17.1.
 
 ---
 
@@ -124,7 +128,8 @@ suite, then writes 33 mono-versioned `.nupkg` to `artifacts\nupkg`. Publish by
 flat-copying `artifacts\nupkg\*.nupkg` into the two local feeds
 (`C:\Users\aruns\Documents\local-nuget` and the Chuvadi Reader's `localpackages`)
 — never `dotnet nuget push` (it creates a mismatched hierarchical layout). Tag
-`vX.Y.Z` after packing. Latest released version: **3.16.0**.
+`vX.Y.Z` after packing. Latest released version: **3.17.1** (3.18.0 pending
+pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 
@@ -132,18 +137,24 @@ Releases publish to local folder feeds only, never to nuget.org.
 
 ## Open / Deferred
 
-- **Deferred visual check:** confirm the `ScriptMode.Full` default fills the
-  COI's scripted fields via the Reader app once it references 3.16.0. CI-green
-  is not the same as visually confirmed.
-- **Meta-package coverage:** `Chuvadi.Pdf` does not yet reference the newer
-  modules (Xfa, PdfA, Text.Shaping, Color, Rendering.Raster, Rendering.Walking).
-  Consumers of the umbrella get most of the graph transitively, but the direct
-  dependency list is worth reconciling.
-- **Future-ticket candidates (low priority):** `gen_api_docs.py` doc-filename
-  collision for the two `DisplayListBuilder` / `PageDisplayList` type-name pairs
-  (cosmetic); moving shared value types (PdfBlendMode, BlendModes, Type3Font,
-  geometry) out of `Rendering.DisplayList` into a shared/common project so
-  `Rendering.Raster` need not depend on the text display list.
+- ~~ScriptMode.Full visual check~~ — **closed**: the Reader app on 3.17.x
+  renders the COI's scripted fields filled (confirmed in the Reader/editor
+  workstream).
+- ~~Meta-package coverage~~ — **closed in 3.18.0**: `Chuvadi.Pdf` now lists
+  Xfa, PdfA, Text.Shaping, Rendering.Raster and Rendering.Walking directly.
+- ~~gen_api_docs filename collision~~ — **closed in 3.18.0**: duplicate type
+  names within a module are suffixed with their last namespace segment
+  (`DisplayListBuilder.DisplayList.md` / `DisplayListBuilder.Raster.md`).
+- **XFA geometry nulls** — closed as correct behaviour: the four COI dataset
+  nodes without `Geometry` (`YEAR_CURRENT_NXT`, `NAME_ROC`, `ADDRESS_ROC`,
+  `STATE_NAME`) have NO corresponding template field (template refs = 0), so
+  every laid-out field carries geometry (15/15).
+- **Shared value-types move** — documented defer (see BACKLOG item 6): plan is
+  a move into `Rendering.Walking` with `TypeForwardedTo` shims, at a
+  major-version boundary.
+- **Autohinter X-stem fitting, SVG tiling patterns, raster stroke patterns,
+  partial-overlap inline images under Scrub** — follow-ups recorded in
+  BACKLOG.
 
 See `docs/BACKLOG.md` for the full open roadmap.
 

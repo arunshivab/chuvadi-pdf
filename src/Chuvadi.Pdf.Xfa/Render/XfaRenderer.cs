@@ -24,6 +24,63 @@ namespace Chuvadi.Pdf.Xfa.Render;
 public static class XfaRenderer
 {
     /// <summary>
+    /// Opens a PDF so that XFA "just works": a dynamic XFA document (catalog
+    /// <c>/NeedsRendering true</c>, whose page content is a placeholder) is
+    /// composed through <see cref="Render"/> and the composed static document
+    /// is returned; every other document — hybrid and static XFA included,
+    /// whose real content already lives in pages and widget appearances —
+    /// comes back exactly as <see cref="PdfDocument.Open(Stream, bool)"/>
+    /// returns it. A dynamic document whose template cannot be composed falls
+    /// back to the original document rather than failing the open.
+    /// </summary>
+    /// <param name="input">The stream holding the PDF.</param>
+    /// <param name="leaveOpen">
+    /// Whether <paramref name="input"/> is left open when the returned
+    /// document is disposed (or, for a composed document, after composition).
+    /// </param>
+    /// <param name="options">
+    /// Rendering options for the dynamic composition, or null for
+    /// <see cref="XfaRenderOptions.Default"/> (scripts run in Full mode).
+    /// </param>
+    /// <returns>The opened document, composed when it was dynamic XFA.</returns>
+    public static PdfDocument OpenComposed(
+        Stream input, bool leaveOpen = false, XfaRenderOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        PdfDocument document = PdfDocument.Open(input, leaveOpen);
+        if (document.XfaKind != XfaKind.Dynamic)
+        {
+            return document;
+        }
+
+        MemoryStream composed = new MemoryStream();
+        try
+        {
+            Render(composed, document, options ?? XfaRenderOptions.Default);
+        }
+        catch (XfaRenderException)
+        {
+            // No usable template: the placeholder document is still a valid
+            // PDF, so the open succeeds with what the file actually carries.
+            composed.Dispose();
+            return document;
+        }
+        catch
+        {
+            // Unexpected failure: dispose what this call opened, then let the
+            // caller see the original exception.
+            composed.Dispose();
+            document.Dispose();
+            throw;
+        }
+
+        document.Dispose();
+        composed.Position = 0;
+        return PdfDocument.Open(composed, leaveOpen: false);
+    }
+
+    /// <summary>
     /// Renders the XFA template of <paramref name="document"/> to a new PDF
     /// written to <paramref name="output"/>.
     /// </summary>

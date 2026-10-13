@@ -403,8 +403,8 @@ python tools/gen_api_docs.py
 | [PageOverlay](Operations/PageOverlay.md) | class | Recolours existing pages by drawing a solid background fill behind the page content and/or rendering the existing content at reduced opacity. |
 | [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
-| [PdfCompressor](Operations/PdfCompressor.md) | class | Rewrites a PDF document to a smaller equivalent. |
-| [PdfCompressor](Operations/PdfCompressor.md) | class | — |
+| [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | Rewrites a PDF document to a smaller equivalent. |
+| [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | — |
 | [PlacePageOptions](Operations/PlacePageOptions.md) | class | Optional per-placement controls for `PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform, PlacePageOptions)`. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
 | [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
@@ -473,6 +473,7 @@ python tools/gen_api_docs.py
 | [RedactionOptions](Redaction/RedactionOptions.md) | class | Top-level configuration for a redaction operation. |
 | [RedactionRect](Redaction/RedactionRect.md) | class | One rectangle of content to permanently remove from a PDF page. |
 | [Redactor](Redaction/Redactor.md) | class | Applies true PHI-safe redactions to a PDF document. |
+| [VectorRedactionMode](Redaction/VectorRedactionMode.md) | enum | How painted vector paths (fills and strokes) that intersect a redaction region are removed from the content stream. |
 
 ## Chuvadi.Pdf.Rendering
 
@@ -485,8 +486,8 @@ python tools/gen_api_docs.py
 | [ClipPath](Rendering/ClipPath.md) | struct | A clipping path applied to a single render operation. |
 | [ClipRegion](Rendering/ClipRegion.md) | class | A device-space clipping region used by `ScanlineRasterizer` to restrict where a fill is painted. |
 | [DiagnosticKind](Rendering/DiagnosticKind.md) | enum | Classifies a `RenderingDiagnostic`. |
-| [DisplayListBuilder](Rendering/DisplayListBuilder.md) | class | Builds a `PageDisplayList` by walking a page's content stream and translating each PDF operator to a `RenderOp`. |
-| [DisplayListBuilder](Rendering/DisplayListBuilder.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
+| [DisplayListBuilder](Rendering/DisplayListBuilder.DisplayList.md) | class | Builds a `PageDisplayList` by walking a page's content stream and translating each PDF operator to a `RenderOp`. |
+| [DisplayListBuilder](Rendering/DisplayListBuilder.Raster.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
 | [DocumentSearch](Rendering/DocumentSearch.md) | class | Searches the text of a `PdfDocument` by page, streaming matches asynchronously. |
 | [DrawGlyphOp](Rendering/DrawGlyphOp.md) | class | Paints a single glyph outline. |
 | [DrawImageOp](Rendering/DrawImageOp.md) | class | Paints a decoded image at the position specified by a transformation matrix. |
@@ -505,8 +506,8 @@ python tools/gen_api_docs.py
 | [LineSegmentExtraction](Rendering/LineSegmentExtraction.md) | class | Extension accessor that presents a page's path content as a flat list of `LineSegment`s, flattening cubic curves to polylines. |
 | [NestedDisplayListOp](Rendering/NestedDisplayListOp.md) | class | Paints another `PageDisplayList` with a composing transform. |
 | [OpacityOp](Rendering/OpacityOp.md) | class | Pushes or pops an opacity group. |
-| [PageDisplayList](Rendering/PageDisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
-| [PageDisplayList](Rendering/PageDisplayList.md) | class | An immutable, renderer-neutral representation of a PDF page's drawable content. |
+| [PageDisplayList](Rendering/PageDisplayList.DisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
+| [PageDisplayList](Rendering/PageDisplayList.Raster.md) | class | An immutable, renderer-neutral representation of a PDF page's drawable content. |
 | [PageRasterizer](Rendering/PageRasterizer.md) | class | Rasterizes a PDF page to a `PixelBuffer`. |
 | [PaintMode](Rendering/PaintMode.md) | enum | Whether a path is filled, stroked, or both. |
 | [PathCommand](Rendering/PathCommand.md) | enum | Type of a path command. |
@@ -520,8 +521,8 @@ python tools/gen_api_docs.py
 | [PdfPageExtensions](Rendering/PdfPageExtensions.md) | class | Extensions on `PdfDocument` and `PdfPage` for the display-list and text-run APIs. |
 | [RasterSoftMaskInfo](Rendering/RasterSoftMaskInfo.md) | class | An active soft mask (ExtGState `/SMask`): the masking transparency group plus how to derive and place its per-pixel coverage. |
 | [Rect](Rendering/Rect.md) | record struct | An axis-aligned bounding rectangle in PDF user-space coords. |
-| [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all display-list operations. |
-| [RenderOp](Rendering/RenderOp.md) | class | Abstract base for all operations in a `PageDisplayList`. |
+| [RenderOp](Rendering/RenderOp.DisplayList.md) | class | Abstract base for all display-list operations. |
+| [RenderOp](Rendering/RenderOp.Raster.md) | class | Abstract base for all operations in a `PageDisplayList`. |
 | [RenderOpBounds](Rendering/RenderOpBounds.md) | class | Axis-aligned bounds accessors for `RenderOp` subtypes. |
 | [RenderOpKind](Rendering/RenderOpKind.md) | enum | Tag identifying the concrete `RenderOp` subtype. |
 | [RenderOptions](Rendering/RenderOptions.md) | class | Options that control how a PDF page is rasterized. |
@@ -578,6 +579,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [SvgDensityFallback](Svg/SvgDensityFallback.md) | enum | What happens when a page's vector-operation count exceeds `SvgExportOptions.MaxVectorOps`. |
 | [SvgExportOptions](Svg/SvgExportOptions.md) | class | Options for PDF → SVG export. |
 | [SvgFontStrategy](Svg/SvgFontStrategy.md) | enum | How embedded fonts are handled. |
 | [SvgRenderer](Svg/SvgRenderer.md) | class | Renders a `PageDisplayList` to SVG. |

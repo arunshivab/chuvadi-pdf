@@ -22,6 +22,7 @@ public sealed class RedactionOptions
         DrawOverlay = true;
         PatternPadding = 1.0;
         MaxDegreeOfParallelism = 1;
+        VectorMode = VectorRedactionMode.SubtractPrecise;
     }
 
     /// <summary>
@@ -56,6 +57,17 @@ public sealed class RedactionOptions
     /// rectangle to compensate for font-metric approximation. Default: 1.0.
     /// </summary>
     public double PatternPadding { get; init; }
+
+    /// <summary>
+    /// Gets or initialises how painted vector paths (fills and strokes) that
+    /// intersect a redaction region are removed. Default:
+    /// <see cref="VectorRedactionMode.SubtractPrecise"/> — geometry whose ink
+    /// provably misses every redaction rectangle survives, and only the
+    /// intersecting geometry is removed (byte-level). Use
+    /// <see cref="VectorRedactionMode.DropIntersecting"/> for the pre-3.18
+    /// whole-path drop.
+    /// </summary>
+    public VectorRedactionMode VectorMode { get; init; }
 
     /// <summary>
     /// Gets or initialises the maximum number of threads used for the

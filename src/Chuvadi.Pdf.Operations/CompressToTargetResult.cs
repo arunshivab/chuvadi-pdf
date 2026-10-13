@@ -30,4 +30,18 @@ public sealed record CompressToTargetResult
     /// When skipped, the original document is re-serialized to the output unchanged.
     /// </summary>
     public CompressionSkipReason SkipReason { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the written output is the rasterize
+    /// fallback (an image-only PDF) rather than the original document with
+    /// recompressed images. Only possible when
+    /// <see cref="CompressToTargetOptions.AllowRasterizeFallback"/> was opted in.
+    /// </summary>
+    public bool UsedRasterizeFallback { get; init; }
+
+    /// <summary>
+    /// The resolution of the written rasterize-fallback output, or zero when
+    /// the fallback was not used.
+    /// </summary>
+    public double RasterizeDpiUsed { get; init; }
 }

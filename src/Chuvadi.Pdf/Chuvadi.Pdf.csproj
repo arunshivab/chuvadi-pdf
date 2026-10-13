@@ -47,15 +47,20 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.PdfA\Chuvadi.Pdf.PdfA.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Reader\Chuvadi.Pdf.Reader.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Redaction\Chuvadi.Pdf.Redaction.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Raster\Chuvadi.Pdf.Rendering.Raster.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Walking\Chuvadi.Pdf.Rendering.Walking.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Signatures\Chuvadi.Pdf.Signatures.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Svg\Chuvadi.Pdf.Svg.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Text.Shaping\Chuvadi.Pdf.Text.Shaping.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Watermark\Chuvadi.Pdf.Watermark.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Xfa\Chuvadi.Pdf.Xfa.csproj" />
   </ItemGroup>
 
 </Project>

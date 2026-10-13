@@ -22,6 +22,34 @@ public enum SvgTextStrategy
     PerGlyph = 1,
 }
 
+/// <summary>
+/// What happens when a page's vector-operation count exceeds
+/// <see cref="SvgExportOptions.MaxVectorOps"/>. Dense vector pages (CAD
+/// exports, large plots) can otherwise produce SVGs with tens of thousands of
+/// elements that overwhelm viewers.
+/// </summary>
+public enum SvgDensityFallback
+{
+    /// <summary>
+    /// Stay vector but force path simplification: straight-segment runs are
+    /// simplified (Ramer–Douglas–Peucker) at
+    /// <see cref="SvgExportOptions.PathSimplifyTolerance"/> or, when that is
+    /// unset, an automatic 0.3-point tolerance. Reduces output size while
+    /// keeping text selectable. Default.
+    /// </summary>
+    Simplify = 0,
+
+    /// <summary>
+    /// Rasterize the whole page at <see cref="SvgExportOptions.RasterFallbackDpi"/>
+    /// and emit a single <c>&lt;image&gt;</c> SVG instead of vector elements.
+    /// Bounded output size for any density; text is no longer selectable.
+    /// Only the document-based entry points (<c>RenderPage</c>) can rasterize —
+    /// rendering a pre-built display list falls back to
+    /// <see cref="Simplify"/>.
+    /// </summary>
+    Rasterize = 1,
+}
+
 /// <summary>How embedded fonts are handled.</summary>
 public enum SvgFontStrategy
 {
@@ -60,4 +88,32 @@ public sealed class SvgExportOptions
     /// for a transparent SVG (useful when compositing over another background).
     /// </summary>
     public ColorF? Background { get; init; } = ColorF.White;
+
+    /// <summary>
+    /// Tolerance (page points) for simplifying straight-segment runs in path
+    /// geometry (Ramer–Douglas–Peucker) before emission. <c>0</c> (default)
+    /// disables simplification. Curves and clip paths are never simplified.
+    /// Typical values: 0.1–0.5 for CAD-style line work.
+    /// </summary>
+    public double PathSimplifyTolerance { get; init; }
+
+    /// <summary>
+    /// Budget on the number of vector painting operations (paths and shadings)
+    /// per page before <see cref="DensityFallback"/> kicks in. <c>0</c>
+    /// (default) means unlimited — every page renders fully vector.
+    /// </summary>
+    public int MaxVectorOps { get; init; }
+
+    /// <summary>
+    /// What happens when a page exceeds <see cref="MaxVectorOps"/>. Defaults
+    /// to <see cref="SvgDensityFallback.Simplify"/>.
+    /// </summary>
+    public SvgDensityFallback DensityFallback { get; init; } = SvgDensityFallback.Simplify;
+
+    /// <summary>
+    /// Resolution used when <see cref="DensityFallback"/> is
+    /// <see cref="SvgDensityFallback.Rasterize"/> and the budget is exceeded.
+    /// Default: 150 DPI.
+    /// </summary>
+    public double RasterFallbackDpi { get; init; } = 150;
 }
