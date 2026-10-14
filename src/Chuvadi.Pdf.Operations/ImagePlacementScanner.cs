@@ -1,15 +1,21 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// SPEC:  PDF 32000-1:2008 §8.3.4 (CTM), §8.9.5.2 (image placement via Do)
+// SPEC:  PDF 32000-1:2008 §8.3.4 (CTM), §8.9.5.2 (image placement via Do),
+//        §8.10 (form XObjects: /Matrix, /Resources inheritance)
 // PHASE: 3.18 — image downsampling support for the compression path.
+//        3.20 — form XObjects are walked, so images inside forms are measured.
 //
 // Downsampling an image to a target DPI needs to know how large the image is
 // painted on the page: a 3000-pixel-wide photo placed 2 inches wide is
 // 1500 DPI, a candidate for downsampling; the same photo placed full-page is
-// not. This scanner walks each page's own content stream tracking q/Q/cm and,
-// for every image Do, records the LARGEST placement extent per image object,
-// so downsampling never undershoots any visible use. Nested form XObjects are
-// not walked (their images are left un-downsampled — conservative).
+// not. This scanner walks each page's content stream tracking q/Q/cm and, for
+// every image Do, records the LARGEST placement extent per image object, so
+// downsampling never undershoots any visible use. Form XObjects invoked by Do
+// are walked recursively under their /Matrix and the invoking CTM, with
+// resource inheritance. Any image whose every use cannot be measured — one
+// reachable from a pattern, a soft mask, a Type 3 font, an annotation
+// appearance, a form nested too deep or recursive, or content that cannot be
+// decoded — is excluded (never downsampled).
 
 using System;
 using System.Collections.Generic;
@@ -24,59 +30,65 @@ using Chuvadi.Pdf.Primitives;
 namespace Chuvadi.Pdf.Operations;
 
 /// <summary>
-/// Scans page content streams and reports, per image XObject object number,
-/// the largest extent (in points) at which the image is painted on any page.
+/// Scans page content streams (and the form XObjects they invoke) and
+/// reports, per image XObject object number, the largest extent (in points)
+/// at which the image is painted on any page.
 /// </summary>
 internal static class ImagePlacementScanner
 {
+    private const int MaxFormDepth = 8;
+
     /// <summary>
     /// Returns the largest placement extent, in points, per image XObject
-    /// object number. An image never seen in any page's content stream has no
-    /// entry (caller treats it as not-downsampleable).
+    /// object number. An image never seen painted has no entry, and neither
+    /// has any image with a use the scanner cannot measure (caller treats both
+    /// as not-downsampleable).
     /// </summary>
     internal static Dictionary<int, (double WidthPts, double HeightPts)> Scan(PdfDocument document)
     {
         Dictionary<int, (double WidthPts, double HeightPts)> placements =
             new Dictionary<int, (double WidthPts, double HeightPts)>();
-        FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
-
-        // Images whose placement cannot be fully known are EXCLUDED from the
-        // result (never downsampled): anything referenced from a form
-        // XObject's resources (forms are not walked, so a large placement
-        // inside one would be invisible here), and every image on a page
-        // whose content stream could not be decoded.
-        HashSet<int> excluded = new HashSet<int>();
+        ScanState state = new ScanState(document.Objects, placements);
 
         for (int i = 0; i < document.PageCount; i++)
         {
             PdfPage page = document.Pages[i];
-            Dictionary<string, int> imageNames = CollectImageNames(page, document.Objects);
-            CollectFormReferencedImages(page.Resources, document.Objects, excluded, depth: 0);
+            PdfDictionary? resources = page.Resources;
 
-            if (imageNames.Count == 0)
+            // Images reachable through annotation appearances are painted at
+            // extents this scanner does not measure.
+            if (page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsValue)
+                && state.Store.Resolve(annotsValue) is PdfArray annots)
             {
-                continue;
+                foreach (PdfPrimitive item in annots)
+                {
+                    if (state.Store.Resolve(item) is PdfDictionary annot
+                        && annot.TryGetValue(PdfName.Intern("AP"), out PdfPrimitive? ap))
+                    {
+                        state.ExcludeReachable(ap);
+                    }
+                }
             }
 
             byte[] content;
             try
             {
-                content = DecodePageContent(page, document.Objects, pipeline);
+                content = DecodePageContent(page, state.Store);
             }
             catch (FilterException)
             {
-                foreach (int objNumber in imageNames.Values)
+                if (resources is not null)
                 {
-                    excluded.Add(objNumber);
+                    state.ExcludeReachable(resources);
                 }
 
                 continue;
             }
 
-            ScanContent(content, imageNames, placements);
+            ScanContent(content, resources, Matrix3x3.Identity, depth: 0, state);
         }
 
-        foreach (int objNumber in excluded)
+        foreach (int objNumber in state.Excluded)
         {
             placements.Remove(objNumber);
         }
@@ -84,97 +96,20 @@ internal static class ImagePlacementScanner
         return placements;
     }
 
-    // Collects the object numbers of every image reachable from a form
-    // XObject's resources (recursively, depth-capped): their true painted
-    // extents live inside form content this scanner does not walk.
-    private static void CollectFormReferencedImages(
-        PdfDictionary? resources, PdfObjectStore store, HashSet<int> excluded, int depth)
-    {
-        if (resources is null || depth > 8
-            || !resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xv)
-            || store.Resolve(xv) is not PdfDictionary xobjects)
-        {
-            return;
-        }
-
-        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in xobjects)
-        {
-            if (store.Resolve(entry.Value) is not PdfStream stream
-                || stream.Dictionary.Subtype is not PdfName subtype)
-            {
-                continue;
-            }
-
-            if (subtype.Value != "Form")
-            {
-                continue;
-            }
-
-            PdfDictionary? formResources = null;
-            if (stream.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp))
-            {
-                formResources = store.Resolve(rp) as PdfDictionary;
-            }
-
-            if (formResources is null
-                || !formResources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? fxv)
-                || store.Resolve(fxv) is not PdfDictionary formXObjects)
-            {
-                continue;
-            }
-
-            foreach (KeyValuePair<PdfName, PdfPrimitive> formEntry in formXObjects)
-            {
-                if (formEntry.Value is PdfReference reference
-                    && store.Resolve(reference) is PdfStream inner
-                    && inner.Dictionary.Subtype is PdfName innerSubtype
-                    && innerSubtype.Value == "Image")
-                {
-                    excluded.Add(reference.ObjectId.ObjectNumber);
-                }
-            }
-
-            CollectFormReferencedImages(formResources, store, excluded, depth + 1);
-        }
-    }
-
-    // Maps each /XObject resource name on the page to its image object number.
-    private static Dictionary<string, int> CollectImageNames(PdfPage page, PdfObjectStore store)
-    {
-        Dictionary<string, int> names = new Dictionary<string, int>(StringComparer.Ordinal);
-
-        PdfDictionary? resources = page.Resources;
-        if (resources is null
-            || !resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xv)
-            || store.Resolve(xv) is not PdfDictionary xobjects)
-        {
-            return names;
-        }
-
-        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in xobjects)
-        {
-            if (entry.Value is not PdfReference reference)
-            {
-                continue;
-            }
-
-            if (store.Resolve(reference) is PdfStream stream
-                && stream.Dictionary.Subtype is PdfName subtype
-                && subtype.Value == "Image")
-            {
-                names[entry.Key.Value] = reference.ObjectId.ObjectNumber;
-            }
-        }
-
-        return names;
-    }
-
     private static void ScanContent(
-        byte[] content,
-        Dictionary<string, int> imageNames,
-        Dictionary<int, (double WidthPts, double HeightPts)> placements)
+        byte[] content, PdfDictionary? resources, Matrix3x3 baseCtm, int depth, ScanState state)
     {
-        Matrix3x3 ctm = Matrix3x3.Identity;
+        PdfDictionary? xobjects = null;
+        if (resources is not null)
+        {
+            state.ExcludeNonXObjectResources(resources);
+            if (resources.TryGetValue(PdfName.Intern("XObject"), out PdfPrimitive? xv))
+            {
+                xobjects = state.Store.Resolve(xv) as PdfDictionary;
+            }
+        }
+
+        Matrix3x3 ctm = baseCtm;
         Stack<Matrix3x3> stack = new Stack<Matrix3x3>();
         List<double> nums = new List<double>();
         string? lastName = null;
@@ -238,23 +173,10 @@ internal static class ImagePlacementScanner
                     break;
 
                 case "Do":
-                    if (lastName is not null && imageNames.TryGetValue(lastName, out int objNumber))
+                    if (lastName is not null && xobjects is not null
+                        && xobjects.TryGetValue(PdfName.Intern(lastName), out PdfPrimitive? target))
                     {
-                        // The image paints the unit square under the CTM; its
-                        // extent is the length of the transformed basis vectors.
-                        double widthPts = Math.Sqrt((ctm.A * ctm.A) + (ctm.B * ctm.B));
-                        double heightPts = Math.Sqrt((ctm.C * ctm.C) + (ctm.D * ctm.D));
-
-                        if (placements.TryGetValue(objNumber, out (double WidthPts, double HeightPts) prior))
-                        {
-                            placements[objNumber] = (
-                                Math.Max(prior.WidthPts, widthPts),
-                                Math.Max(prior.HeightPts, heightPts));
-                        }
-                        else
-                        {
-                            placements[objNumber] = (widthPts, heightPts);
-                        }
+                        HandleDo(target, ctm, resources, depth, state);
                     }
 
                     break;
@@ -268,6 +190,101 @@ internal static class ImagePlacementScanner
         }
     }
 
+    private static void HandleDo(
+        PdfPrimitive target, Matrix3x3 ctm, PdfDictionary? resources, int depth, ScanState state)
+    {
+        if (state.Store.Resolve(target) is not PdfStream stream
+            || stream.Dictionary.Subtype is not PdfName subtype)
+        {
+            return;
+        }
+
+        if (subtype.Value == "Image")
+        {
+            if (target is PdfReference reference)
+            {
+                // The image paints the unit square under the CTM; its extent
+                // is the length of the transformed basis vectors.
+                double widthPts = Math.Sqrt((ctm.A * ctm.A) + (ctm.B * ctm.B));
+                double heightPts = Math.Sqrt((ctm.C * ctm.C) + (ctm.D * ctm.D));
+                state.Record(reference.ObjectId.ObjectNumber, widthPts, heightPts);
+            }
+
+            return;
+        }
+
+        if (subtype.Value != "Form")
+        {
+            return;
+        }
+
+        PdfDictionary? formResources = stream.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? rv)
+            ? state.Store.Resolve(rv) as PdfDictionary
+            : null;
+
+        // A form too deep or already being walked (a cycle) cannot be
+        // measured: everything it can reach is excluded.
+        if (depth >= MaxFormDepth || !state.Active.Add(stream))
+        {
+            state.ExcludeReachable(stream);
+            return;
+        }
+
+        try
+        {
+            byte[] formContent;
+            try
+            {
+                formContent = ObjectImporter.DecodeStreamContent(stream);
+            }
+            catch (FilterException)
+            {
+                state.ExcludeReachable(stream);
+                if (formResources is null && resources is not null)
+                {
+                    state.ExcludeReachable(resources);
+                }
+
+                return;
+            }
+
+            Matrix3x3 formMatrix = ReadMatrix(stream.Dictionary, state.Store);
+            ScanContent(formContent, formResources ?? resources, formMatrix.Multiply(ctm), depth + 1, state);
+        }
+        finally
+        {
+            state.Active.Remove(stream);
+        }
+    }
+
+    private static Matrix3x3 ReadMatrix(PdfDictionary dict, PdfObjectStore store)
+    {
+        if (!dict.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mv)
+            || store.Resolve(mv) is not PdfArray array
+            || array.Count != 6)
+        {
+            return Matrix3x3.Identity;
+        }
+
+        double[] v = new double[6];
+        for (int i = 0; i < 6; i++)
+        {
+            switch (store.Resolve(array[i]))
+            {
+                case PdfInteger integer:
+                    v[i] = integer.Value;
+                    break;
+                case PdfReal real:
+                    v[i] = real.Value;
+                    break;
+                default:
+                    return Matrix3x3.Identity;
+            }
+        }
+
+        return new Matrix3x3(v[0], v[1], v[2], v[3], v[4], v[5]);
+    }
+
     // Consumes an inline image's dictionary tokens, binary data and EI,
     // using the exact-extent helper so a false "EI" inside the binary data
     // cannot misalign the scan.
@@ -277,8 +294,7 @@ internal static class ImagePlacementScanner
         tok.Seek(end < 0 ? content.Length : end);
     }
 
-    private static byte[] DecodePageContent(
-        PdfPage page, PdfObjectStore store, FilterPipeline pipeline)
+    private static byte[] DecodePageContent(PdfPage page, PdfObjectStore store)
     {
         using MemoryStream merged = new MemoryStream();
 
@@ -289,36 +305,125 @@ internal static class ImagePlacementScanner
             {
                 foreach (PdfPrimitive item in array)
                 {
-                    AppendDecoded(store.Resolve(item) as PdfStream, pipeline, merged);
+                    AppendDecoded(store.Resolve(item) as PdfStream, merged);
                 }
             }
             else
             {
-                AppendDecoded(resolved as PdfStream, pipeline, merged);
+                AppendDecoded(resolved as PdfStream, merged);
             }
         }
 
         return merged.ToArray();
     }
 
-    private static void AppendDecoded(PdfStream? stream, FilterPipeline pipeline, MemoryStream merged)
+    // Decodes through the stream's whole /Filter chain with its /DecodeParms.
+    private static void AppendDecoded(PdfStream? stream, MemoryStream merged)
     {
         if (stream is null)
         {
             return;
         }
 
-        byte[] bytes;
-        if (stream.Filter is PdfName filter)
-        {
-            bytes = pipeline.Decode(FilterRegistry.ResolveAlias(filter.Value), stream.RawBytes, null);
-        }
-        else
-        {
-            bytes = stream.RawBytes;
-        }
-
+        byte[] bytes = ObjectImporter.DecodeStreamContent(stream);
         merged.Write(bytes, 0, bytes.Length);
         merged.WriteByte((byte)'\n');
+    }
+
+    private sealed class ScanState
+    {
+        private readonly Dictionary<int, (double WidthPts, double HeightPts)> _placements;
+        private readonly HashSet<PdfPrimitive> _excludeVisited =
+            new HashSet<PdfPrimitive>(ReferenceEqualityComparer.Instance);
+
+        internal ScanState(PdfObjectStore store, Dictionary<int, (double WidthPts, double HeightPts)> placements)
+        {
+            Store = store;
+            _placements = placements;
+        }
+
+        internal PdfObjectStore Store { get; }
+
+        internal HashSet<int> Excluded { get; } = new HashSet<int>();
+
+        internal HashSet<PdfStream> Active { get; } = new HashSet<PdfStream>(ReferenceEqualityComparer.Instance);
+
+        internal void Record(int objNumber, double widthPts, double heightPts)
+        {
+            if (_placements.TryGetValue(objNumber, out (double WidthPts, double HeightPts) prior))
+            {
+                _placements[objNumber] = (Math.Max(prior.WidthPts, widthPts), Math.Max(prior.HeightPts, heightPts));
+            }
+            else
+            {
+                _placements[objNumber] = (widthPts, heightPts);
+            }
+        }
+
+        // Images reachable from a resource dictionary through anything other
+        // than its /XObject entry (patterns, soft-mask groups, Type 3 fonts)
+        // are painted at extents the walk does not measure.
+        internal void ExcludeNonXObjectResources(PdfDictionary resources)
+        {
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in resources)
+            {
+                if (entry.Key.Value != "XObject")
+                {
+                    ExcludeReachable(entry.Value);
+                }
+            }
+        }
+
+        // Excludes every image stream reachable from a value (never through
+        // /Parent, which leads back up the page tree).
+        internal void ExcludeReachable(PdfPrimitive root)
+        {
+            Stack<PdfPrimitive> work = new Stack<PdfPrimitive>();
+            work.Push(root);
+            while (work.Count > 0)
+            {
+                PdfPrimitive current = work.Pop();
+                if (current is PdfReference reference)
+                {
+                    PdfPrimitive resolved = Store.Resolve(reference);
+                    if (resolved is PdfStream image && image.Dictionary.Subtype is PdfName st && st.Value == "Image")
+                    {
+                        Excluded.Add(reference.ObjectId.ObjectNumber);
+                    }
+
+                    current = resolved;
+                }
+
+                if (!_excludeVisited.Add(current))
+                {
+                    continue;
+                }
+
+                PdfDictionary? dict = current switch
+                {
+                    PdfStream s => s.Dictionary,
+                    PdfDictionary d => d,
+                    _ => null,
+                };
+
+                if (dict is not null)
+                {
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                    {
+                        if (entry.Key.Value != "Parent")
+                        {
+                            work.Push(entry.Value);
+                        }
+                    }
+                }
+                else if (current is PdfArray array)
+                {
+                    foreach (PdfPrimitive item in array)
+                    {
+                        work.Push(item);
+                    }
+                }
+            }
+        }
     }
 }

@@ -10,6 +10,74 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.20.0] - 2026-10-14
+
+The "redaction assurance" release: tagged-content redaction and a
+verification API (PDF-03), fixes from an adversarial review of redaction, and
+the remaining finishing items (form-aware downsampling, autohinter X fitting,
+perspective deskew).
+
+### Security
+- **Text under the content stream's own `cm` is now redacted where it is
+  drawn.** The text matcher placed glyphs with the text matrix alone (plus
+  the placement of an invoking form), ignoring any `cm` in the page's own
+  content. Text in a scaled, translated or flipped coordinate system — common
+  in generated PDFs — was therefore not removed when the box was drawn over
+  it. Glyphs are now tested in page space, and still in the old frame too so
+  rectangles built from text-fragment positions keep matching (a glyph goes
+  if either hits). **Documents redacted before 3.20 whose text is placed
+  through `cm` should be re-redacted.**
+- **Text rise (`Ts`) and horizontal scaling (`Tz`) are honoured.** Raised or
+  stretched text inside a box was measured at the wrong place and could
+  survive.
+- **Survivors no longer slide into the redacted area.** The gap left for
+  removed glyphs omitted character and word spacing (`Tc`/`Tw`), so the rest
+  of the line moved left — visible text drawn over the redaction area. The
+  gap now reproduces each removed glyph's full advance.
+- **Tagged content: replacement text is stripped everywhere.** `/E`
+  (expansion text) joins `/ActualText` and `/Alt`; property lists referenced
+  by name from `/Properties` are cleaned; a Figure's `/Alt` is stripped when
+  its image is removed.
+- **Objects only removed content used now leave the file:** an image's
+  `/SMask` and `/Mask`, and tiling patterns, shadings and graphics states the
+  rewritten content no longer paints with. Anything still used elsewhere is
+  kept.
+
+### Added
+- **Redaction verification (PDF-03).** `RedactionVerifier.Verify(document,
+  rectangles)` reports every glyph, image, path and annotation still drawn
+  inside the rectangles (the redaction overlay itself is ignored);
+  `RedactionVerifier.ExtractWithin(document, page, region)` lists what any
+  region paints. Built on the render display list, so forms, Type 3 glyphs
+  and annotation appearances count exactly as drawn. New types
+  `RedactionVerification`, `RedactionSurvivor`, `RedactionSurvivorKind`.
+  `Chuvadi.Pdf.Redaction` now depends on `Chuvadi.Pdf.Rendering.DisplayList`.
+- **Four-point perspective correction.** `PerspectiveCorrection.Correct`
+  (in `Chuvadi.Pdf.Images`) straightens a quadrilateral marked on a photo to
+  an upright rectangle (homography, premultiplied bilinear sampling), with
+  `SuggestSize` for the natural output size.
+- **Autohinter X-axis stem fitting** under `HintingMode.Full`: vertical stems
+  of unhinted fonts get whole-pixel widths and positions (monotone mapping in
+  between). `HintingMode.Light` (the default) is unchanged.
+
+### Changed
+- **Downsampling measures images inside form XObjects.** The placement
+  scanner walks invoked forms (composing `/Matrix`, inheriting resources), so
+  images in forms are downsampled to their real painted size instead of being
+  skipped. Images it cannot measure — used by a pattern, soft mask, Type 3
+  font or annotation appearance, in a form nested too deep or recursively, or
+  in content that fails to decode — are still left alone.
+
+### Fixed
+- **Text rise in the text display list.** `Ts` was ignored, so superscripts
+  and subscripts sat on the baseline in SVG output, text-run bounds and
+  search hit boxes.
+- **`/ToUnicode` CMaps compressed with a filter array** (or needing
+  `/DecodeParms`) were decoded as plain Flate and lost their Unicode mapping.
+- Content streams with a filter array are decoded fully by the downsampling
+  scanner, and JBIG2 globals with a filter array by the Scrub image cropper.
+
+---
 ## [3.19.0] - 2026-10-14
 
 The "Reader delegation" release: library capabilities the Chuvadi Reader asked

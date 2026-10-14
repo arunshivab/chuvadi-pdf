@@ -9,23 +9,22 @@
 
 ## Last Updated
 
-2026-10-14 — v3.18.0 backlog-drain arc (one large PR): precise vector
-redaction (`VectorRedactionMode`), SVG density handling (path batching,
-simplify tolerance, op budget, raster fallback), CompressToTarget rasterize
-fallback, scrub-crop gaps (/Annots, inline images, `sh`, PageCropper B16
-preload), dynamic-XFA auto-compose (`XfaRenderer.OpenComposed`), ImageMask
-stencils in both pipelines, pattern fills (tiling + shading in raster,
-shading in SVG), compression image recoding (downsample-to-DPI, smart codec
-selection), CMYK completeness, composite autohinting in unhinted fonts,
-xref-offset recovery, perf baseline + advisory CI job, meta-package direct
-deps, gen_api_docs collision fix. Last released version: v3.17.1.
+2026-10-14 — v3.19.0 (Reader delegation: arrows, multi-stamp with opacity,
+imposition parity, display rotation, content inventory, header/footer
+preview, SVG tiling patterns, raster pattern strokes, sample-level Scrub
+image cropping, Scrub/redaction leak fix) and v3.20.0 (redaction assurance:
+tagged replacement-text stripping, `RedactionVerifier`, adversarial-review
+fixes for text under `cm`/`Ts`/`Tz` and `Tc`/`Tw` survivor drift, removal of
+masks/patterns/shadings/graphics states only removed content used;
+form-aware downsampling; autohinter X fitting; `PerspectiveCorrection`).
+Last released version: v3.18.1.
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,413 tests across 30 in-solution test projects,
-0 failures.** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,596 tests across 30 in-solution test projects,
+0 failures (v3.20.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -118,6 +117,11 @@ All modules are Complete and shipping. Grouped by role:
   older uncompressed ones.
 - **Redaction-grade crop is done.** `PageCropMode.ClipOnly` (lossless) and
   `PageCropMode.Scrub` (byte-scrub via `PageScrubber`/`ScrubGeometry`).
+- **Redaction matches text in page space.** Glyph boxes are tested under
+  text matrix · CTM · form base (and also the legacy text-matrix-only frame;
+  a glyph goes if either hits), with `Ts` rise and `Tz` scaling applied.
+  `RedactionVerifier` re-checks any output against the rectangles using the
+  render display list.
 
 ---
 
@@ -157,9 +161,11 @@ Releases publish to local folder feeds only, never to nuget.org.
 - **Shared value-types move** — documented defer (see BACKLOG item 6): plan is
   a move into `Rendering.Walking` with `TypeForwardedTo` shims, at a
   major-version boundary.
-- **Autohinter X-stem fitting, SVG tiling patterns, raster stroke patterns,
-  partial-overlap inline images under Scrub** — follow-ups recorded in
-  BACKLOG.
+- ~~Text under `cm` / `Ts` / `Tz` escaping redaction~~ — **fixed in 3.20.0**
+  (adversarial review). Documents redacted before 3.20 whose text is placed
+  through a content-stream `cm` should be re-redacted.
+- **Pixel-level partial image redaction** — open (BACKLOG item 16): a box
+  over part of an image removes the whole image.
 
 See `docs/BACKLOG.md` for the full open roadmap.
 

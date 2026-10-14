@@ -378,6 +378,11 @@ public static class Redactor
             }
         }
 
+        if (run.StripPropertyLists.Count > 0)
+        {
+            StripNamedPropertyLists(allObjects, run.StripPropertyLists);
+        }
+
         if (orphanImageCandidates.Count > 0)
         {
             allObjects = OmitUnreachable(allObjects, trailer, orphanImageCandidates);
@@ -450,6 +455,9 @@ public static class Redactor
         public MemoryStream? Buffer { get; set; }
 
         public bool Dropped { get; set; }
+
+        // A named property list (BDC /Tag /Name) carrying replacement text.
+        public PdfDictionary? NamedTextProperties { get; set; }
     }
 
     private static (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) RewriteContent(
@@ -632,6 +640,9 @@ public static class Redactor
                         Operands = new List<PdfToken>(pendingOperands),
                         Mcid = mcid,
                         Buffer = carriesActualText ? new MemoryStream() : null,
+                        NamedTextProperties = op == "BDC"
+                            ? ResolveNamedTextProperties(pendingOperands, resources, run.Store)
+                            : null,
                     };
 
                     if (!carriesActualText)
@@ -680,6 +691,14 @@ public static class Redactor
                     if (scope.Mcid is int closedMcid && scope.Dropped)
                     {
                         redactedMcids.Add(closedMcid);
+                    }
+
+                    if (scope.Dropped && scope.NamedTextProperties is PdfDictionary named)
+                    {
+                        lock (run.Sync)
+                        {
+                            run.StripPropertyLists.Add(named);
+                        }
                     }
 
                     pendingOperands.Clear();
@@ -752,7 +771,14 @@ public static class Redactor
 
                 bool drop = ProcessOperator(op, pendingOperands, state, contexts, run, resources);
 
-                if (!drop)
+                if (drop)
+                {
+                    // An image, form or shading removed inside a marked-content
+                    // scope: the scope's replacement text (a Figure's /Alt)
+                    // describes what was removed.
+                    NoteDropped();
+                }
+                else
                 {
                     MemoryStream sink = Sink();
                     WriteTokens(sink, pendingOperands);
@@ -857,12 +883,44 @@ public static class Redactor
     /// <c>/ActualText</c> or <c>/Alt</c> entry — text that would survive redaction
     /// of the body unless it is dropped with it. PDF 32000-1:2008 §14.9.4.
     /// </summary>
+    // Marked-content and structure keys whose values carry text that stands in
+    // for the content: replacement text (§14.9.4), alternate description
+    // (§14.9.3) and abbreviation expansion (§14.9.5).
+    private static bool IsReplacementTextKey(string key) =>
+        key is "ActualText" or "Alt" or "E";
+
+    // For BDC /Tag /Name, resolves the named property list from /Resources
+    // /Properties and returns it when it carries replacement text.
+    private static PdfDictionary? ResolveNamedTextProperties(
+        List<PdfToken> operands, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (operands.Count < 2
+            || operands[^1].Type != PdfTokenType.Name
+            || resources is null
+            || !resources.TryGetValue(PdfName.Intern("Properties"), out PdfPrimitive? pv)
+            || store.Resolve(pv) is not PdfDictionary properties
+            || !properties.TryGetValue(PdfName.Intern(operands[^1].RawText), out PdfPrimitive? entry)
+            || store.Resolve(entry) is not PdfDictionary list)
+        {
+            return null;
+        }
+
+        foreach (PdfName key in list.Keys)
+        {
+            if (IsReplacementTextKey(key.Value))
+            {
+                return list;
+            }
+        }
+
+        return null;
+    }
+
     private static bool BdcHasInlineActualText(List<PdfToken> operands)
     {
         for (int i = 0; i < operands.Count; i++)
         {
-            if (operands[i].Type == PdfTokenType.Name
-                && (operands[i].RawText == "ActualText" || operands[i].RawText == "Alt"))
+            if (operands[i].Type == PdfTokenType.Name && IsReplacementTextKey(operands[i].RawText))
             {
                 return true;
             }
@@ -891,7 +949,7 @@ public static class Redactor
 
             if (stripActualText
                 && t.Type == PdfTokenType.Name
-                && (t.RawText == "ActualText" || t.RawText == "Alt"))
+                && IsReplacementTextKey(t.RawText))
             {
                 skipValue = true;
                 continue;
@@ -968,7 +1026,8 @@ public static class Redactor
             }
 
             bool hasReplacementText = element.ContainsKey(PdfName.Intern("ActualText"))
-                || element.ContainsKey(PdfName.Intern("Alt"));
+                || element.ContainsKey(PdfName.Intern("Alt"))
+                || element.ContainsKey(PdfName.Intern("E"));
             if (redacted && hasReplacementText)
             {
                 if (isIndirect)
@@ -1063,7 +1122,7 @@ public static class Redactor
     }
 
     /// <summary>
-    /// Deep-copies a structure object, dropping <c>/ActualText</c> and <c>/Alt</c>
+    /// Deep-copies a structure object, dropping <c>/ActualText</c>, <c>/Alt</c> and <c>/E</c>
     /// from the object itself when <paramref name="stripSelf"/> is set and from any
     /// inline descendant dictionary in <paramref name="inlineStrip"/>. Indirect
     /// references are left untouched (their targets are rewritten separately).
@@ -1077,8 +1136,7 @@ public static class Redactor
             PdfDictionary copy = new PdfDictionary();
             foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
             {
-                if (stripThis
-                    && (entry.Key.Value == "ActualText" || entry.Key.Value == "Alt"))
+                if (stripThis && IsReplacementTextKey(entry.Key.Value))
                 {
                     continue;
                 }
@@ -1152,6 +1210,20 @@ public static class Redactor
                 if (operands.Count >= 1 && operands[^1].IsNumeric)
                 {
                     state.WordSpacing = ParseDouble(operands[^1]);
+                }
+
+                return false;
+            case "Ts":
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
+                {
+                    state.TextRise = ParseDouble(operands[^1]);
+                }
+
+                return false;
+            case "Tz":
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
+                {
+                    state.HorizontalScaling = ParseDouble(operands[^1]) / 100.0;
                 }
 
                 return false;
@@ -1902,6 +1974,12 @@ public static class Redactor
     // active font's widths are known, otherwise a Helvetica-baseline estimate.
     private static double MeasureTextWidth(string text, RedactState state)
     {
+        double spacing = 0;
+        foreach (char ch in text)
+        {
+            spacing += state.CharSpacing + (ch == 32 ? state.WordSpacing : 0.0);
+        }
+
         if (state.GlyphWidths is int[] glyphWidths)
         {
             double total = 0;
@@ -1912,10 +1990,19 @@ public static class Redactor
                 total += w > 0 ? w : 500;
             }
 
-            return total / 1000.0 * state.FontSize;
+            return ((total / 1000.0 * state.FontSize) + spacing) * state.HorizontalScaling;
         }
 
-        return text.Length * state.FontSize * 0.6;
+        return ((text.Length * state.FontSize * 0.6) + spacing) * state.HorizontalScaling;
+    }
+
+    // A glyph's Tc/Tw spacing expressed in TJ units (thousandths of text
+    // space at the current font size), so a dropped glyph's gap reproduces
+    // its full advance — not only its width — and survivors keep their place.
+    private static double SpacingIn1000(char glyph, RedactState state)
+    {
+        double spacing = state.CharSpacing + (glyph == 32 ? state.WordSpacing : 0.0);
+        return spacing * 1000.0 / state.FontSize;
     }
 
     // Emits a Tj operator with only the out-of-region glyphs retained. When no
@@ -1970,10 +2057,10 @@ public static class Redactor
                 (state.GlyphWidths is int[] gw && code >= 0 && code < 256 && gw[code] > 0)
                     ? gw[code]
                     : 500;
-            advance[i] = width1000;
-            double advUser = width1000 / 1000.0 * state.FontSize
+            advance[i] = width1000 + SpacingIn1000(text[i], state);
+            double advUser = (width1000 / 1000.0 * state.FontSize
                 + state.CharSpacing
-                + (code == 32 ? state.WordSpacing : 0.0);
+                + (code == 32 ? state.WordSpacing : 0.0)) * state.HorizontalScaling;
 
             glyphX0[i] = cursor;
             glyphX1[i] = cursor + advUser;
@@ -2176,11 +2263,11 @@ public static class Redactor
         {
             // Apply the kern preceding this glyph (TJ number k → shift left by
             // k/1000 × font size) before measuring its span.
-            cursor -= leadKern[i] / 1000.0 * state.FontSize;
+            cursor -= leadKern[i] / 1000.0 * state.FontSize * state.HorizontalScaling;
 
-            double advUser = widths[i] / 1000.0 * state.FontSize
+            double advUser = (widths[i] / 1000.0 * state.FontSize
                 + state.CharSpacing
-                + (chars[i] == 32 ? state.WordSpacing : 0.0);
+                + (chars[i] == 32 ? state.WordSpacing : 0.0)) * state.HorizontalScaling;
             glyphX0[i] = cursor;
             glyphX1[i] = cursor + advUser;
             bool inRegion = MatchSpan(
@@ -2249,7 +2336,7 @@ public static class Redactor
                 while (idx < n && drop[idx])
                 {
                     disp += -leadKern[idx];
-                    disp += widths[idx];
+                    disp += widths[idx] + SpacingIn1000(chars[idx], state);
                     if (replacement is null)
                     {
                         replacement = glyphReplacement[idx];
@@ -2326,8 +2413,8 @@ public static class Redactor
         Transform baseCtm)
     {
         Transform combined = state.TextMatrix.Multiply(state.Ctm).Multiply(baseCtm);
-        double bottom = GlyphBottom(state);
-        double top = GlyphTop(state);
+        double bottom = GlyphBottom(state) + state.TextRise;
+        double top = GlyphTop(state) + state.TextRise;
         int i = 0;
         while (i < patternDrop.Length)
         {
@@ -2429,7 +2516,7 @@ public static class Redactor
             int w = (state.GlyphWidths is int[] gw && code >= 0 && code < 256 && gw[code] > 0)
                 ? gw[code]
                 : 500;
-            total += w;
+            total += w + SpacingIn1000(ch, state);
         }
 
         return total;
@@ -2547,25 +2634,56 @@ public static class Redactor
         IReadOnlyList<RedactContext> contexts, out string? replacement)
     {
         replacement = null;
+        double bottom = GlyphInkBottom(state, glyph) + state.TextRise;
+        double top = GlyphInkTop(state, glyph) + state.TextRise;
         for (int c = 0; c < contexts.Count; c++)
         {
             RedactContext context = contexts[c];
-            Transform combined = local.Multiply(context.BaseCtm);
-            PointF originDev = combined.TransformPoint(new PointF(x0, GlyphInkBottom(state, glyph)));
-            PointF endDev = combined.TransformPoint(new PointF(x1, GlyphInkTop(state, glyph)));
-            RectangleF box = RectangleF.FromCorners(originDev.X, originDev.Y, endDev.X, endDev.Y);
-
-            for (int r = 0; r < context.Rects.Count; r++)
+            foreach (Transform combined in TextFrames(local, state, context))
             {
-                if (!box.Intersect(context.Rects[r]).IsEmpty)
+                RectangleF box = TransformedBox(combined, x0, bottom, x1, top);
+                for (int r = 0; r < context.Rects.Count; r++)
                 {
-                    replacement = r < context.Replacements.Count ? context.Replacements[r] : null;
-                    return true;
+                    if (!box.Intersect(context.Rects[r]).IsEmpty)
+                    {
+                        replacement = r < context.Replacements.Count ? context.Replacements[r] : null;
+                        return true;
+                    }
                 }
             }
         }
 
         return false;
+    }
+
+    // The frames a text box is tested in. Rectangles are page space, so the
+    // true frame applies the content stream's own CTM (text matrix · CTM ·
+    // form base). The text-matrix-only frame is also tested so callers that
+    // derived rectangles from CTM-less text-fragment positions keep matching:
+    // a glyph is removed when either frame hits a rectangle (over-redact when
+    // in doubt), and text under a page-level cm can no longer escape.
+    private static IEnumerable<Transform> TextFrames(Transform local, RedactState state, RedactContext context)
+    {
+        yield return local.Multiply(state.Ctm).Multiply(context.BaseCtm);
+        if (!state.Ctm.Equals(Transform.Identity))
+        {
+            yield return local.Multiply(context.BaseCtm);
+        }
+    }
+
+    // The axis-aligned page box of a text-space rectangle under a transform
+    // (all four corners, so rotation and skew are covered).
+    private static RectangleF TransformedBox(Transform m, double x0, double y0, double x1, double y1)
+    {
+        PointF a = m.TransformPoint(new PointF(x0, y0));
+        PointF b = m.TransformPoint(new PointF(x1, y0));
+        PointF c = m.TransformPoint(new PointF(x1, y1));
+        PointF d = m.TransformPoint(new PointF(x0, y1));
+        double minX = Math.Min(Math.Min(a.X, b.X), Math.Min(c.X, d.X));
+        double minY = Math.Min(Math.Min(a.Y, b.Y), Math.Min(c.Y, d.Y));
+        double maxX = Math.Max(Math.Max(a.X, b.X), Math.Max(c.X, d.X));
+        double maxY = Math.Max(Math.Max(a.Y, b.Y), Math.Max(c.Y, d.Y));
+        return RectangleF.FromCorners(minX, minY, maxX, maxY);
     }
 
     private static string EncodeLiteralString(string value)
@@ -2604,23 +2722,20 @@ public static class Redactor
         // both). Forms still map through BaseCtm in the combined transform below.
         Transform local = state.TextMatrix;
 
+        double bottom = RunInkBottom(state, text) + state.TextRise;
+        double top = RunInkTop(state, text) + state.TextRise;
         for (int c = 0; c < contexts.Count; c++)
         {
             RedactContext context = contexts[c];
-            Transform combined = local.Multiply(context.BaseCtm);
-            PointF originDev = combined.TransformPoint(
-                new PointF(state.TextX, RunInkBottom(state, text)));
-            PointF endDev = combined.TransformPoint(
-                new PointF(state.TextX + width, RunInkTop(state, text)));
-
-            RectangleF textBox = RectangleF.FromCorners(
-                originDev.X, originDev.Y, endDev.X, endDev.Y);
-
-            for (int r = 0; r < context.Rects.Count; r++)
+            foreach (Transform combined in TextFrames(local, state, context))
             {
-                if (!textBox.Intersect(context.Rects[r]).IsEmpty)
+                RectangleF textBox = TransformedBox(combined, state.TextX, bottom, state.TextX + width, top);
+                for (int r = 0; r < context.Rects.Count; r++)
                 {
-                    return true;
+                    if (!textBox.Intersect(context.Rects[r]).IsEmpty)
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -2874,72 +2989,147 @@ public static class Redactor
         return rewritten;
     }
 
-    // ── Orphaned-image removal ────────────────────────────────────────────
+    // ── Orphaned-resource removal ─────────────────────────────────────────
 
-    // Rewrites a page's (or form's) /Resources so its /XObject dictionary keeps
-    // only images its rewritten content still invokes. The pruned images'
-    // object numbers become removal candidates. Resources are copied (never
-    // edited in place) because they may be shared with, or inherited by,
-    // other pages. Forms that inherit the container's resources (no
-    // /Resources of their own) contribute the names they invoke.
+    // Resource categories whose entries carry drawable content and are
+    // referenced from content by name: images and forms (Do), patterns
+    // (scn/SCN), shadings (sh, and shading patterns) and graphics states (gs,
+    // whose /SMask groups hold content).
+    private static readonly string[] PrunableCategories = { "Pattern", "Shading", "ExtGState" };
+
+    // Rewrites a page's (or form's) /Resources so it keeps only entries its
+    // rewritten content still names: unused images in /XObject, and unused
+    // /Pattern, /Shading and /ExtGState entries. Pruned entries' object
+    // numbers become removal candidates (with everything they reach — see
+    // OmitUnreachable). Resources are copied (never edited in place) because
+    // they may be shared with, or inherited by, other pages. Forms that
+    // inherit the container's resources (no /Resources of their own)
+    // contribute the names they use; if one cannot be decoded, nothing is
+    // pruned (its uses are unknown).
     private static void PruneUnusedImages(
         PdfDictionary container, PdfDictionary? resources, byte[] content,
         RedactRun run, HashSet<int> candidates)
     {
-        if (resources is null
-            || !resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv)
-            || run.Store.Resolve(xv) is not PdfDictionary xobjects)
+        if (resources is null)
         {
             return;
         }
 
-        HashSet<string> invoked = new HashSet<string>(StringComparer.Ordinal);
-        CollectInvokedNames(content, xobjects, run, invoked, new HashSet<int>(), 0);
+        PdfDictionary? xobjects = resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv)
+            ? run.Store.Resolve(xv) as PdfDictionary
+            : null;
 
-        PdfDictionary kept = new PdfDictionary();
-        bool pruned = false;
-        foreach (PdfName key in xobjects.Keys)
+        HashSet<string> invoked = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> named = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> paintedPatterns = new HashSet<string>(StringComparer.Ordinal);
+        bool complete = true;
+        CollectInvokedNames(
+            content, xobjects, run, invoked, named, paintedPatterns, new HashSet<int>(), 0, ref complete);
+        if (!complete)
         {
-            PdfPrimitive value = xobjects[key];
-            if (!invoked.Contains(key.Value)
-                && run.Store.Resolve(value) is PdfStream stream
-                && stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? st)
-                && st is PdfName subtype && subtype.Value == "Image")
+            return;
+        }
+
+        PdfDictionary? resourcesCopy = null;
+
+        if (xobjects is not null)
+        {
+            PdfDictionary kept = new PdfDictionary();
+            bool pruned = false;
+            foreach (PdfName key in xobjects.Keys)
             {
-                if (value is PdfReference r)
+                PdfPrimitive value = xobjects[key];
+                if (!invoked.Contains(key.Value)
+                    && run.Store.Resolve(value) is PdfStream stream
+                    && stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? st)
+                    && st is PdfName subtype && subtype.Value == "Image")
                 {
-                    candidates.Add(r.ObjectId.ObjectNumber);
+                    if (value is PdfReference r)
+                    {
+                        candidates.Add(r.ObjectId.ObjectNumber);
+                    }
+
+                    pruned = true;
+                    continue;
                 }
 
-                pruned = true;
+                kept.Set(key, value);
+            }
+
+            if (pruned)
+            {
+                resourcesCopy = CopyDictionary(resources);
+                resourcesCopy.Set(PdfName.XObject, kept);
+            }
+        }
+
+        foreach (string category in PrunableCategories)
+        {
+            PdfName categoryName = PdfName.Intern(category);
+            if (!resources.TryGetValue(categoryName, out PdfPrimitive? cv)
+                || run.Store.Resolve(cv) is not PdfDictionary entries)
+            {
                 continue;
             }
 
-            kept.Set(key, value);
+            // A pattern is in use only if something is painted while it is
+            // the current colour: after redaction removes the fill, the
+            // leftover "/P0 scn" alone does not keep the pattern's content.
+            HashSet<string> used = category == "Pattern" ? paintedPatterns : named;
+            PdfDictionary kept = new PdfDictionary();
+            bool pruned = false;
+            foreach (PdfName key in entries.Keys)
+            {
+                PdfPrimitive value = entries[key];
+                if (!used.Contains(key.Value))
+                {
+                    if (value is PdfReference r)
+                    {
+                        candidates.Add(r.ObjectId.ObjectNumber);
+                    }
+
+                    pruned = true;
+                    continue;
+                }
+
+                kept.Set(key, value);
+            }
+
+            if (pruned)
+            {
+                resourcesCopy ??= CopyDictionary(resources);
+                resourcesCopy.Set(categoryName, kept);
+            }
         }
 
-        if (!pruned)
+        if (resourcesCopy is not null)
         {
-            return;
+            container.Set(PdfName.Resources, resourcesCopy);
         }
-
-        PdfDictionary resourcesCopy = CopyDictionary(resources);
-        resourcesCopy.Set(PdfName.XObject, kept);
-        container.Set(PdfName.Resources, resourcesCopy);
     }
 
+    // Collects the XObject names invoked by Do, every name token used as an
+    // operand, and the pattern names actually painted with (current fill or
+    // stroke pattern when a painting operator runs), in the content and in
+    // the resource-inheriting forms it invokes. Sets complete to false when
+    // such a form cannot be decoded.
     private static void CollectInvokedNames(
-        byte[] content, PdfDictionary xobjects, RedactRun run,
-        HashSet<string> invoked, HashSet<int> visitedForms, int depth)
+        byte[] content, PdfDictionary? xobjects, RedactRun run,
+        HashSet<string> invoked, HashSet<string> named, HashSet<string> paintedPatterns,
+        HashSet<int> visitedForms, int depth, ref bool complete)
     {
         if (depth > 8)
         {
+            complete = false;
             return;
         }
 
         using MemoryStream input = new MemoryStream(content);
         using PdfTokenizer tok = new PdfTokenizer(input);
         string? lastName = null;
+        string? fillPattern = null;
+        string? strokePattern = null;
+        Stack<(string? Fill, string? Stroke)> saved = new Stack<(string? Fill, string? Stroke)>();
         while (true)
         {
             PdfToken t = tok.Read();
@@ -2951,19 +3141,76 @@ public static class Redactor
             if (t.Type == PdfTokenType.Name)
             {
                 lastName = DecodeNameText(t.RawText);
+                named.Add(lastName);
                 continue;
             }
 
             if (t.Type == PdfTokenType.Keyword && t.RawText == "BI")
             {
                 SkipInlineImage(tok, content);
+                MarkPainted(paintedPatterns, fillPattern, strokePattern);
                 lastName = null;
                 continue;
+            }
+
+            if (t.Type == PdfTokenType.Keyword)
+            {
+                switch (t.RawText)
+                {
+                    case "q":
+                        saved.Push((fillPattern, strokePattern));
+                        break;
+                    case "Q":
+                        if (saved.Count > 0)
+                        {
+                            (fillPattern, strokePattern) = saved.Pop();
+                        }
+
+                        break;
+                    case "scn":
+                        fillPattern = lastName;
+                        break;
+                    case "SCN":
+                        strokePattern = lastName;
+                        break;
+                    case "cs":
+                    case "sc":
+                    case "g":
+                    case "rg":
+                    case "k":
+                        fillPattern = null;
+                        break;
+                    case "CS":
+                    case "SC":
+                    case "G":
+                    case "RG":
+                    case "K":
+                        strokePattern = null;
+                        break;
+                    case "f":
+                    case "F":
+                    case "f*":
+                    case "B":
+                    case "B*":
+                    case "b":
+                    case "b*":
+                    case "S":
+                    case "s":
+                    case "Tj":
+                    case "TJ":
+                    case "'":
+                    case "\"":
+                    case "Do":
+                    case "EI":
+                        MarkPainted(paintedPatterns, fillPattern, strokePattern);
+                        break;
+                }
             }
 
             if (t.Type == PdfTokenType.Keyword && t.RawText == "Do" && lastName is not null)
             {
                 if (invoked.Add(lastName)
+                    && xobjects is not null
                     && xobjects.TryGetValue(PdfName.Intern(lastName), out PdfPrimitive? xref)
                     && xref is PdfReference formRef
                     && run.Store.Resolve(xref) is PdfStream form
@@ -2980,10 +3227,17 @@ public static class Redactor
                     }
                     catch (Exception)
                     {
-                        formContent = Array.Empty<byte>();
+                        complete = false;
+                        return;
                     }
 
-                    CollectInvokedNames(formContent, xobjects, run, invoked, visitedForms, depth + 1);
+                    CollectInvokedNames(
+                        formContent, xobjects, run, invoked, named, paintedPatterns, visitedForms, depth + 1,
+                        ref complete);
+                    if (!complete)
+                    {
+                        return;
+                    }
                 }
             }
 
@@ -2991,6 +3245,21 @@ public static class Redactor
             {
                 lastName = null;
             }
+        }
+    }
+
+    // Painting marks both current patterns used (over-keeping is safe: a
+    // pattern is only pruned when nothing at all is painted with it).
+    private static void MarkPainted(HashSet<string> painted, string? fill, string? stroke)
+    {
+        if (fill is not null)
+        {
+            painted.Add(fill);
+        }
+
+        if (stroke is not null)
+        {
+            painted.Add(stroke);
         }
     }
 
@@ -3021,6 +3290,97 @@ public static class Redactor
         return sb.ToString();
     }
 
+    // Rewrites every output object that holds (directly or nested) one of the
+    // named property lists used by a redacted marked-content sequence, with
+    // the lists' replacement text removed. Other uses of a shared list lose
+    // that accessibility text too — over-redaction in doubt (B15).
+    private static void StripNamedPropertyLists(
+        List<PdfIndirectObject> objects, HashSet<PdfDictionary> targets)
+    {
+        for (int i = 0; i < objects.Count; i++)
+        {
+            PdfPrimitive value = objects[i].Value;
+            if (HoldsTarget(value, targets, 0))
+            {
+                objects[i] = new PdfIndirectObject(objects[i].Id, CloneStrippingTargets(value, targets));
+            }
+        }
+    }
+
+    private static bool HoldsTarget(PdfPrimitive value, HashSet<PdfDictionary> targets, int depth)
+    {
+        if (depth > 64)
+        {
+            return false;
+        }
+
+        switch (value)
+        {
+            case PdfDictionary d:
+                if (targets.Contains(d))
+                {
+                    return true;
+                }
+
+                foreach (PdfName key in d.Keys)
+                {
+                    if (HoldsTarget(d[key], targets, depth + 1))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case PdfArray a:
+                for (int i = 0; i < a.Count; i++)
+                {
+                    if (HoldsTarget(a[i], targets, depth + 1))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case PdfStream st:
+                return HoldsTarget(st.Dictionary, targets, depth + 1);
+            default:
+                return false;
+        }
+    }
+
+    private static PdfPrimitive CloneStrippingTargets(PdfPrimitive value, HashSet<PdfDictionary> targets)
+    {
+        switch (value)
+        {
+            case PdfDictionary d:
+                bool strip = targets.Contains(d);
+                PdfDictionary copy = new PdfDictionary();
+                foreach (PdfName key in d.Keys)
+                {
+                    if (strip && IsReplacementTextKey(key.Value))
+                    {
+                        continue;
+                    }
+
+                    copy.Set(key, CloneStrippingTargets(d[key], targets));
+                }
+
+                return copy;
+            case PdfArray a:
+                List<PdfPrimitive> items = new List<PdfPrimitive>(a.Count);
+                for (int i = 0; i < a.Count; i++)
+                {
+                    items.Add(CloneStrippingTargets(a[i], targets));
+                }
+
+                return new PdfArray(items);
+            case PdfStream st:
+                return new PdfStream((PdfDictionary)CloneStrippingTargets(st.Dictionary, targets), st.RawBytes);
+            default:
+                return value;
+        }
+    }
+
     // Drops candidate objects the output no longer reaches from the trailer.
     private static List<PdfIndirectObject> OmitUnreachable(
         List<PdfIndirectObject> objects, PdfDictionary trailer, HashSet<int> candidates)
@@ -3030,6 +3390,57 @@ public static class Redactor
         {
             byNumber[obj.Id.ObjectNumber] = obj.Value;
         }
+
+        // A removed object's dependents (an image's /SMask and /Mask, a
+        // pattern's or form's resources and fonts, a graphics state's soft-mask
+        // group) are candidates too: each still leaves only if nothing else
+        // reaches it.
+        HashSet<int> closure = new HashSet<int>(candidates);
+        Stack<PdfPrimitive> expand = new Stack<PdfPrimitive>();
+        foreach (int candidate in candidates)
+        {
+            if (byNumber.TryGetValue(candidate, out PdfPrimitive? value))
+            {
+                expand.Push(value);
+            }
+        }
+
+        while (expand.Count > 0)
+        {
+            switch (expand.Pop())
+            {
+                case PdfReference r:
+                    if (closure.Add(r.ObjectId.ObjectNumber)
+                        && byNumber.TryGetValue(r.ObjectId.ObjectNumber, out PdfPrimitive? target))
+                    {
+                        expand.Push(target);
+                    }
+
+                    break;
+                case PdfDictionary d:
+                    foreach (PdfName key in d.Keys)
+                    {
+                        if (key.Value != "Parent" && key.Value != "P" && key.Value != "Pg")
+                        {
+                            expand.Push(d[key]);
+                        }
+                    }
+
+                    break;
+                case PdfArray a:
+                    for (int i = 0; i < a.Count; i++)
+                    {
+                        expand.Push(a[i]);
+                    }
+
+                    break;
+                case PdfStream st:
+                    expand.Push(st.Dictionary);
+                    break;
+            }
+        }
+
+        candidates = closure;
 
         HashSet<int> reachable = new HashSet<int>();
         Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
@@ -3778,6 +4189,14 @@ internal sealed class RedactState
     private readonly Stack<double> _charSpacingStack = new Stack<double>();
     private readonly Stack<double> _wordSpacingStack = new Stack<double>();
 
+    // Text rise (Ts, text-space units, shifts glyphs up) and horizontal
+    // scaling (Tz ÷ 100, scales every advance). Both are text-state
+    // parameters saved and restored by q/Q (PDF 9.3).
+    internal double TextRise { get; set; }
+    internal double HorizontalScaling { get; set; } = 1.0;
+    private readonly Stack<double> _riseStack = new Stack<double>();
+    private readonly Stack<double> _scalingStack = new Stack<double>();
+
     // Stroke geometry state (PDF 8.4.3), used by the precise vector subtractor
     // to bound how far a stroked path's ink can reach from its centreline.
     // Saved/restored by q/Q like the rest of the graphics state. Defaults per
@@ -3799,6 +4218,8 @@ internal sealed class RedactState
         _ctmStack.Push(Ctm);
         _charSpacingStack.Push(CharSpacing);
         _wordSpacingStack.Push(WordSpacing);
+        _riseStack.Push(TextRise);
+        _scalingStack.Push(HorizontalScaling);
         _lineWidthStack.Push(LineWidth);
         _miterLimitStack.Push(MiterLimit);
         _strokeReliableStack.Push(StrokeStateReliable);
@@ -3819,6 +4240,16 @@ internal sealed class RedactState
         if (_wordSpacingStack.Count > 0)
         {
             WordSpacing = _wordSpacingStack.Pop();
+        }
+
+        if (_riseStack.Count > 0)
+        {
+            TextRise = _riseStack.Pop();
+        }
+
+        if (_scalingStack.Count > 0)
+        {
+            HorizontalScaling = _scalingStack.Pop();
         }
 
         if (_lineWidthStack.Count > 0)
@@ -3920,4 +4351,13 @@ internal sealed class RedactRun
 
     /// <summary>Guards <see cref="FormInvocations"/> during parallel collection.</summary>
     public object Sync { get; } = new();
+
+    /// <summary>
+    /// Named marked-content property lists (resolved from /Resources
+    /// /Properties) used by a redacted sequence; their replacement text
+    /// (/ActualText, /Alt, /E) is stripped from the output. Guarded by
+    /// <see cref="Sync"/>.
+    /// </summary>
+    public HashSet<PdfDictionary> StripPropertyLists { get; } =
+        new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
 }

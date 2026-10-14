@@ -1354,8 +1354,9 @@ public sealed class TrueTypeLoader
     /// <param name="light">When true, grid-fit the Y axis only (horizontal positions stay naturally scaled).</param>
     /// <param name="autohintFallback">
     /// When true (the default), glyphs of fonts that carry no hinting programs
-    /// at all are grid-fitted by the geometric autohinter (Y axis only)
-    /// instead of falling back to the unhinted outline.
+    /// at all are grid-fitted by the geometric autohinter (the Y axis, plus
+    /// vertical stems in X when <paramref name="light"/> is false) instead of
+    /// falling back to the unhinted outline.
     /// </param>
     public GlyphOutline? GetHintedGlyphOutline(
         int glyphId, int ppem, bool light, bool autohintFallback = true)
@@ -1378,7 +1379,7 @@ public sealed class TrueTypeLoader
                 RawGlyph? flattened = BuildFlattenedCompositeRaw(glyphId, depth: 1);
                 if (flattened is not null && flattened.ContourCount > 0)
                 {
-                    GlyphOutline? autohinted = BuildAutohintedOutline(flattened, glyphId, ppem);
+                    GlyphOutline? autohinted = BuildAutohintedOutline(flattened, glyphId, ppem, light);
                     if (autohinted is not null)
                     {
                         return autohinted;
@@ -1397,7 +1398,7 @@ public sealed class TrueTypeLoader
             // mixed render keeps consistent weights.
             if (autohintFallback && !HasHintingPrograms)
             {
-                return BuildAutohintedOutline(raw, glyphId, ppem);
+                return BuildAutohintedOutline(raw, glyphId, ppem, light);
             }
             return null;
         }
@@ -1565,7 +1566,8 @@ public sealed class TrueTypeLoader
             Array.Empty<byte>(), realPoints);
     }
 
-    private GlyphOutline? BuildAutohintedOutline(RawGlyph raw, int glyphId, int ppem)
+    // Light hinting fits Y only; full hinting also fits vertical stems in X.
+    private GlyphOutline? BuildAutohintedOutline(RawGlyph raw, int glyphId, int ppem, bool light)
     {
         int realPoints = raw.RealPointCount;
         if (realPoints <= 0 || raw.ContourCount == 0)
@@ -1577,11 +1579,15 @@ public sealed class TrueTypeLoader
         BlueZoneTable zones = EnsureAutohintZones();
         double[] fittedY = Autohinter.FitY(raw, zones, scale, _unitsPerEm);
 
-        double[] xs = new double[realPoints];
+        double[] xs = light ? new double[realPoints] : Autohinter.FitX(raw, scale);
         byte[] flags = new byte[realPoints];
         for (int i = 0; i < realPoints; i++)
         {
-            xs[i] = raw.X[i] * scale;
+            if (light)
+            {
+                xs[i] = raw.X[i] * scale;
+            }
+
             flags[i] = raw.OnCurve[i] ? (byte)0x01 : (byte)0x00;
         }
 
