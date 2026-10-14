@@ -354,6 +354,7 @@ python tools/gen_api_docs.py
 | [ImageFrame](Images/ImageFrame.md) | class | A decoded image frame held in a `PixelBuffer`. |
 | [JpegDecoder](Images/JpegDecoder.md) | class | Decodes baseline sequential (SOF0) and progressive (SOF2) DCT JPEG images into an `ImageFrame`. |
 | [JpegEncoder](Images/JpegEncoder.md) | class | Encodes images as baseline sequential JPEG (SOF0) with JFIF headers. |
+| [PerspectiveCorrection](Images/PerspectiveCorrection.md) | class | Four-point perspective correction ("deskew"): maps a quadrilateral marked on a photo of a page — its four corners — onto an upright rectangle, the way a scanning app straightens a page shot at an angle. |
 | [PngDecoder](Images/PngDecoder.md) | class | Decodes a PNG image into an `ImageFrame`. |
 | [PngEncoder](Images/PngEncoder.md) | class | Encodes an `ImageFrame` to PNG format. |
 | [TiffDecoder](Images/TiffDecoder.md) | class | Decodes TIFF images per TIFF 6.0 baseline. |
@@ -480,6 +481,10 @@ python tools/gen_api_docs.py
 | [RedactionException](Redaction/RedactionException.md) | class | Thrown when a redaction operation fails. |
 | [RedactionOptions](Redaction/RedactionOptions.md) | class | Top-level configuration for a redaction operation. |
 | [RedactionRect](Redaction/RedactionRect.md) | class | One rectangle of content to permanently remove from a PDF page. |
+| [RedactionSurvivor](Redaction/RedactionSurvivor.md) | class | One piece of content found inside a region. |
+| [RedactionSurvivorKind](Redaction/RedactionSurvivorKind.md) | enum | The kind of content found inside a region. |
+| [RedactionVerification](Redaction/RedactionVerification.md) | class | The result of verifying that redaction regions are empty. |
+| [RedactionVerifier](Redaction/RedactionVerifier.md) | class | Checks what a document still paints inside given regions, using the same display list the renderers draw — page content, form XObjects, Type 3 glyphs and annotation appearances included. |
 | [Redactor](Redaction/Redactor.md) | class | Applies true PHI-safe redactions to a PDF document. |
 | [VectorRedactionMode](Redaction/VectorRedactionMode.md) | enum | How painted vector paths (fills and strokes) that intersect a redaction region are removed from the content stream. |
 

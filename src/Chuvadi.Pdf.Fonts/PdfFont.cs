@@ -365,6 +365,38 @@ public sealed class PdfFont
 
     // ── ToUnicode parsing ─────────────────────────────────────────────────
 
+    private static byte[] DecodeFilterChain(PdfStream stream, IPdfObjectResolver resolver)
+    {
+        byte[] current = stream.RawBytes;
+        PdfPrimitive? filter = stream.Dictionary.TryGetValue(PdfName.Filter, out PdfPrimitive? fv)
+            ? resolver.Resolve(fv)
+            : null;
+        PdfPrimitive? parms = stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? pv)
+            ? resolver.Resolve(pv)
+            : null;
+        FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
+
+        if (filter is PdfName single)
+        {
+            return pipeline.Decode(
+                FilterRegistry.ResolveAlias(single.Value), current, FilterParameters.FromDictionary(parms, 0));
+        }
+
+        if (filter is PdfArray chain)
+        {
+            for (int i = 0; i < chain.Count; i++)
+            {
+                if (resolver.Resolve(chain[i]) is PdfName name)
+                {
+                    current = pipeline.Decode(
+                        FilterRegistry.ResolveAlias(name.Value), current, FilterParameters.FromDictionary(parms, i));
+                }
+            }
+        }
+
+        return current;
+    }
+
     private static CMapParseResult? ParseToUnicode(
         PdfDictionary fontDict,
         IPdfObjectResolver resolver)
@@ -381,19 +413,9 @@ public sealed class PdfFont
             return null;
         }
 
-        // Decode the stream (usually FlateDecode compressed).
-        byte[] rawBytes = stream.RawBytes;
-
-        // If the stream has a filter, apply it.
-        if (stream.Filter is not null)
-        {
-            rawBytes = FilterRegistry
-                .CreateDefaultPipeline()
-                .Decode(
-                    FilterRegistry.ResolveAlias(
-                        stream.Filter is PdfName fn ? fn.Value : "FlateDecode"),
-                    rawBytes);
-        }
+        // Decode the stream through its whole /Filter chain (a single name or
+        // an array), with the matching /DecodeParms for each filter.
+        byte[] rawBytes = DecodeFilterChain(stream, resolver);
 
         CMapParser parser = new CMapParser(rawBytes);
         return parser.ParseFull();

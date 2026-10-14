@@ -128,11 +128,26 @@ Shipped in v3.19.0 (Reader delegation):
   header/footer `ResolveSegments` (PDF-11). PDF-10 closed as correct
   behaviour (the null-geometry dataset nodes have no template fields).
 
+Shipped in v3.20.0 (redaction assurance + finishing items):
+- **PDF-03** — tagged-content redaction strips `/ActualText`, `/Alt` and `/E`
+  from inline BDC dictionaries, named `/Properties` lists and structure
+  elements (a Figure's `/Alt` too when its image is removed);
+  `RedactionVerifier.Verify` / `ExtractWithin` report what a region still
+  paints.
+- **Redaction hardening (adversarial review)** — text placed by the content
+  stream's own `cm`, by `Ts` or `Tz` is matched where it is drawn; survivors
+  keep their positions under `Tc`/`Tw`; soft masks, masks, tiling patterns,
+  shadings and graphics states used only by removed content leave the file.
+- **Downsample placements inside forms** (was open item 8).
+- **Autohinter X-axis stem fitting** under full hinting (was open item 4).
+- **Raster 4-point perspective deskew** — `PerspectiveCorrection` in
+  `Chuvadi.Pdf.Images` (was open item 14).
+
 ---
 
 ## Open roadmap
 
-Status verified against code at v3.19.0. Items are independent and may be
+Status verified against code at v3.20.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -150,10 +165,6 @@ MediaBox in unrotated user space; `/Rotate` is applied only with the opt-in
 `ApplyPageRotation` (3.19), and the CropBox is not used to bound the output.
 A default switch would change every existing caller's output, so it waits for
 a major version.
-
-### Fonts
-**4. Autohinter X-axis stem fitting.** Optional X-axis fitting for mono/low-DPI
-rendering. (Composite Y-fitting in unhinted fonts shipped in v3.18.0.)
 
 ### Accessibility / archival
 **5. Tagged-PDF structure generation.** PDF/A *output* ships
@@ -176,13 +187,8 @@ assemblies for zero user-visible gain; do it at a major-version boundary.
 cropped or scrubbed; a pattern cell's content and a shading that overlaps
 the crop box are still kept whole (confined by the backstop clip), so their
 off-box portion remains in the file. An annotation appearance partially
-overlapping the box is likewise kept whole.
-
-**8. Downsample placements inside nested forms.** The compression-path
-placement scanner walks page content only. Since 3.18's verification round,
-any image also referenced from a form XObject's resources (or on a page whose
-content failed to decode) is excluded from downsampling outright, so nothing
-undershoots; walking form content for real placements remains open.
+overlapping the box is likewise kept whole. (Redaction, unlike Scrub, now
+drops a pattern entirely once nothing on the page paints with it — 3.20.)
 
 **9. Known-accepted recovery/fidelity limits (3.18 adversarial review).**
 (a) A tiling-pattern fill needing more than 4,096 tile placements paints
@@ -218,9 +224,12 @@ several lines (for example `PageBuilder.DrawLine`, `DrawText`, `DrawArrow`).
 The CI check compares against the same generator, so it stays green;
 fixing the parser regenerates many pages, so it is its own small PR.
 
-### Application-adjacent
-**14. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench"
-image-processing feature; belongs to the Reader Bench arc.
+### Redaction follow-ups
+**16. Pixel-level partial image redaction.** A redaction box over part of an
+image removes the whole image (over-redact, by design). Scanned pages
+therefore lose the entire page image when one word is redacted. Cropping or
+blanking only the covered samples (the Scrub cropper already does this at
+the sample level) would keep the rest of the scan.
 
 ---
 

@@ -734,11 +734,7 @@ internal static class ImageSampleCropper
                 && jd.TryGetValue(PdfName.Intern("JBIG2Globals"), out PdfPrimitive? gRef)
                 && resolver.Resolve(gRef) is PdfStream globals)
             {
-                byte[] g = globals.RawBytes;
-                if (globals.Filter is PdfName gf)
-                {
-                    g = FilterRegistry.CreateDefaultPipeline().Decode(FilterRegistry.ResolveAlias(gf.Value), g, null);
-                }
+                byte[] g = ObjectImporter.DecodeStreamContent(globals);
 
                 fp = (fp ?? new FilterParameters()) with { Jbig2Globals = g };
             }

@@ -1590,6 +1590,11 @@ public static class DisplayListBuilder
                 Advance: 0);
         }
 
+        // Text rise (Ts) shifts glyphs up in text space before the text
+        // matrix applies (PDF 9.4.4: Trm = [Tfs·Th 0 0 Tfs 0 Trise] · Tm · CTM).
+        private static AffineMatrix RiseMatrix(BuilderState s) =>
+            s.TextRise == 0 ? AffineMatrix.Identity : new AffineMatrix(1, 0, 0, 1, 0, s.TextRise);
+
         private void EmitText(byte[] bytes, BuilderState s)
         {
             if (s.FontKey is null) { return; }
@@ -1652,7 +1657,7 @@ public static class DisplayListBuilder
                 }
             }
 
-            AffineMatrix combined = s.TextMatrix.Multiply(s.Ctm);
+            AffineMatrix combined = RiseMatrix(s).Multiply(s.TextMatrix).Multiply(s.Ctm);
             Add(new TextOp
             {
                 BlendMode = _stack.Current.BlendMode,
@@ -1746,7 +1751,7 @@ public static class DisplayListBuilder
                     bool startingNewFold = pending.Count == 0;
                     if (startingNewFold)
                     {
-                        pendingTransform = s.TextMatrix.Multiply(s.Ctm);
+                        pendingTransform = RiseMatrix(s).Multiply(s.TextMatrix).Multiply(s.Ctm);
                         cursorX = 0;
                     }
 

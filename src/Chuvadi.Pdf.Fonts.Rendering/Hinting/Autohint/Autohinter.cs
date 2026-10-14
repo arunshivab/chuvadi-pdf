@@ -1,9 +1,11 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  FreeType autohinter — latin Y-direction grid fitting (blue zone
-//        anchoring, stem fitting, untouched-point interpolation)
+//        anchoring, stem fitting, untouched-point interpolation) and, for
+//        full hinting, X-direction vertical-stem fitting
 // PHASE: Phase 2.7 — Autohinting (Components 3–5: Y fitting fallback)
-// Grid-fits the Y axis of glyphs that carry no TrueType instructions.
+//        3.20 — X-axis stem fitting (full hinting only)
+// Grid-fits glyphs that carry no TrueType instructions.
 
 using System;
 using System.Collections.Generic;
@@ -18,10 +20,12 @@ namespace Chuvadi.Pdf.Fonts.Rendering.Hinting.Autohint;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The X axis is never touched — this matches the library's Light hinting
-/// philosophy (Y-only grid fitting under grayscale anti-aliasing). The fitted
-/// result feeds the same fractional-pixel path builder the bytecode
-/// interpreter uses.
+/// <see cref="FitY"/> is the whole pass under Light hinting (Y-only grid
+/// fitting under grayscale anti-aliasing). Full hinting adds
+/// <see cref="FitX"/>, which snaps vertical stems to whole-pixel widths and
+/// positions — the crisp-stem look that matters for monochrome or low-DPI
+/// output. The fitted result feeds the same fractional-pixel path builder
+/// the bytecode interpreter uses.
 /// </para>
 /// <para>
 /// Overshoot suppression follows the classic rule: when a blue zone's
@@ -109,6 +113,102 @@ internal static class Autohinter
 
         InterpolateUntouched(glyph, fitted, touched, delta, scale);
         return fitted;
+    }
+
+    /// <summary>
+    /// Computes grid-fitted device-pixel X coordinates for the glyph's contour
+    /// points: each vertical stem gets a whole-pixel width (at least one
+    /// pixel) and a whole-pixel left edge placed as close as possible to its
+    /// natural centre; every other point is mapped by monotone piecewise-linear
+    /// interpolation between the fitted stem edges (rigid shift beyond the
+    /// outermost edges), so the outline never folds.
+    /// </summary>
+    /// <param name="glyph">The raw glyph (font units); phantom points are ignored.</param>
+    /// <param name="scale">Device pixels per font unit (ppem ÷ unitsPerEm).</param>
+    /// <returns>
+    /// Per-point device X values (fractional pixels), parallel to the glyph's
+    /// contour points; the natural scaled X when no stems were found.
+    /// </returns>
+    internal static double[] FitX(RawGlyph glyph, double scale)
+    {
+        ArgumentNullException.ThrowIfNull(glyph);
+        if (scale <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scale), "Scale must be positive.");
+        }
+
+        int realPoints = glyph.RealPointCount;
+        double[] fitted = new double[realPoints];
+        for (int i = 0; i < realPoints; i++)
+        {
+            fitted[i] = glyph.X[i] * scale;
+        }
+
+        if (realPoints == 0)
+        {
+            return fitted;
+        }
+
+        // Anchors (design X → fitted device X), left to right. Stems that
+        // overlap an already-anchored stem are skipped, and each new anchor is
+        // kept at or right of the previous one, so the mapping is monotone.
+        List<(double Design, double Device)> anchors = new();
+        double lastDesign = double.NegativeInfinity;
+        double lastDevice = double.NegativeInfinity;
+        foreach (Stem stem in StemDetector.DetectVerticalStems(glyph))
+        {
+            if (stem.MinX <= lastDesign || stem.Width <= 0)
+            {
+                continue;
+            }
+
+            double width = Math.Max(1, Math.Round(stem.Width * scale));
+            double left = Math.Round((stem.CenterX * scale) - (width / 2.0));
+            if (left < lastDevice)
+            {
+                left = Math.Ceiling(lastDevice);
+            }
+
+            anchors.Add((stem.MinX, left));
+            anchors.Add((stem.MaxX, left + width));
+            lastDesign = stem.MaxX;
+            lastDevice = left + width;
+        }
+
+        if (anchors.Count == 0)
+        {
+            return fitted;
+        }
+
+        for (int i = 0; i < realPoints; i++)
+        {
+            fitted[i] = MapX(glyph.X[i], anchors, scale);
+        }
+
+        return fitted;
+    }
+
+    private static double MapX(double x, List<(double Design, double Device)> anchors, double scale)
+    {
+        (double firstDesign, double firstDevice) = anchors[0];
+        if (x <= firstDesign)
+        {
+            return firstDevice + ((x - firstDesign) * scale);
+        }
+
+        for (int k = 1; k < anchors.Count; k++)
+        {
+            (double d1, double f1) = anchors[k];
+            if (x <= d1)
+            {
+                (double d0, double f0) = anchors[k - 1];
+                double span = d1 - d0;
+                return span <= 0 ? f1 : f0 + ((f1 - f0) * (x - d0) / span);
+            }
+        }
+
+        (double lastDesign, double lastDevice) = anchors[^1];
+        return lastDevice + ((x - lastDesign) * scale);
     }
 
     // ── Fitting stages ────────────────────────────────────────────────────
