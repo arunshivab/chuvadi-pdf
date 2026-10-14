@@ -128,8 +128,8 @@ suite, then writes 33 mono-versioned `.nupkg` to `artifacts\nupkg`. Publish by
 flat-copying `artifacts\nupkg\*.nupkg` into the two local feeds
 (`C:\Users\aruns\Documents\local-nuget` and the Chuvadi Reader's `localpackages`)
 — never `dotnet nuget push` (it creates a mismatched hierarchical layout). Tag
-`vX.Y.Z` after packing. Latest released version: **3.17.1** (3.18.0 pending
-pack on Arun's machine).
+`vX.Y.Z` after packing. Latest released version: **3.18.0** (3.18.1, the
+FlateDecode trailing-byte hotfix, pending merge + pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 
