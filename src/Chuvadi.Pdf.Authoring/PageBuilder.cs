@@ -303,6 +303,105 @@ public sealed class PageBuilder
     }
 
     /// <summary>
+    /// Draws an arrow from (x1, y1) to (x2, y2): a stroked shaft plus filled
+    /// triangular head(s) in the same colour. The shaft stops at each head's
+    /// base so the line cap never pokes through a tip. Head geometry comes from
+    /// <see cref="ArrowGeometry"/>, so an on-screen preview built from
+    /// <see cref="ArrowGeometry.HeadPoints"/> matches this output exactly.
+    /// A zero-length arrow draws nothing.
+    /// </summary>
+    /// <param name="x1">Start x (top-left page coordinates).</param>
+    /// <param name="y1">Start y (top-left page coordinates).</param>
+    /// <param name="x2">End x (top-left page coordinates).</param>
+    /// <param name="y2">End y (top-left page coordinates).</param>
+    /// <param name="color">Shaft and head colour.</param>
+    /// <param name="width">Shaft stroke width.</param>
+    /// <param name="ends">Which ends carry a head.</param>
+    /// <param name="headLength">
+    /// Head length, or null for <see cref="ArrowGeometry.DefaultHeadLength"/>.
+    /// </param>
+    /// <param name="headWidth">
+    /// Head base width, or null for <see cref="ArrowGeometry.DefaultHeadWidth"/>.
+    /// </param>
+    /// <returns>This builder, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when a head size is negative or not finite.
+    /// </exception>
+    public PageBuilder DrawArrow(
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        Color color,
+        double width = 1.0,
+        ArrowEnds ends = ArrowEnds.End,
+        double? headLength = null,
+        double? headWidth = null)
+    {
+        double length = headLength ?? ArrowGeometry.DefaultHeadLength(width);
+        double baseWidth = headWidth ?? ArrowGeometry.DefaultHeadWidth(length);
+
+        PointF start = new PointF(x1, y1);
+        PointF end = new PointF(x2, y2);
+        PointF[] endHead = ends != ArrowEnds.Start
+            ? ArrowGeometry.HeadPoints(start, end, length, baseWidth)
+            : Array.Empty<PointF>();
+        PointF[] startHead = ends != ArrowEnds.End
+            ? ArrowGeometry.HeadPoints(end, start, length, baseWidth)
+            : Array.Empty<PointF>();
+
+        if (start.X == end.X && start.Y == end.Y)
+        {
+            return this;
+        }
+
+        // A double-headed arrow shares the shaft between both heads, so each
+        // head may claim at most half of it.
+        double shaftLength = start.DistanceTo(end);
+        double perHead = ends == ArrowEnds.Both ? Math.Min(length, shaftLength / 2.0) : length;
+        if (ends == ArrowEnds.Both && perHead < length)
+        {
+            double scaledWidth = baseWidth * (perHead / length);
+            endHead = ArrowGeometry.HeadPoints(start, end, perHead, scaledWidth);
+            startHead = ArrowGeometry.HeadPoints(end, start, perHead, scaledWidth);
+        }
+
+        PointF shaftStart = startHead.Length > 0 ? ArrowGeometry.ShaftEnd(end, start, perHead) : start;
+        PointF shaftEnd = endHead.Length > 0 ? ArrowGeometry.ShaftEnd(start, end, perHead) : end;
+
+        _w.PushState();
+        _w.SetStrokeRgb(color);
+        _w.SetFillRgb(color);
+        _w.SetLineWidth(width);
+
+        if (shaftStart.DistanceTo(shaftEnd) > 0.0)
+        {
+            _w.MoveToTopLeft(shaftStart.X, shaftStart.Y);
+            _w.LineToTopLeft(shaftEnd.X, shaftEnd.Y);
+            _w.Stroke();
+        }
+
+        FillTriangle(endHead);
+        FillTriangle(startHead);
+        _w.PopState();
+        return this;
+    }
+
+    private void FillTriangle(PointF[] points)
+    {
+        if (points.Length != 3)
+        {
+            return;
+        }
+
+        _w.MoveToTopLeft(points[0].X, points[0].Y);
+        _w.LineToTopLeft(points[1].X, points[1].Y);
+        _w.LineToTopLeft(points[2].X, points[2].Y);
+        _w.ClosePath();
+        _w.Fill();
+    }
+
+    /// <summary>
     /// Draws a rectangle. Supply at least one of <paramref name="fill"/>
     /// or <paramref name="stroke"/>.
     /// </summary>

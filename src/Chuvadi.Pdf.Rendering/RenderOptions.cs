@@ -137,4 +137,39 @@ public sealed class RenderOptions
     /// Computes the scale factor from PDF points to device pixels for this DPI.
     /// </summary>
     public double Scale => Dpi / 72.0;
+
+    /// <summary>
+    /// Gets or initialises a clockwise view rotation applied to the rendered
+    /// page, in degrees: 0 (default), 90, 180 or 270. The output buffer takes
+    /// the rotated size (width and height swapped for 90 and 270). Values are
+    /// normalised modulo 360, so -90 means 270.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when the value is not a multiple of 90.
+    /// </exception>
+    public int Rotation
+    {
+        get => _rotation;
+        init => _rotation = NormalizeRotation(value, nameof(Rotation));
+    }
+
+    /// <summary>
+    /// Gets or initialises whether the page's own <c>/Rotate</c> entry is
+    /// applied, so the page renders upright the way PDF viewers display it.
+    /// It adds to <see cref="Rotation"/>. Default: false (the page renders in
+    /// its unrotated user space, as in earlier releases).
+    /// </summary>
+    public bool ApplyPageRotation { get; init; }
+
+    internal static int NormalizeRotation(int value, string name)
+    {
+        if (value % 90 != 0)
+        {
+            throw new ArgumentOutOfRangeException(name, value, "Rotation must be a multiple of 90 degrees.");
+        }
+
+        return ((value % 360) + 360) % 360;
+    }
+
+    private readonly int _rotation;
 }

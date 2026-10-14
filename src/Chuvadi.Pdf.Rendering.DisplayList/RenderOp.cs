@@ -73,6 +73,8 @@ public enum RenderOpKind
     Shading = 7,
     /// <summary><see cref="Type3UseOp"/>.</summary>
     Type3Glyph = 8,
+    /// <summary><see cref="TilingPatternOp"/>.</summary>
+    TilingPattern = 9,
 }
 
 /// <summary>Line cap style (PDF §8.4.3.3).</summary>

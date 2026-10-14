@@ -58,22 +58,46 @@ internal static class PageScrubber
         byte[] content,
         double x0, double y0, double x1, double y1,
         PdfDictionary? resources,
-        IPdfObjectResolver resolver)
+        IPdfObjectResolver resolver,
+        Func<PdfStream, PdfReference>? allocate = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(resolver);
+        return ScrubCore(content, x0, y0, x1, y1, resources, resolver, allocate, Matrix3x3.Identity, 0);
+    }
 
+    // Nested form XObjects are scrubbed recursively up to this depth; deeper
+    // forms (or cycles) are removed rather than kept unscrubbed (B15).
+    private const int MaxFormDepth = 8;
+
+    // Scrubs one content stream. The page level (depth 0) starts from the
+    // identity CTM and wraps the output in the hard-clip backstop; a form
+    // XObject is scrubbed in its own space by seeding its placement CTM
+    // (form /Matrix x CTM at Do) — the crop box stays in page space and the
+    // page-level backstop already confines the form's paint.
+    private static ScrubResult ScrubCore(
+        byte[] content,
+        double x0, double y0, double x1, double y1,
+        PdfDictionary? resources,
+        IPdfObjectResolver resolver,
+        Func<PdfStream, PdfReference>? allocate,
+        Matrix3x3 initialCtm,
+        int depth)
+    {
         StringBuilder output = new StringBuilder(content.Length + 64);
         List<(string Name, PdfStream Stream)> newXObjects = new List<(string, PdfStream)>();
+        HashSet<string> referenced = new HashSet<string>(StringComparer.Ordinal);
 
-        // Hard-clip backstop: confines anything echoed verbatim (e.g. images,
-        // before image cropping is applied) to the crop box.
-        output.Append("q ")
-              .Append(F(x0)).Append(' ').Append(F(y0)).Append(' ')
-              .Append(F(x1 - x0)).Append(' ').Append(F(y1 - y0))
-              .Append(" re W n\n");
+        // Hard-clip backstop: confines anything echoed verbatim to the crop box.
+        if (depth == 0)
+        {
+            output.Append("q ")
+                  .Append(F(x0)).Append(' ').Append(F(y0)).Append(' ')
+                  .Append(F(x1 - x0)).Append(' ').Append(F(y1 - y0))
+                  .Append(" re W n\n");
+        }
 
-        Matrix3x3 ctm = Matrix3x3.Identity;
+        Matrix3x3 ctm = initialCtm;
         Stack<Matrix3x3> ctmStack = new Stack<Matrix3x3>();
 
         TextState text = new TextState();
@@ -460,7 +484,7 @@ internal static class PageScrubber
 
                 case "Do":
                     HandleDo(output, operandTexts, ctm, resources, resolver,
-                        x0, y0, x1, y1, newXObjects);
+                        x0, y0, x1, y1, newXObjects, referenced, allocate, depth);
                     break;
 
                 // A shading paints the full active clip region. When that
@@ -482,7 +506,8 @@ internal static class PageScrubber
                 // dropped when the unit square it paints (under the CTM) lies
                 // entirely outside the crop box.
                 case "BI":
-                    HandleInlineImage(output, tok, content, ctm, x0, y0, x1, y1, token.ByteOffset);
+                    HandleInlineImage(output, tok, content, ctm, x0, y0, x1, y1, token.ByteOffset,
+                        resources, resolver, newXObjects, allocate);
                     break;
 
                 default:
@@ -494,22 +519,35 @@ internal static class PageScrubber
             operandNums.Clear();
         }
 
-        output.Append("Q\n");
-        return new ScrubResult(Encoding.Latin1.GetBytes(output.ToString()), newXObjects);
+        if (depth == 0)
+        {
+            output.Append("Q\n");
+        }
+
+        return new ScrubResult(Encoding.Latin1.GetBytes(output.ToString()), newXObjects, referenced);
     }
 
     /// <summary>Result of a scrub: rewritten content plus any newly created image XObjects.</summary>
     internal sealed class ScrubResult
     {
-        internal ScrubResult(byte[] content, List<(string Name, PdfStream Stream)> newXObjects)
+        internal ScrubResult(
+            byte[] content, List<(string Name, PdfStream Stream)> newXObjects, HashSet<string> referencedXObjects)
         {
             Content = content;
             NewXObjects = newXObjects;
+            ReferencedXObjects = referencedXObjects;
         }
 
         internal byte[] Content { get; }
 
         internal List<(string Name, PdfStream Stream)> NewXObjects { get; }
+
+        /// <summary>
+        /// Original XObject resource names the scrubbed content still invokes
+        /// (verbatim <c>Do</c>s). Every other original XObject entry is no
+        /// longer used and must be pruned, or its full content stays in the file.
+        /// </summary>
+        internal HashSet<string> ReferencedXObjects { get; }
     }
 
     // ── Text ─────────────────────────────────────────────────────────────────
@@ -716,7 +754,7 @@ internal static class PageScrubber
         return t.Length > 0 && (t[0] == '(' || t[0] == '<');
     }
 
-    private static byte[] ParseStringBytes(string token)
+    internal static byte[] ParseStringBytes(string token)
     {
         if (token.Length == 0)
         {
@@ -858,7 +896,9 @@ internal static class PageScrubber
     // recommends at most 4 KB), so the residual off-box bytes are bounded.
     private static void HandleInlineImage(
         StringBuilder output, PdfTokenizer tok, byte[] content, Matrix3x3 ctm,
-        double x0, double y0, double x1, double y1, long biStart)
+        double x0, double y0, double x1, double y1, long biStart,
+        PdfDictionary? resources, IPdfObjectResolver resolver,
+        List<(string Name, PdfStream Stream)> newXObjects, Func<PdfStream, PdfReference>? allocate)
     {
         // Exact-extent consumption (3.18): the dictionary's /W /H /BPC /CS
         // give the data length for unfiltered images, so a byte pair that
@@ -875,22 +915,22 @@ internal static class PageScrubber
             return;
         }
 
-        List<(double X, double Y)> quad = ScrubGeometry.TransformRectCorners(ctm, 0, 0, 1, 1);
-        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
-        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
-        foreach ((double qx, double qy) in quad)
-        {
-            minX = Math.Min(minX, qx);
-            minY = Math.Min(minY, qy);
-            maxX = Math.Max(maxX, qx);
-            maxY = Math.Max(maxY, qy);
-        }
+        // Inside: kept byte for byte. Outside: removed. Crossing: cropped at
+        // the sample level into a new image XObject so no off-box pixel
+        // survives; an image that cannot be decoded for cropping is removed
+        // (over-redaction in doubt, B15).
+        ImageCropOutcome outcome = ImageSampleCropper.Crop(
+            () => ImageSampleCropper.FromInline(content, (int)biStart, eiEnd, resources, resolver),
+            ctm, x0, y0, x1, y1, allocate, out PdfStream? cropped, out Matrix3x3 place);
 
-        bool outside = maxX <= x0 || minX >= x1 || maxY <= y0 || minY >= y1;
-        if (!outside)
+        if (outcome == ImageCropOutcome.Inside)
         {
             output.Append(Encoding.Latin1.GetString(content, (int)biStart, eiEnd - (int)biStart));
             output.Append('\n');
+        }
+        else if (outcome == ImageCropOutcome.Cropped && cropped is not null)
+        {
+            EmitPlacedXObject(output, newXObjects, cropped, place, "ScrubIm");
         }
 
         tok.Seek(eiEnd);
@@ -900,233 +940,286 @@ internal static class PageScrubber
         StringBuilder output, List<string> operandTexts, Matrix3x3 ctm,
         PdfDictionary? resources, IPdfObjectResolver resolver,
         double x0, double y0, double x1, double y1,
-        List<(string Name, PdfStream Stream)> newXObjects)
+        List<(string Name, PdfStream Stream)> newXObjects,
+        HashSet<string> referenced,
+        Func<PdfStream, PdfReference>? allocate,
+        int depth)
     {
         if (operandTexts.Count < 1)
         {
             return;
         }
 
-        string name = operandTexts[0];
-        PdfStream? xobj = ResolveXObjectStream(name.TrimStart('/'), resources, resolver);
+        // Last operand is the name (stack semantics).
+        string name = DecodeNameToken(operandTexts[^1]);
+        PdfStream? xobj = ResolveXObjectStream(name, resources, resolver);
 
-        // Forms or unresolved XObjects: keep verbatim (confined by the backstop).
-        PdfName? subtype = xobj?.Dictionary.Subtype;
-        if (xobj is null || subtype is null || subtype.Value != "Image")
+        // Unresolvable XObject: paints nothing in any viewer; keep the
+        // operator (harmless) and its resource name.
+        if (xobj is null)
         {
             EchoVerbatim(output, operandTexts, "Do");
+            referenced.Add(name);
             return;
         }
 
-        List<(double X, double Y)> imgQuad = ScrubGeometry.TransformRectCorners(ctm, 0, 0, 1, 1);
-        List<(double X, double Y)> cropQuad = new List<(double X, double Y)>
+        string subtype = xobj.Dictionary.Subtype?.Value ?? string.Empty;
+        if (subtype == "Image")
         {
-            (x0, y0), (x1, y0), (x1, y1), (x0, y1),
-        };
+            ImageCropOutcome outcome = ImageSampleCropper.Crop(
+                () => ImageSampleCropper.FromXObject(xobj, resolver),
+                ctm, x0, y0, x1, y1, allocate, out PdfStream? cropped, out Matrix3x3 place);
 
-        bool allInside = true;
-        foreach ((double X, double Y) c in imgQuad)
-        {
-            if (!ScrubGeometry.PointInside(cropQuad, c.X, c.Y))
+            switch (outcome)
             {
-                allInside = false;
+                case ImageCropOutcome.Inside:
+                    EchoVerbatim(output, operandTexts, "Do");
+                    referenced.Add(name);
+                    break;
+                case ImageCropOutcome.Cropped when cropped is not null:
+                    EmitPlacedXObject(output, newXObjects, cropped, place, "ScrubIm");
+                    break;
+                default:
+                    // Outside, or crossing but undecodable: removed (B15).
+                    break;
             }
-        }
 
-        if (allInside)
-        {
-            EchoVerbatim(output, operandTexts, "Do");
             return;
         }
 
-        if (ScrubGeometry.ClipPolygon(imgQuad, cropQuad).Count < 3)
+        if (subtype == "Form")
         {
-            return; // fully outside: byte-removed
-        }
-
-        // Crossing. Axis-aligned CTM (b == c == 0) supports a lossless pixel crop.
-        if (Math.Abs(ctm.B) > 1e-6 || Math.Abs(ctm.C) > 1e-6)
-        {
-            EchoVerbatim(output, operandTexts, "Do");
+            HandleForm(output, operandTexts, name, xobj, ctm, resources, resolver,
+                x0, y0, x1, y1, newXObjects, referenced, allocate, depth);
             return;
         }
 
-        if (!TryCropImage(output, xobj, resolver, ctm, x0, y0, x1, y1, newXObjects))
-        {
-            EchoVerbatim(output, operandTexts, "Do");
-        }
+        // PostScript or unknown XObject subtypes paint nothing in conforming
+        // viewers; drop them.
     }
 
-    private static bool TryCropImage(
-        StringBuilder output, PdfStream xobj, IPdfObjectResolver resolver,
-        Matrix3x3 ctm, double x0, double y0, double x1, double y1,
-        List<(string Name, PdfStream Stream)> newXObjects)
+    // Scrubs a form XObject recursively: entirely inside → kept verbatim;
+    // entirely outside its BBox → removed; otherwise its content is scrubbed
+    // in the form's own space and replaced by a new form whose resources keep
+    // only what the scrubbed content still uses.
+    private static void HandleForm(
+        StringBuilder output, List<string> operandTexts, string name, PdfStream form, Matrix3x3 ctm,
+        PdfDictionary? resources, IPdfObjectResolver resolver,
+        double x0, double y0, double x1, double y1,
+        List<(string Name, PdfStream Stream)> newXObjects,
+        HashSet<string> referenced,
+        Func<PdfStream, PdfReference>? allocate,
+        int depth)
     {
-        Chuvadi.Pdf.Images.ImageFrame? frame = DecodeImage(xobj, resolver);
-        if (frame is null)
+        PdfDictionary dict = form.Dictionary;
+        Matrix3x3 formMatrix = Matrix3x3.Identity;
+        if (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("Matrix"))) is PdfArray m && m.Count >= 6)
         {
-            return false;
+            formMatrix = new Matrix3x3(
+                NumOf(resolver, m[0]), NumOf(resolver, m[1]), NumOf(resolver, m[2]),
+                NumOf(resolver, m[3]), NumOf(resolver, m[4]), NumOf(resolver, m[5]));
         }
 
-        // Page-space extent of the image (b == c == 0): x in [E, E+A], y in [F, F+D].
-        double ex0 = Math.Min(ctm.E, ctm.E + ctm.A);
-        double ex1 = Math.Max(ctm.E, ctm.E + ctm.A);
-        double ey0 = Math.Min(ctm.F, ctm.F + ctm.D);
-        double ey1 = Math.Max(ctm.F, ctm.F + ctm.D);
+        Matrix3x3 formCtm = formMatrix.Multiply(ctm);
 
-        double ix0 = Math.Max(ex0, x0);
-        double iy0 = Math.Max(ey0, y0);
-        double ix1 = Math.Min(ex1, x1);
-        double iy1 = Math.Min(ey1, y1);
-        if (ix1 - ix0 <= 0 || iy1 - iy0 <= 0)
+        // Classify by the form's BBox mapped to page space.
+        if (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("BBox"))) is PdfArray bbox && bbox.Count >= 4)
         {
-            return false;
-        }
-
-        // In-box page rect mapped to image space [0,1]^2.
-        double u0 = (ix0 - ex0) / (ex1 - ex0);
-        double u1 = (ix1 - ex0) / (ex1 - ex0);
-        double v0 = (iy0 - ey0) / (ey1 - ey0);
-        double v1 = (iy1 - ey0) / (ey1 - ey0);
-
-        int w = frame.Width;
-        int h = frame.Height;
-
-        // Image space v=0 is the bottom; pixel row 0 is the top.
-        int col0 = Clamp((int)Math.Floor(u0 * w), 0, w - 1);
-        int col1 = Clamp((int)Math.Ceiling(u1 * w), col0 + 1, w);
-        int row0 = Clamp((int)Math.Floor((1 - v1) * h), 0, h - 1);
-        int row1 = Clamp((int)Math.Ceiling((1 - v0) * h), row0 + 1, h);
-
-        int cw = col1 - col0;
-        int ch = row1 - row0;
-        if (cw <= 0 || ch <= 0)
-        {
-            return false;
-        }
-
-        byte[] rgb = new byte[cw * ch * 3];
-        int p = 0;
-        for (int row = row0; row < row1; row++)
-        {
-            for (int col = col0; col < col1; col++)
+            double bx0 = NumOf(resolver, bbox[0]);
+            double by0 = NumOf(resolver, bbox[1]);
+            double bx1 = NumOf(resolver, bbox[2]);
+            double by1 = NumOf(resolver, bbox[3]);
+            List<(double X, double Y)> quad = ScrubGeometry.TransformRectCorners(
+                formCtm, Math.Min(bx0, bx1), Math.Min(by0, by1), Math.Max(bx0, bx1), Math.Max(by0, by1));
+            List<(double X, double Y)> cropQuad = new List<(double X, double Y)>
             {
-                (byte b, byte g, byte r, byte _) = frame.Pixels.GetPixelBgra(col, row);
-                rgb[p++] = r;
-                rgb[p++] = g;
-                rgb[p++] = b;
+                (x0, y0), (x1, y0), (x1, y1), (x0, y1),
+            };
+
+            if (ScrubGeometry.ClipPolygon(quad, cropQuad).Count < 3)
+            {
+                return; // entirely outside: removed
+            }
+
+            bool allInside = true;
+            foreach ((double X, double Y) c in quad)
+            {
+                if (!ScrubGeometry.PointInside(cropQuad, c.X, c.Y))
+                {
+                    allInside = false;
+                    break;
+                }
+            }
+
+            if (allInside)
+            {
+                EchoVerbatim(output, operandTexts, "Do");
+                referenced.Add(name);
+                return;
             }
         }
 
-        byte[] flate = FlateEncode(rgb);
-        PdfDictionary dict = new PdfDictionary();
-        dict.Set(PdfName.Intern("Type"), PdfName.Intern("XObject"));
-        dict.Set(PdfName.Subtype, PdfName.Intern("Image"));
-        dict.Set(PdfName.Intern("Width"), cw);
-        dict.Set(PdfName.Intern("Height"), ch);
-        dict.Set(PdfName.Intern("ColorSpace"), PdfName.Intern("DeviceRGB"));
-        dict.Set(PdfName.Intern("BitsPerComponent"), 8);
-        dict.Set(PdfName.Filter, PdfName.Intern("FlateDecode"));
-        dict.Set(PdfName.Length, flate.Length);
-        PdfStream cropped = new PdfStream(dict, flate);
-
-        string newName = "ScrubIm" + newXObjects.Count;
-        newXObjects.Add((newName, cropped));
-
-        // Placement maps the unit square to the in-box page rect, expressed
-        // relative to the current CTM:  place = inBoxRect * inverse(CTM),
-        // so that  unit * place * CTM == inBoxRect.
-        if (!ScrubGeometry.TryInvert(ctm, out Matrix3x3 invCtm))
+        if (allocate is null || depth + 1 >= MaxFormDepth)
         {
-            return false;
+            return; // cannot rebuild the form here: removed (B15)
         }
 
-        Matrix3x3 inBox = new Matrix3x3(ix1 - ix0, 0, 0, iy1 - iy0, ix0, iy0);
-        Matrix3x3 place = inBox.Multiply(invCtm);
+        byte[] formContent;
+        try
+        {
+            formContent = DecodeFormContent(form);
+        }
+        catch (Exception)
+        {
+            return; // undecodable crossing form: removed (B15)
+        }
 
+        PdfDictionary? formResources = resources;
+        if (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Resources)) is PdfDictionary own)
+        {
+            formResources = own;
+        }
+
+        ScrubResult nested = ScrubCore(
+            formContent, x0, y0, x1, y1, formResources, resolver, allocate, formCtm, depth + 1);
+
+        PdfDictionary newDict = new PdfDictionary();
+        foreach (PdfName key in dict.Keys)
+        {
+            if (key.Value is "Filter" or "DecodeParms" or "Length" or "Resources")
+            {
+                continue;
+            }
+
+            newDict.Set(key, dict[key]);
+        }
+
+        newDict.Set(PdfName.Resources, BuildScrubbedResources(formResources, nested, resolver, allocate));
+        newDict.Set(PdfName.Length, nested.Content.Length);
+        PdfStream scrubbedForm = new PdfStream(newDict, nested.Content);
+
+        string newName = "ScrubFm" + newXObjects.Count.ToString(CultureInfo.InvariantCulture);
+        newXObjects.Add((newName, scrubbedForm));
+        output.Append('/').Append(newName).Append(" Do\n");
+    }
+
+    /// <summary>
+    /// Copies <paramref name="resources"/>, keeping only the original XObject
+    /// entries the scrubbed content still invokes plus the newly created ones
+    /// (registered through <paramref name="allocate"/>).
+    /// </summary>
+    internal static PdfDictionary BuildScrubbedResources(
+        PdfDictionary? resources, ScrubResult result, IPdfObjectResolver resolver,
+        Func<PdfStream, PdfReference> allocate)
+    {
+        PdfDictionary copy = new PdfDictionary();
+        if (resources is not null)
+        {
+            foreach (PdfName key in resources.Keys)
+            {
+                copy.Set(key, resources[key]);
+            }
+        }
+
+        PdfDictionary xobjects = new PdfDictionary();
+        if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("XObject"))) is PdfDictionary original)
+        {
+            foreach (PdfName key in original.Keys)
+            {
+                if (result.ReferencedXObjects.Contains(key.Value))
+                {
+                    xobjects.Set(key, original[key]);
+                }
+            }
+        }
+
+        foreach ((string newName, PdfStream stream) in result.NewXObjects)
+        {
+            xobjects.Set(PdfName.Intern(newName), allocate(stream));
+        }
+
+        copy.Set(PdfName.Intern("XObject"), xobjects);
+        return copy;
+    }
+
+    private static byte[] DecodeFormContent(PdfStream form)
+    {
+        byte[] data = form.RawBytes;
+        PdfPrimitive? filter = form.Filter;
+        if (filter is null)
+        {
+            return data;
+        }
+
+        Chuvadi.Pdf.Filters.FilterPipeline pipe = Chuvadi.Pdf.Filters.FilterRegistry.CreateDefaultPipeline();
+        PdfPrimitive? parms = form.Dictionary.GetAs<PdfPrimitive>(PdfName.Intern("DecodeParms"));
+        if (filter is PdfName single)
+        {
+            return pipe.Decode(Chuvadi.Pdf.Filters.FilterRegistry.ResolveAlias(single.Value), data,
+                Chuvadi.Pdf.Filters.FilterParameters.FromDictionary(parms, 0));
+        }
+
+        if (filter is PdfArray chain)
+        {
+            for (int i = 0; i < chain.Count; i++)
+            {
+                if (chain[i] is PdfName n)
+                {
+                    data = pipe.Decode(Chuvadi.Pdf.Filters.FilterRegistry.ResolveAlias(n.Value), data,
+                        Chuvadi.Pdf.Filters.FilterParameters.FromDictionary(parms, i));
+                }
+            }
+        }
+
+        return data;
+    }
+
+    // Writes "q <place> cm /ScrubImN Do Q" for a newly created XObject.
+    private static void EmitPlacedXObject(
+        StringBuilder output, List<(string Name, PdfStream Stream)> newXObjects,
+        PdfStream stream, Matrix3x3 place, string prefix)
+    {
+        string newName = prefix + newXObjects.Count.ToString(CultureInfo.InvariantCulture);
+        newXObjects.Add((newName, stream));
         output.Append("q ")
               .Append(F(place.A)).Append(' ').Append(F(place.B)).Append(' ')
               .Append(F(place.C)).Append(' ').Append(F(place.D)).Append(' ')
               .Append(F(place.E)).Append(' ').Append(F(place.F)).Append(" cm /")
               .Append(newName).Append(" Do Q\n");
-        return true;
     }
 
-    private static Chuvadi.Pdf.Images.ImageFrame? DecodeImage(PdfStream xobj, IPdfObjectResolver resolver)
+    private static double NumOf(IPdfObjectResolver resolver, PdfPrimitive p) => Res(resolver, p) switch
     {
-        PdfDictionary dict = xobj.Dictionary;
-        string filterName = (Res(resolver, xobj.Filter) as PdfName)?.Value ?? string.Empty;
+        PdfInteger i => i.Value,
+        PdfReal r => r.Value,
+        _ => 0.0,
+    };
 
-        try
-        {
-            if (filterName == "DCTDecode")
-            {
-                return Chuvadi.Pdf.Images.JpegDecoder.Decode(xobj.RawBytes);
-            }
-
-            int w = (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("Width"))) as PdfInteger)?.Value ?? 0;
-            int h = (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("Height"))) as PdfInteger)?.Value ?? 0;
-            int bpc = (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("BitsPerComponent"))) as PdfInteger)?.Value ?? 8;
-            string cs = (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("ColorSpace"))) as PdfName)?.Value ?? string.Empty;
-            if (w <= 0 || h <= 0 || bpc != 8)
-            {
-                return null;
-            }
-
-            byte[] samples = xobj.RawBytes;
-            if (xobj.Filter is PdfName fn)
-            {
-                Chuvadi.Pdf.Filters.FilterPipeline pipe = Chuvadi.Pdf.Filters.FilterRegistry.CreateDefaultPipeline();
-                samples = pipe.Decode(Chuvadi.Pdf.Filters.FilterRegistry.ResolveAlias(fn.Value), xobj.RawBytes, null);
-            }
-
-            int channels = cs == "DeviceRGB" ? 3 : cs == "DeviceGray" ? 1 : 0;
-            if (channels == 0 || samples.Length < w * h * channels)
-            {
-                return null;
-            }
-
-            Chuvadi.Pdf.Graphics.PixelBuffer buf = new Chuvadi.Pdf.Graphics.PixelBuffer(w, h);
-            int si = 0;
-            for (int y = 0; y < h; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    byte r, g, b;
-                    if (channels == 3)
-                    {
-                        r = samples[si++];
-                        g = samples[si++];
-                        b = samples[si++];
-                    }
-                    else
-                    {
-                        r = g = b = samples[si++];
-                    }
-
-                    buf.SetPixelBgra(x, y, b, g, r, 255);
-                }
-            }
-
-            return new Chuvadi.Pdf.Images.ImageFrame(
-                buf, channels == 3 ? Chuvadi.Pdf.Images.ImageColorFormat.Rgb24 : Chuvadi.Pdf.Images.ImageColorFormat.Gray8);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
-    private static byte[] FlateEncode(byte[] data)
+    // Decodes a name operand ("/Im#20A") to its resource key ("Im A").
+    private static string DecodeNameToken(string token)
     {
-        using MemoryStream ms = new MemoryStream();
-        using (System.IO.Compression.ZLibStream zs =
-            new System.IO.Compression.ZLibStream(ms, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+        string name = token.StartsWith('/') ? token.Substring(1) : token;
+        if (!name.Contains('#'))
         {
-            zs.Write(data, 0, data.Length);
+            return name;
         }
 
-        return ms.ToArray();
+        StringBuilder sb = new StringBuilder(name.Length);
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (name[i] == '#' && i + 2 < name.Length
+                && int.TryParse(name.AsSpan(i + 1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int code))
+            {
+                sb.Append((char)code);
+                i += 2;
+            }
+            else
+            {
+                sb.Append(name[i]);
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static PdfStream? ResolveXObjectStream(string name, PdfDictionary? resources, IPdfObjectResolver resolver)
@@ -1145,8 +1238,6 @@ internal static class PageScrubber
 
         return null;
     }
-
-    private static int Clamp(int v, int lo, int hi) => v < lo ? lo : v > hi ? hi : v;
 
     // ── Vector paths ─────────────────────────────────────────────────────────
 

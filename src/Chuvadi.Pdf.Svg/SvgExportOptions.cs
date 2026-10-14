@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.0 — SVG export
 
+using System;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Svg;
@@ -116,4 +117,42 @@ public sealed class SvgExportOptions
     /// Default: 150 DPI.
     /// </summary>
     public double RasterFallbackDpi { get; init; } = 150;
+
+    /// <summary>
+    /// Clockwise display rotation applied to the whole rendered page, in
+    /// degrees: 0 (default), 90, 180 or 270. The SVG's width, height and
+    /// <c>viewBox</c> are emitted for the rotated orientation (swapped for 90
+    /// and 270) and the page content is rotated inside it, so the output can
+    /// be shown as-is without editing the SVG. It is a view rotation; the
+    /// page's own <c>/Rotate</c> is added only when
+    /// <see cref="ApplyPageRotation"/> is set. Values are normalised modulo
+    /// 360 (so -90 means 270).
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when the value is not a multiple of 90.
+    /// </exception>
+    public int Rotation
+    {
+        get => _rotation;
+        init
+        {
+            if (value % 90 != 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(Rotation), value, "Rotation must be a multiple of 90 degrees.");
+            }
+
+            _rotation = ((value % 360) + 360) % 360;
+        }
+    }
+
+    /// <summary>
+    /// Whether the page's own <c>/Rotate</c> entry is applied, so the page
+    /// renders upright the way PDF viewers display it. It adds to
+    /// <see cref="Rotation"/>. Default: false (the page renders in its
+    /// unrotated user space, as in earlier releases).
+    /// </summary>
+    public bool ApplyPageRotation { get; init; }
+
+    private readonly int _rotation;
 }

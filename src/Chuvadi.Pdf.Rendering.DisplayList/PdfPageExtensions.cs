@@ -24,6 +24,25 @@ public static class PdfPageExtensions
     }
 
     /// <summary>
+    /// Returns whether page <paramref name="pageIndex"/> paints anything
+    /// visible (text, paths, images or shadings, including form XObjects and
+    /// annotation appearances). See <see cref="PageContentInventory"/>.
+    /// </summary>
+    public static bool HasDrawableContent(this PdfDocument document, int pageIndex)
+    {
+        return PageContentInventory.Inspect(document, pageIndex).HasDrawableContent;
+    }
+
+    /// <summary>
+    /// Returns what page <paramref name="pageIndex"/> paints, by category.
+    /// See <see cref="PageContentInventory"/>.
+    /// </summary>
+    public static PageContentInventory GetContentInventory(this PdfDocument document, int pageIndex)
+    {
+        return PageContentInventory.Inspect(document, pageIndex);
+    }
+
+    /// <summary>
     /// Returns the text runs of <paramref name="pageIndex"/> in reading order.
     /// </summary>
     /// <remarks>

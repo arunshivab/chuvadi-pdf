@@ -232,6 +232,7 @@ public static class Redactor
 
         // Phase 3 (serial) — allocate object numbers and assemble the output in
         // stable order, so the result is identical regardless of parallelism.
+        List<PdfDictionary> modifiedPages = new List<PdfDictionary>(work.Count);
         for (int i = 0; i < work.Count; i++)
         {
             PdfObjectId redactedId = new PdfObjectId(nextObjectNum++, 0);
@@ -258,10 +259,29 @@ public static class Redactor
             ]);
             modifiedPage.Set(PdfName.Contents, contents);
             allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
+            modifiedPages.Add(modifiedPage);
             rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
         }
 
-        RewriteCollectedForms(run, allObjects, removedContentStreamNums);
+        Dictionary<int, (PdfDictionary Dict, byte[] Content)> rewrittenForms =
+            RewriteCollectedForms(run, allObjects, removedContentStreamNums);
+
+        // An image whose Do was removed must leave the file, not just the
+        // content stream: prune it from the rewritten pages' and forms'
+        // /XObject resources, then omit it below if nothing else reaches it.
+        HashSet<int> orphanImageCandidates = new HashSet<int>();
+        for (int i = 0; i < work.Count; i++)
+        {
+            PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
+        }
+
+        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content)> form in rewrittenForms)
+        {
+            PdfDictionary? formResources = form.Value.Dict.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
+                ? run.Store.Resolve(fr) as PdfDictionary
+                : null;
+            PruneUnusedImages(form.Value.Dict, formResources, form.Value.Content, run, orphanImageCandidates);
+        }
 
         // LA-04: neutralise the structure tree so redacted text cannot be
         // recovered through /ActualText, /Alt, or marked-content references in the
@@ -356,6 +376,11 @@ public static class Redactor
                 trailer.Set(PdfName.Root, new PdfReference(obj.Id));
                 break;
             }
+        }
+
+        if (orphanImageCandidates.Count > 0)
+        {
+            allObjects = OmitUnreachable(allObjects, trailer, orphanImageCandidates);
         }
 
         PdfWriter.Write(output, allObjects, trailer);
@@ -2819,9 +2844,11 @@ public static class Redactor
     // Rewrites every collected form XObject's content stream in place (same
     // object id), removing in-rect text under any of its placements, and marks
     // the original for exclusion so no unredacted copy survives in the output.
-    private static void RewriteCollectedForms(
+    private static Dictionary<int, (PdfDictionary Dict, byte[] Content)> RewriteCollectedForms(
         RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
     {
+        Dictionary<int, (PdfDictionary Dict, byte[] Content)> rewritten =
+            new Dictionary<int, (PdfDictionary Dict, byte[] Content)>();
         foreach (KeyValuePair<int, List<RedactContext>> kvp in run.FormInvocations)
         {
             int objNum = kvp.Key;
@@ -2841,7 +2868,217 @@ public static class Redactor
 
             allObjects.Add(new PdfIndirectObject(new PdfObjectId(objNum, 0), new PdfStream(newDict, redacted)));
             excluded.Add(objNum);
+            rewritten[objNum] = (newDict, redacted);
         }
+
+        return rewritten;
+    }
+
+    // ── Orphaned-image removal ────────────────────────────────────────────
+
+    // Rewrites a page's (or form's) /Resources so its /XObject dictionary keeps
+    // only images its rewritten content still invokes. The pruned images'
+    // object numbers become removal candidates. Resources are copied (never
+    // edited in place) because they may be shared with, or inherited by,
+    // other pages. Forms that inherit the container's resources (no
+    // /Resources of their own) contribute the names they invoke.
+    private static void PruneUnusedImages(
+        PdfDictionary container, PdfDictionary? resources, byte[] content,
+        RedactRun run, HashSet<int> candidates)
+    {
+        if (resources is null
+            || !resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv)
+            || run.Store.Resolve(xv) is not PdfDictionary xobjects)
+        {
+            return;
+        }
+
+        HashSet<string> invoked = new HashSet<string>(StringComparer.Ordinal);
+        CollectInvokedNames(content, xobjects, run, invoked, new HashSet<int>(), 0);
+
+        PdfDictionary kept = new PdfDictionary();
+        bool pruned = false;
+        foreach (PdfName key in xobjects.Keys)
+        {
+            PdfPrimitive value = xobjects[key];
+            if (!invoked.Contains(key.Value)
+                && run.Store.Resolve(value) is PdfStream stream
+                && stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? st)
+                && st is PdfName subtype && subtype.Value == "Image")
+            {
+                if (value is PdfReference r)
+                {
+                    candidates.Add(r.ObjectId.ObjectNumber);
+                }
+
+                pruned = true;
+                continue;
+            }
+
+            kept.Set(key, value);
+        }
+
+        if (!pruned)
+        {
+            return;
+        }
+
+        PdfDictionary resourcesCopy = CopyDictionary(resources);
+        resourcesCopy.Set(PdfName.XObject, kept);
+        container.Set(PdfName.Resources, resourcesCopy);
+    }
+
+    private static void CollectInvokedNames(
+        byte[] content, PdfDictionary xobjects, RedactRun run,
+        HashSet<string> invoked, HashSet<int> visitedForms, int depth)
+    {
+        if (depth > 8)
+        {
+            return;
+        }
+
+        using MemoryStream input = new MemoryStream(content);
+        using PdfTokenizer tok = new PdfTokenizer(input);
+        string? lastName = null;
+        while (true)
+        {
+            PdfToken t = tok.Read();
+            if (t.IsEndOfStream)
+            {
+                break;
+            }
+
+            if (t.Type == PdfTokenType.Name)
+            {
+                lastName = DecodeNameText(t.RawText);
+                continue;
+            }
+
+            if (t.Type == PdfTokenType.Keyword && t.RawText == "BI")
+            {
+                SkipInlineImage(tok, content);
+                lastName = null;
+                continue;
+            }
+
+            if (t.Type == PdfTokenType.Keyword && t.RawText == "Do" && lastName is not null)
+            {
+                if (invoked.Add(lastName)
+                    && xobjects.TryGetValue(PdfName.Intern(lastName), out PdfPrimitive? xref)
+                    && xref is PdfReference formRef
+                    && run.Store.Resolve(xref) is PdfStream form
+                    && form.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? st)
+                    && st is PdfName subtype && subtype.Value == "Form"
+                    && !form.Dictionary.ContainsKey(PdfName.Resources)
+                    && visitedForms.Add(formRef.ObjectId.ObjectNumber))
+                {
+                    // A form without its own resources draws with these ones.
+                    byte[] formContent;
+                    try
+                    {
+                        formContent = DecodeStream(form, run.Pipeline);
+                    }
+                    catch (Exception)
+                    {
+                        formContent = Array.Empty<byte>();
+                    }
+
+                    CollectInvokedNames(formContent, xobjects, run, invoked, visitedForms, depth + 1);
+                }
+            }
+
+            if (t.Type == PdfTokenType.Keyword)
+            {
+                lastName = null;
+            }
+        }
+    }
+
+    private static string DecodeNameText(string raw)
+    {
+        string name = raw.StartsWith('/') ? raw.Substring(1) : raw;
+        if (!name.Contains('#'))
+        {
+            return name;
+        }
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder(name.Length);
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (name[i] == '#' && i + 2 < name.Length
+                && int.TryParse(name.AsSpan(i + 1, 2), System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out int code))
+            {
+                sb.Append((char)code);
+                i += 2;
+            }
+            else
+            {
+                sb.Append(name[i]);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    // Drops candidate objects the output no longer reaches from the trailer.
+    private static List<PdfIndirectObject> OmitUnreachable(
+        List<PdfIndirectObject> objects, PdfDictionary trailer, HashSet<int> candidates)
+    {
+        Dictionary<int, PdfPrimitive> byNumber = new Dictionary<int, PdfPrimitive>();
+        foreach (PdfIndirectObject obj in objects)
+        {
+            byNumber[obj.Id.ObjectNumber] = obj.Value;
+        }
+
+        HashSet<int> reachable = new HashSet<int>();
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(trailer);
+        while (pending.Count > 0)
+        {
+            PdfPrimitive current = pending.Pop();
+            switch (current)
+            {
+                case PdfReference r:
+                    if (reachable.Add(r.ObjectId.ObjectNumber)
+                        && byNumber.TryGetValue(r.ObjectId.ObjectNumber, out PdfPrimitive? target))
+                    {
+                        pending.Push(target);
+                    }
+
+                    break;
+                case PdfDictionary d:
+                    foreach (PdfName key in d.Keys)
+                    {
+                        pending.Push(d[key]);
+                    }
+
+                    break;
+                case PdfArray a:
+                    for (int i = 0; i < a.Count; i++)
+                    {
+                        pending.Push(a[i]);
+                    }
+
+                    break;
+                case PdfStream st:
+                    pending.Push(st.Dictionary);
+                    break;
+            }
+        }
+
+        List<PdfIndirectObject> kept = new List<PdfIndirectObject>(objects.Count);
+        foreach (PdfIndirectObject obj in objects)
+        {
+            if (candidates.Contains(obj.Id.ObjectNumber) && !reachable.Contains(obj.Id.ObjectNumber))
+            {
+                continue;
+            }
+
+            kept.Add(obj);
+        }
+
+        return kept;
     }
 
     // ── Overlay generation ────────────────────────────────────────────────

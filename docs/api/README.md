@@ -308,6 +308,8 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [ArrowEnds](Graphics/ArrowEnds.md) | enum | Which ends of a line carry an arrowhead. |
+| [ArrowGeometry](Graphics/ArrowGeometry.md) | class | Pure arrow geometry: the triangular head polygon at the tip of a line and the shortened shaft that meets the head's base. |
 | [ColorF](Graphics/ColorF.md) | struct | An immutable colour value, with support for DeviceGray, DeviceRGB, and DeviceCMYK colour spaces. |
 | [ColorSpace](Graphics/ColorSpace.md) | enum | The colour space of a `ColorF` value. |
 | [FillRule](Graphics/FillRule.md) | enum | Determines how the interior of a path is defined when the path self-intersects or has nested sub-paths. |
@@ -386,8 +388,13 @@ python tools/gen_api_docs.py
 | [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress` declined to rewrite a document. |
 | [DocumentInfo](Operations/DocumentInfo.md) | class | Sets document-information metadata (Title, Author, Subject, Keywords) on an existing document and writes the result. |
 | [HeaderFooter](Operations/HeaderFooter.md) | class | Adds running headers and/or footers to a document, with three strategies for how the bands interact with existing content (see `PageContentFit`): overlay in the margins, always reserve-and-scale, or scale only when content intrudes. |
+| [HeaderFooterAlignment](Operations/HeaderFooterAlignment.md) | enum | Horizontal alignment of a header/footer segment within its band. |
+| [HeaderFooterBand](Operations/HeaderFooterBand.md) | enum | Which running band a header/footer segment belongs to. |
 | [HeaderFooterOptions](Operations/HeaderFooterOptions.md) | class | Options controlling header/footer content, geometry, and the content-fit strategy. |
+| [HeaderFooterSegment](Operations/HeaderFooterSegment.md) | class | One header/footer segment exactly as `HeaderFooter.Apply` draws it on a page: token-substituted text plus placement in PDF page coordinates (origin bottom-left, points). |
 | [Imposition](Operations/Imposition.md) | class | Composes the pages of a source document onto larger sheets: N-up grids and 2-up saddle-stitch booklets. |
+| [ImpositionPlacement](Operations/ImpositionPlacement.md) | class | Where one source page lands on an imposition sheet. |
+| [ImpositionSheet](Operations/ImpositionSheet.md) | class | One output sheet (or booklet sheet side) in an imposition plan. |
 | [MergeOptions](Operations/MergeOptions.md) | class | Options for `PageOperations.Merge(System.IO.Stream, System.Collections.Generic.IReadOnlyList{Chuvadi.Pdf.Documents.PdfDocument}, MergeOptions)`. |
 | [NUpOptions](Operations/NUpOptions.md) | class | Options for `Imposition.NUp(System.IO.Stream, Chuvadi.Pdf.Documents.PdfDocument, NUpOptions)`: how many source pages to place per sheet, the sheet size, and the spacing around and between cells. |
 | [NUpOrder](Operations/NUpOrder.md) | enum | The order in which source pages fill the cells of an N-up sheet. |
@@ -413,6 +420,7 @@ python tools/gen_api_docs.py
 | [StampNumbering](Operations/StampNumbering.md) | class | Describes a running numbering sequence for the `{number}` stamp token: a free prefix and suffix, a start value, an optional zero-pad width, a `NumberingFormat` style, and first-page handling. |
 | [StampPipeline](Operations/StampPipeline.md) | class | Accumulates several overlay operations — text stamps, page numbers, text watermarks, headers and footers — plus an optional outline, and applies them all in a single write. |
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
+| [StampRequest](Operations/StampRequest.md) | class | One stamp for `PageStamper.PlaceMany`: a source page drawn onto a target page under an affine transform, over or under the existing content, at a constant opacity. |
 | [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
 | [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |
 
@@ -506,6 +514,7 @@ python tools/gen_api_docs.py
 | [LineSegmentExtraction](Rendering/LineSegmentExtraction.md) | class | Extension accessor that presents a page's path content as a flat list of `LineSegment`s, flattening cubic curves to polylines. |
 | [NestedDisplayListOp](Rendering/NestedDisplayListOp.md) | class | Paints another `PageDisplayList` with a composing transform. |
 | [OpacityOp](Rendering/OpacityOp.md) | class | Pushes or pops an opacity group. |
+| [PageContentInventory](Rendering/PageContentInventory.md) | class | Counts what a page actually paints, from the same display list the SVG and raster renderers draw — page content, nested form XObjects, Type 3 glyphs and visible annotation appearances included. |
 | [PageDisplayList](Rendering/PageDisplayList.DisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
 | [PageDisplayList](Rendering/PageDisplayList.Raster.md) | class | An immutable, renderer-neutral representation of a PDF page's drawable content. |
 | [PageRasterizer](Rendering/PageRasterizer.md) | class | Rasterizes a PDF page to a `PixelBuffer`. |
@@ -543,6 +552,7 @@ python tools/gen_api_docs.py
 | [TextRun](Rendering/TextRun.md) | class | A contiguous run of text on a page, with glyph-level positions for selection-overlay use cases. |
 | [TextRunExtraction](Rendering/TextRunExtraction.md) | class | Extension surface for extracting text runs from a `PageDisplayList`. |
 | [TextRunExtractor](Rendering/TextRunExtractor.md) | class | Walks a `PageDisplayList` and produces a sequence of `TextRun`s in reading order. |
+| [TilingPatternOp](Rendering/TilingPatternOp.md) | class | Paints a tiling pattern (PatternType 1): the pattern cell's content, built once as `Cell` in pattern-cell space, is placed once per entry of `Tiles` (each mapping cell space to page space). |
 | [TransformOp](Rendering/TransformOp.md) | class | Pushes or pops a graphics-state transformation matrix. |
 | [Type3Font](Rendering/Type3Font.md) | class | A parsed Type 3 font: its FontMatrix, per-code glyph content streams, the font's own /Resources, and glyph-space widths. |
 | [Type3Glyph](Rendering/Type3Glyph.md) | record struct | A single Type 3 glyph: its content stream and glyph-space width. |

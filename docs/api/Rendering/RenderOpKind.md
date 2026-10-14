@@ -21,6 +21,7 @@ public enum RenderOpKind
 | `BlendMode` | `BlendModeOp`. |
 | `Shading` | `ShadingOp`. |
 | `Type3Glyph` | `Type3UseOp`. |
+| `TilingPattern` | `TilingPatternOp`. |
 
 ---
 

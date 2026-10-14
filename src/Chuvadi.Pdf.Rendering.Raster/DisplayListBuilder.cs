@@ -314,6 +314,7 @@ public static class DisplayListBuilder
             _state.StrokeColor = ColorF.FromGray((float)gray);
             _state.StrokeValid = true;
             _state.StrokeColorSpace = null;
+            _state.StrokePattern = null;
         }
 
         /// <inheritdoc />
@@ -333,6 +334,7 @@ public static class DisplayListBuilder
             _state.StrokeColor = ColorF.FromRgb((float)r, (float)g, (float)b);
             _state.StrokeValid = true;
             _state.StrokeColorSpace = null;
+            _state.StrokePattern = null;
         }
 
         /// <inheritdoc />
@@ -352,6 +354,7 @@ public static class DisplayListBuilder
             _state.StrokeColor = ColorF.FromCmyk((float)c, (float)m, (float)y, (float)k);
             _state.StrokeValid = true;
             _state.StrokeColorSpace = null;
+            _state.StrokePattern = null;
         }
 
         /// <inheritdoc />
@@ -370,6 +373,7 @@ public static class DisplayListBuilder
             {
                 _state.StrokeColorSpace = space;
                 _state.StrokeValid = valid;
+                _state.StrokePattern = null;
             }
             else
             {
@@ -461,6 +465,7 @@ public static class DisplayListBuilder
             {
                 _state.StrokeColor = c;
                 _state.StrokeValid = true;
+                _state.StrokePattern = null;
             }
             else
             {
@@ -475,36 +480,37 @@ public static class DisplayListBuilder
         {
             if (_suppressColorOps) { return; }
 
+            // A pattern is not a flat paintable colour, so flat paints stay
+            // suppressed; the pattern itself paints through the fill/stroke
+            // operators. The numeric operands before the name are the
+            // underlying colour of an uncoloured (PaintType 2) tiling pattern —
+            // recorded as the cell replay's starting colour.
+            ColorF? underlying = components.Length switch
+            {
+                1 => ColorF.FromGray((float)components[0]),
+                3 => ColorF.FromRgb((float)components[0], (float)components[1], (float)components[2]),
+                4 => ColorF.FromCmyk(
+                    (float)components[0], (float)components[1],
+                    (float)components[2], (float)components[3]),
+                _ => null,
+            };
+
             if (stroke)
             {
-                // Stroke patterns are not painted (follow-up): keep the legacy
-                // behaviour of suppressing pattern-stroked geometry.
                 _state.StrokeValid = false;
+                if (underlying is ColorF strokeUnderlying)
+                {
+                    _state.StrokePatternColor = strokeUnderlying;
+                }
+
+                _state.StrokePattern = ResolvePattern(name);
                 return;
             }
 
-            // A pattern is not a flat paintable colour, so flat fills stay
-            // suppressed; the pattern itself paints through OpFill. The numeric
-            // operands before the name are the underlying colour of an
-            // uncoloured (PaintType 2) tiling pattern — record it as the cell
-            // replay's starting colour.
             _state.FillValid = false;
-            switch (components.Length)
+            if (underlying is ColorF fillUnderlying)
             {
-                case 1:
-                    _state.FillColor = ColorF.FromGray((float)components[0]);
-                    break;
-                case 3:
-                    _state.FillColor = ColorF.FromRgb(
-                        (float)components[0], (float)components[1], (float)components[2]);
-                    break;
-                case 4:
-                    _state.FillColor = ColorF.FromCmyk(
-                        (float)components[0], (float)components[1],
-                        (float)components[2], (float)components[3]);
-                    break;
-                default:
-                    break;
+                _state.FillColor = fillUnderlying;
             }
 
             _state.FillPattern = ResolvePattern(name);
@@ -909,14 +915,36 @@ public static class DisplayListBuilder
         // coordinates; an enclosing form's placement composes afterwards).
         private void EmitPatternFill(FillRule rule)
         {
-            PdfPrimitive pattern = _state.FillPattern!;
+            Path device = TransformPath(_currentPath, _state.Ctm);
+            EmitPatternPaint(
+                _state.FillPattern!, new ClipPath(device, rule), device.EndpointBounds(), _state.FillColor);
+        }
+
+        // Paints the current path's stroke with the current stroke pattern:
+        // the pattern is clipped to the stroke's outline (a stroke-outline
+        // ClipPath expanded by the rasterizer exactly like a stroke op), so a
+        // pattern-stroked line shows the pattern where the stroke would paint.
+        private void EmitPatternStroke()
+        {
+            Path device = TransformPath(_currentPath, _state.Ctm);
+            StrokeStyle style = BuildStrokeStyle();
+
+            // The tile range must cover the stroke's ink, which extends past the
+            // path by up to half the width times the miter limit.
+            double margin = (style.Width / 2.0) * Math.Max(1.0, style.MiterLimit) + 1.0;
+            RectangleF b = device.EndpointBounds();
+            RectangleF bounds = new RectangleF(b.X - margin, b.Y - margin, b.Width + (2 * margin), b.Height + (2 * margin));
+            EmitPatternPaint(_state.StrokePattern!, new ClipPath(device, style), bounds, _state.StrokePatternColor);
+        }
+
+        private void EmitPatternPaint(PdfPrimitive pattern, ClipPath region, RectangleF regionBounds, ColorF underlying)
+        {
             PdfDictionary? dict = pattern as PdfDictionary ?? (pattern as PdfStream)?.Dictionary;
             if (dict is null)
             {
                 return;
             }
 
-            Path device = TransformPath(_currentPath, _state.Ctm);
             List<ClipPath> clips = new List<ClipPath>();
             IReadOnlyList<ClipPath>? active = SnapshotClips();
             if (active is not null)
@@ -924,7 +952,7 @@ public static class DisplayListBuilder
                 clips.AddRange(active);
             }
 
-            clips.Add(new ClipPath(device, rule));
+            clips.Add(region);
 
             Transform patternMatrix = ReadMatrixEntry(dict, "Matrix");
             int patternType = ReadIntEntry(dict, "PatternType");
@@ -941,7 +969,7 @@ public static class DisplayListBuilder
 
             if (patternType == 1 && pattern is PdfStream cell)
             {
-                EmitTilingPattern(cell, dict, patternMatrix, clips, device);
+                EmitTilingPattern(cell, dict, patternMatrix, clips, regionBounds, underlying);
             }
         }
 
@@ -950,7 +978,7 @@ public static class DisplayListBuilder
         // once per tile via NestedDisplayListOp, clipped to the filled path.
         private void EmitTilingPattern(
             PdfStream cell, PdfDictionary dict, Transform patternMatrix,
-            List<ClipPath> clips, Path devicePath)
+            List<ClipPath> clips, RectangleF bounds, ColorF underlying)
         {
             const int MaxTiles = 4096;
 
@@ -983,7 +1011,6 @@ public static class DisplayListBuilder
                 return;
             }
 
-            RectangleF bounds = devicePath.EndpointBounds();
             double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
             double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
             Span<PointF> corners = stackalloc PointF[4]
@@ -1026,8 +1053,8 @@ public static class DisplayListBuilder
             sub._state.StrokeAlpha = _state.StrokeAlpha;
             if (ReadIntEntry(dict, "PaintType") == 2)
             {
-                sub._state.FillColor = _state.FillColor;
-                sub._state.StrokeColor = _state.FillColor;
+                sub._state.FillColor = underlying;
+                sub._state.StrokeColor = underlying;
                 sub._suppressColorOps = true;
             }
 
@@ -1154,7 +1181,11 @@ public static class DisplayListBuilder
                 _currentPath.ClosePath();
             }
 
-            if (_state.StrokeValid && !_currentPath.IsEmpty)
+            if (!_currentPath.IsEmpty && _state.StrokePattern is not null)
+            {
+                EmitPatternStroke();
+            }
+            else if (_state.StrokeValid && !_currentPath.IsEmpty)
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 StrokeStyle style = BuildStrokeStyle();
@@ -1186,7 +1217,11 @@ public static class DisplayListBuilder
                     _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
 
-                if (_state.StrokeValid)
+                if (_state.StrokePattern is not null)
+                {
+                    EmitPatternStroke();
+                }
+                else if (_state.StrokeValid)
                 {
                     StrokeStyle style = BuildStrokeStyle();
                     _ops.Add(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });

@@ -26,6 +26,25 @@ Applies a header and/or footer to `document`.
 - `document` — The source document.
 - `options` — Header/footer content and layout options. <exception cref="ArgumentNullException"> Thrown when any argument is null. </exception>
 
+### `ResolveText`
+
+__static__
+
+```csharp
+static string ResolveText(string template, int pageIndex, int totalPages, HeaderFooterOptions options)
+```
+
+Substitutes header/footer tokens in a single template for one page, using the same context `Apply` builds (1-based page number, total pages, `HeaderFooterOptions.FilePath` and `HeaderFooterOptions.Timestamp`).
+
+**Parameters**
+
+- `template` — Template text containing tokens such as `{page}`.
+- `pageIndex` — Zero-based page index.
+- `totalPages` — Total page count.
+- `options` — Supplies the file path and timestamp tokens.
+
+**Returns:** The substituted text. <exception cref="ArgumentNullException"> Thrown when `template` or `options` is null. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/HeaderFooter.cs`](../../../src/Chuvadi.Pdf.Operations/HeaderFooter.cs)_

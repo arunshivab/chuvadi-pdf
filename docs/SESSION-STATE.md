@@ -125,11 +125,11 @@ All modules are Complete and shipping. Grouped by role:
 
 `build\pack.ps1 -Version x.y.z` cleans, builds Release, runs the full test
 suite, then writes 33 mono-versioned `.nupkg` to `artifacts\nupkg`. Publish by
-flat-copying `artifacts\nupkg\*.nupkg` into the two local feeds
-(`C:\Users\aruns\Documents\local-nuget` and the Chuvadi Reader's `localpackages`)
-— never `dotnet nuget push` (it creates a mismatched hierarchical layout). Tag
-`vX.Y.Z` after packing. Latest released version: **3.18.0** (3.18.1, the
-FlateDecode trailing-byte hotfix, pending merge + pack on Arun's machine).
+flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuget`
+— the library's job ends there; the Chuvadi Reader picks packages up from that
+feed on its own side. Never `dotnet nuget push` (it creates a mismatched
+hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
+**3.18.1** (3.19.0 and 3.20.0 pending merge + pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 
@@ -137,9 +137,14 @@ Releases publish to local folder feeds only, never to nuget.org.
 
 ## Open / Deferred
 
-- ~~ScriptMode.Full visual check~~ — **closed**: the Reader app on 3.17.x
-  renders the COI's scripted fields filled (confirmed in the Reader/editor
-  workstream).
+- ~~ScriptMode.Full visual check~~ — **closed**: the Reader renders the COI
+  fully, but the COI has no script-computed fields (None / CalculationsOnly /
+  Full render byte-identically), so it does not exercise the script engines.
+  A form with calculated fields is needed to verify Full end to end.
+- ~~Scrub/redaction leak~~ — **fixed in 3.19.0**: Scrub kept the original
+  content streams (and replaced images/forms) in the file through 3.18.1;
+  redaction kept removed images. Documents scrubbed before 3.19 are not
+  redacted and should be re-cropped.
 - ~~Meta-package coverage~~ — **closed in 3.18.0**: `Chuvadi.Pdf` now lists
   Xfa, PdfA, Text.Shaping, Rendering.Raster and Rendering.Walking directly.
 - ~~gen_api_docs filename collision~~ — **closed in 3.18.0**: duplicate type
