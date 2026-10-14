@@ -111,33 +111,34 @@ public sealed class DeflateFilter : IStreamFilter
             throw new FilterException(FilterName, "Preset dictionaries in zlib streams are not supported in PDF.");
         }
 
-        // DEFLATE payload starts at byte 2, ends at len-4 (last 4 bytes are Adler-32).
+        // DEFLATE payload starts at byte 2 and ends where the final block's
+        // end-of-block symbol says it ends — NOT at a fixed offset from the
+        // end of the buffer. Real-world PDF streams routinely carry bytes
+        // after the zlib data (an EOL before "endstream", producer padding,
+        // or a truncated Adler-32 trailer), so anchoring the trailer at
+        // len-4 misreads it: an Elsevier-produced journal shifted the
+        // 4-byte Adler-32 window one byte late over a trailing 0x0A and
+        // every page after the first failed to decode.
+        //
+        // The Adler-32 trailer is therefore not verified at all: the
+        // inflater's structural checks (Huffman validity, block types,
+        // stored-block complements, back-reference bounds) remain strict and
+        // catch real corruption, while a wrong, truncated, or junk-followed
+        // trailer after a structurally sound stream never fails the decode —
+        // matching Acrobat, pdf.js, PDFium, and mutool, all of which open
+        // such files.
         int payloadStart = 2;
-        int payloadEnd = compressed.Length - 4;
 
-        if (payloadEnd <= payloadStart)
+        if (compressed.Length <= payloadStart)
         {
-            throw new FilterException(FilterName, "Stream too short to contain DEFLATE payload and Adler-32 checksum.");
+            throw new FilterException(FilterName, "Stream too short to contain a DEFLATE payload.");
         }
 
-        // Inflate the DEFLATE payload.
-        DeflateInflater inflater = new DeflateInflater(compressed, payloadStart, payloadEnd - payloadStart);
+        // Inflate the DEFLATE payload; the inflater stops at the final block
+        // and ignores whatever follows it.
+        DeflateInflater inflater = new DeflateInflater(
+            compressed, payloadStart, compressed.Length - payloadStart);
         byte[] decompressed = inflater.Inflate();
-
-        // Verify Adler-32 checksum (big-endian, RFC 1950 §2.2).
-        uint expectedChecksum =
-            ((uint)compressed[payloadEnd] << 24) |
-            ((uint)compressed[payloadEnd + 1] << 16) |
-            ((uint)compressed[payloadEnd + 2] << 8) |
-            compressed[payloadEnd + 3];
-
-        uint actualChecksum = Adler32.Compute(decompressed);
-
-        if (actualChecksum != expectedChecksum)
-        {
-            throw new FilterException(FilterName,
-                $"Adler-32 checksum mismatch. Expected 0x{expectedChecksum:X8}, got 0x{actualChecksum:X8}.");
-        }
 
         // Apply predictor reversal if specified.
         byte[] result = ApplyPredictorReversal(decompressed, decodeParms);

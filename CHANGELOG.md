@@ -10,6 +10,31 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.18.1] - 2026-10-14
+
+A hotfix: FlateDecode failed on real-world PDFs whose streams carry bytes
+after the zlib data (PDF-12, Chuvadi Reader).
+
+### Fixed
+- **FlateDecode trailing-byte tolerance.** The decoder located the Adler-32
+  trailer at the last 4 bytes of the stream buffer, so a stream with trailing
+  bytes after the zlib data (an EOL before `endstream`, producer padding, or
+  a truncated trailer) misread the checksum and threw
+  `FilterException: Adler-32 checksum mismatch` — an Elsevier journal rendered
+  page 1 only, with every later page failing on a trailing `0x0A`. The DEFLATE
+  payload now ends where the final block ends, and the Adler-32 trailer is
+  advisory: a wrong, truncated, or junk-followed trailer after a structurally
+  sound stream no longer fails the decode, matching Acrobat, pdf.js, PDFium,
+  and mutool. Structural corruption (invalid block types, broken Huffman
+  codes, out-of-range back-references, truncated payloads) still throws.
+
+### Changed
+- A FlateDecode stream that inflates cleanly but carries a corrupt Adler-32
+  trailer now decodes successfully instead of throwing. The checksum was the
+  only detector for corruption that leaves the DEFLATE structure valid; that
+  detection is traded for opening the files every mainstream viewer opens.
+
+---
 ## [3.18.0] - 2026-10-14
 
 A backlog-drain release: one large PR closing the verified-open items of the

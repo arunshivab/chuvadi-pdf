@@ -231,13 +231,28 @@ public sealed class DeflateFilterTests
     [Fact]
     public void Decode_CorruptedPayload_ThrowsFilterException()
     {
-        byte[] original = Encoding.UTF8.GetBytes("Hello World");
+        // 0x07 = BFINAL=1, BTYPE=3 (reserved) — structurally invalid DEFLATE.
+        // Structural corruption (invalid block types, broken Huffman codes,
+        // out-of-range back-references, truncation) still throws; only the
+        // advisory Adler-32 trailer is lenient (see the PDF-12 tests below).
+        byte[] invalidBlockType = [0x78, 0x9C, 0x07];
+
+        Action act = () => Pipeline.Decode("FlateDecode", invalidBlockType);
+        act.Should().Throw<FilterException>();
+    }
+
+    [Fact]
+    public void Decode_TruncatedPayload_ThrowsFilterException()
+    {
+        // Cutting the stream inside the DEFLATE payload is a structural
+        // error (unexpected end of stream), not a trailer problem.
+        byte[] original = Encoding.UTF8.GetBytes("Hello World truncated");
         byte[] compressed = ZlibCompress(original);
 
-        // Corrupt the compressed payload (not header, not checksum).
-        compressed[5] ^= 0xFF;
+        byte[] truncated = new byte[6];
+        Array.Copy(compressed, truncated, truncated.Length);
 
-        Action act = () => Pipeline.Decode("FlateDecode", compressed);
+        Action act = () => Pipeline.Decode("FlateDecode", truncated);
         act.Should().Throw<FilterException>();
     }
 
@@ -345,23 +360,12 @@ public sealed class DeflateFilterTests
         decoded.Should().Equal([1, 2, 3, 4, 6, 8]);
     }
 
-    // ── Adler32 checksum (verified indirectly — Adler32 is internal) ──────
-
-    [Fact]
-    public void Adler32_ChecksumMismatch_ThrowsFilterException()
-    {
-        // Adler32 is internal — tested by corrupting the checksum trailer
-        // and verifying the decoder detects the mismatch.
-        byte[] original = Encoding.UTF8.GetBytes("checksum test");
-        byte[] compressed = ZlibCompress(original);
-
-        // The last 4 bytes are the Adler-32 checksum. Corrupt one byte.
-        compressed[compressed.Length - 1] ^= 0xFF;
-
-        Action act = () => Pipeline.Decode("FlateDecode", compressed);
-        act.Should().Throw<FilterException>()
-            .WithMessage("*checksum*");
-    }
+    // ── Adler-32 trailer leniency (PDF-12) ────────────────────────────────
+    // The DEFLATE payload ends where the final block says it ends; whatever
+    // follows (a correct trailer, a corrupt one, a truncated one, or an EOL
+    // before "endstream") never fails a structurally sound decode. Structural
+    // corruption inside the payload still throws (see
+    // Decode_CorruptedPayload_ThrowsFilterException above).
 
     [Fact]
     public void Adler32_ValidChecksum_DecodesSuccessfully()
@@ -370,6 +374,72 @@ public sealed class DeflateFilterTests
         byte[] original = Encoding.UTF8.GetBytes("Mark Adler");
         byte[] compressed = ZlibCompress(original);
         byte[] decoded = Pipeline.Decode("FlateDecode", compressed);
+        decoded.Should().Equal(original);
+    }
+
+    [Fact]
+    public void Decode_CorruptChecksumTrailer_IsLenientAndDecodes()
+    {
+        // The data inflates with a consistent structure; a wrong trailer is a
+        // producer bug every mainstream viewer tolerates, so the decode
+        // succeeds with the correct content.
+        byte[] original = Encoding.UTF8.GetBytes("checksum test");
+        byte[] compressed = ZlibCompress(original);
+
+        // The last 4 bytes are the Adler-32 checksum. Corrupt one byte.
+        compressed[compressed.Length - 1] ^= 0xFF;
+
+        byte[] decoded = Pipeline.Decode("FlateDecode", compressed);
+        decoded.Should().Equal(original);
+    }
+
+    [Fact]
+    public void Decode_TrailingNewlineAfterTrailer_Decodes()
+    {
+        // PDF-12 regression: Elsevier journals carry 0x0A after the zlib
+        // data. A buffer-anchored trailer read misparsed the checksum one
+        // byte late ("Expected 0x7B25270A, got 0xD17B2527") and failed every
+        // page after the first.
+        byte[] original = Encoding.UTF8.GetBytes("Elsevier page content");
+        byte[] compressed = ZlibCompress(original);
+
+        byte[] withNewline = new byte[compressed.Length + 1];
+        Array.Copy(compressed, withNewline, compressed.Length);
+        withNewline[compressed.Length] = 0x0A;
+
+        byte[] decoded = Pipeline.Decode("FlateDecode", withNewline);
+        decoded.Should().Equal(original);
+    }
+
+    [Fact]
+    public void Decode_TrailingCrLfAndJunkAfterTrailer_Decodes()
+    {
+        // Any amount of trailing junk after the final DEFLATE block is
+        // ignored (CRLF, repeated EOLs, stray delimiter bytes).
+        byte[] original = Encoding.UTF8.GetBytes("trailing junk tolerance");
+        byte[] compressed = ZlibCompress(original);
+
+        byte[] junk = [0x0D, 0x0A, 0x0D, 0x0A, 0x3E, 0x3E];
+        byte[] withJunk = new byte[compressed.Length + junk.Length];
+        Array.Copy(compressed, withJunk, compressed.Length);
+        Array.Copy(junk, 0, withJunk, compressed.Length, junk.Length);
+
+        byte[] decoded = Pipeline.Decode("FlateDecode", withJunk);
+        decoded.Should().Equal(original);
+    }
+
+    [Fact]
+    public void Decode_TruncatedChecksumTrailer_Decodes()
+    {
+        // A stream cut inside the 4-byte trailer still holds the complete
+        // DEFLATE payload; the decode succeeds with the full content.
+        byte[] original = Encoding.UTF8.GetBytes("truncated trailer");
+        byte[] compressed = ZlibCompress(original);
+
+        byte[] truncated = new byte[compressed.Length - 2];
+        Array.Copy(compressed, truncated, truncated.Length);
+
+        byte[] decoded = Pipeline.Decode("FlateDecode", truncated);
         decoded.Should().Equal(original);
     }
 }
