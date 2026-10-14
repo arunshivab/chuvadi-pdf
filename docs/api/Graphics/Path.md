@@ -118,6 +118,23 @@ Path Ellipse(double cx, double cy, double rx, double ry)
 
 Appends an ellipse approximated by four cubic Bezier curves. The Bezier approximation constant k ≈ 0.5523 is industry standard.
 
+### `ArrowHead`
+
+```csharp
+Path ArrowHead(PointF tail, PointF tip, double headLength, double headWidth)
+```
+
+Appends a closed triangular arrowhead pointing at `tip` along the direction from `tail` (geometry from `ArrowGeometry.HeadPoints`). A zero-length arrow appends nothing.
+
+**Parameters**
+
+- `tail` — The start of the arrow shaft.
+- `tip` — The point the arrowhead touches.
+- `headLength` — Distance from the tip to the head's base.
+- `headWidth` — Full width of the head's base.
+
+**Returns:** This path, for chaining.
+
 ### `Clear`
 
 ```csharp

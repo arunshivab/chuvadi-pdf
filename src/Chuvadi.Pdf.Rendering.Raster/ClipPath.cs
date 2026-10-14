@@ -45,9 +45,33 @@ public readonly struct ClipPath
         Rule = rule;
     }
 
+    /// <summary>
+    /// Initialises a <see cref="ClipPath"/> whose region is the area painted
+    /// by stroking <paramref name="path"/> with <paramref name="stroke"/>
+    /// (used to paint a stroke with a pattern: the pattern is clipped to the
+    /// stroke's outline). The region is evaluated with the non-zero rule.
+    /// </summary>
+    /// <param name="path">The stroked path geometry in PDF user space.</param>
+    /// <param name="stroke">The stroke style (width in PDF user-space units).</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="path"/> or <paramref name="stroke"/> is null.
+    /// </exception>
+    public ClipPath(Path path, StrokeStyle stroke)
+    {
+        Path = path ?? throw new ArgumentNullException(nameof(path));
+        Stroke = stroke ?? throw new ArgumentNullException(nameof(stroke));
+        Rule = FillRule.NonZeroWinding;
+    }
+
     /// <summary>Gets the clip path geometry in PDF user space.</summary>
     public Path Path { get; }
 
     /// <summary>Gets the fill rule used to evaluate the clip region.</summary>
     public FillRule Rule { get; }
+
+    /// <summary>
+    /// Gets the stroke style when the clip region is the stroke outline of
+    /// <see cref="Path"/>, or null for an ordinary area clip.
+    /// </summary>
+    public StrokeStyle? Stroke { get; }
 }

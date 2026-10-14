@@ -98,6 +98,14 @@ double Scale => Dpi / 72.0
 
 Computes the scale factor from PDF points to device pixels for this DPI.
 
+### `ApplyPageRotation`
+
+```csharp
+bool ApplyPageRotation
+```
+
+Gets or initialises whether the page's own `/Rotate` entry is applied, so the page renders upright the way PDF viewers display it. It adds to `Rotation`. Default: false (the page renders in its unrotated user space, as in earlier releases).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/RenderOptions.cs`](../../../src/Chuvadi.Pdf.Rendering/RenderOptions.cs)_

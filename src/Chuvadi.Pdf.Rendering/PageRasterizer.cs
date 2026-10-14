@@ -91,6 +91,21 @@ public sealed class PageRasterizer
     {
         ArgumentNullException.ThrowIfNull(page);
 
+        int rotation = _options.Rotation;
+        if (_options.ApplyPageRotation)
+        {
+            // A malformed /Rotate that is not a multiple of 90 contributes its
+            // nearest lower multiple rather than failing the render.
+            int pageRotate = page.Rotate - (page.Rotate % 90);
+            rotation = RenderOptions.NormalizeRotation(rotation + pageRotate, nameof(RenderOptions.Rotation));
+        }
+
+        return RotateClockwise(RasterizeUpright(page), rotation);
+    }
+
+    // Renders the page in its unrotated user space (the historical output).
+    private PixelBuffer RasterizeUpright(PdfPage page)
+    {
         int s = _options.SuperSample > 1 ? _options.SuperSample : 1;
 
         if (s == 1)
@@ -105,6 +120,8 @@ public sealed class PageRasterizer
             Background = _options.Background,
             FlatnessTolerance = _options.FlatnessTolerance,
             SuperSample = 1,
+            AntiAlias = _options.AntiAlias,
+            GammaCorrect = _options.GammaCorrect,
             Hinting = _options.Hinting,
             AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
         };
@@ -136,6 +153,37 @@ public sealed class PageRasterizer
         PageRasterizer painter = new PageRasterizer(_objects, options);
         painter.PaintDisplayList(list, buffer, pageH, Transform.Identity);
         return buffer;
+    }
+
+    // Exact pixel rotation (no resampling) for the clockwise view rotation.
+    private static PixelBuffer RotateClockwise(PixelBuffer src, int rotation)
+    {
+        if (rotation == 0)
+        {
+            return src;
+        }
+
+        int w = src.Width;
+        int h = src.Height;
+        bool swap = rotation == 90 || rotation == 270;
+        PixelBuffer dst = new PixelBuffer(swap ? h : w, swap ? w : h);
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                (byte b, byte g, byte r, byte a) = src.GetPixelBgra(x, y);
+                (int dx, int dy) = rotation switch
+                {
+                    90 => (h - 1 - y, x),
+                    180 => (w - 1 - x, h - 1 - y),
+                    _ => (y, w - 1 - x),
+                };
+                dst.SetPixelBgra(dx, dy, b, g, r, a);
+            }
+        }
+
+        return dst;
     }
 
     private static PixelBuffer Downsample(PixelBuffer src, int dstW, int dstH, int s)
@@ -1148,7 +1196,27 @@ public sealed class PageRasterizer
         foreach (ClipPath clip in clips)
         {
             GraphicsPath device = UserSpacePathToDevice(clip.Path, pageHeight, outerTransform);
-            deviceClips.Add(flattener.Flatten(device));
+            List<List<PointF>> flattened = flattener.Flatten(device);
+
+            if (clip.Stroke is StrokeStyle stroke)
+            {
+                // A stroke-outline clip (pattern-painted stroke): the region is
+                // the stroke's painted area, expanded exactly as a stroke op is
+                // (device width, at least one pixel).
+                StrokeStyle deviceStyle = new StrokeStyle
+                {
+                    Width = Math.Max(1.0, stroke.Width * _options.Scale),
+                    Cap = stroke.Cap,
+                    Join = stroke.Join,
+                    MiterLimit = stroke.MiterLimit,
+                    DashPattern = stroke.DashPattern,
+                    DashOffset = stroke.DashOffset,
+                    Color = stroke.Color,
+                };
+                flattened = _stroke.Expand(flattened, deviceStyle);
+            }
+
+            deviceClips.Add(flattened);
             rules.Add(clip.Rule);
         }
 

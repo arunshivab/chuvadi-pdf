@@ -60,6 +60,12 @@ public static class PageCropper
         // by a Scrub crop because they lie entirely outside the crop box; these
         // objects are omitted from the output so their content does not leak.
         private readonly HashSet<int> _droppedObjects = new HashSet<int>();
+
+        // Objects reachable from a scrubbed page's ORIGINAL dictionary. After
+        // scrubbing, any of them no longer reachable from the catalog (a
+        // replaced image or form, its masks and resources) is omitted from the
+        // output — otherwise its full, uncropped content stays in the file.
+        private readonly HashSet<int> _scrubCandidates = new HashSet<int>();
         private int _nextObjectNumber;
 
         internal Worker(PdfDocument document, IReadOnlyList<PageCrop> crops)
@@ -131,7 +137,14 @@ public static class PageCropper
             }
 
             all.AddRange(_extraObjects);
-            PdfWriter.Write(output, all, BuildTrailer(catalogId));
+
+            PdfDictionary trailer = BuildTrailer(catalogId);
+            if (_scrubCandidates.Count > 0)
+            {
+                all = OmitUnreachableCandidates(all, trailer);
+            }
+
+            PdfWriter.Write(output, all, trailer);
         }
 
         private void ProcessPage(int pageIndex, PdfObjectId pageId, PageCrop crop)
@@ -142,16 +155,20 @@ public static class PageCropper
 
             if (crop.Mode == PageCropMode.Scrub)
             {
-                byte[] decoded = DecodePageContent(pageDict);
-                PdfPrimitive? resPrim = pageDict.GetAs<PdfPrimitive>(PdfName.Resources);
-                PdfDictionary? resources = resPrim is null ? null : _store.Resolve(resPrim) as PdfDictionary;
-                PageScrubber.ScrubResult result = PageScrubber.Scrub(
-                    decoded, cropBox.X, cropBox.Y, cropBox.Right, cropBox.Top, resources, _store);
+                CollectReachable(pageDict, _scrubCandidates, skipParent: true);
 
-                if (result.NewXObjects.Count > 0)
-                {
-                    RegisterXObjects(newPage, resources, result.NewXObjects);
-                }
+                byte[] decoded = DecodePageContent(pageDict);
+
+                // Resources may be inherited from the page tree (§7.7.3.4).
+                PdfDictionary? resources = _document.Pages[pageIndex].Resources;
+                PageScrubber.ScrubResult result = PageScrubber.Scrub(
+                    decoded, cropBox.X, cropBox.Y, cropBox.Right, cropBox.Top, resources, _store, Allocate);
+
+                // Keep only the XObjects the scrubbed content still invokes,
+                // plus the cropped/scrubbed replacements.
+                newPage.Set(
+                    PdfName.Resources,
+                    PageScrubber.BuildScrubbedResources(resources, result, _store, Allocate));
 
                 PdfArray scrubContents = new PdfArray([]);
                 scrubContents.Add(new PdfReference(NextStreamFromBytes(result.Content)));
@@ -307,31 +324,6 @@ public static class PageCropper
             PdfObjectId id = NextId();
             _extraObjects.Add(new PdfIndirectObject(id, new PdfStream(dict, bytes)));
             return id;
-        }
-
-        private void RegisterXObjects(
-            PdfDictionary newPage, PdfDictionary? resources,
-            List<(string Name, PdfStream Stream)> xobjs)
-        {
-            PdfDictionary resDict = resources is null
-                ? new PdfDictionary()
-                : ObjectImporter.CopyDictionary(resources);
-
-            PdfPrimitive? xobjPrim = resDict.GetAs<PdfPrimitive>(PdfName.Intern("XObject"));
-            PdfDictionary xobjDict =
-                (xobjPrim is not null && _store.Resolve(xobjPrim) is PdfDictionary existing)
-                    ? ObjectImporter.CopyDictionary(existing)
-                    : new PdfDictionary();
-
-            foreach ((string name, PdfStream stream) in xobjs)
-            {
-                PdfObjectId id = NextId();
-                _extraObjects.Add(new PdfIndirectObject(id, stream));
-                xobjDict.Set(PdfName.Intern(name), new PdfReference(id));
-            }
-
-            resDict.Set(PdfName.Intern("XObject"), xobjDict);
-            newPage.Set(PdfName.Resources, resDict);
         }
 
         // Collects the object numbers of every annotation that SURVIVES in the
@@ -537,6 +529,126 @@ public static class PageCropper
         private PdfObjectId NextId()
         {
             return new PdfObjectId(_nextObjectNumber++, 0);
+        }
+
+        // Registers a new stream object and returns a reference to it.
+        private PdfReference Allocate(PdfStream stream)
+        {
+            PdfObjectId id = NextId();
+            _extraObjects.Add(new PdfIndirectObject(id, stream));
+            return new PdfReference(id);
+        }
+
+        // Adds every object number reachable from a primitive (through
+        // references, dictionaries, arrays and stream dictionaries). The page's
+        // /Parent link is skipped so the walk stays within the page's own graph.
+        private void CollectReachable(PdfPrimitive root, HashSet<int> into, bool skipParent)
+        {
+            Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                PdfPrimitive current = pending.Pop();
+                switch (current)
+                {
+                    case PdfReference r:
+                        if (into.Add(r.ObjectId.ObjectNumber))
+                        {
+                            PdfPrimitive target = _store.Resolve(r);
+                            if (target is not PdfNull)
+                            {
+                                pending.Push(target);
+                            }
+                        }
+
+                        break;
+                    case PdfDictionary d:
+                        foreach (PdfName key in d.Keys)
+                        {
+                            if (skipParent && ReferenceEquals(current, root) && key.Value == "Parent")
+                            {
+                                continue;
+                            }
+
+                            pending.Push(d[key]);
+                        }
+
+                        break;
+                    case PdfArray a:
+                        for (int i = 0; i < a.Count; i++)
+                        {
+                            pending.Push(a[i]);
+                        }
+
+                        break;
+                    case PdfStream st:
+                        pending.Push(st.Dictionary);
+                        break;
+                }
+            }
+        }
+
+        // Drops scrub candidates that the output no longer reaches from the
+        // trailer (catalog and info). Shared objects still used elsewhere —
+        // another page, an annotation, the outline — remain reachable and stay.
+        private List<PdfIndirectObject> OmitUnreachableCandidates(
+            List<PdfIndirectObject> objects, PdfDictionary trailer)
+        {
+            Dictionary<int, PdfPrimitive> byNumber = new Dictionary<int, PdfPrimitive>();
+            foreach (PdfIndirectObject obj in objects)
+            {
+                byNumber[obj.Id.ObjectNumber] = obj.Value;
+            }
+
+            HashSet<int> reachable = new HashSet<int>();
+            Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+            pending.Push(trailer);
+            while (pending.Count > 0)
+            {
+                PdfPrimitive current = pending.Pop();
+                switch (current)
+                {
+                    case PdfReference r:
+                        if (reachable.Add(r.ObjectId.ObjectNumber)
+                            && byNumber.TryGetValue(r.ObjectId.ObjectNumber, out PdfPrimitive? target))
+                        {
+                            pending.Push(target);
+                        }
+
+                        break;
+                    case PdfDictionary d:
+                        foreach (PdfName key in d.Keys)
+                        {
+                            pending.Push(d[key]);
+                        }
+
+                        break;
+                    case PdfArray a:
+                        for (int i = 0; i < a.Count; i++)
+                        {
+                            pending.Push(a[i]);
+                        }
+
+                        break;
+                    case PdfStream st:
+                        pending.Push(st.Dictionary);
+                        break;
+                }
+            }
+
+            List<PdfIndirectObject> kept = new List<PdfIndirectObject>(objects.Count);
+            foreach (PdfIndirectObject obj in objects)
+            {
+                int n = obj.Id.ObjectNumber;
+                if (_scrubCandidates.Contains(n) && !reachable.Contains(n))
+                {
+                    continue;
+                }
+
+                kept.Add(obj);
+            }
+
+            return kept;
         }
     }
 }

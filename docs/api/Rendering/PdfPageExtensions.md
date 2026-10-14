@@ -20,6 +20,26 @@ static PageDisplayList BuildDisplayList(this PdfDocument document, int pageIndex
 
 Builds a `PageDisplayList` for the given page index.
 
+### `HasDrawableContent`
+
+__static__
+
+```csharp
+static bool HasDrawableContent(this PdfDocument document, int pageIndex)
+```
+
+Returns whether page `pageIndex` paints anything visible (text, paths, images or shadings, including form XObjects and annotation appearances). See `PageContentInventory`.
+
+### `GetContentInventory`
+
+__static__
+
+```csharp
+static PageContentInventory GetContentInventory(this PdfDocument document, int pageIndex)
+```
+
+Returns what page `pageIndex` paints, by category. See `PageContentInventory`.
+
 ### `GetTextRuns`
 
 __static__

@@ -27,6 +27,15 @@ Initialises a `ClipPath` with a path and a fill rule.
 - `path` — The clip path geometry in PDF user space.
 - `rule` — The fill rule used to evaluate the clip region. <exception cref="ArgumentNullException"> Thrown when `path` is null. </exception>
 
+### `ClipPath(Path path, StrokeStyle stroke)`
+
+Initialises a `ClipPath` whose region is the area painted by stroking `path` with `stroke` (used to paint a stroke with a pattern: the pattern is clipped to the stroke's outline). The region is evaluated with the non-zero rule.
+
+**Parameters**
+
+- `path` — The stroked path geometry in PDF user space.
+- `stroke` — The stroke style (width in PDF user-space units). <exception cref="ArgumentNullException"> Thrown when `path` or `stroke` is null. </exception>
+
 ## Properties
 
 ### `Path`
@@ -44,6 +53,14 @@ FillRule Rule
 ```
 
 Gets the fill rule used to evaluate the clip region.
+
+### `Stroke`
+
+```csharp
+StrokeStyle? Stroke
+```
+
+Gets the stroke style when the clip region is the stroke outline of `Path`, or null for an ordinary area clip.
 
 ---
 

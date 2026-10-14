@@ -41,6 +41,27 @@ internal sealed class SvgWriter
         _coordFormat = "0." + new string('#', precision);
     }
 
+    internal void StartSvg(double width, double height, int rotation)
+    {
+        // Clockwise view rotation: the canvas takes the rotated size and one
+        // outer group maps page space (y-down) into it.
+        bool swap = rotation == 90 || rotation == 270;
+        StartSvg(swap ? height : width, swap ? width : height);
+        string? matrix = rotation switch
+        {
+            90 => $"matrix(0 1 -1 0 {F(height)} 0)",
+            180 => $"matrix(-1 0 0 -1 {F(width)} {F(height)})",
+            270 => $"matrix(0 -1 1 0 0 {F(width)})",
+            _ => null,
+        };
+
+        if (matrix is not null)
+        {
+            _body.Append("<g transform=\"").Append(matrix).Append("\">");
+            _openElements.Push("g");
+        }
+    }
+
     internal void StartSvg(double width, double height)
     {
         _body.Append("<svg xmlns=\"http://www.w3.org/2000/svg\" ");
@@ -126,6 +147,28 @@ internal sealed class SvgWriter
         }
 
         _body.Append('>');
+    }
+
+    /// <summary>
+    /// Opens an inline <c>&lt;defs&gt;&lt;g id=…&gt;</c> holding content that is
+    /// only drawn through <see cref="EmitUse"/> references.
+    /// </summary>
+    internal void OpenDefinitionGroup(string id)
+    {
+        _body.Append("<defs><g id=\"").Append(EscapeXml(id)).Append("\">");
+    }
+
+    /// <summary>Closes a group opened by <see cref="OpenDefinitionGroup"/>.</summary>
+    internal void CloseDefinitionGroup()
+    {
+        _body.Append("</g></defs>");
+    }
+
+    /// <summary>Draws a reference to a defined group under a transform.</summary>
+    internal void EmitUse(string id, string transform)
+    {
+        _body.Append("<use xlink:href=\"#").Append(EscapeXml(id)).Append("\" transform=\"")
+            .Append(EscapeXml(transform)).Append("\"/>");
     }
 
     /// <summary>Closes a <c>&lt;mask&gt;</c> element opened by <see cref="OpenMask"/>.</summary>

@@ -37,6 +37,16 @@ internal sealed class BuilderState
     // (Tiling patterns are not painted in this pipeline — deferred.)
     internal PdfPrimitive? FillShadingPattern { get; set; }
     internal AffineMatrix FillPatternMatrix { get; set; } = AffineMatrix.Identity;
+
+    // PatternType 1 (tiling) fill pattern selected by scn /Name: the cell
+    // stream, its pattern-to-page matrix (pattern /Matrix composed with the
+    // pattern's parent default space), and the underlying colour of an
+    // uncoloured (PaintType 2) pattern.
+    internal PdfStream? FillTilingPattern { get; set; }
+
+    internal AffineMatrix FillTilingMatrix { get; set; } = AffineMatrix.Identity;
+
+    internal PdfColor? FillTilingColor { get; set; }
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -151,6 +161,9 @@ internal sealed class BuilderState
         Type3 = Type3,
         FillShadingPattern = FillShadingPattern,
         FillPatternMatrix = FillPatternMatrix,
+        FillTilingPattern = FillTilingPattern,
+        FillTilingMatrix = FillTilingMatrix,
+        FillTilingColor = FillTilingColor,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

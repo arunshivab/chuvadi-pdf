@@ -53,6 +53,74 @@ public static class HeaderFooter
         ApplyWithReflow(output, document, options, targets, total);
     }
 
+    /// <summary>
+    /// Resolves exactly what <see cref="Apply"/> would draw on one page — each
+    /// non-empty header/footer segment with its token-substituted text and its
+    /// placement — without writing a document. A live preview built from these
+    /// segments matches the output byte-for-byte in text and position, because
+    /// <see cref="Apply"/> draws from the same computation.
+    /// </summary>
+    /// <param name="document">The document the options will be applied to.</param>
+    /// <param name="pageIndex">Zero-based page to resolve.</param>
+    /// <param name="options">The header/footer options.</param>
+    /// <returns>
+    /// The segments in drawing order (header left/centre/right, then footer).
+    /// Empty when <paramref name="pageIndex"/> is not targeted by
+    /// <see cref="HeaderFooterOptions.PageIndices"/> or nothing resolves to text.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="document"/> or <paramref name="options"/> is null.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="pageIndex"/> is outside the document.
+    /// </exception>
+    public static IReadOnlyList<HeaderFooterSegment> ResolveSegments(
+        PdfDocument document, int pageIndex, HeaderFooterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(options);
+
+        int total = document.PageCount;
+        if (pageIndex < 0 || pageIndex >= total)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pageIndex), pageIndex, "Page index is outside the document.");
+        }
+
+        if (!ResolveTargets(options.PageIndices, total).Contains(pageIndex))
+        {
+            return Array.Empty<HeaderFooterSegment>();
+        }
+
+        return ComputeSegments(options, document.Pages[pageIndex].MediaBox, pageIndex, total);
+    }
+
+    /// <summary>
+    /// Substitutes header/footer tokens in a single template for one page,
+    /// using the same context <see cref="Apply"/> builds (1-based page number,
+    /// total pages, <see cref="HeaderFooterOptions.FilePath"/> and
+    /// <see cref="HeaderFooterOptions.Timestamp"/>).
+    /// </summary>
+    /// <param name="template">Template text containing tokens such as <c>{page}</c>.</param>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <param name="totalPages">Total page count.</param>
+    /// <param name="options">Supplies the file path and timestamp tokens.</param>
+    /// <returns>The substituted text.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="template"/> or <paramref name="options"/> is null.
+    /// </exception>
+    public static string ResolveText(string template, int pageIndex, int totalPages, HeaderFooterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(options);
+        return StampTokens.Resolve(template, BuildContext(options, pageIndex, totalPages));
+    }
+
+    private static StampContext BuildContext(HeaderFooterOptions options, int pageIndex, int total)
+    {
+        return new StampContext(pageIndex + 1, total, options.FilePath, options.Timestamp);
+    }
+
     // Overlay model: draw header/footer in margins via the stamp writer; no
     // content movement.
     private static void ApplyOverlay(
@@ -164,17 +232,31 @@ public static class HeaderFooter
     }
 
     // Builds the text-show fragment for header and footer segments on one page.
+    // Drawn from ComputeSegments so ResolveSegments previews match exactly.
     private static string BuildBandFragments(
         HeaderFooterOptions options,
         PdfPage page,
         int pageIndex,
         int total)
     {
-        PdfRectangle mediaBox = page.MediaBox;
-        StampContext ctx = new StampContext(
-            pageIndex + 1, total, options.FilePath, options.Timestamp);
-
         StringBuilder sb = new StringBuilder();
+        foreach (HeaderFooterSegment segment in ComputeSegments(options, page.MediaBox, pageIndex, total))
+        {
+            Transform placement = new Transform(1, 0, 0, 1, segment.X, segment.BaselineY);
+            sb.Append(StampText.BuildShowText(segment.Text, placement, options.FontSize, options.Color));
+        }
+
+        return sb.ToString();
+    }
+
+    private static List<HeaderFooterSegment> ComputeSegments(
+        HeaderFooterOptions options,
+        PdfRectangle mediaBox,
+        int pageIndex,
+        int total)
+    {
+        StampContext ctx = BuildContext(options, pageIndex, total);
+        List<HeaderFooterSegment> segments = new List<HeaderFooterSegment>();
 
         if (options.Header is BandText header)
         {
@@ -182,39 +264,41 @@ public static class HeaderFooter
             // page top, Y2), per HeaderBaselineOffset's contract, so the header
             // text sits inside the band rather than below it (mirrors the footer).
             double y = mediaBox.Y2 + options.HeaderBaselineOffset;
-            AppendSegments(sb, header, ctx, mediaBox, y, options);
+            AddBand(segments, HeaderFooterBand.Header, header, ctx, mediaBox, y, options);
         }
 
         if (options.Footer is BandText footer)
         {
             double y = mediaBox.Y1 + options.FooterBaselineOffset;
-            AppendSegments(sb, footer, ctx, mediaBox, y, options);
+            AddBand(segments, HeaderFooterBand.Footer, footer, ctx, mediaBox, y, options);
         }
 
-        return sb.ToString();
+        return segments;
     }
 
-    private static void AppendSegments(
-        StringBuilder sb,
-        BandText band,
+    private static void AddBand(
+        List<HeaderFooterSegment> segments,
+        HeaderFooterBand band,
+        BandText text,
         StampContext ctx,
         PdfRectangle mediaBox,
         double baselineY,
         HeaderFooterOptions options)
     {
-        AppendOne(sb, band.Left, ctx, mediaBox, baselineY, options, Align.Left);
-        AppendOne(sb, band.Center, ctx, mediaBox, baselineY, options, Align.Center);
-        AppendOne(sb, band.Right, ctx, mediaBox, baselineY, options, Align.Right);
+        AddOne(segments, band, text.Left, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Left);
+        AddOne(segments, band, text.Center, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Center);
+        AddOne(segments, band, text.Right, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Right);
     }
 
-    private static void AppendOne(
-        StringBuilder sb,
+    private static void AddOne(
+        List<HeaderFooterSegment> segments,
+        HeaderFooterBand band,
         string? template,
         StampContext ctx,
         PdfRectangle mediaBox,
         double baselineY,
         HeaderFooterOptions options,
-        Align align)
+        HeaderFooterAlignment align)
     {
         if (template is null)
         {
@@ -230,13 +314,12 @@ public static class HeaderFooter
         double width = StampText.MeasureWidth(text, options.FontSize);
         double x = align switch
         {
-            Align.Left => mediaBox.X1 + options.MarginX,
-            Align.Center => mediaBox.X1 + (mediaBox.Width - width) / 2.0,
+            HeaderFooterAlignment.Left => mediaBox.X1 + options.MarginX,
+            HeaderFooterAlignment.Center => mediaBox.X1 + (mediaBox.Width - width) / 2.0,
             _ => mediaBox.X2 - options.MarginX - width,
         };
 
-        Transform placement = new Transform(1, 0, 0, 1, x, baselineY);
-        sb.Append(StampText.BuildShowText(text, placement, options.FontSize, options.Color));
+        segments.Add(new HeaderFooterSegment(band, align, text, x, baselineY, width, options.FontSize));
     }
 
     // Heuristic intrusion probe: scans the page's content-stream numbers paired
@@ -305,12 +388,5 @@ public static class HeaderFooter
         }
 
         return new HashSet<int>(pageIndices);
-    }
-
-    private enum Align
-    {
-        Left,
-        Center,
-        Right,
     }
 }

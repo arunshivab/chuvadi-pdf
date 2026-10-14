@@ -90,6 +90,14 @@ double RasterFallbackDpi
 
 Resolution used when `DensityFallback` is `SvgDensityFallback.Rasterize` and the budget is exceeded. Default: 150 DPI.
 
+### `ApplyPageRotation`
+
+```csharp
+bool ApplyPageRotation
+```
+
+Whether the page's own `/Rotate` entry is applied, so the page renders upright the way PDF viewers display it. It adds to `Rotation`. Default: false (the page renders in its unrotated user space, as in earlier releases).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Svg/SvgExportOptions.cs`](../../../src/Chuvadi.Pdf.Svg/SvgExportOptions.cs)_

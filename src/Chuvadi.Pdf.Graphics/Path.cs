@@ -170,6 +170,31 @@ public sealed class Path
             .ClosePath();
     }
 
+    /// <summary>
+    /// Appends a closed triangular arrowhead pointing at <paramref name="tip"/>
+    /// along the direction from <paramref name="tail"/> (geometry from
+    /// <see cref="ArrowGeometry.HeadPoints"/>). A zero-length arrow appends
+    /// nothing.
+    /// </summary>
+    /// <param name="tail">The start of the arrow shaft.</param>
+    /// <param name="tip">The point the arrowhead touches.</param>
+    /// <param name="headLength">Distance from the tip to the head's base.</param>
+    /// <param name="headWidth">Full width of the head's base.</param>
+    /// <returns>This path, for chaining.</returns>
+    public Path ArrowHead(PointF tail, PointF tip, double headLength, double headWidth)
+    {
+        PointF[] head = ArrowGeometry.HeadPoints(tail, tip, headLength, headWidth);
+        if (head.Length == 0)
+        {
+            return this;
+        }
+
+        return MoveTo(head[0])
+            .LineTo(head[1])
+            .LineTo(head[2])
+            .ClosePath();
+    }
+
     /// <summary>Removes all segments and resets the current point.</summary>
     public void Clear()
     {

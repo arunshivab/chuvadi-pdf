@@ -102,6 +102,11 @@ public sealed class SvgRenderer
 
     // Soft-mask (/SMask) defs emitted this render, keyed by mask identity, plus
     // a counter for unique <mask> ids.
+    // Tiling-pattern cells emitted this render (one <defs> group per cell),
+    // compared by reference.
+    private readonly Dictionary<PageDisplayList, string> _emittedTileCells =
+        new(ReferenceEqualityComparer.Instance);
+
     private readonly Dictionary<SoftMaskInfo, string> _emittedMasks =
         new(ReferenceEqualityComparer.Instance);
     private int _maskSeq;
@@ -205,6 +210,7 @@ public sealed class SvgRenderer
         ArgumentNullException.ThrowIfNull(list);
         _emittedMasks.Clear();
         _maskSeq = 0;
+        _emittedTileCells.Clear();
 
         // Density handling: an explicit tolerance always applies; exceeding the
         // vector-op budget forces at least the automatic tolerance (the
@@ -217,7 +223,7 @@ public sealed class SvgRenderer
         }
 
         SvgWriter w = new(_opts.Precision);
-        w.StartSvg(list.MediaWidth, list.MediaHeight);
+        w.StartSvg(list.MediaWidth, list.MediaHeight, EffectiveRotation(list));
 
         // Opaque page sheet behind all content (unflipped coordinates), so the
         // SVG matches the rasteriser's white paper and composites consistently
@@ -240,6 +246,20 @@ public sealed class SvgRenderer
         RenderOpList(list, w, familyByBaseFont, resolver);
         w.CloseGroup();
         return w.ToSvgString();
+    }
+
+    // The clockwise view rotation for this page: the requested rotation, plus
+    // the page's own /Rotate when ApplyPageRotation is set. A malformed /Rotate
+    // that is not a multiple of 90 contributes its nearest lower multiple.
+    private int EffectiveRotation(PageDisplayList list)
+    {
+        int rotation = _opts.Rotation;
+        if (_opts.ApplyPageRotation)
+        {
+            rotation += list.Rotation - (list.Rotation % 90);
+        }
+
+        return ((rotation % 360) + 360) % 360;
     }
 
     // Counts the vector painting operations (paths and shadings) in a display
@@ -274,7 +294,7 @@ public sealed class SvgRenderer
         string dataUrl = "data:image/png;base64," + Convert.ToBase64String(png);
 
         SvgWriter w = new(_opts.Precision);
-        w.StartSvg(list.MediaWidth, list.MediaHeight);
+        w.StartSvg(list.MediaWidth, list.MediaHeight, EffectiveRotation(list));
         if (_opts.Background is ColorF background)
         {
             w.EmitPageBackground(list.MediaWidth, list.MediaHeight, ToHexColor(background));
@@ -411,6 +431,13 @@ public sealed class SvgRenderer
                     EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
                     CloseWrappers(w, wrapSh);
                     break;
+                case TilingPatternOp tp:
+                    FlushPendingFillRect(ref pendingFillRect, w);
+                    FlushPendingPathBatch(ref pendingBatch, w);
+                    int wrapTp = OpenOpWrappers(tp, w, familyByBaseFont, resolver);
+                    EmitTilingPattern(tp, w, familyByBaseFont, resolver);
+                    CloseWrappers(w, wrapTp);
+                    break;
                 case Type3UseOp t3:
                     FlushPendingFillRect(ref pendingFillRect, w);
                     FlushPendingPathBatch(ref pendingBatch, w);
@@ -458,6 +485,29 @@ public sealed class SvgRenderer
         for (int i = 0; i < count; i++)
         {
             w.CloseGroup();
+        }
+    }
+
+    // Tiling pattern: the cell is rendered once into an inline <defs> group
+    // (per cell display list), then referenced by one <use> per tile. The
+    // enclosing clip-path group (from the filled path's ClipOp) confines the
+    // tiles; the page-flip group maps the PDF-space tile transforms.
+    private void EmitTilingPattern(
+        TilingPatternOp op, SvgWriter w,
+        Dictionary<string, string> familyByBaseFont, IPdfObjectResolver? resolver)
+    {
+        if (!_emittedTileCells.TryGetValue(op.Cell, out string? id))
+        {
+            id = "tcell" + _emittedTileCells.Count.ToString(CultureInfo.InvariantCulture);
+            _emittedTileCells[op.Cell] = id;
+            w.OpenDefinitionGroup(id);
+            RenderOpList(op.Cell, w, familyByBaseFont, resolver);
+            w.CloseDefinitionGroup();
+        }
+
+        foreach (AffineMatrix tile in op.Tiles)
+        {
+            w.EmitUse(id, tile.ToSvgMatrix());
         }
     }
 

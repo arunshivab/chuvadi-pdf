@@ -143,6 +143,72 @@ public static class PageStamper
     }
 
     /// <summary>
+    /// Places any number of stamps — on any mix of target pages, from any mix
+    /// of source documents and pages, each with its own transform, placement
+    /// and opacity — in a single pass, writing the document once. Stamps on the
+    /// same page are drawn in list order (later stamps paint over earlier ones
+    /// within the same <see cref="StampPlacement"/>). Each distinct source page
+    /// is imported once as a form XObject and shared across every stamp that
+    /// uses it.
+    /// </summary>
+    /// <param name="output">The stream to write the stamped PDF to.</param>
+    /// <param name="target">The document to stamp.</param>
+    /// <param name="stamps">The stamps to place.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when an argument or any stamp's source is null.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when a stamp's target page index is outside the document, its
+    /// source page index is outside the source document, or its opacity is
+    /// outside [0, 1].
+    /// </exception>
+    public static void PlaceMany(Stream output, PdfDocument target, IReadOnlyList<StampRequest> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(stamps);
+
+        // Validate everything before writing anything.
+        foreach (StampRequest request in stamps)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(request.Source, nameof(stamps));
+
+            if (request.TargetPageIndex < 0 || request.TargetPageIndex >= target.PageCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stamps), request.TargetPageIndex, "Target page index is outside the document.");
+            }
+
+            if (request.SourcePageIndex < 0 || request.SourcePageIndex >= request.Source.PageCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stamps), request.SourcePageIndex, "Source page index is outside the source document.");
+            }
+
+            if (!(request.Opacity >= 0.0 && request.Opacity <= 1.0))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stamps), request.Opacity, "Opacity must be in [0, 1].");
+            }
+        }
+
+        StampDocument document = new StampDocument(target);
+        foreach (StampRequest request in stamps)
+        {
+            document.AddStamp(
+                request.TargetPageIndex,
+                request.Source,
+                request.SourcePageIndex,
+                request.Transform,
+                request.Placement,
+                request.Opacity);
+        }
+
+        document.Write(output);
+    }
+
+    /// <summary>
     /// Holds a target document plus pending stamps, imports source pages as
     /// form XObjects, and rewrites the affected pages.
     /// </summary>
@@ -193,7 +259,8 @@ public static class PageStamper
             PdfDocument source,
             int sourcePageIndex,
             Transform transform,
-            StampPlacement placement)
+            StampPlacement placement,
+            double opacity = 1.0)
         {
             PdfObjectId formId = ImportForm(source, sourcePageIndex);
 
@@ -203,7 +270,7 @@ public static class PageStamper
                 _pageStamps[targetPageIndex] = stamps;
             }
 
-            stamps.Add(new Stamp(formId, transform, placement));
+            stamps.Add(new Stamp(formId, transform, placement, opacity));
         }
 
         internal void AddRemoval(int targetPageIndex, string stampName)
@@ -384,6 +451,8 @@ public static class PageStamper
                 ? ObjectImporter.CopyDictionary(page.Resources)
                 : new PdfDictionary();
             PdfDictionary xobjects = GetOrCreateSubdict(resources, "XObject");
+            PdfDictionary? extGStates = null;
+            int nextGsIndex = 0;
 
             // Drop the XObject resource entries of any removed stamps.
             if (removals is not null)
@@ -411,7 +480,25 @@ public static class PageStamper
                     + (baseIndex + i).ToString(CultureInfo.InvariantCulture);
                 xobjects.Set(PdfName.Intern(name), new PdfReference(stamp.FormId));
 
-                byte[] op = BuildStampOperators(stamp.Transform, name);
+                string? gsName = null;
+                if (stamp.Opacity < 1.0)
+                {
+                    if (extGStates is null)
+                    {
+                        extGStates = GetOrCreateSubdict(resources, "ExtGState");
+                        nextGsIndex = NextFreeIndex(extGStates, "CvStampGs");
+                    }
+
+                    gsName = "CvStampGs" + nextGsIndex.ToString(CultureInfo.InvariantCulture);
+                    nextGsIndex++;
+                    PdfDictionary gs = new PdfDictionary();
+                    gs.Set(PdfName.Type, PdfName.Intern("ExtGState"));
+                    gs.Set(PdfName.Intern("ca"), new PdfReal(stamp.Opacity));
+                    gs.Set(PdfName.Intern("CA"), new PdfReal(stamp.Opacity));
+                    extGStates.Set(PdfName.Intern(gsName), gs);
+                }
+
+                byte[] op = BuildStampOperators(stamp.Transform, name, gsName);
                 PdfObjectId opId = NextId();
                 PdfDictionary opDict = new PdfDictionary();
                 opDict.Set(PdfName.Length, op.Length);
@@ -428,6 +515,11 @@ public static class PageStamper
             }
 
             resources.Set(PdfName.XObject, xobjects);
+            if (extGStates is not null)
+            {
+                resources.Set(PdfName.Intern("ExtGState"), extGStates);
+            }
+
             pageDict.Set(PdfName.Resources, resources);
 
             // Isolate existing content in its own q/Q scope so stamps are not
@@ -490,17 +582,24 @@ public static class PageStamper
         // forms never collide with stamps from a previous Place call.
         private static int NextFreeStampIndex(PdfDictionary xobjects)
         {
+            return NextFreeIndex(xobjects, "CvStamp");
+        }
+
+        // Smallest N such that prefix+N is not a key in the dictionary (and no
+        // larger prefix+M exists), so new entries never collide with old ones.
+        private static int NextFreeIndex(PdfDictionary dictionary, string prefix)
+        {
             int next = 0;
-            foreach (PdfName key in xobjects.Keys)
+            foreach (PdfName key in dictionary.Keys)
             {
                 string value = key.Value;
-                if (!value.StartsWith("CvStamp", StringComparison.Ordinal))
+                if (!value.StartsWith(prefix, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 if (int.TryParse(
-                        value.AsSpan(7),
+                        value.AsSpan(prefix.Length),
                         NumberStyles.None,
                         CultureInfo.InvariantCulture,
                         out int index)
@@ -513,10 +612,15 @@ public static class PageStamper
             return next;
         }
 
-        private static byte[] BuildStampOperators(Transform t, string name)
+        private static byte[] BuildStampOperators(Transform t, string name, string? gsName)
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("q\n");
+            if (gsName is not null)
+            {
+                sb.Append('/').Append(gsName).Append(" gs\n");
+            }
+
             sb.Append(Num(t.A)).Append(' ').Append(Num(t.B)).Append(' ')
                 .Append(Num(t.C)).Append(' ').Append(Num(t.D)).Append(' ')
                 .Append(Num(t.E)).Append(' ').Append(Num(t.F)).Append(" cm\n");
@@ -641,11 +745,12 @@ public static class PageStamper
 
     private readonly struct Stamp
     {
-        internal Stamp(PdfObjectId formId, Transform transform, StampPlacement placement)
+        internal Stamp(PdfObjectId formId, Transform transform, StampPlacement placement, double opacity)
         {
             FormId = formId;
             Transform = transform;
             Placement = placement;
+            Opacity = opacity;
         }
 
         internal PdfObjectId FormId { get; }
@@ -653,5 +758,7 @@ public static class PageStamper
         internal Transform Transform { get; }
 
         internal StampPlacement Placement { get; }
+
+        internal double Opacity { get; }
     }
 }

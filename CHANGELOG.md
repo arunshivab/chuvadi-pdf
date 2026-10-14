@@ -10,6 +10,85 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.19.0] - 2026-10-14
+
+The "Reader delegation" release: library capabilities the Chuvadi Reader asked
+for (PDF-04..PDF-08, PDF-11), pattern completeness, and a scrub/redaction
+leak fix.
+
+### Security
+- **Scrub crop no longer leaves the original page content in the file.**
+  Through 3.18.1, `PageCropMode.Scrub` rewrote the page content stream but
+  kept the original content-stream objects in the output, so off-box text was
+  hidden from viewers yet still recoverable from the file bytes; image and form
+  XObjects crossing or outside the crop box likewise stayed in `/Resources`
+  with their full content. Scrub now prunes every resource the scrubbed
+  content no longer uses and omits all objects of the original page that the
+  output no longer reaches (objects shared with other pages, annotations or
+  the outline stay). **Documents cropped with Scrub before 3.19 should be
+  treated as not redacted and re-cropped.**
+- **Redaction removes images from the file, not just the page.** An image
+  XObject whose `Do` was removed by a redaction box stayed in `/Resources` and
+  in the output; it is now pruned from the rewritten page's (and form's)
+  resources and omitted when nothing else uses it. Shared images still used
+  on other pages are kept.
+
+### Added
+- **Arrows (PDF-04).** `PageBuilder.DrawArrow` (shaft plus filled head at the
+  end, start or both), `Path.ArrowHead`, and the pure `ArrowGeometry`
+  (`HeadPoints`, `ShaftEnd`, defaults) so on-screen previews use exactly the
+  geometry the PDF gets.
+- **Multi-stamp in one pass with opacity (PDF-05).** `PageStamper.PlaceMany`
+  places any number of `StampRequest`s (any target pages, any sources,
+  per-stamp transform, placement and `Opacity`) and writes once; translucent
+  stamps get collision-free `CvStampGsN` ExtGStates.
+- **Imposition parity (PDF-06).** `Imposition.PlanNUp` / `PlanBooklet`
+  return the exact sheet geometry (`ImpositionSheet` / `ImpositionPlacement`)
+  that `NUp` / `Booklet` write; `Imposition.FitTransform` fits any page's
+  visible area into a rectangle.
+- **Display rotation (PDF-07).** `SvgExportOptions.Rotation` and
+  `RenderOptions.Rotation` (clockwise 0/90/180/270; the canvas or buffer takes
+  the rotated size), plus opt-in `ApplyPageRotation` on both to honour the
+  page's own `/Rotate`. Defaults are unchanged.
+- **Content inventory (PDF-08).** `PageContentInventory` (text runs, paths,
+  images, shadings; `HasDrawableContent`, `HasVisibleText`) built from the
+  render display list, so forms, Type 3 glyphs, annotation appearances and
+  invisible text are classified exactly as rendered; extensions
+  `document.HasDrawableContent(i)` and `document.GetContentInventory(i)`.
+- **Header/footer preview (PDF-11).** `HeaderFooter.ResolveSegments`
+  returns each segment exactly as `Apply` draws it (token-substituted text,
+  x, baseline, width) and `HeaderFooter.ResolveText` resolves one template;
+  `Apply` now draws from the same computation, so preview equals output.
+- **Tiling patterns in SVG.** PatternType 1 fills render in the SVG pipeline
+  (cell defined once in `<defs>`, one `<use>` per tile, clipped to the
+  path); uncoloured patterns paint in the `scn` colour. New
+  `TilingPatternOp` in the text display list.
+- **Pattern strokes in raster.** A pattern set as the stroke colour (`SCN`)
+  now paints the stroke area (tiling and shading patterns), via a new
+  stroke-outline `ClipPath` kind.
+
+### Fixed
+- **Imposition ignored the crop box and `/Rotate`.** Cells were sized from
+  the MediaBox while the placed form used the CropBox (and its origin
+  offset), and rotated pages were placed sideways; placement now fits the
+  visible, upright page exactly like a viewer shows it. Invalid geometry
+  (margins or gutters that leave no cell, negative spacing, an empty source)
+  is rejected with `ArgumentException` instead of producing blank sheets.
+- **Scrub crop of images crossing the crop box** is now byte-level for both
+  inline images and image XObjects: the in-box pixel sub-rectangle is copied
+  at the sample level (any filter — including CCITT and JBIG2 scans — any
+  bits per component, colour space and `/Decode` preserved, `/SMask` and
+  `/Mask` cropped alongside); rotated or skewed placements blank every pixel
+  whose cell lies outside the box. An image that cannot be decoded for
+  cropping is removed (over-redaction in doubt), where 3.18 kept it whole.
+- **Scrub crop of form XObjects** recurses into the form in its own space
+  instead of keeping it verbatim; scrubbed forms get pruned resources.
+- **Scrub crop of pages with inherited `/Resources`** keeps resolving the
+  inherited fonts and XObjects.
+- Shading patterns used inside form XObjects map through the form's space.
+- Supersampled rasterization now honours `AntiAlias` and `GammaCorrect`.
+
+---
 ## [3.18.1] - 2026-10-14
 
 A hotfix: FlateDecode failed on real-world PDFs whose streams carry bytes

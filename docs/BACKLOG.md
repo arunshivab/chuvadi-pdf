@@ -112,11 +112,27 @@ Shipped in v3.18.0:
   conversion, form-XObject recursion, and quote-operator text routing all
   landed with the rendering consolidation (the open items were stale).
 
+Shipped in v3.19.0 (Reader delegation):
+- **Scrub/redaction leak fix** — Scrub prunes unused resources and omits the
+  original page's unreachable objects (content streams, replaced images and
+  forms); redaction omits images whose `Do` it removed.
+- **Scrub residuals closed** — inline and XObject images crossing the box are
+  cropped at the sample level (any filter/bpc/colour space, masks included,
+  rotated placements blanked); forms are scrubbed recursively; inherited
+  resources resolve. (Was open item 7.)
+- **Tiling patterns in SVG** and **pattern strokes in raster** (were open
+  items 2 and 3).
+- **Reader asks** — arrows (PDF-04), `PageStamper.PlaceMany` with opacity
+  (PDF-05), imposition crop/rotate parity + plans (PDF-06), SVG/raster view
+  rotation with opt-in `/Rotate` (PDF-07), `PageContentInventory` (PDF-08),
+  header/footer `ResolveSegments` (PDF-11). PDF-10 closed as correct
+  behaviour (the null-geometry dataset nodes have no template fields).
+
 ---
 
 ## Open roadmap
 
-Status verified against code at v3.18.0. Items are independent and may be
+Status verified against code at v3.19.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -124,13 +140,16 @@ re-ordered.
 through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
 
 ### Rendering follow-ups
-**2. Tiling patterns in the SVG pipeline.** Shading patterns (PatternType 2)
-ship in SVG (clip + gradient); tiling patterns (PatternType 1) still fall back
-to the previous flat colour. Needs `<pattern>` element emission or cell
-pre-rasterization.
+**2. Pattern strokes in the SVG pipeline.** Pattern fills (tiling and shading)
+ship in SVG and pattern strokes ship in raster; a pattern set as the STROKE
+colour in SVG still falls back to the previous flat colour. Needs the stroke
+outline as an SVG mask or clip.
 
-**3. Stroke patterns in the raster pipeline.** Fill patterns ship; a pattern
-set as the STROKE colour still suppresses the stroke (legacy behaviour).
+**3. Page boxes in the default renderers.** SVG and raster render the
+MediaBox in unrotated user space; `/Rotate` is applied only with the opt-in
+`ApplyPageRotation` (3.19), and the CropBox is not used to bound the output.
+A default switch would change every existing caller's output, so it waits for
+a major version.
 
 ### Fonts
 **4. Autohinter X-axis stem fitting.** Optional X-axis fitting for mono/low-DPI
@@ -153,10 +172,11 @@ DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
 
 ### Scrub-crop residuals
-**7. Partial-overlap inline images under Scrub.** A fully off-box inline image
-is removed; one OVERLAPPING the crop box is kept verbatim (visually confined
-by the backstop clip), so its off-box bytes remain. Byte-level cropping needs
-inline-image re-encoding.
+**7. Pattern and shading content under Scrub.** Images and forms are now
+cropped or scrubbed; a pattern cell's content and a shading that overlaps
+the crop box are still kept whole (confined by the backstop clip), so their
+off-box portion remains in the file. An annotation appearance partially
+overlapping the box is likewise kept whole.
 
 **8. Downsample placements inside nested forms.** The compression-path
 placement scanner walks page content only. Since 3.18's verification round,
@@ -190,6 +210,13 @@ dependency; still needs bitonal detection + G4 and JBIG2 encode (#10).
 **13. SSIM perceptual target.** SSIM *measurement* exists in the benchmark
 suite; the optimisation *target knob* ("smallest file at visually lossless")
 that would drive the image-recoding stack does not.
+
+### Tooling
+**15. API doc generator skips some multi-line signatures.**
+`tools/gen_api_docs.py` omits a few public methods whose declaration spans
+several lines (for example `PageBuilder.DrawLine`, `DrawText`, `DrawArrow`).
+The CI check compares against the same generator, so it stays green;
+fixing the parser regenerates many pages, so it is its own small PR.
 
 ### Application-adjacent
 **14. Raster 4-point perspective deskew.** A Chuvadi Reader "Bench"

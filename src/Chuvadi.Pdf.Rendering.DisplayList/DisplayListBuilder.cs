@@ -80,6 +80,18 @@ public static class DisplayListBuilder
 
         private PdfDictionary? _resources;
         private int _formDepth;
+
+        // Default coordinate space of the content stream currently being walked
+        // (identity for the page; the form space at Do for a form XObject).
+        // Pattern /Matrix maps pattern space into this space (§8.7.2).
+        private AffineMatrix _patternBaseCtm = AffineMatrix.Identity;
+
+        // Tiling-pattern cells nest (a cell may paint with a pattern); the
+        // depth guard stops self-referencing patterns recursing without bound.
+        private int _patternDepth;
+        private const int MaxPatternDepth = 8;
+        private const int MaxTilingTiles = 4096;
+        private readonly Dictionary<(PdfStream Cell, PdfColor? Color), PageDisplayList> _tilingCellCache = new();
         private const int MaxFormDepth = 12;
 
         // Type 3 font state: parsed fonts per resource key, cached glyph
@@ -357,6 +369,7 @@ public static class DisplayListBuilder
             _stack.Current.FillColor = PdfColor.Gray(gray);
             _stack.Current.FillColorSpace = null;
             _stack.Current.FillShadingPattern = null;
+            _stack.Current.FillTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -374,6 +387,7 @@ public static class DisplayListBuilder
             _stack.Current.FillColor = PdfColor.Rgb(r, g, b);
             _stack.Current.FillColorSpace = null;
             _stack.Current.FillShadingPattern = null;
+            _stack.Current.FillTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -391,6 +405,7 @@ public static class DisplayListBuilder
             _stack.Current.FillColor = PdfColor.Cmyk(c, m, y, k);
             _stack.Current.FillColorSpace = null;
             _stack.Current.FillShadingPattern = null;
+            _stack.Current.FillTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -420,6 +435,7 @@ public static class DisplayListBuilder
             {
                 _stack.Current.FillColorSpace = space;
                 _stack.Current.FillShadingPattern = null;
+                _stack.Current.FillTilingPattern = null;
             }
         }
 
@@ -475,6 +491,7 @@ public static class DisplayListBuilder
             {
                 _stack.Current.FillColor = color;
                 _stack.Current.FillShadingPattern = null;
+                _stack.Current.FillTilingPattern = null;
             }
         }
 
@@ -497,6 +514,9 @@ public static class DisplayListBuilder
             BuilderState current = _stack.Current;
             current.FillShadingPattern = null;
             current.FillPatternMatrix = AffineMatrix.Identity;
+            current.FillTilingPattern = null;
+            current.FillTilingMatrix = AffineMatrix.Identity;
+            current.FillTilingColor = null;
 
             if (_resources is null
                 || !_resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv))
@@ -513,13 +533,13 @@ public static class DisplayListBuilder
 
             PdfPrimitive resolved = _doc.Objects.Resolve(entry);
             PdfDictionary? dict = resolved as PdfDictionary ?? (resolved as PdfStream)?.Dictionary;
-            if (dict is null
-                || IntOf(dict, "PatternType", 0) != 2
-                || !dict.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shadingRef))
+            if (dict is null)
             {
                 return;
             }
 
+            // Pattern space maps into the default space of the content stream
+            // that uses it (the page, or the form at its Do).
             AffineMatrix matrix = AffineMatrix.Identity;
             if (dict.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mPrim)
                 && _doc.Objects.Resolve(mPrim) is PdfArray arr
@@ -528,6 +548,29 @@ public static class DisplayListBuilder
                 matrix = new AffineMatrix(
                     NumOf(arr[0]), NumOf(arr[1]), NumOf(arr[2]),
                     NumOf(arr[3]), NumOf(arr[4]), NumOf(arr[5]));
+            }
+
+            matrix = matrix.Multiply(_patternBaseCtm);
+            int patternType = IntOf(dict, "PatternType", 0);
+
+            if (patternType == 1 && resolved is PdfStream cell)
+            {
+                current.FillTilingPattern = cell;
+                current.FillTilingMatrix = matrix;
+                current.FillTilingColor = components.Length switch
+                {
+                    1 => PdfColor.Gray(components[0]),
+                    3 => PdfColor.Rgb(components[0], components[1], components[2]),
+                    4 => PdfColor.Cmyk(components[0], components[1], components[2], components[3]),
+                    _ => null,
+                };
+                return;
+            }
+
+            if (patternType != 2
+                || !dict.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shadingRef))
+            {
+                return;
             }
 
             current.FillShadingPattern = shadingRef;
@@ -1227,6 +1270,29 @@ public static class DisplayListBuilder
         {
             if (!s.HasCurrentPath) { return; }
 
+            // A PatternType 1 (tiling) fill pattern replays its cell across the
+            // path, clipped to it. A combined fill-and-stroke still strokes the
+            // outline afterwards. PDF 32000-1:2008 §8.7.3.
+            if (mode != PaintMode.Stroke && s.FillTilingPattern is not null)
+            {
+                Add(new TransformOp { Push = true, Ctm = s.Ctm });
+                Add(new ClipOp
+                {
+                    Geometry = s.CurrentPath,
+                    FillRule = rule,
+                });
+                EmitTilingPattern(s);
+                Add(new TransformOp { Push = false, Ctm = s.Ctm });
+
+                if (mode == PaintMode.FillAndStroke)
+                {
+                    EmitPathCore(s, PaintMode.Stroke, rule);
+                }
+
+                s.ResetPath();
+                return;
+            }
+
             // A PatternType 2 (shading) fill pattern paints its gradient
             // clipped to the path instead of a flat fill. A combined
             // fill-and-stroke still strokes the outline afterwards.
@@ -1252,6 +1318,198 @@ public static class DisplayListBuilder
 
             EmitPathCore(s, mode, rule);
             s.ResetPath();
+        }
+
+        // Builds the tile placements covering the current path and emits one
+        // TilingPatternOp. Cells are built once per (cell, underlying colour).
+        private void EmitTilingPattern(BuilderState s)
+        {
+            PdfStream cell = s.FillTilingPattern!;
+            PdfDictionary dict = cell.Dictionary;
+            if (_patternDepth >= MaxPatternDepth
+                || !dict.TryGetValue(PdfName.Intern("BBox"), out PdfPrimitive? bboxPrim)
+                || _doc.Objects.Resolve(bboxPrim) is not PdfArray bboxArr
+                || bboxArr.Count < 4)
+            {
+                return;
+            }
+
+            double bx0 = NumOf(bboxArr[0]);
+            double by0 = NumOf(bboxArr[1]);
+            double cellWidth = Math.Abs(NumOf(bboxArr[2]) - bx0);
+            double cellHeight = Math.Abs(NumOf(bboxArr[3]) - by0);
+            double xStep = Math.Abs(StepOf(dict, "XStep", cellWidth));
+            double yStep = Math.Abs(StepOf(dict, "YStep", cellHeight));
+            if (xStep < 1e-6) { xStep = cellWidth; }
+            if (yStep < 1e-6) { yStep = cellHeight; }
+            if (xStep < 1e-6 || yStep < 1e-6)
+            {
+                return;
+            }
+
+            AffineMatrix patternToPage = s.FillTilingMatrix;
+            if (!TryInvert(patternToPage, out AffineMatrix pageToPattern)
+                || !TryPathBounds(s.CurrentPath, out double minPx, out double minPy, out double maxPx, out double maxPy))
+            {
+                return;
+            }
+
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+            foreach ((double cx, double cy) in new[] { (minPx, minPy), (maxPx, minPy), (maxPx, maxPy), (minPx, maxPy) })
+            {
+                (double px, double py) = pageToPattern.Apply(cx, cy);
+                minX = Math.Min(minX, px);
+                minY = Math.Min(minY, py);
+                maxX = Math.Max(maxX, px);
+                maxY = Math.Max(maxY, py);
+            }
+
+            int i0 = (int)Math.Floor((minX - bx0 - cellWidth) / xStep) + 1;
+            int i1 = (int)Math.Ceiling((maxX - bx0) / xStep);
+            int j0 = (int)Math.Floor((minY - by0 - cellHeight) / yStep) + 1;
+            int j1 = (int)Math.Ceiling((maxY - by0) / yStep);
+            long tileCount = (long)(i1 - i0 + 1) * (j1 - j0 + 1);
+            if (tileCount <= 0 || tileCount > MaxTilingTiles)
+            {
+                return;
+            }
+
+            bool uncoloured = IntOf(dict, "PaintType", 1) == 2;
+            PdfColor? underlying = uncoloured ? (s.FillTilingColor ?? s.FillColor) : null;
+            PageDisplayList? cellList = GetOrBuildTilingCell(cell, underlying);
+            if (cellList is null || cellList.Count == 0)
+            {
+                return;
+            }
+
+            List<AffineMatrix> tiles = new List<AffineMatrix>((int)tileCount);
+            for (int j = j0; j <= j1; j++)
+            {
+                for (int i = i0; i <= i1; i++)
+                {
+                    tiles.Add(new AffineMatrix(1, 0, 0, 1, i * xStep, j * yStep).Multiply(patternToPage));
+                }
+            }
+
+            Add(new TilingPatternOp(cellList, tiles)
+            {
+                BlendMode = s.BlendMode,
+                SoftMask = s.SoftMask,
+            });
+        }
+
+        private PageDisplayList? GetOrBuildTilingCell(PdfStream cell, PdfColor? underlying)
+        {
+            if (_tilingCellCache.TryGetValue((cell, underlying), out PageDisplayList? cached))
+            {
+                return cached;
+            }
+
+            byte[] content;
+            try
+            {
+                content = ContentStreamLoader.Decode(cell);
+            }
+            catch
+            {
+                return null;
+            }
+
+            Builder sub = new Builder(_doc);
+            sub._patternDepth = _patternDepth + 1;
+            sub._resources = _resources;
+            if (cell.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
+                && _doc.Objects.ResolveAs<PdfDictionary>(rp) is PdfDictionary cellResources)
+            {
+                sub._resources = cellResources;
+            }
+
+            if (underlying is PdfColor colour)
+            {
+                // Uncoloured (PaintType 2): the cell paints in the colour given
+                // with scn; its own colour operators are ignored (§8.7.3.3).
+                sub._stack.Current.FillColor = colour;
+                sub._stack.Current.StrokeColor = colour;
+                sub._suppressColorOps = true;
+            }
+
+            if (content.Length > 0)
+            {
+                ContentStreamWalker.Walk(content, sub);
+            }
+
+            PageDisplayList list = new PageDisplayList(sub._ops, 0, 0, 0);
+            _tilingCellCache[(cell, underlying)] = list;
+            return list;
+        }
+
+        private double StepOf(PdfDictionary dict, string key, double fallback)
+        {
+            if (dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v)
+                && _doc.Objects.Resolve(v) is PdfInteger or PdfReal)
+            {
+                return NumOf(v);
+            }
+
+            return fallback;
+        }
+
+        private static bool TryInvert(AffineMatrix m, out AffineMatrix inverse)
+        {
+            // Row-vector convention: x' = A x + C y + E, y' = B x + D y + F.
+            double det = (m.A * m.D) - (m.B * m.C);
+            if (Math.Abs(det) < 1e-12 || double.IsNaN(det))
+            {
+                inverse = AffineMatrix.Identity;
+                return false;
+            }
+
+            inverse = new AffineMatrix(
+                m.D / det,
+                -m.B / det,
+                -m.C / det,
+                m.A / det,
+                ((m.C * m.F) - (m.D * m.E)) / det,
+                ((m.B * m.E) - (m.A * m.F)) / det);
+            return true;
+        }
+
+        // Bounds of every point in the path (curve control points included, a
+        // conservative superset of the curve itself).
+        private static bool TryPathBounds(
+            PathGeometry path, out double minX, out double minY, out double maxX, out double maxY)
+        {
+            minX = double.PositiveInfinity;
+            minY = double.PositiveInfinity;
+            maxX = double.NegativeInfinity;
+            maxY = double.NegativeInfinity;
+            foreach (PathSegment seg in path.Segments)
+            {
+                switch (seg.Command)
+                {
+                    case PathCommand.CubicTo:
+                        Include(seg.X1, seg.Y1, ref minX, ref minY, ref maxX, ref maxY);
+                        Include(seg.X2, seg.Y2, ref minX, ref minY, ref maxX, ref maxY);
+                        Include(seg.X3, seg.Y3, ref minX, ref minY, ref maxX, ref maxY);
+                        break;
+                    case PathCommand.MoveTo:
+                    case PathCommand.LineTo:
+                        Include(seg.X1, seg.Y1, ref minX, ref minY, ref maxX, ref maxY);
+                        break;
+                }
+            }
+
+            return minX <= maxX && minY <= maxY;
+        }
+
+        private static void Include(
+            double x, double y, ref double minX, ref double minY, ref double maxX, ref double maxY)
+        {
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
         }
 
         private void EmitPathCore(BuilderState s, PaintMode mode, FillRule rule)
@@ -1902,13 +2160,16 @@ public static class DisplayListBuilder
             }
 
             PdfDictionary? savedResources = _resources;
+            AffineMatrix savedPatternBase = _patternBaseCtm;
             SaveState();
             ConcatMatrix(a, b, c, d, e, f);
+            _patternBaseCtm = _stack.Current.Ctm;
             _resources = formResources;
             _formDepth++;
             ContentStreamWalker.Walk(formContent, this);
             _formDepth--;
             _resources = savedResources;
+            _patternBaseCtm = savedPatternBase;
             RestoreState();
         }
 
