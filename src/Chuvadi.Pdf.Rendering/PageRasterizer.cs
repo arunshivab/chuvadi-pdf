@@ -124,6 +124,8 @@ public sealed class PageRasterizer
             GammaCorrect = _options.GammaCorrect,
             Hinting = _options.Hinting,
             AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
+            IgnoreOptionalContent = _options.IgnoreOptionalContent,
+            LayerVisibility = _options.LayerVisibility,
         };
 
         PixelBuffer big = RasterizeInternal(page, hi);
@@ -143,7 +145,7 @@ public sealed class PageRasterizer
         double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
         bool lightHint = options.Hinting == HintingMode.Light;
         PageDisplayList list = DisplayListBuilder.Build(
-            page, _objects, hintScale, lightHint, options.AutohintUnhintedFonts);
+            page, _objects, options.VisibilityFor(page), hintScale, lightHint, options.AutohintUnhintedFonts);
 
         if (list.Ops.Count == 0)
         {
@@ -427,6 +429,8 @@ public sealed class PageRasterizer
             GammaCorrect = _options.GammaCorrect,
             Hinting = _options.Hinting,
             AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
+            IgnoreOptionalContent = _options.IgnoreOptionalContent,
+            LayerVisibility = _options.LayerVisibility,
         };
     }
 
@@ -438,7 +442,7 @@ public sealed class PageRasterizer
         double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
         bool lightHint = options.Hinting == HintingMode.Light;
         PageDisplayList list = DisplayListBuilder.Build(
-            page, _objects, hintScale, lightHint, options.AutohintUnhintedFonts);
+            page, _objects, options.VisibilityFor(page), hintScale, lightHint, options.AutohintUnhintedFonts);
         if (list.Ops.Count == 0)
         {
             return;
@@ -554,9 +558,202 @@ public sealed class PageRasterizer
                 case ShadeOp sh:
                     PaintShadeOp(sh, buffer, pageHeight, outerTransform, ambientClip);
                     break;
+                case TilingFillOp tf:
+                    PaintTilingFillOp(tf, buffer, pageHeight, outerTransform, ambientClip);
+                    break;
             }
         }
     }
+
+    // Largest pattern-tile bitmap side, in pixels; finer resolution than this
+    // per cell is not visible once the cell repeats thousands of times.
+    private const int MaxTileBitmapSide = 2048;
+
+    // Repeated pattern fills may cover at most this many times the output
+    // area per rasterizer, so a hostile file with thousands of full-page
+    // pattern fills cannot stall rendering; fills beyond the budget are
+    // skipped, as every such fill was before 3.21.
+    private const long RepeatedFillAreaBudget = 32;
+    private long _repeatedFillPixels;
+
+    // Paints a tiling pattern too fine to place tile by tile (3.21): the cell
+    // is rendered once into a bitmap covering one repeat period at device
+    // resolution, then every device pixel of the filled region is mapped back
+    // into pattern space, wrapped by the steps, and sampled from that bitmap.
+    // Cost scales with the output area, never with the tile count, and the
+    // continuous wrap leaves no seams. A period smaller than about a pixel
+    // collapses to the cell's average colour, which is what the eye sees.
+    private void PaintTilingFillOp(
+        TilingFillOp op, PixelBuffer buffer,
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
+    {
+        double scale = _options.Scale;
+        Transform patternToPage = op.PatternMatrix.Multiply(outerTransform);
+        Transform pageToPattern;
+        try
+        {
+            pageToPattern = patternToPage.Invert();
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+
+        // Device length of one step along each pattern axis.
+        double stepXDevice = Math.Sqrt(Square(patternToPage.A * op.XStep) + Square(patternToPage.B * op.XStep)) * scale;
+        double stepYDevice = Math.Sqrt(Square(patternToPage.C * op.YStep) + Square(patternToPage.D * op.YStep)) * scale;
+        if (!double.IsFinite(stepXDevice) || !double.IsFinite(stepYDevice))
+        {
+            return;
+        }
+
+        // Device-space bounds of the region, clipped to the buffer.
+        PointF[] corners =
+        {
+            outerTransform.TransformPoint(new PointF(op.Region.X, op.Region.Y)),
+            outerTransform.TransformPoint(new PointF(op.Region.Right, op.Region.Y)),
+            outerTransform.TransformPoint(new PointF(op.Region.Right, op.Region.Top)),
+            outerTransform.TransformPoint(new PointF(op.Region.X, op.Region.Top)),
+        };
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (PointF c in corners)
+        {
+            double dx = c.X * scale;
+            double dy = (pageHeight - c.Y) * scale;
+            minX = Math.Min(minX, dx);
+            maxX = Math.Max(maxX, dx);
+            minY = Math.Min(minY, dy);
+            maxY = Math.Max(maxY, dy);
+        }
+
+        int x0 = Math.Max(0, (int)Math.Floor(minX));
+        int y0 = Math.Max(0, (int)Math.Floor(minY));
+        int x1 = Math.Min(buffer.Width, (int)Math.Ceiling(maxX));
+        int y1 = Math.Min(buffer.Height, (int)Math.Ceiling(maxY));
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+
+        ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
+        if (clip is not null && clip.IsEmpty)
+        {
+            return;
+        }
+
+        int regionW = x1 - x0;
+        int regionH = y1 - y0;
+        _repeatedFillPixels += (long)regionW * regionH;
+        if (_repeatedFillPixels > RepeatedFillAreaBudget * buffer.Width * buffer.Height)
+        {
+            return;
+        }
+
+        bool average = stepXDevice < 2 && stepYDevice < 2;
+        int tileW = average ? 16 : (int)Math.Clamp(Math.Ceiling(stepXDevice), 1, MaxTileBitmapSide);
+        int tileH = average ? 16 : (int)Math.Clamp(Math.Ceiling(stepYDevice), 1, MaxTileBitmapSide);
+        PixelBuffer tile = RenderPatternPeriod(op, tileW, tileH);
+        if (average)
+        {
+            tile = AverageToSinglePixel(tile);
+            tileW = 1;
+            tileH = 1;
+        }
+
+        ImageFrame region = ImageFrame.Create(regionW, regionH, ImageColorFormat.Rgba32);
+        for (int py = 0; py < regionH; py++)
+        {
+            double pageY = pageHeight - ((y0 + py + 0.5) / scale);
+            for (int px = 0; px < regionW; px++)
+            {
+                PointF p = pageToPattern.TransformPoint(new PointF((x0 + px + 0.5) / scale, pageY));
+                double fu = Wrap((p.X - op.CellOriginX) / op.XStep);
+                double fv = Wrap((p.Y - op.CellOriginY) / op.YStep);
+                int tx = Math.Min(tileW - 1, (int)(fu * tileW));
+                int ty = Math.Min(tileH - 1, (int)((1.0 - fv) * tileH));
+                (byte b, byte g, byte r, byte a) = tile.GetPixelBgra(tx, ty);
+                region.Pixels.SetPixelBgra(px, py, b, g, r, a);
+            }
+        }
+
+        float[]? smask = op.SoftMask is null
+            ? null
+            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        CompositeImage(region, buffer, x0, y0, regionW, regionH, clip, 1.0, op.BlendMode, smask, buffer.Width);
+    }
+
+    // Renders one repeat period of the pattern — the window starting at the
+    // cell origin, one step wide and high — into a transparent bitmap. The
+    // cell is drawn at the neighbouring offsets too, so content reaching past
+    // a step wraps into the window as overlapping tiles would paint it.
+    private PixelBuffer RenderPatternPeriod(TilingFillOp op, int tileW, int tileH)
+    {
+        PixelBuffer tile = new PixelBuffer(tileW, tileH);
+        PageRasterizer painter = new PageRasterizer(_objects, new RenderOptions
+        {
+            Dpi = 72,
+            AntiAlias = _options.AntiAlias,
+            GammaCorrect = _options.GammaCorrect,
+            Hinting = HintingMode.Off,
+        });
+
+        double sx = tileW / op.XStep;
+        double sy = tileH / op.YStep;
+        int reachX = Math.Max(1, (int)Math.Ceiling(op.CellWidth / op.XStep));
+        int reachY = Math.Max(1, (int)Math.Ceiling(op.CellHeight / op.YStep));
+        for (int j = -reachY; j <= reachY; j++)
+        {
+            for (int i = -reachX; i <= reachX; i++)
+            {
+                Transform cellToTile = new Transform(
+                    sx, 0, 0, sy,
+                    ((i * op.XStep) - op.CellOriginX) * sx,
+                    ((j * op.YStep) - op.CellOriginY) * sy);
+                painter.PaintDisplayList(op.Cell, tile, tileH, cellToTile);
+            }
+        }
+
+        return tile;
+    }
+
+    private static PixelBuffer AverageToSinglePixel(PixelBuffer tile)
+    {
+        double b = 0, g = 0, r = 0, a = 0;
+        for (int y = 0; y < tile.Height; y++)
+        {
+            for (int x = 0; x < tile.Width; x++)
+            {
+                (byte pb, byte pg, byte pr, byte pa) = tile.GetPixelBgra(x, y);
+                double w = pa / 255.0;
+                b += pb * w;
+                g += pg * w;
+                r += pr * w;
+                a += pa;
+            }
+        }
+
+        int n = tile.Width * tile.Height;
+        PixelBuffer one = new PixelBuffer(1, 1);
+        double alphaSum = a / 255.0;
+        if (alphaSum > 0)
+        {
+            one.SetPixelBgra(
+                0, 0,
+                (byte)Math.Round(b / alphaSum), (byte)Math.Round(g / alphaSum), (byte)Math.Round(r / alphaSum),
+                (byte)Math.Round(a / n));
+        }
+
+        return one;
+    }
+
+    private static double Wrap(double value)
+    {
+        double f = value - Math.Floor(value);
+        return f >= 1.0 ? 0.0 : f;
+    }
+
+    private static double Square(double value) => value * value;
 
     // Intersects an op's own clip with the ambient (parent-of-form) clip. Both
     // are already in device space, so the combined region is their geometric

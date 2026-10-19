@@ -64,6 +64,38 @@ Returns true when the page has at least one non-empty content stream. This is a 
 
 ## Methods
 
+### `FindViewport`
+
+```csharp
+PdfViewport? FindViewport(double x, double y)
+```
+
+Returns the viewport that governs a point (default user space): the last one in `Viewports` whose region contains it, as the specification directs (later viewports are on top), or null.
+
+**Parameters**
+
+- `x` — Point x.
+- `y` — Point y.
+
+**Returns:** The viewport, or null when none contains the point.
+
+### `MeasureDistance`
+
+```csharp
+PdfMeasurement? MeasureDistance(double x1, double y1, double x2, double y2)
+```
+
+Measures the distance between two points (default user space) in the real-world units of the viewport containing both, or null when no single viewport with a rectilinear measure contains them.
+
+**Parameters**
+
+- `x1` — First point x.
+- `y1` — First point y.
+- `x2` — Second point x.
+- `y2` — Second point y.
+
+**Returns:** The measured distance, or null.
+
 ### `GetInheritedInteger`
 
 ```csharp

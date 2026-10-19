@@ -217,13 +217,19 @@ python tools/gen_api_docs.py
 | [EncryptionInfo](Documents/EncryptionInfo.md) | class | Describes the encryption properties of a `PdfDocument`. |
 | [OptionalContentGroup](Documents/OptionalContentGroup.md) | class | An Optional Content Group (OCG) — a named, toggleable layer in a PDF. |
 | [OptionalContentReader](Documents/OptionalContentReader.md) | class | Reads optional content groups (layers) from a PDF document. |
+| [OptionalContentVisibility](Documents/OptionalContentVisibility.md) | class | Decides whether optional content (layers) is visible: the document's default configuration (`/OCProperties /D`: `/BaseState`, `/ON`, `/OFF`, and the `/AS` auto-state for viewing), optionally overridden per layer name. |
 | [OptionalContentWriter](Documents/OptionalContentWriter.md) | class | Writes optional-content (layer) visibility changes to a PDF document. |
 | [PageAnnotationAppearances](Documents/PageAnnotationAppearances.md) | class | Collects the drawable annotation appearances of a page: every annotation with a resolvable normal appearance stream that is not hidden and not a popup, together with its §12.5.5 placement. |
 | [PdfDocument](Documents/PdfDocument.md) | class | Represents an opened PDF document. |
 | [PdfDocumentAsync](Documents/PdfDocumentAsync.md) | class | Async-capable entry points for `PdfDocument`. |
+| [PdfFractionFormat](Documents/PdfFractionFormat.md) | enum | How a number format displays fractional values (Table 261 `/F`). |
+| [PdfMeasure](Documents/PdfMeasure.md) | class | A measure dictionary (`/Measure`): how distances and areas in a region of a page map to real-world units — for example a 1:100 floor plan. |
+| [PdfMeasurement](Documents/PdfMeasurement.md) | struct | A measured value in a drawing's real-world units. |
+| [PdfNumberFormat](Documents/PdfNumberFormat.md) | class | One step of a measurement unit chain (a `/NumberFormat` dictionary): its label and the factor converting the previous unit into it — the first format converts default user-space units into the first display unit. |
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |
 | [PdfPageCollection](Documents/PdfPageCollection.md) | class | Provides lazy, random-access to the pages of a PDF document. |
 | [PdfRectangle](Documents/PdfRectangle.md) | struct | An immutable rectangle in PDF user space (points, 1/72 inch). |
+| [PdfViewport](Documents/PdfViewport.md) | class | A viewport (`/VP` entry): a rectangular region of a page with its own name and measurement scale. |
 | [XfaDataField](Documents/XfaDataField.md) | class | A single value drawn from the XFA `datasets` packet's data layer (`&lt;xfa:data&gt;`): the data element's path, its text value, and a best-effort widget geometry the host can use to overlay the value onto the rendered template. |
 | [XfaGeometry](Documents/XfaGeometry.md) | class | Best-effort geometry for an `XfaDataField`, taken from a matching AcroForm widget annotation's `/Rect`. |
 | [XfaKind](Documents/XfaKind.md) | enum | Classifies how a document uses XFA (XML Forms Architecture), so a consumer can tell forms that render from the page content apart from dynamic XFA that needs a dedicated processor and may otherwise appear blank. |
@@ -557,7 +563,8 @@ python tools/gen_api_docs.py
 | [TextRun](Rendering/TextRun.md) | class | A contiguous run of text on a page, with glyph-level positions for selection-overlay use cases. |
 | [TextRunExtraction](Rendering/TextRunExtraction.md) | class | Extension surface for extracting text runs from a `PageDisplayList`. |
 | [TextRunExtractor](Rendering/TextRunExtractor.md) | class | Walks a `PageDisplayList` and produces a sequence of `TextRun`s in reading order. |
-| [TilingPatternOp](Rendering/TilingPatternOp.md) | class | Paints a tiling pattern (PatternType 1): the pattern cell's content, built once as `Cell` in pattern-cell space, is placed once per entry of `Tiles` (each mapping cell space to page space). |
+| [TilingFillOp](Rendering/TilingFillOp.md) | class | Fills a region with a tiling pattern described for repetition rather than tile by tile: emitted when a fill needs more than 4,096 tiles (a fine hatch over a whole page). |
+| [TilingPatternOp](Rendering/TilingPatternOp.md) | class | Paints a tiling pattern (PatternType 1): the pattern cell's content, built once as `Cell` in pattern-cell space, repeated across the filled region. |
 | [TransformOp](Rendering/TransformOp.md) | class | Pushes or pops a graphics-state transformation matrix. |
 | [Type3Font](Rendering/Type3Font.md) | class | A parsed Type 3 font: its FontMatrix, per-code glyph content streams, the font's own /Resources, and glyph-space widths. |
 | [Type3Glyph](Rendering/Type3Glyph.md) | record struct | A single Type 3 glyph: its content stream and glyph-space width. |

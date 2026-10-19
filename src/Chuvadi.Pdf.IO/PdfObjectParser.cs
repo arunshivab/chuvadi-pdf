@@ -59,11 +59,10 @@ internal sealed class PdfObjectParser
     /// </summary>
     internal PdfIndirectObject? ScanForObject(PdfObjectId id)
     {
-        byte[] pattern = Encoding.ASCII.GetBytes(
-            id.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " "
-            + id.Generation.ToString(CultureInfo.InvariantCulture) + " obj");
-
-        List<long> hits = FindPatternOffsets(pattern);
+        // The header's three tokens may be separated by any run of PDF
+        // whitespace (§7.2.2): "12 0 obj", "12  0 obj", "12 0\nobj" and
+        // "12\r\n0 obj" are all the same definition (3.21).
+        List<long> hits = FindObjectHeaderOffsets(id.ObjectNumber, id.Generation);
 
         // Object-shaped bytes INSIDE a stream body (a decoy, or an embedded
         // PDF) must not shadow the real definition: hits inside any
@@ -127,6 +126,121 @@ internal sealed class PdfObjectParser
 
         return unterminated;
     }
+
+    // Longest whitespace run accepted between the tokens of an object header.
+    private const int MaxHeaderGap = 32;
+
+    // Finds every offset at which an object header "N G obj" starts on a token
+    // boundary, with one or more whitespace bytes (at most MaxHeaderGap)
+    // between the tokens and a non-regular byte (or the end of the file) after
+    // "obj". The generation is compared numerically, so "0" and "00" match.
+    private List<long> FindObjectHeaderOffsets(int objectNumber, int generation)
+    {
+        const int ChunkSize = 1 << 16;
+        byte[] number = Encoding.ASCII.GetBytes(objectNumber.ToString(CultureInfo.InvariantCulture));
+        int overlap = number.Length + (2 * MaxHeaderGap) + 16;
+        List<long> hits = new List<long>();
+        long length = _stream.Length;
+        byte[] buffer = new byte[ChunkSize + overlap + 1];
+
+        long position = 0;
+        while (position < length)
+        {
+            long readFrom = position == 0 ? 0 : position - 1;
+            _stream.Position = readFrom;
+            int filled = 0;
+            while (filled < buffer.Length)
+            {
+                int read = _stream.Read(buffer, filled, buffer.Length - filled);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                filled += read;
+            }
+
+            bool atEnd = readFrom + filled >= length;
+            int lead = position == 0 ? 0 : 1;
+            int scanEnd = Math.Min(filled, lead + ChunkSize);
+            for (int i = lead; i < scanEnd && i + number.Length <= filled; i++)
+            {
+                if (!MatchesAt(buffer, i, number))
+                {
+                    continue;
+                }
+
+                bool startOk = (readFrom + i == 0) || !IsRegularByte(buffer[i - 1]);
+                if (startOk && IsHeaderAt(buffer, i + number.Length, filled, atEnd, generation))
+                {
+                    long hit = readFrom + i;
+                    if (hits.Count == 0 || hits[hits.Count - 1] != hit)
+                    {
+                        hits.Add(hit);
+                    }
+                }
+            }
+
+            position += ChunkSize;
+        }
+
+        return hits;
+    }
+
+    // After the object number: whitespace+, generation digits, whitespace+,
+    // "obj", then a non-regular byte or the end of the file.
+    private static bool IsHeaderAt(byte[] buffer, int index, int filled, bool atEnd, int generation)
+    {
+        int p = SkipWhitespace(buffer, index, filled);
+        if (p < 0)
+        {
+            return false;
+        }
+
+        long value = 0;
+        int digitsStart = p;
+        while (p < filled && buffer[p] >= (byte)'0' && buffer[p] <= (byte)'9')
+        {
+            value = (value * 10) + (buffer[p] - (byte)'0');
+            if (value > int.MaxValue)
+            {
+                return false;
+            }
+
+            p++;
+        }
+
+        if (p == digitsStart || value != generation)
+        {
+            return false;
+        }
+
+        p = SkipWhitespace(buffer, p, filled);
+        if (p < 0 || p + 3 > filled
+            || buffer[p] != (byte)'o' || buffer[p + 1] != (byte)'b' || buffer[p + 2] != (byte)'j')
+        {
+            return false;
+        }
+
+        int after = p + 3;
+        return after < filled ? !IsRegularByte(buffer[after]) : atEnd;
+    }
+
+    // Skips one or more PDF whitespace bytes (at most MaxHeaderGap); returns
+    // the index after them, or -1 when there is no whitespace there.
+    private static int SkipWhitespace(byte[] buffer, int index, int filled)
+    {
+        int p = index;
+        while (p < filled && p - index < MaxHeaderGap && IsWhitespaceByte(buffer[p]))
+        {
+            p++;
+        }
+
+        return p == index || (p < filled && IsWhitespaceByte(buffer[p])) ? -1 : p;
+    }
+
+    private static bool IsWhitespaceByte(byte b) =>
+        b is 0x00 or 0x09 or 0x0A or 0x0C or 0x0D or 0x20;
 
     // Finds every offset at which the pattern occurs on a token boundary:
     // preceded by a non-digit (or the start of the file) and followed by a

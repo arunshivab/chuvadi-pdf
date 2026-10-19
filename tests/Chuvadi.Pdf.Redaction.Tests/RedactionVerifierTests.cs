@@ -180,6 +180,26 @@ public sealed class RedactionVerifierTests
     }
 
     [Fact]
+    public void Verify_SeesTextInAHiddenLayer()
+    {
+        // Hidden layers are not drawn by default, but their text is still in
+        // the file, so verification must report it.
+        List<byte[]> bodies = new List<byte[]>
+        {
+            Obj("<</Type/Catalog/Pages 2 0 R/OCProperties<</OCGs[6 0 R]/D<</OFF[6 0 R]>>>>>>"),
+            Obj("<</Type/Pages/Kids[3 0 R]/Count 1>>"),
+            Obj("<</Type/Page/Parent 2 0 R/MediaBox[0 0 400 400]/Resources<</Font<</F1 5 0 R>>"
+                + "/Properties<</L 6 0 R>>>>/Contents 4 0 R>>"),
+            Stream("/OC /L BDC BT /F1 12 Tf 300 300 Td (LAYERED) Tj ET EMC"),
+            Obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"),
+            Obj("<</Type/OCG/Name(Secret)>>"),
+        };
+        using PdfDocument doc = Open(Build(bodies));
+
+        RedactionVerifier.Verify(doc, new[] { new RedactionRect(0, Box) }).SurvivingText.Should().Be("LAYERED");
+    }
+
+    [Fact]
     public void ExtractWithin_RejectsBadArguments()
     {
         using PdfDocument doc = Open(TextPage("BT ET"));

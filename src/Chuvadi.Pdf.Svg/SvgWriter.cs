@@ -171,6 +171,33 @@ internal sealed class SvgWriter
             .Append(EscapeXml(transform)).Append("\"/>");
     }
 
+    /// <summary>
+    /// Opens an inline <c>&lt;defs&gt;&lt;pattern&gt;</c> repeating a
+    /// <paramref name="width"/> × <paramref name="height"/> window at
+    /// (<paramref name="x"/>, <paramref name="y"/>) in pattern space, mapped to
+    /// the current space by <paramref name="patternTransform"/>.
+    /// </summary>
+    internal void OpenPattern(string id, double x, double y, double width, double height, string patternTransform)
+    {
+        _body.AppendFormat(CultureInfo.InvariantCulture,
+            "<defs><pattern id=\"{0}\" patternUnits=\"userSpaceOnUse\" x=\"{1}\" y=\"{2}\" width=\"{3}\" height=\"{4}\" patternTransform=\"{5}\">",
+            EscapeXml(id), F(x), F(y), F(width), F(height), EscapeXml(patternTransform));
+    }
+
+    /// <summary>Closes a pattern opened by <see cref="OpenPattern"/>.</summary>
+    internal void ClosePattern()
+    {
+        _body.Append("</pattern></defs>");
+    }
+
+    /// <summary>Fills a rectangle with a paint server (<c>url(#id)</c>).</summary>
+    internal void EmitPatternRect(double x, double y, double width, double height, string paintId)
+    {
+        _body.AppendFormat(CultureInfo.InvariantCulture,
+            "<rect x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{3}\" fill=\"url(#{4})\"/>",
+            F(x), F(y), F(width), F(height), EscapeXml(paintId));
+    }
+
     /// <summary>Closes a <c>&lt;mask&gt;</c> element opened by <see cref="OpenMask"/>.</summary>
     internal void CloseMask()
     {

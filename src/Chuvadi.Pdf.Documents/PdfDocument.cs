@@ -40,6 +40,7 @@ namespace Chuvadi.Pdf.Documents;
 public sealed class PdfDocument : IDisposable
 {
     private readonly PdfReader _reader;
+    private OptionalContentVisibility? _defaultOptionalContent;
     private PdfPageCollection? _pages;
     private bool _disposed;
 
@@ -252,7 +253,7 @@ public sealed class PdfDocument : IDisposable
             if (_pages is null)
             {
                 PdfDictionary? pagesDict = GetPagesRoot();
-                _pages = new PdfPageCollection(pagesDict, _reader.Objects);
+                _pages = new PdfPageCollection(pagesDict, _reader.Objects, () => DefaultOptionalContent);
             }
 
             return _pages;
@@ -261,6 +262,32 @@ public sealed class PdfDocument : IDisposable
 
     /// <summary>Gets the total number of pages.</summary>
     public int PageCount => Pages.Count;
+
+    // Default-configuration layer visibility, built once on first use.
+    private OptionalContentVisibility DefaultOptionalContent
+    {
+        get
+        {
+            OptionalContentVisibility? cached = Volatile.Read(ref _defaultOptionalContent);
+            if (cached is not null)
+            {
+                return cached;
+            }
+
+            OptionalContentVisibility built;
+            try
+            {
+                built = OptionalContentVisibility.FromCatalog(Catalog, _reader.Objects);
+            }
+            catch (PdfException)
+            {
+                // Unreadable /OCProperties: show everything rather than fail.
+                built = OptionalContentVisibility.AllVisible;
+            }
+
+            return Interlocked.CompareExchange(ref _defaultOptionalContent, built, null) ?? built;
+        }
+    }
 
     // ── Document metadata ─────────────────────────────────────────────────
 
@@ -573,17 +600,21 @@ public sealed class PdfDocument : IDisposable
     public PdfReader Reader => _reader;
 
     /// <summary>
-    /// Gets warnings raised while opening the document. A non-empty list means
-    /// the file was structurally repaired during loading — for example, a
-    /// page-tree object recovered from a corrupt cross-reference table. The
-    /// document is usable, and writing it back out (merge, reorder, extract,
-    /// save) emits a clean, repaired file.
+    /// Gets the structural repairs made to the document. A non-empty list means
+    /// the file was repaired while loading — for example, a page-tree object
+    /// recovered from a corrupt cross-reference table, or an object whose
+    /// cross-reference offset was wrong (recovered by scanning, read from a
+    /// misnumbered definition, or treated as missing). Objects load lazily, so
+    /// the list can grow after open: check it after rendering, extracting or
+    /// saving, not only at open. The document is usable, and writing it back
+    /// out (merge, reorder, extract, save) emits a clean, repaired file.
     /// </summary>
     public IReadOnlyList<string> Warnings => _reader.Warnings;
 
     /// <summary>
-    /// Gets a value indicating whether the document was opened in a repaired
-    /// state. Equivalent to <see cref="Warnings"/> being non-empty.
+    /// Gets a value indicating whether the document has been repaired so far.
+    /// Equivalent to <see cref="Warnings"/> being non-empty; like it, it can
+    /// become true after open, when a damaged object is first loaded.
     /// </summary>
     public bool IsRecovered => _reader.Warnings.Count > 0;
 

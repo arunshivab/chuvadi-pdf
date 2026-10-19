@@ -71,6 +71,15 @@ public sealed class TextExtractor
         _pipeline = FilterRegistry.CreateDefaultPipeline();
     }
 
+    /// <summary>
+    /// Gets or initialises which optional-content layers are extracted.
+    /// Default (null): the page's <see cref="PdfPage.OptionalContent"/> — text
+    /// in layers hidden by the document's default configuration is left out,
+    /// as Acrobat does. Pass <see cref="OptionalContentVisibility.AllVisible"/>
+    /// to extract every layer.
+    /// </summary>
+    public OptionalContentVisibility? OptionalContent { get; init; }
+
     // ── Public API ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -87,7 +96,10 @@ public sealed class TextExtractor
 
         byte[] contentBytes = ReadContentBytes(page);
 
-        ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources);
+        ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
+        {
+            OptionalContent = VisibilityFor(page),
+        };
         List<TextFragment> fragments = contentBytes.Length > 0
             ? parser.Parse(contentBytes)
             : new List<TextFragment>();
@@ -124,7 +136,10 @@ public sealed class TextExtractor
 
         byte[] contentBytes = ReadContentBytes(page);
 
-        ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources);
+        ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
+        {
+            OptionalContent = VisibilityFor(page),
+        };
         List<TextFragment> fragments = contentBytes.Length > 0
             ? parser.Parse(contentBytes)
             : new List<TextFragment>();
@@ -152,6 +167,12 @@ public sealed class TextExtractor
         for (int i = 0; i < appearances.Count; i++)
         {
             AnnotationAppearance ap = appearances[i];
+            OptionalContentVisibility visibility = VisibilityFor(page);
+            if (HiddenByEntry(ap.Annotation, visibility) || HiddenByEntry(ap.Appearance.Dictionary, visibility))
+            {
+                continue;
+            }
+
             byte[] apBytes;
 
             try
@@ -168,7 +189,10 @@ public sealed class TextExtractor
                 continue;
             }
 
-            ContentStreamParser apParser = new ContentStreamParser(_objects, ap.Resources);
+            ContentStreamParser apParser = new ContentStreamParser(_objects, ap.Resources)
+            {
+                OptionalContent = visibility,
+            };
             List<TextFragment> apFragments = apParser.Parse(apBytes);
 
             for (int j = 0; j < apFragments.Count; j++)
@@ -189,6 +213,11 @@ public sealed class TextExtractor
             }
         }
     }
+
+    private OptionalContentVisibility VisibilityFor(PdfPage page) => OptionalContent ?? page.OptionalContent;
+
+    private static bool HiddenByEntry(PdfDictionary dict, OptionalContentVisibility visibility) =>
+        dict.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) && !visibility.IsVisible(oc);
 
     // ── Private: content stream loading ──────────────────────────────────
 

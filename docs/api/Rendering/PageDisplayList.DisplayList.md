@@ -10,7 +10,7 @@ public sealed class PageDisplayList : IReadOnlyList<RenderOp>
 
 ## Remarks
 
-Built by `DisplayListBuilder.Build`; consumed by output adapters such as `SvgRenderer`, `WpfRenderer`, or future software rasterizers.  
+Built by `DisplayListBuilder.Build(PdfDocument, int, bool)`; consumed by output adapters such as `SvgRenderer`, `WpfRenderer`, or future software rasterizers.  
 
  Pure value-like type: same page bytes, same display list. No rendering side effects.  
 

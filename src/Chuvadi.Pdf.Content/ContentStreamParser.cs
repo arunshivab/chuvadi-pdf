@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Objects;
@@ -55,6 +56,14 @@ public sealed class ContentStreamParser
         _resources = resources;
     }
 
+    /// <summary>
+    /// Gets or initialises which optional-content layers are extracted. Text
+    /// inside a hidden <c>BDC /OC</c> sequence, or in a form XObject whose
+    /// <c>/OC</c> is hidden, is left out. Default:
+    /// <see cref="OptionalContentVisibility.AllVisible"/> (every layer).
+    /// </summary>
+    public OptionalContentVisibility OptionalContent { get; init; } = OptionalContentVisibility.AllVisible;
+
     // ── Public API ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -93,6 +102,12 @@ public sealed class ContentStreamParser
         bool inTextObject = false;
 
         List<PdfPrimitive> operands = new List<PdfPrimitive>();
+
+        // Marked-content nesting: true where a BDC /OC sequence is hidden.
+        // Text shown while any open sequence is hidden is dropped; the text
+        // state still advances as normal.
+        List<bool> hiddenStack = new List<bool>();
+        int hiddenDepth = 0;
 
         using (MemoryStream ms = new MemoryStream(streams))
         using (PdfTokenizer tokenizer = new PdfTokenizer(ms, leaveOpen: false))
@@ -138,9 +153,44 @@ public sealed class ContentStreamParser
                 }
 
                 string op = token.RawText;
+                int fragmentsBefore = fragments.Count;
 
                 switch (op)
                 {
+                    // ── Marked content (optional content) ─────────────────
+
+                    case "BMC":
+                        hiddenStack.Add(false);
+                        break;
+
+                    case "BDC":
+                        {
+                            bool hidden = operands.Count >= 2
+                                && operands[0] is PdfName mcTag && mcTag.Value == "OC"
+                                && operands[1] is PdfName mcProp
+                                && !OptionalContent.IsVisible(ResolveProperty(resources, mcProp));
+                            hiddenStack.Add(hidden);
+                            if (hidden)
+                            {
+                                hiddenDepth++;
+                            }
+                        }
+
+                        break;
+
+                    case "EMC":
+                        if (hiddenStack.Count > 0)
+                        {
+                            if (hiddenStack[^1])
+                            {
+                                hiddenDepth--;
+                            }
+
+                            hiddenStack.RemoveAt(hiddenStack.Count - 1);
+                        }
+
+                        break;
+
                     // ── Graphics state ────────────────────────────────────
 
                     case "q":
@@ -322,7 +372,7 @@ public sealed class ContentStreamParser
                         break;
 
                     case "Do":
-                        if (operands.Count >= 1 && depth < MaxFormDepth)
+                        if (operands.Count >= 1 && depth < MaxFormDepth && hiddenDepth == 0)
                         {
                             AppendFormText(
                                 GetString(operands, 0), resources, visited, depth, fragments);
@@ -332,6 +382,11 @@ public sealed class ContentStreamParser
                     default:
                         // Unknown operator — discard operands and continue.
                         break;
+                }
+
+                if (hiddenDepth > 0 && fragments.Count > fragmentsBefore)
+                {
+                    fragments.RemoveRange(fragmentsBefore, fragments.Count - fragmentsBefore);
                 }
 
                 operands.Clear();
@@ -484,11 +539,30 @@ public sealed class ContentStreamParser
             return;
         }
 
+        if (stream.Dictionary.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc)
+            && !OptionalContent.IsVisible(oc))
+        {
+            return;
+        }
+
         byte[] content = DecodeStream(stream);
         PdfDictionary? formResources =
             ResolveDictionary(stream.Dictionary, PdfName.Resources) ?? resources;
 
         fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1));
+    }
+
+    // The raw /Properties entry for a BDC property name (reference kept so
+    // the group's identity survives), or null.
+    private PdfPrimitive? ResolveProperty(PdfDictionary? resources, PdfName name)
+    {
+        if (resources is null)
+        {
+            return null;
+        }
+
+        PdfDictionary? properties = ResolveDictionary(resources, PdfName.Intern("Properties"));
+        return properties is not null && properties.TryGetValue(name, out PdfPrimitive? entry) ? entry : null;
     }
 
     private static bool IsFormXObject(PdfStream stream)

@@ -18,6 +18,16 @@ public sealed class TextExtractor
 - Applies the chosen `ExtractionStrategy` to the resulting fragments. 
 - Returns the extracted text as a plain Unicode string.  Phase 1 scope: born-digital text only. Image-embedded text requires OCR (Phase 3). PDF 32000-1:2008 §9.10 — Extraction of text content.
 
+## Properties
+
+### `OptionalContent`
+
+```csharp
+OptionalContentVisibility? OptionalContent
+```
+
+Gets or initialises which optional-content layers are extracted. Default (null): the page's `PdfPage.OptionalContent` — text in layers hidden by the document's default configuration is left out, as Acrobat does. Pass `OptionalContentVisibility.AllVisible` to extract every layer.
+
 ## Methods
 
 ### `ExtractText`

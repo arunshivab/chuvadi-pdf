@@ -143,11 +143,21 @@ Shipped in v3.20.0 (redaction assurance + finishing items):
 - **Raster 4-point perspective deskew** — `PerspectiveCorrection` in
   `Chuvadi.Pdf.Images` (was open item 14).
 
+Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
+- **Tiling patterns over 4,096 tiles** are repeated (raster bitmap tile, SVG
+  `<pattern>`) instead of painting nothing; **xref recovery** tolerates any
+  header whitespace and never returns a different live object (null plus a
+  warning). (Were open items 9a and 9b.)
+- **PDF-14** — layers hidden by the default configuration are not drawn or
+  extracted; per-render overrides; `OptionalContentVisibility`.
+- **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
+  real-world distances, areas and coordinates.
+
 ---
 
 ## Open roadmap
 
-Status verified against code at v3.20.0. Items are independent and may be
+Status verified against code at v3.21.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -190,12 +200,12 @@ off-box portion remains in the file. An annotation appearance partially
 overlapping the box is likewise kept whole. (Redaction, unlike Scrub, now
 drops a pattern entirely once nothing on the page paints with it — 3.20.)
 
-**9. Known-accepted recovery/fidelity limits (3.18 adversarial review).**
-(a) A tiling-pattern fill needing more than 4,096 tile placements paints
-nothing (bounded memory beats a plausible-looking partial paint);
-(b) the xref recovery scan matches `N G obj` with single spaces only
-(`5 0\nobj` is legal but unrecovered) and, when the scan finds nothing,
-falls back to the object parsed at the stale offset (the pre-3.18 behaviour).
+### Rendering (major-version switch)
+**9. /UserUnit in the default renderers.** `PdfPage.UserUnit` is exposed
+(3.21) but the SVG and raster renderers still size output from the MediaBox
+in plain points, so a large-format drawing with `/UserUnit 10` renders at a
+tenth of its physical size. Honouring it changes output size for existing
+callers, so it waits for the same major-version switch as item 3.
 
 ### Compression workstream (long-horizon engines)
 The image-recoding base has shipped (downsample-to-DPI, per-image codec

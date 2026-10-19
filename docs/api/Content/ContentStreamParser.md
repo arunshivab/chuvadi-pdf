@@ -23,6 +23,16 @@ Initialises a `ContentStreamParser` for a page.
 - `resolver` — Resolves indirect object references.
 - `resources` — The page Resources dictionary, or null.
 
+## Properties
+
+### `OptionalContent`
+
+```csharp
+OptionalContentVisibility OptionalContent
+```
+
+Gets or initialises which optional-content layers are extracted. Text inside a hidden `BDC /OC` sequence, or in a form XObject whose `/OC` is hidden, is left out. Default: `OptionalContentVisibility.AllVisible` (every layer).
+
 ## Methods
 
 ### `Parse`

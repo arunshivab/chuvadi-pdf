@@ -176,7 +176,8 @@ public static class RedactionVerifier
         PdfDocument document, int pageIndex, List<RectangleF> regions, bool ignoreOverlays,
         List<RedactionSurvivor> into)
     {
-        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex);
+        // Hidden layers are still in the file: verification sees every layer.
+        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, OptionalContentVisibility.AllVisible);
         InspectList(list, AffineMatrix.Identity, pageIndex, regions, ignoreOverlays, into, 0);
         InspectAnnotations(document, pageIndex, regions, into);
     }

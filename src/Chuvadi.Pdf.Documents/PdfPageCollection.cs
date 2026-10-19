@@ -39,11 +39,15 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     private readonly PdfDictionary _pagesRoot;
     private readonly IPdfObjectResolver _resolver;
     private readonly PdfPage?[] _cache;
+    private readonly Func<OptionalContentVisibility>? _optionalContent;
 
-    internal PdfPageCollection(PdfDictionary pagesRoot, IPdfObjectResolver resolver)
+    internal PdfPageCollection(
+        PdfDictionary pagesRoot, IPdfObjectResolver resolver,
+        Func<OptionalContentVisibility>? optionalContent = null)
     {
         _pagesRoot = pagesRoot ?? throw new ArgumentNullException(nameof(pagesRoot));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        _optionalContent = optionalContent;
 
         int count = _pagesRoot.GetInteger(PdfName.Count, 0);
         _cache = new PdfPage?[count];
@@ -107,7 +111,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         int index = 0;
         foreach (PdfDictionary leaf in WalkPageDictionaries(_pagesRoot, 0))
         {
-            yield return new PdfPage(leaf, _resolver, index);
+            yield return new PdfPage(leaf, _resolver, index, _optionalContent);
             index++;
         }
     }
@@ -204,7 +208,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
             {
                 if (localOffset == targetIndex)
                 {
-                    return new PdfPage(kidDict, _resolver, targetIndex);
+                    return new PdfPage(kidDict, _resolver, targetIndex, _optionalContent);
                 }
 
                 localOffset++;
