@@ -3,6 +3,7 @@
 // PHASE: Phase 2.0 — SVG export
 
 using System;
+using System.Collections.Generic;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Svg;
@@ -153,6 +154,20 @@ public sealed class SvgExportOptions
     /// unrotated user space, as in earlier releases).
     /// </summary>
     public bool ApplyPageRotation { get; init; }
+
+    /// <summary>
+    /// Whether optional content (layers) is ignored, so every layer is drawn
+    /// whatever its state. Default: false — layers hidden in the document's
+    /// default configuration are left out, as in Acrobat.
+    /// </summary>
+    public bool IgnoreOptionalContent { get; init; }
+
+    /// <summary>
+    /// Per-layer visibility overrides (layer name → visible) on top of the
+    /// document's default configuration. Ignored when
+    /// <see cref="IgnoreOptionalContent"/> is true. Default: null.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? LayerVisibility { get; init; }
 
     private readonly int _rotation;
 }

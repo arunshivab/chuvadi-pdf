@@ -9,22 +9,20 @@
 
 ## Last Updated
 
-2026-10-14 — v3.19.0 (Reader delegation: arrows, multi-stamp with opacity,
-imposition parity, display rotation, content inventory, header/footer
-preview, SVG tiling patterns, raster pattern strokes, sample-level Scrub
-image cropping, Scrub/redaction leak fix) and v3.20.0 (redaction assurance:
-tagged replacement-text stripping, `RedactionVerifier`, adversarial-review
-fixes for text under `cm`/`Ts`/`Tz` and `Tc`/`Tw` survivor drift, removal of
-masks/patterns/shadings/graphics states only removed content used;
-form-aware downsampling; autohinter X fitting; `PerspectiveCorrection`).
-Last released version: v3.18.1.
+2026-10-19 — v3.21.0: tiling patterns over 4,096 tiles repeated (raster
+bitmap tile with area budget, SVG `<pattern>`); xref recovery whitespace-
+tolerant, never returns a different live object (null plus warning, lazy
+warnings); PDF-14 layer visibility when rendering/extracting
+(`OptionalContentVisibility`, OFF layers hidden by default); PDF-15
+`/UserUnit`, viewports and `/Measure`. Released: v3.19.0 and v3.20.0 (2026-10-14).
+Last released version: v3.20.0.
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,596 tests across 30 in-solution test projects,
-0 failures (v3.20.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,651 tests across 30 in-solution test projects,
+0 failures (v3.21.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -122,6 +120,13 @@ All modules are Complete and shipping. Grouped by role:
   a glyph goes if either hits), with `Ts` rise and `Tz` scaling applied.
   `RedactionVerifier` re-checks any output against the rectangles using the
   render display list.
+- **Optional content is honoured.** Renderers, inventory, text runs and
+  `TextExtractor` skip layers hidden by the default configuration
+  (`PdfPage.OptionalContent`); `IgnoreOptionalContent` / `LayerVisibility`
+  override per render. Redaction, Scrub and `RedactionVerifier` always see
+  every layer.
+- **Lazy recovery warnings.** `PdfReader.Warnings` grows when a damaged object
+  is first loaded; a stale xref entry with no definition resolves to null.
 
 ---
 
@@ -133,7 +138,7 @@ flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuge
 — the library's job ends there; the Chuvadi Reader picks packages up from that
 feed on its own side. Never `dotnet nuget push` (it creates a mismatched
 hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
-**3.18.1** (3.19.0 and 3.20.0 pending merge + pack on Arun's machine).
+**3.20.0** (3.21.0 pending merge + pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 

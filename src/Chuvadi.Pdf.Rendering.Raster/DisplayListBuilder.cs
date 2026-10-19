@@ -69,9 +69,33 @@ public static class DisplayListBuilder
     public static PageDisplayList Build(PdfPage page, PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
     {
         ArgumentNullException.ThrowIfNull(page);
-        ArgumentNullException.ThrowIfNull(objects);
+        return Build(page, objects, page.OptionalContent, hintingScale, lightHinting, autohintFallback);
+    }
 
-        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback);
+    /// <summary>
+    /// Interprets a page's content with an explicit layer visibility: content
+    /// in hidden optional-content groups is left out (pass
+    /// <see cref="OptionalContentVisibility.AllVisible"/> to draw every layer).
+    /// The other parameters are as for
+    /// <see cref="Build(PdfPage, PdfObjectStore, double, bool, bool)"/>.
+    /// </summary>
+    /// <param name="page">The PDF page to interpret.</param>
+    /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <param name="optionalContent">Which layers are visible.</param>
+    /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting.</param>
+    /// <param name="lightHinting">When true, grid-fit the Y axis only.</param>
+    /// <param name="autohintFallback">When true, unhinted fonts are grid-fitted by the autohinter.</param>
+    /// <returns>An immutable display list.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    public static PageDisplayList Build(
+        PdfPage page, PdfObjectStore objects, OptionalContentVisibility optionalContent,
+        double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(objects);
+        ArgumentNullException.ThrowIfNull(optionalContent);
+
+        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback, optionalContent);
         byte[] content = ContentStreamLoader.Load(page.Contents, objects);
         return worker.BuildFromPage(content, page);
     }
@@ -173,8 +197,18 @@ public static class DisplayListBuilder
         // Resources of the stream being walked (page or form XObject)
         private PdfDictionary? _resources;
 
-        public Worker(PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
+        // 3.21: layer visibility. One entry per open BMC/BDC (true when that
+        // BDC /OC sequence is hidden); painting is suppressed while any open
+        // sequence is hidden. Graphics state still updates normally.
+        private readonly OptionalContentVisibility _visibility;
+        private readonly List<bool> _hiddenStack = new List<bool>();
+        private int _hiddenDepth;
+
+        public Worker(
+            PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false,
+            bool autohintFallback = true, OptionalContentVisibility? visibility = null)
         {
+            _visibility = visibility ?? OptionalContentVisibility.AllVisible;
             _objects = objects;
             _hintingScale = hintingScale;
             _lightHinting = lightHinting;
@@ -229,6 +263,11 @@ public static class DisplayListBuilder
             for (int i = 0; i < appearances.Count; i++)
             {
                 AnnotationAppearance ap = appearances[i];
+                if (IsHiddenByEntry(ap.Annotation))
+                {
+                    continue;
+                }
+
                 SaveState();
                 ConcatMatrix(ap.ScaleX, 0, 0, ap.ScaleY, ap.OffsetX, ap.OffsetY);
                 EmitFormXObject(ap.Appearance, _resources);
@@ -236,6 +275,58 @@ public static class DisplayListBuilder
             }
 
             return new PageDisplayList(_ops, page.Width, page.Height);
+        }
+
+        // Appends a painting op unless hidden optional content is open.
+        private void EmitOp(RenderOp op)
+        {
+            if (_hiddenDepth == 0)
+            {
+                _ops.Add(op);
+            }
+        }
+
+        // True when a form/image XObject or annotation carries a hidden /OC
+        // entry (PDF 32000-1:2008 §8.11.3.3).
+        private bool IsHiddenByEntry(PdfDictionary dict) =>
+            dict.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) && !_visibility.IsVisible(oc);
+
+        // ── Marked content (optional content) ─────────────────────────────
+
+        /// <inheritdoc />
+        public void BeginMarkedContent(string tag, string? propertyName)
+        {
+            bool hidden = false;
+            if (tag == "OC" && propertyName is not null
+                && _resources is not null
+                && _resources.TryGetValue(PdfName.Intern("Properties"), out PdfPrimitive? propsPrim)
+                && _objects.ResolveAs<PdfDictionary>(propsPrim) is PdfDictionary properties
+                && properties.TryGetValue(PdfName.Intern(propertyName), out PdfPrimitive? entry))
+            {
+                hidden = !_visibility.IsVisible(entry);
+            }
+
+            _hiddenStack.Add(hidden);
+            if (hidden)
+            {
+                _hiddenDepth++;
+            }
+        }
+
+        /// <inheritdoc />
+        public void EndMarkedContent()
+        {
+            if (_hiddenStack.Count == 0)
+            {
+                return;
+            }
+
+            if (_hiddenStack[^1])
+            {
+                _hiddenDepth--;
+            }
+
+            _hiddenStack.RemoveAt(_hiddenStack.Count - 1);
         }
 
         // ── Graphics state operators ──────────────────────────────────────
@@ -750,7 +841,7 @@ public static class DisplayListBuilder
                 return new PageDisplayList(new List<RenderOp>(), 0, 0);
             }
 
-            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
 
             byte[] content;
@@ -870,7 +961,7 @@ public static class DisplayListBuilder
             if (shading.IsRadial)
             {
                 PointF p1 = ctm.TransformPoint(new PointF(coords[3], coords[4]));
-                _ops.Add(new ShadeOp(
+                EmitOp(new ShadeOp(
                     isRadial: true,
                     x0: p0.X,
                     y0: p0.Y,
@@ -887,7 +978,7 @@ public static class DisplayListBuilder
             else
             {
                 PointF p1 = ctm.TransformPoint(new PointF(coords[2], coords[3]));
-                _ops.Add(new ShadeOp(
+                EmitOp(new ShadeOp(
                     isRadial: false,
                     x0: p0.X,
                     y0: p0.Y,
@@ -1034,11 +1125,17 @@ public static class DisplayListBuilder
             int j0 = (int)Math.Floor((minY - bbox[1] - cellHeight) / yStep) + 1;
             int j1 = (int)Math.Ceiling((maxY - bbox[1]) / yStep);
 
-            long tiles = (long)(i1 - i0 + 1) * (j1 - j0 + 1);
-            if (tiles <= 0 || tiles > MaxTiles)
+            // Counted in floating point so absurd step/region ratios cannot
+            // overflow; above MaxTiles the fill is repeated by the painter.
+            double tiles =
+                (Math.Ceiling((maxX - bbox[0]) / xStep) - Math.Floor((minX - bbox[0] - cellWidth) / xStep))
+                * (Math.Ceiling((maxY - bbox[1]) / yStep) - Math.Floor((minY - bbox[1] - cellHeight) / yStep));
+            if (!double.IsFinite(tiles) || tiles <= 0)
             {
                 return;
             }
+
+            bool repeat = tiles > MaxTiles;
 
             // Build the cell sub-list once. An uncoloured pattern (PaintType 2)
             // paints with the underlying colour recorded by SetPatternColor.
@@ -1047,7 +1144,7 @@ public static class DisplayListBuilder
                 return;
             }
 
-            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._state.FillAlpha = _state.FillAlpha;
             sub._state.StrokeAlpha = _state.StrokeAlpha;
@@ -1086,6 +1183,17 @@ public static class DisplayListBuilder
             }
 
             PageDisplayList inner = new PageDisplayList(sub._ops, 0, 0);
+            if (repeat)
+            {
+                EmitOp(new TilingFillOp(
+                    inner, patternMatrix, xStep, yStep, bbox[0], bbox[1], cellWidth, cellHeight, bounds, clips)
+                {
+                    BlendMode = _state.BlendMode,
+                    SoftMask = _state.SoftMask,
+                });
+                return;
+            }
+
             for (int j = j0; j <= j1; j++)
             {
                 for (int i = i0; i <= i1; i++)
@@ -1093,7 +1201,7 @@ public static class DisplayListBuilder
                     Transform composition = Transform
                         .CreateTranslation(i * xStep, j * yStep)
                         .Multiply(patternMatrix);
-                    _ops.Add(new NestedDisplayListOp(inner, composition, clips)
+                    EmitOp(new NestedDisplayListOp(inner, composition, clips)
                     {
                         BlendMode = _state.BlendMode,
                         SoftMask = _state.SoftMask,
@@ -1166,7 +1274,7 @@ public static class DisplayListBuilder
             else if (_state.FillValid && !_currentPath.IsEmpty)
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
-                _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                EmitOp(new FillPathOp(transformed, EffectiveFill, rule, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
             }
 
             ApplyDeferredClip();
@@ -1189,7 +1297,7 @@ public static class DisplayListBuilder
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 StrokeStyle style = BuildStrokeStyle();
-                _ops.Add(new StrokePathOp(transformed, style, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                EmitOp(new StrokePathOp(transformed, style, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
             }
 
             ApplyDeferredClip();
@@ -1214,7 +1322,7 @@ public static class DisplayListBuilder
                 }
                 else if (_state.FillValid)
                 {
-                    _ops.Add(new FillPathOp(transformed, EffectiveFill, rule, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                    EmitOp(new FillPathOp(transformed, EffectiveFill, rule, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
 
                 if (_state.StrokePattern is not null)
@@ -1224,7 +1332,7 @@ public static class DisplayListBuilder
                 else if (_state.StrokeValid)
                 {
                     StrokeStyle style = BuildStrokeStyle();
-                    _ops.Add(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                    EmitOp(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                 }
             }
 
@@ -1604,7 +1712,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                        EmitOp(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     double programAdvance = hintedGlyph is not null && !_lightHinting
@@ -1628,7 +1736,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                        EmitOp(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = ResolveSimpleAdvance(code, std14.GetAdvanceWidth(ch, _state.FontSize));
@@ -1648,7 +1756,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(glyphPath, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                        EmitOp(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = ResolveSimpleAdvance(code, adv);
@@ -1706,7 +1814,7 @@ public static class DisplayListBuilder
                                 .Multiply(textScale)
                                 .Multiply(_textMatrix)
                                 .Multiply(_state.Ctm);
-                            _ops.Add(new NestedDisplayListOp(inner, composition, SnapshotClips())
+                            EmitOp(new NestedDisplayListOp(inner, composition, SnapshotClips())
                             {
                                 BlendMode = _state.BlendMode,
                                 SoftMask = _state.SoftMask,
@@ -1746,7 +1854,7 @@ public static class DisplayListBuilder
                 return new PageDisplayList(new List<RenderOp>(), 0, 0);
             }
 
-            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._resources = type3.Resources ?? _resources;
             sub.SeedType3Fill(fill);
@@ -2016,7 +2124,7 @@ public static class DisplayListBuilder
                         }
 
                         Path placed = TransformPath(scaled.Outline, glyphPlacement);
-                        _ops.Add(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                        EmitOp(new DrawGlyphOp(placed, EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
                     }
 
                     advance = hintedGlyph is not null && !_lightHinting
@@ -2408,7 +2516,7 @@ public static class DisplayListBuilder
 
             PdfStream? xobjStream = _objects.ResolveAs<PdfStream>(xobjRef ?? PdfNull.Value);
 
-            if (xobjStream is null)
+            if (xobjStream is null || IsHiddenByEntry(xobjStream.Dictionary))
             {
                 return;
             }
@@ -2488,7 +2596,7 @@ public static class DisplayListBuilder
                 ImageFrame? stencil = StencilFrame(xobjStream, imageBytes);
                 if (stencil is not null)
                 {
-                    _ops.Add(new DrawImageOp(stencil, _state.Ctm, SnapshotClips(), _state.FillAlpha)
+                    EmitOp(new DrawImageOp(stencil, _state.Ctm, SnapshotClips(), _state.FillAlpha)
                     {
                         BlendMode = _state.BlendMode,
                         SoftMask = _state.SoftMask,
@@ -2530,7 +2638,7 @@ public static class DisplayListBuilder
 
             ApplySoftMask(xobjStream, frame);
 
-            _ops.Add(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+            EmitOp(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
         }
 
         // Converts decoded raw samples into an ImageFrame for the cases the
@@ -2901,6 +3009,11 @@ public static class DisplayListBuilder
 
         private void EmitFormXObject(PdfStream xobjStream, PdfDictionary? outerResources)
         {
+            if (IsHiddenByEntry(xobjStream.Dictionary))
+            {
+                return;
+            }
+
             // Form XObject's Matrix entry composes with the current CTM
             Transform formMatrix = Transform.Identity;
 
@@ -2937,7 +3050,7 @@ public static class DisplayListBuilder
                 return;
             }
 
-            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback);
+            Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
 
             // A non-group form XObject inherits the graphics state in effect at
@@ -2972,7 +3085,7 @@ public static class DisplayListBuilder
             // Composition: form-local · outer CTM (row-vector convention)
             Transform composition = formMatrix.Multiply(_state.Ctm);
 
-            _ops.Add(new NestedDisplayListOp(inner, composition, SnapshotClips()));
+            EmitOp(new NestedDisplayListOp(inner, composition, SnapshotClips()));
         }
 
         private static double AsDouble(PdfPrimitive p)

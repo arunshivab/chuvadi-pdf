@@ -104,6 +104,7 @@ public sealed class SvgRenderer
     // a counter for unique <mask> ids.
     // Tiling-pattern cells emitted this render (one <defs> group per cell),
     // compared by reference.
+    private int _patternSeq;
     private readonly Dictionary<PageDisplayList, string> _emittedTileCells =
         new(ReferenceEqualityComparer.Instance);
 
@@ -157,7 +158,15 @@ public sealed class SvgRenderer
     public string RenderPage(PdfDocument document, int pageIndex)
     {
         ArgumentNullException.ThrowIfNull(document);
-        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex);
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pageIndex));
+        }
+
+        OptionalContentVisibility visibility = _opts.IgnoreOptionalContent
+            ? OptionalContentVisibility.AllVisible
+            : document.Pages[pageIndex].OptionalContent.WithOverrides(_opts.LayerVisibility);
+        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, visibility);
 
         if (_opts.MaxVectorOps > 0
             && _opts.DensityFallback == SvgDensityFallback.Rasterize
@@ -211,6 +220,7 @@ public sealed class SvgRenderer
         _emittedMasks.Clear();
         _maskSeq = 0;
         _emittedTileCells.Clear();
+        _patternSeq = 0;
 
         // Density handling: an explicit tolerance always applies; exceeding the
         // vector-op budget forces at least the automatic tolerance (the
@@ -289,6 +299,8 @@ public sealed class SvgRenderer
             new RenderOptions
             {
                 Dpi = _opts.RasterFallbackDpi,
+                IgnoreOptionalContent = _opts.IgnoreOptionalContent,
+                LayerVisibility = _opts.LayerVisibility,
             });
         byte[] png = rasterizer.RasterizeToPng(document.Pages[pageIndex]);
         string dataUrl = "data:image/png;base64," + Convert.ToBase64String(png);
@@ -503,6 +515,28 @@ public sealed class SvgRenderer
             w.OpenDefinitionGroup(id);
             RenderOpList(op.Cell, w, familyByBaseFont, resolver);
             w.CloseDefinitionGroup();
+        }
+
+        if (op.IsRepeating)
+        {
+            // Too many tiles to list (3.21): a native <pattern> repeats the
+            // cell. The cell is drawn at the neighbouring offsets as well, so
+            // content reaching past one step wraps into the window exactly as
+            // overlapping tiles would paint it.
+            string patternId = "tpat" + _patternSeq.ToString(CultureInfo.InvariantCulture);
+            _patternSeq++;
+            w.OpenPattern(patternId, op.CellOriginX, op.CellOriginY, op.XStep, op.YStep, op.PatternMatrix.ToSvgMatrix());
+            for (int j = -1; j <= 1; j++)
+            {
+                for (int i = -1; i <= 1; i++)
+                {
+                    w.EmitUse(id, new AffineMatrix(1, 0, 0, 1, i * op.XStep, j * op.YStep).ToSvgMatrix());
+                }
+            }
+
+            w.ClosePattern();
+            w.EmitPatternRect(op.Region.X, op.Region.Y, op.Region.Width, op.Region.Height, patternId);
+            return;
         }
 
         foreach (AffineMatrix tile in op.Tiles)

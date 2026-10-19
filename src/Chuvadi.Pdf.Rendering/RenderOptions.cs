@@ -4,6 +4,8 @@
 // Rendering options: DPI, scale, background colour.
 
 using System;
+using System.Collections.Generic;
+using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Rendering;
@@ -160,6 +162,27 @@ public sealed class RenderOptions
     /// its unrotated user space, as in earlier releases).
     /// </summary>
     public bool ApplyPageRotation { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether optional content (layers) is ignored, so
+    /// every layer draws whatever its state. Default: false — layers hidden in
+    /// the document's default configuration are not drawn, as in Acrobat.
+    /// </summary>
+    public bool IgnoreOptionalContent { get; init; }
+
+    /// <summary>
+    /// Gets or initialises per-layer visibility overrides (layer name →
+    /// visible), applied on top of the document's default configuration —
+    /// for example to drive a layers panel. Ignored when
+    /// <see cref="IgnoreOptionalContent"/> is true. Default: null (no overrides).
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? LayerVisibility { get; init; }
+
+    // The layer visibility these options select for a page.
+    internal OptionalContentVisibility VisibilityFor(PdfPage page) =>
+        IgnoreOptionalContent
+            ? OptionalContentVisibility.AllVisible
+            : page.OptionalContent.WithOverrides(LayerVisibility);
 
     internal static int NormalizeRotation(int value, string name)
     {

@@ -5,6 +5,7 @@
 // Represents a single page in a PDF document.
 
 using System;
+using System.Collections.Generic;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -30,13 +31,26 @@ public sealed class PdfPage
     private readonly PdfDictionary _dict;
     private readonly IPdfObjectResolver _resolver;
     private readonly int _pageIndex;
+    private readonly Func<OptionalContentVisibility>? _optionalContent;
 
-    internal PdfPage(PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex)
+    internal PdfPage(
+        PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex,
+        Func<OptionalContentVisibility>? optionalContent = null)
     {
         _dict = dict ?? throw new ArgumentNullException(nameof(dict));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _pageIndex = pageIndex;
+        _optionalContent = optionalContent;
     }
+
+    /// <summary>
+    /// Gets the document's default layer visibility (its <c>/OCProperties /D</c>
+    /// configuration), which the renderers and text extraction apply to this
+    /// page unless told otherwise. <see cref="OptionalContentVisibility.AllVisible"/>
+    /// when the document has no optional content.
+    /// </summary>
+    public OptionalContentVisibility OptionalContent =>
+        _optionalContent?.Invoke() ?? OptionalContentVisibility.AllVisible;
 
     // ── Identity ──────────────────────────────────────────────────────────
 
@@ -89,6 +103,84 @@ public sealed class PdfPage
     public double Height => MediaBox.Height;
 
     // ── Page attributes ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets the size of one default user-space unit in multiples of 1/72 inch
+    /// (<c>/UserUnit</c>, PDF 1.6; not inherited). 1.0 when absent or not a
+    /// positive number. The page's physical width in inches is
+    /// <c>Width * UserUnit / 72</c>; large-format drawings use it to exceed
+    /// the 14,400-unit page limit.
+    /// PDF 32000-1:2008 §8.3.2.3, Table 30 — UserUnit.
+    /// </summary>
+    public double UserUnit
+    {
+        get
+        {
+            if (!_dict.TryGetValue(PdfName.Intern("UserUnit"), out PdfPrimitive? value))
+            {
+                return 1.0;
+            }
+
+            double unit = _resolver.Resolve(value) switch
+            {
+                PdfInteger i => i.Value,
+                PdfReal r => r.Value,
+                _ => 1.0,
+            };
+            return unit > 0 && double.IsFinite(unit) ? unit : 1.0;
+        }
+    }
+
+    /// <summary>
+    /// Gets the page's viewports (<c>/VP</c>): regions with their own name
+    /// and measurement scale, for example each drawing on a sheet. Empty when
+    /// the page has none. PDF 32000-1:2008 §12.9.2.
+    /// </summary>
+    public IReadOnlyList<PdfViewport> Viewports =>
+        PdfViewport.ReadArray(_dict.TryGetValue(PdfName.Intern("VP"), out PdfPrimitive? vp) ? vp : null, _resolver);
+
+    /// <summary>
+    /// Returns the viewport that governs a point (default user space): the
+    /// last one in <see cref="Viewports"/> whose region contains it, as the
+    /// specification directs (later viewports are on top), or null.
+    /// </summary>
+    /// <param name="x">Point x.</param>
+    /// <param name="y">Point y.</param>
+    /// <returns>The viewport, or null when none contains the point.</returns>
+    public PdfViewport? FindViewport(double x, double y)
+    {
+        IReadOnlyList<PdfViewport> viewports = Viewports;
+        for (int i = viewports.Count - 1; i >= 0; i--)
+        {
+            if (viewports[i].Contains(x, y))
+            {
+                return viewports[i];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Measures the distance between two points (default user space) in the
+    /// real-world units of the viewport containing both, or null when no
+    /// single viewport with a rectilinear measure contains them.
+    /// </summary>
+    /// <param name="x1">First point x.</param>
+    /// <param name="y1">First point y.</param>
+    /// <param name="x2">Second point x.</param>
+    /// <param name="y2">Second point y.</param>
+    /// <returns>The measured distance, or null.</returns>
+    public PdfMeasurement? MeasureDistance(double x1, double y1, double x2, double y2)
+    {
+        PdfViewport? viewport = FindViewport(x1, y1);
+        if (viewport?.Measure is not PdfMeasure measure || !measure.IsRectilinear || !viewport.Contains(x2, y2))
+        {
+            return null;
+        }
+
+        return measure.Distance(x1, y1, x2, y2);
+    }
 
     /// <summary>
     /// Gets the page rotation in degrees (0, 90, 180, or 270).

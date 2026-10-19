@@ -42,7 +42,34 @@ public static class DisplayListBuilder
             throw new ArgumentOutOfRangeException(nameof(pageIndex));
         }
         PdfPage page = document.Pages[pageIndex];
-        return new Builder(document).BuildPage(page, flattenTransforms);
+        return new Builder(document, page.OptionalContent).BuildPage(page, flattenTransforms);
+    }
+
+    /// <summary>
+    /// Builds the display list for one page with an explicit layer
+    /// visibility: content in hidden optional-content groups is left out
+    /// (pass <see cref="OptionalContentVisibility.AllVisible"/> to keep
+    /// everything, as redaction verification does).
+    /// </summary>
+    /// <param name="document">The document.</param>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <param name="optionalContent">Which layers are visible.</param>
+    /// <param name="flattenTransforms">As for <see cref="Build(PdfDocument, int, bool)"/>.</param>
+    /// <returns>The page's display list.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the page index is out of range.</exception>
+    public static PageDisplayList Build(
+        PdfDocument document, int pageIndex, OptionalContentVisibility optionalContent,
+        bool flattenTransforms = false)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(optionalContent);
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pageIndex));
+        }
+        PdfPage page = document.Pages[pageIndex];
+        return new Builder(document, optionalContent).BuildPage(page, flattenTransforms);
     }
 
     private sealed class Builder : IContentOperatorSink
@@ -111,6 +138,14 @@ public static class DisplayListBuilder
         private readonly List<string?> _markedContentStack = new();
         private IReadOnlyList<string> _currentLayers = Array.Empty<string>();
 
+        // 3.21: layer visibility. _hiddenStack parallels _markedContentStack
+        // (true where that BDC /OC sequence is hidden); _hiddenDepth counts the
+        // hidden entries, so painting ops are dropped while it is non-zero.
+        // Graphics-state, clip and scope ops are kept so state stays exact.
+        private readonly OptionalContentVisibility _visibility;
+        private readonly List<bool> _hiddenStack = new();
+        private int _hiddenDepth;
+
         // ── v2.1.2: gap-tracking for word-boundary space insertion ───────────
         //
         // After each text emit on the same line, we record the text-matrix
@@ -141,7 +176,11 @@ public static class DisplayListBuilder
         // few legitimate breaks. Better than the opposite.
         private const double GapToleranceFraction = 0.3;
 
-        internal Builder(PdfDocument doc) { _doc = doc; }
+        internal Builder(PdfDocument doc, OptionalContentVisibility visibility)
+        {
+            _doc = doc;
+            _visibility = visibility;
+        }
 
         internal PageDisplayList BuildPage(PdfPage page, bool flattenTransforms)
         {
@@ -174,6 +213,11 @@ public static class DisplayListBuilder
             for (int i = 0; i < appearances.Count; i++)
             {
                 AnnotationAppearance ap = appearances[i];
+                if (IsHiddenByEntry(ap.Annotation))
+                {
+                    continue;
+                }
+
                 SaveState();
                 ConcatMatrix(ap.ScaleX, 0, 0, ap.ScaleY, ap.OffsetX, ap.OffsetY);
                 EmitFormXObject(ap.Appearance);
@@ -202,6 +246,11 @@ public static class DisplayListBuilder
         // applied in exactly one place. PDF 32000-1:2008 §8.11.3.2.
         private void Add(RenderOp op)
         {
+            if (_hiddenDepth > 0 && IsPaintingOp(op))
+            {
+                return;
+            }
+
             op.Layers = _currentLayers;
             op.Clips = _stack.Current.Clips;
             _ops.Add(op);
@@ -216,6 +265,14 @@ public static class DisplayListBuilder
                 ? ResolveOptionalContentName(propertyName)
                 : null;
             _markedContentStack.Add(layer);
+            bool hidden = tag == "OC" && propertyName is not null
+                && !_visibility.IsVisible(ResolvePropertyEntry(propertyName));
+            _hiddenStack.Add(hidden);
+            if (hidden)
+            {
+                _hiddenDepth++;
+            }
+
             RecomputeCurrentLayers();
         }
 
@@ -227,7 +284,42 @@ public static class DisplayListBuilder
                 _markedContentStack.RemoveAt(_markedContentStack.Count - 1);
                 RecomputeCurrentLayers();
             }
+
+            if (_hiddenStack.Count > 0)
+            {
+                if (_hiddenStack[^1])
+                {
+                    _hiddenDepth--;
+                }
+
+                _hiddenStack.RemoveAt(_hiddenStack.Count - 1);
+            }
         }
+
+        // Painting ops are what hidden optional content suppresses; scope,
+        // clip, opacity and blend-mode ops carry state and are always kept.
+        private static bool IsPaintingOp(RenderOp op) =>
+            op is PathOp or TextOp or ImageOp or ShadingOp or Type3UseOp or TilingPatternOp;
+
+        // The raw /Resources /Properties entry for a BDC property name (kept as
+        // the reference so OCG identity is preserved), or null.
+        private PdfPrimitive? ResolvePropertyEntry(string propertyName)
+        {
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Properties"), out PdfPrimitive? propsPrim)
+                || _doc.Objects.ResolveAs<PdfDictionary>(propsPrim) is not PdfDictionary properties
+                || !properties.TryGetValue(PdfName.Intern(propertyName), out PdfPrimitive? entry))
+            {
+                return null;
+            }
+
+            return entry;
+        }
+
+        // True when a form/image XObject or annotation carries an /OC entry
+        // that is hidden (PDF 32000-1:2008 §8.11.3.3).
+        private bool IsHiddenByEntry(PdfDictionary dict) =>
+            dict.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) && !_visibility.IsVisible(oc);
 
         // Rebuilds the cached outer-first snapshot of active layer names from
         // the marked-content stack (entries that are null — non-/OC marked
@@ -889,7 +981,7 @@ public static class DisplayListBuilder
                 return cached;
             }
 
-            Builder sub = new Builder(_doc);
+            Builder sub = new Builder(_doc, _visibility);
             sub._resources = type3.Resources ?? _resources;
             sub._stack.Current.FillColor = fill;
 
@@ -1111,7 +1203,7 @@ public static class DisplayListBuilder
                 groupResources = r;
             }
 
-            Builder sub = new Builder(_doc);
+            Builder sub = new Builder(_doc, _visibility);
             byte[] content;
             try
             {
@@ -1365,12 +1457,12 @@ public static class DisplayListBuilder
                 maxY = Math.Max(maxY, py);
             }
 
-            int i0 = (int)Math.Floor((minX - bx0 - cellWidth) / xStep) + 1;
-            int i1 = (int)Math.Ceiling((maxX - bx0) / xStep);
-            int j0 = (int)Math.Floor((minY - by0 - cellHeight) / yStep) + 1;
-            int j1 = (int)Math.Ceiling((maxY - by0) / yStep);
-            long tileCount = (long)(i1 - i0 + 1) * (j1 - j0 + 1);
-            if (tileCount <= 0 || tileCount > MaxTilingTiles)
+            // Tile count estimated in floating point first, so absurd step /
+            // region ratios cannot overflow the integer ranges below.
+            double estimate =
+                (Math.Ceiling((maxX - bx0) / xStep) - Math.Floor((minX - bx0 - cellWidth) / xStep))
+                * (Math.Ceiling((maxY - by0) / yStep) - Math.Floor((minY - by0 - cellHeight) / yStep));
+            if (!double.IsFinite(estimate) || estimate <= 0)
             {
                 return;
             }
@@ -1379,6 +1471,31 @@ public static class DisplayListBuilder
             PdfColor? underlying = uncoloured ? (s.FillTilingColor ?? s.FillColor) : null;
             PageDisplayList? cellList = GetOrBuildTilingCell(cell, underlying);
             if (cellList is null || cellList.Count == 0)
+            {
+                return;
+            }
+
+            if (estimate > MaxTilingTiles)
+            {
+                // Too many tiles to list (3.21): describe the repetition and
+                // let the consumer repeat the cell (SVG <pattern>), at a cost
+                // independent of the tile count.
+                Add(new TilingPatternOp(
+                    cellList, patternToPage, xStep, yStep, bx0, by0,
+                    new Rect(minPx, minPy, maxPx - minPx, maxPy - minPy))
+                {
+                    BlendMode = s.BlendMode,
+                    SoftMask = s.SoftMask,
+                });
+                return;
+            }
+
+            int i0 = (int)Math.Floor((minX - bx0 - cellWidth) / xStep) + 1;
+            int i1 = (int)Math.Ceiling((maxX - bx0) / xStep);
+            int j0 = (int)Math.Floor((minY - by0 - cellHeight) / yStep) + 1;
+            int j1 = (int)Math.Ceiling((maxY - by0) / yStep);
+            long tileCount = (long)(i1 - i0 + 1) * (j1 - j0 + 1);
+            if (tileCount <= 0)
             {
                 return;
             }
@@ -1416,7 +1533,7 @@ public static class DisplayListBuilder
                 return null;
             }
 
-            Builder sub = new Builder(_doc);
+            Builder sub = new Builder(_doc, _visibility);
             sub._patternDepth = _patternDepth + 1;
             sub._resources = _resources;
             if (cell.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)
@@ -2132,6 +2249,7 @@ public static class DisplayListBuilder
         private void EmitFormXObject(PdfStream formStream)
         {
             if (_formDepth >= MaxFormDepth) { return; }
+            if (IsHiddenByEntry(formStream.Dictionary)) { return; }
 
             byte[] formContent;
             try
@@ -2189,6 +2307,7 @@ public static class DisplayListBuilder
             if (xobjects is null) { return; }
             if (!xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? imgRef)) { return; }
             if (_doc.Objects.Resolve(imgRef) is not PdfStream stream) { return; }
+            if (IsHiddenByEntry(stream.Dictionary)) { return; }
             if (!stream.Dictionary.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? sub)
                 || sub is not PdfName subName)
             {

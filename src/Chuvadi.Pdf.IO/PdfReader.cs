@@ -27,20 +27,24 @@ public sealed class PdfReader : IDisposable
 
     private readonly Stream _stream;
     private readonly bool _leaveOpen;
+    private readonly IReadOnlyList<string> _openWarnings;
+    private readonly RecoveryLog _recoveryLog;
     private bool _disposed;
 
     private PdfReader(
         Stream stream,
         bool leaveOpen,
         PdfDictionary trailer,
-        PdfObjectStore objects)
+        PdfObjectStore objects,
+        RecoveryLog recoveryLog)
     {
         _stream = stream;
         _leaveOpen = leaveOpen;
         _disposed = false;
+        _recoveryLog = recoveryLog;
         Trailer = trailer;
         Objects = objects;
-        Warnings = RecoverPageTree(objects, trailer);
+        _openWarnings = RecoverPageTree(objects, trailer);
     }
 
     // Validates the page tree at open time and repairs kids whose cross-reference
@@ -240,6 +244,7 @@ public sealed class PdfReader : IDisposable
         LoadXrefChain(stream, startXrefOffset, xref, trailer);
 
         PdfObjectParser parser = new PdfObjectParser(stream);
+        RecoveryLog recoveryLog = new RecoveryLog();
 
         // Check for encryption. The /Encrypt entry in the trailer holds the
         // encryption dictionary (or an indirect reference to it).
@@ -250,7 +255,7 @@ public sealed class PdfReader : IDisposable
         if (trailer.TryGetValue(PdfName.Intern("Encrypt"), out PdfPrimitive? encryptPrim))
         {
             (decryptor, encryptObjectNumber, encryptMetadata) = BuildDecryptor(
-                parser, xref, trailer, encryptPrim, password);
+                parser, xref, trailer, encryptPrim, password, recoveryLog);
         }
 
         Decryptor? finalDecryptor = decryptor;
@@ -273,7 +278,7 @@ public sealed class PdfReader : IDisposable
         PdfObjectStore objects = new PdfObjectStore(id =>
         {
             PdfIndirectObject? loaded = LoadObjectFromFile(
-                parser, xref, id, streamReader, storeHolder[0]);
+                parser, xref, id, streamReader, storeHolder[0], recoveryLog);
 
             if (loaded is null || finalDecryptor is null)
             {
@@ -309,7 +314,7 @@ public sealed class PdfReader : IDisposable
 
         storeHolder[0] = objects;
 
-        return new PdfReader(stream, leaveOpen, trailer, objects);
+        return new PdfReader(stream, leaveOpen, trailer, objects, recoveryLog);
     }
 
     private static (Decryptor decryptor, int encryptObjectNumber, bool encryptMetadata)
@@ -318,7 +323,8 @@ public sealed class PdfReader : IDisposable
             XrefTable xref,
             PdfDictionary trailer,
             PdfPrimitive encryptPrim,
-            string? password)
+            string? password,
+            RecoveryLog recoveryLog)
     {
         PdfDictionary encryptDict;
         int encryptObjectNumber = -1;
@@ -326,7 +332,7 @@ public sealed class PdfReader : IDisposable
         if (encryptPrim is PdfReference encRef)
         {
             encryptObjectNumber = encRef.ObjectId.ObjectNumber;
-            PdfIndirectObject? indirect = LoadInUseObjectFromFile(parser, xref, encRef.ObjectId);
+            PdfIndirectObject? indirect = LoadInUseObjectFromFile(parser, xref, encRef.ObjectId, recoveryLog);
 
             if (indirect?.Value is not PdfDictionary d)
             {
@@ -376,11 +382,30 @@ public sealed class PdfReader : IDisposable
     public PdfObjectStore Objects { get; }
 
     /// <summary>
-    /// Gets warnings raised while opening the document — for example, page-tree
-    /// objects recovered from a corrupt cross-reference table. An empty list
-    /// means the file opened without any structural repair.
+    /// Gets the structural repairs made so far — page-tree objects recovered
+    /// at open from a corrupt cross-reference table, and (3.21) objects whose
+    /// cross-reference offset proved wrong when they were first loaded:
+    /// recovered by scanning the file, read from a misnumbered definition, or
+    /// treated as missing. Objects load lazily, so the list can grow after
+    /// open; check it after the work (render, extract, save), not only at
+    /// open. An empty list means no repair was needed.
     /// </summary>
-    public IReadOnlyList<string> Warnings { get; }
+    public IReadOnlyList<string> Warnings
+    {
+        get
+        {
+            IReadOnlyList<string> lazy = _recoveryLog.Snapshot();
+            if (lazy.Count == 0)
+            {
+                return _openWarnings;
+            }
+
+            List<string> all = new List<string>(_openWarnings.Count + lazy.Count);
+            all.AddRange(_openWarnings);
+            all.AddRange(lazy);
+            return all;
+        }
+    }
 
     /// <summary>Gets the total length of the underlying file in bytes.</summary>
     public long FileLength
@@ -816,7 +841,8 @@ public sealed class PdfReader : IDisposable
         XrefTable xref,
         PdfObjectId id,
         ObjectStreamReader streamReader,
-        PdfObjectStore store)
+        PdfObjectStore store,
+        RecoveryLog recoveryLog)
     {
         if (!xref.TryGet(id.ObjectNumber, out XrefEntry entry))
         {
@@ -825,7 +851,7 @@ public sealed class PdfReader : IDisposable
 
         if (entry.IsInUse)
         {
-            return LoadInUseObject(parser, id, entry.ByteOffset);
+            return LoadInUseObject(parser, xref, id, entry.ByteOffset, recoveryLog);
         }
 
         if (entry.IsCompressed)
@@ -858,28 +884,40 @@ public sealed class PdfReader : IDisposable
     private static PdfIndirectObject? LoadInUseObjectFromFile(
         PdfObjectParser parser,
         XrefTable xref,
-        PdfObjectId id)
+        PdfObjectId id,
+        RecoveryLog recoveryLog)
     {
         long offset = xref.GetOffset(id.ObjectNumber);
         if (offset < 0)
         {
             return null;
         }
-        return LoadInUseObject(parser, id, offset);
+        return LoadInUseObject(parser, xref, id, offset, recoveryLog);
     }
 
     /// <summary>
     /// Reads a classic in-use indirect object at the given byte offset,
-    /// recovering from a provably wrong xref offset (3.18): when the bytes at
-    /// the offset parse to a DIFFERENT object number, or do not parse at all,
-    /// the file is scanned for the object's real definition. Healthy files
-    /// never pay for the scan — it only runs once an entry has failed the
-    /// object-number check that every load performs anyway.
+    /// recovering from a provably wrong xref offset: when the bytes at the
+    /// offset parse to a DIFFERENT object number, or do not parse at all, the
+    /// file is scanned for the object's real definition (3.18; whitespace-
+    /// tolerant since 3.21). Healthy files never pay for the scan — it only
+    /// runs once an entry has failed the object-number check that every load
+    /// performs anyway.
     /// </summary>
-    private static PdfIndirectObject LoadInUseObject(
+    /// <remarks>
+    /// When the scan finds no definition (3.21, PDF 32000-1:2008 §7.3.10), the
+    /// object is never resolved to a different live object. The definition at
+    /// the offset is accepted under the requested number only when no other
+    /// cross-reference entry uses its own number (a writer that mislabelled
+    /// the header); otherwise the object is treated as missing (null). Every
+    /// repair is recorded in <see cref="Warnings"/>.
+    /// </remarks>
+    private static PdfIndirectObject? LoadInUseObject(
         PdfObjectParser parser,
+        XrefTable xref,
         PdfObjectId id,
-        long offset)
+        long offset,
+        RecoveryLog recoveryLog)
     {
         try
         {
@@ -892,13 +930,33 @@ public sealed class PdfReader : IDisposable
 
             // Wrong object at the offset: the xref entry is provably stale.
             PdfIndirectObject? recovered = parser.ScanForObject(id);
-            return recovered ?? obj;
+            if (recovered is not null)
+            {
+                recoveryLog.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"Object {id.ObjectNumber} {id.Generation}: the cross-reference offset {offset} holds object {obj.Id.ObjectNumber}; the definition was recovered by scanning the file."));
+                return recovered;
+            }
+
+            bool claimed = xref.TryGet(obj.Id.ObjectNumber, out XrefEntry other)
+                && (other.IsInUse || other.IsCompressed);
+            if (!claimed)
+            {
+                recoveryLog.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"Object {id.ObjectNumber} {id.Generation}: the definition at offset {offset} is numbered {obj.Id.ObjectNumber} {obj.Id.Generation}, which no other cross-reference entry uses; it was read as object {id.ObjectNumber}."));
+                return new PdfIndirectObject(id, obj.Value);
+            }
+
+            recoveryLog.Add(string.Create(CultureInfo.InvariantCulture,
+                $"Object {id.ObjectNumber} {id.Generation}: the cross-reference offset {offset} holds object {obj.Id.ObjectNumber} and no definition of object {id.ObjectNumber} was found; it was treated as missing (null)."));
+            return null;
         }
         catch (PdfParseException)
         {
             PdfIndirectObject? recovered = parser.ScanForObject(id);
             if (recovered is not null)
             {
+                recoveryLog.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"Object {id.ObjectNumber} {id.Generation}: unreadable at the cross-reference offset {offset}; the definition was recovered by scanning the file."));
                 return recovered;
             }
 
@@ -909,6 +967,8 @@ public sealed class PdfReader : IDisposable
             PdfIndirectObject? recovered = parser.ScanForObject(id);
             if (recovered is not null)
             {
+                recoveryLog.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"Object {id.ObjectNumber} {id.Generation}: unreadable at the cross-reference offset {offset}; the definition was recovered by scanning the file."));
                 return recovered;
             }
 

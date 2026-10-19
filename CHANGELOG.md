@@ -10,6 +10,77 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.21.0] - 2026-10-19
+
+Acrobat-aligned behaviour for two long-standing limits (tiling patterns with
+many tiles, damaged cross-reference recovery), plus the last two Reader asks:
+layer visibility when rendering (PDF-14) and real-world measurement (PDF-15).
+
+### Added
+- **Layer visibility (PDF-14).** `OptionalContentVisibility` evaluates the
+  document's default layer configuration (`/BaseState`, `/ON`, `/OFF`, and
+  the `/AS` auto-state for viewing) and every way content joins a layer:
+  `BDC /OC` sequences, and `/OC` on form XObjects, image XObjects and
+  annotations, including membership dictionaries (`/P` AnyOn, AllOn, AnyOff,
+  AllOff) and `/VE` visibility expressions (And, Or, Not).
+  `OptionalContentVisibility.FromDocument(document, layerVisibility)`,
+  `WithOverrides`, `IsLayerVisible(name)`, `IsVisible(entry)` and
+  `AllVisible`. Each page exposes the document default as
+  `PdfPage.OptionalContent`.
+  - Rendering options: `RenderOptions.IgnoreOptionalContent` /
+    `LayerVisibility` and `SvgExportOptions.IgnoreOptionalContent` /
+    `LayerVisibility` (layer name → visible, for a layers panel).
+  - Builders: `DisplayListBuilder.Build(document, page, OptionalContentVisibility, …)`
+    for the text display list and `Build(page, objects, OptionalContentVisibility, …)`
+    for the raster one.
+  - Extraction: `TextExtractor.OptionalContent` and
+    `ContentStreamParser.OptionalContent`.
+- **Measurement (PDF-15).** `PdfPage.UserUnit` (`/UserUnit`, default 1.0),
+  `PdfPage.Viewports` (`/VP`: `PdfViewport` with `Bounds`, `Name`,
+  `Measure`), `PdfPage.FindViewport(x, y)` (the last viewport containing the
+  point, per the specification) and `PdfPage.MeasureDistance(x1, y1, x2, y2)`.
+  `PdfMeasure` (rectilinear `/RL`; `/GEO` is reported but not converted)
+  provides `Distance`, `Area` and `Coordinates` in the drawing's units, with
+  formatting that follows the document's number formats (`PdfNumberFormat`:
+  precision, fractions, separators, unit chains such as `10 ft 6 in`).
+  `PdfMeasure.FromDictionary` also reads an annotation's `/Measure`.
+
+### Changed
+- **Layers hidden in the document's default configuration are no longer
+  drawn or extracted**, as in Acrobat. This affects SVG, raster,
+  `PageContentInventory` / `HasDrawableContent`, text runs and search, and
+  `TextExtractor`. Content in OFF layers that rendered through 3.20 now
+  disappears. Set `IgnoreOptionalContent` (or pass
+  `OptionalContentVisibility.AllVisible`) for the previous behaviour.
+  Redaction, Scrub and `RedactionVerifier` still see every layer: hidden
+  content is in the file, so it is still removed and still reported.
+- **Tiling patterns needing more than 4,096 tiles are painted** instead of
+  being skipped. Raster renders the cell once into a bitmap at device
+  resolution and repeats it across the region. The cost depends on the output
+  area, not the tile count. A period under about a pixel paints the cell's
+  average tone. Repeated fills on one page are capped at 32× the output area
+  so hostile files stay bounded. SVG emits a native `<pattern>`
+  (`TilingPatternOp.IsRepeating`). Fills of 4,096 tiles or fewer render
+  exactly as before. New raster op: `TilingFillOp`.
+- **Damaged cross-reference recovery** no longer hands back the wrong object.
+  When an xref offset holds a different object and no definition of the
+  requested one exists, the object is treated as missing (null, PDF
+  32000-1:2008 §7.3.10) instead of resolving to the unrelated object. The one
+  exception: a definition with a mislabelled header is accepted when no other
+  entry uses its number.
+- **Every recovery is reported.** `PdfReader.Warnings`, `PdfDocument.Warnings`
+  and `IsRecovered` now also cover objects repaired as they are first loaded:
+  recovered by scanning, read from a mislabelled definition, or treated as
+  missing. Objects load lazily, so these can appear after open. Check them
+  after rendering or extracting. A stale entry repaired by scanning, which
+  3.18 fixed silently, now adds a warning.
+
+### Fixed
+- The xref recovery scan accepts any PDF whitespace between the parts of an
+  object header (`12  0 obj`, `12 0\nobj`, `12\r\n0 obj`), not only single
+  spaces.
+
+---
 ## [3.20.0] - 2026-10-14
 
 The "redaction assurance" release: tagged-content redaction and a

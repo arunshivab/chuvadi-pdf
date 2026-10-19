@@ -47,11 +47,11 @@ public sealed class PageTreeRecoveryTests
 
         // 3.18: the general xref-offset recovery in the loader fixes the
         // stale entry at first load (the object number at the offset does not
-        // match), so the narrower page-tree recovery never needs to fire and
-        // no warning is raised — the document simply resolves correctly.
-        doc.IsRecovered.Should().BeFalse();
-        doc.Warnings.Should().BeEmpty();
+        // match), so the narrower page-tree recovery never needs to fire.
+        // 3.21: that repair is now reported, like every other repair.
         doc.PageCount.Should().BeGreaterThan(0);
+        doc.IsRecovered.Should().BeTrue();
+        doc.Warnings.Should().ContainSingle(w => w.Contains("recovered by scanning"));
     }
 
     [Fact]

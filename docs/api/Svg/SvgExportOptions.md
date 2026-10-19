@@ -98,6 +98,22 @@ bool ApplyPageRotation
 
 Whether the page's own `/Rotate` entry is applied, so the page renders upright the way PDF viewers display it. It adds to `Rotation`. Default: false (the page renders in its unrotated user space, as in earlier releases).
 
+### `IgnoreOptionalContent`
+
+```csharp
+bool IgnoreOptionalContent
+```
+
+Whether optional content (layers) is ignored, so every layer is drawn whatever its state. Default: false — layers hidden in the document's default configuration are left out, as in Acrobat.
+
+### `LayerVisibility`
+
+```csharp
+IReadOnlyDictionary<string, bool>? LayerVisibility
+```
+
+Per-layer visibility overrides (layer name → visible) on top of the document's default configuration. Ignored when `IgnoreOptionalContent` is true. Default: null.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Svg/SvgExportOptions.cs`](../../../src/Chuvadi.Pdf.Svg/SvgExportOptions.cs)_

@@ -108,7 +108,7 @@ Gets the underlying `PdfReader` for low-level access such as reading raw file by
 IReadOnlyList<string> Warnings => _reader.Warnings
 ```
 
-Gets warnings raised while opening the document. A non-empty list means the file was structurally repaired during loading — for example, a page-tree object recovered from a corrupt cross-reference table. The document is usable, and writing it back out (merge, reorder, extract, save) emits a clean, repaired file.
+Gets the structural repairs made to the document. A non-empty list means the file was repaired while loading — for example, a page-tree object recovered from a corrupt cross-reference table, or an object whose cross-reference offset was wrong (recovered by scanning, read from a misnumbered definition, or treated as missing). Objects load lazily, so the list can grow after open: check it after rendering, extracting or saving, not only at open. The document is usable, and writing it back out (merge, reorder, extract, save) emits a clean, repaired file.
 
 ### `IsRecovered`
 
@@ -116,7 +116,7 @@ Gets warnings raised while opening the document. A non-empty list means the file
 bool IsRecovered => _reader.Warnings.Count > 0
 ```
 
-Gets a value indicating whether the document was opened in a repaired state. Equivalent to `Warnings` being non-empty.
+Gets a value indicating whether the document has been repaired so far. Equivalent to `Warnings` being non-empty; like it, it can become true after open, when a damaged object is first loaded.
 
 ## Methods
 

@@ -102,7 +102,7 @@ public sealed class PageContentInventory
                 case ShadingOp:
                     shadings++;
                     break;
-                case TilingPatternOp tp when depth < 8 && tp.Tiles.Count > 0:
+                case TilingPatternOp tp when depth < 8 && (tp.Tiles.Count > 0 || tp.IsRepeating):
                     // A tiling pattern paints its cell's content (once per
                     // tile; counted once).
                     PageContentInventory cell = FromNested(tp.Cell, depth + 1);

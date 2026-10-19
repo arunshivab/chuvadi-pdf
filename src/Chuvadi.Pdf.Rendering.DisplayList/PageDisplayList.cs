@@ -18,7 +18,7 @@ namespace Chuvadi.Pdf.Rendering.DisplayList;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Built by <see cref="DisplayListBuilder.Build"/>; consumed by output adapters
+/// Built by <see cref="DisplayListBuilder.Build(PdfDocument, int, bool)"/>; consumed by output adapters
 /// such as <c>SvgRenderer</c>, <c>WpfRenderer</c>, or future software rasterizers.
 /// </para>
 /// <para>
