@@ -8,6 +8,12 @@ Free-text annotation drawn directly on the page (§12.5.6.6).
 public sealed class FreeTextAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `FreeTextAnnotation(int pageIndex, RectangleF rect, string contents, ColorF? color = null, string? author = null, float opacity = 1f, string defaultAppearance = "/Helvetica 12 Tf 0 0 0 rg")`
+
+Initialises a free-text annotation.
+
 ## Properties
 
 ### `DefaultAppearance`

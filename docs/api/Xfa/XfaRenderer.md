@@ -10,6 +10,24 @@ public static class XfaRenderer
 
 ## Methods
 
+### `OpenComposed`
+
+__static__
+
+```csharp
+static PdfDocument OpenComposed(Stream input, bool leaveOpen = false, XfaRenderOptions? options = null)
+```
+
+Opens a PDF so that XFA "just works": a dynamic XFA document (catalog `/NeedsRendering true`, whose page content is a placeholder) is composed through `Render` and the composed static document is returned; every other document — hybrid and static XFA included, whose real content already lives in pages and widget appearances — comes back exactly as `PdfDocument.Open(Stream, bool)` returns it. A dynamic document whose template cannot be composed falls back to the original document rather than failing the open.
+
+**Parameters**
+
+- `input` — The stream holding the PDF.
+- `leaveOpen` — Whether `input` is left open when the returned document is disposed (or, for a composed document, after composition).
+- `options` — Rendering options for the dynamic composition, or null for `XfaRenderOptions.Default` (scripts run in Full mode).
+
+**Returns:** The opened document, composed when it was dynamic XFA.
+
 ### `Render`
 
 __static__

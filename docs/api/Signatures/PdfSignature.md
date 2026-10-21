@@ -20,6 +20,12 @@ A PDF signature is the combination of a signature dictionary and the AcroForm fi
 - /M — signing time (PDF date string; optional and often unreliable — the authoritative signing time, when present, lives inside the CMS signed attributes). 
 - /Name, /Reason, /Location, /ContactInfo — optional signer metadata.
 
+## Constructors
+
+### `PdfSignature(string fieldName, string? filter, string? subFilter, ByteRange byteRange, byte[] contents, string? name, string? reason, string? location, string? contactInfo, DateTimeOffset? signingTimeFromDictionary, bool isDocumentTimestamp)`
+
+Initialises a new PdfSignature.
+
 ## Properties
 
 ### `FieldName`

@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Graphics;
@@ -179,6 +180,13 @@ public static class PageCropper
                 // appearance streams) omitted from the output — an off-box
                 // annotation otherwise keeps its full content in the file.
                 FilterAnnotations(newPage, cropBox);
+
+                // A page thumbnail is a picture of the whole uncropped page,
+                // and /PieceInfo holds the authoring application's private
+                // copy of it: both would keep off-box content. Dropped here,
+                // their objects are omitted when nothing else reaches them.
+                newPage.Remove(PdfName.Intern("Thumb"));
+                newPage.Remove(PdfName.Intern("PieceInfo"));
             }
             else
             {
@@ -416,10 +424,17 @@ public static class PageCropper
             PdfArray kept = new PdfArray([]);
             foreach (PdfPrimitive item in annots)
             {
-                if (_store.Resolve(item) is not PdfDictionary annot
-                    || !IsEntirelyOutside(annot, cropBox))
+                if (_store.Resolve(item) is not PdfDictionary annot)
                 {
                     kept.Add(item);
+                    continue;
+                }
+
+                if (!IsEntirelyOutside(annot, cropBox))
+                {
+                    // A kept annotation's appearance keeps only what lies in
+                    // the box (an appearance can draw past its /Rect).
+                    kept.Add(ScrubKeptAppearance(item, annot, cropBox));
                     continue;
                 }
 
@@ -439,6 +454,157 @@ public static class PageCropper
             {
                 newPage.Set(annotsName, kept);
             }
+        }
+
+        // Rewrites a kept annotation's appearance streams (/AP N, R, D and
+        // their state sub-dictionaries) scrubbed to the box, in place of the
+        // originals (which then leave the file unless something else still
+        // reaches them). An annotation without an appearance or a /Rect is
+        // returned unchanged.
+        private PdfPrimitive ScrubKeptAppearance(PdfPrimitive item, PdfDictionary annot, RectangleF cropBox)
+        {
+            if (!TryReadRect(annot, out double rx0, out double ry0, out double rx1, out double ry1)
+                || !annot.TryGetValue(PdfName.Intern("AP"), out PdfPrimitive? apPrim)
+                || _store.Resolve(apPrim) is not PdfDictionary ap)
+            {
+                return item;
+            }
+
+            PdfDictionary newAp = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in ap)
+            {
+                PdfPrimitive value = _store.Resolve(entry.Value);
+                if (value is PdfStream stream)
+                {
+                    newAp.Set(entry.Key, ScrubAppearance(stream, rx0, ry0, rx1, ry1, cropBox));
+                }
+                else if (value is PdfDictionary states)
+                {
+                    PdfDictionary newStates = new PdfDictionary();
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> state in states)
+                    {
+                        newStates.Set(
+                            state.Key,
+                            _store.Resolve(state.Value) is PdfStream stateStream
+                                ? ScrubAppearance(stateStream, rx0, ry0, rx1, ry1, cropBox)
+                                : state.Value);
+                    }
+
+                    newAp.Set(entry.Key, newStates);
+                }
+                else
+                {
+                    newAp.Set(entry.Key, entry.Value);
+                }
+            }
+
+            PdfDictionary newAnnot = ObjectImporter.CopyDictionary(annot);
+            newAnnot.Set(PdfName.Intern("AP"), newAp);
+            if (item is PdfReference annotRef)
+            {
+                _modifiedPages.Add((annotRef.ObjectId, newAnnot));
+                return item;
+            }
+
+            return newAnnot;
+        }
+
+        // Scrubs one appearance stream. Its form space maps to page space by
+        // its /Matrix followed by the transform fitting the transformed
+        // /BBox to the annotation /Rect (PDF 12.5.5).
+        private PdfReference ScrubAppearance(
+            PdfStream stream, double rx0, double ry0, double rx1, double ry1, RectangleF cropBox)
+        {
+            PdfDictionary dict = stream.Dictionary;
+            Matrix3x3 matrix = Matrix3x3.Identity;
+            if (_store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Intern("Matrix")) ?? PdfNull.Value) is PdfArray m
+                && m.Count >= 6)
+            {
+                matrix = new Matrix3x3(
+                    Num(m[0]), Num(m[1]), Num(m[2]), Num(m[3]), Num(m[4]), Num(m[5]));
+            }
+
+            byte[] content;
+            Matrix3x3 placement;
+            if (_store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Intern("BBox")) ?? PdfNull.Value) is PdfArray bbox
+                && bbox.Count >= 4)
+            {
+                List<(double X, double Y)> corners = ScrubGeometry.TransformRectCorners(
+                    matrix,
+                    Math.Min(Num(bbox[0]), Num(bbox[2])), Math.Min(Num(bbox[1]), Num(bbox[3])),
+                    Math.Max(Num(bbox[0]), Num(bbox[2])), Math.Max(Num(bbox[1]), Num(bbox[3])));
+                double tx0 = double.PositiveInfinity, ty0 = double.PositiveInfinity;
+                double tx1 = double.NegativeInfinity, ty1 = double.NegativeInfinity;
+                foreach ((double x, double y) in corners)
+                {
+                    tx0 = Math.Min(tx0, x);
+                    ty0 = Math.Min(ty0, y);
+                    tx1 = Math.Max(tx1, x);
+                    ty1 = Math.Max(ty1, y);
+                }
+
+                double sx = tx1 - tx0 > 1e-9 ? (rx1 - rx0) / (tx1 - tx0) : 1.0;
+                double sy = ty1 - ty0 > 1e-9 ? (ry1 - ry0) / (ty1 - ty0) : 1.0;
+                placement = matrix.Multiply(new Matrix3x3(sx, 0, 0, sy, rx0 - (sx * tx0), ry0 - (sy * ty0)));
+                try
+                {
+                    content = ObjectImporter.DecodeStreamContent(stream);
+                }
+                catch (Exception)
+                {
+                    content = Array.Empty<byte>(); // undecodable: emptied (B15)
+                }
+            }
+            else
+            {
+                // No bounding box: its extent is unknown, so it is emptied (B15).
+                placement = matrix;
+                content = Array.Empty<byte>();
+            }
+
+            PdfDictionary? ownResources = _store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Resources) ?? PdfNull.Value) as PdfDictionary;
+            PageScrubber.ScrubResult result = PageScrubber.ScrubPlaced(
+                content, cropBox.X, cropBox.Y, cropBox.Right, cropBox.Top, ownResources, _store, Allocate, placement);
+
+            PdfDictionary newDict = new PdfDictionary();
+            foreach (PdfName key in dict.Keys)
+            {
+                if (key.Value is not ("Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo"))
+                {
+                    newDict.Set(key, dict[key]);
+                }
+            }
+
+            if (ownResources is not null || result.NewXObjects.Count > 0)
+            {
+                newDict.Set(PdfName.Resources, PageScrubber.BuildScrubbedResources(ownResources, result, _store, Allocate));
+            }
+
+            newDict.Set(PdfName.Length, result.Content.Length);
+            return Allocate(new PdfStream(newDict, result.Content));
+        }
+
+        private double Num(PdfPrimitive p) => PdfReal.ToDouble(_store.Resolve(p));
+
+        private bool TryReadRect(PdfDictionary annot, out double x0, out double y0, out double x1, out double y1)
+        {
+            x0 = y0 = x1 = y1 = 0;
+            if (!annot.TryGetValue(PdfName.Intern("Rect"), out PdfPrimitive? rectPrim)
+                || _store.Resolve(rectPrim) is not PdfArray rect
+                || rect.Count < 4)
+            {
+                return false;
+            }
+
+            double ax = Num(rect[0]);
+            double ay = Num(rect[1]);
+            double bx = Num(rect[2]);
+            double by = Num(rect[3]);
+            x0 = Math.Min(ax, bx);
+            x1 = Math.Max(ax, bx);
+            y0 = Math.Min(ay, by);
+            y1 = Math.Max(ay, by);
+            return true;
         }
 
         private bool IsEntirelyOutside(PdfDictionary annot, RectangleF cropBox)
@@ -591,6 +757,18 @@ public static class PageCropper
         // Drops scrub candidates that the output no longer reaches from the
         // trailer (catalog and info). Shared objects still used elsewhere —
         // another page, an annotation, the outline — remain reachable and stay.
+        // A structure tree object reference (PDF 14.7.4.3): /Type /OBJR, or an
+        // untyped dictionary with /Obj and no structure type.
+        private static bool IsObjectReference(PdfDictionary d)
+        {
+            if (d.TryGetValue(PdfName.Type, out PdfPrimitive? type) && type is PdfName name)
+            {
+                return name.Value == "OBJR";
+            }
+
+            return d.ContainsKey(PdfName.Intern("Obj")) && !d.ContainsKey(PdfName.Intern("S"));
+        }
+
         private List<PdfIndirectObject> OmitUnreachableCandidates(
             List<PdfIndirectObject> objects, PdfDictionary trailer)
         {
@@ -617,8 +795,18 @@ public static class PageCropper
 
                         break;
                     case PdfDictionary d:
+                        bool objectReference = IsObjectReference(d);
                         foreach (PdfName key in d.Keys)
                         {
+                            // A structure element's object reference (OBJR) only
+                            // labels an object; it does not keep a removed one
+                            // (an image no longer drawn) in the file.
+                            if (objectReference && key.Value == "Obj" && d[key] is PdfReference labelled
+                                && _scrubCandidates.Contains(labelled.ObjectId.ObjectNumber))
+                            {
+                                continue;
+                            }
+
                             pending.Push(d[key]);
                         }
 

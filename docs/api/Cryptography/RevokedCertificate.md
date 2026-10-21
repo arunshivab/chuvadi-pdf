@@ -15,6 +15,12 @@ RFC 5280 §5.1:
  revokedCertificates SEQUENCE OF SEQUENCE { userCertificate     CertificateSerialNumber, revocationDate      Time, crlEntryExtensions  Extensions OPTIONAL } OPTIONAL 
 ```
 
+## Constructors
+
+### `RevokedCertificate(BigInteger userCertificateSerial, DateTimeOffset revocationDate, CrlReason reason, DateTimeOffset? invalidityDate)`
+
+Initialises a new revocation entry.
+
 ## Properties
 
 ### `UserCertificateSerial`

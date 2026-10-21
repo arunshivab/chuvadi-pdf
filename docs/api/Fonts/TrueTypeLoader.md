@@ -86,6 +86,21 @@ int GetGlyphIndexUnicode(int codePoint)
 
 Maps a Unicode code point to a glyph index via the Unicode cmap.
 
+### `GetHintedGlyphOutline`
+
+```csharp
+GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light, bool autohintFallback = true)
+```
+
+Returns the glyph outline grid-fitted at the given pixels-per-em, in device space (Y up, one unit = one pixel), or `null` when the glyph cannot be hinted or an interpreter fault occurs.
+
+**Parameters**
+
+- `glyphId` — Zero-based glyph index.
+- `ppem` — Target size in pixels per em; must be positive.
+- `light` — When true, grid-fit the Y axis only (horizontal positions stay naturally scaled).
+- `autohintFallback` — When true (the default), glyphs of fonts that carry no hinting programs at all are grid-fitted by the geometric autohinter (the Y axis, plus vertical stems in X when `light` is false) instead of falling back to the unhinted outline.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeLoader.cs)_

@@ -8,6 +8,12 @@ The result of verifying a PDF digital signature.
 public sealed class SignatureVerificationResult
 ```
 
+## Constructors
+
+### `SignatureVerificationResult(SignatureVerificationStatus status, string message, X509Certificate? signerCertificate, bool integrityVerified, bool trustValidated = false, CertificatePath? validatedPath = null, bool timestampValidated = false, DateTimeOffset? signatureTimestamp = null, X509Certificate? timestampCertificate = null, bool timestampTrustValidated = false, CertificatePath? timestampValidatedPath = null)`
+
+Initialises a new result.
+
 ## Properties
 
 ### `Status`

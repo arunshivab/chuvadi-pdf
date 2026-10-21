@@ -8,6 +8,18 @@ Border style for an annotation, describing width, style, and (for dashed borders
 public sealed class BorderStyle
 ```
 
+## Constructors
+
+### `BorderStyle(float width = 1f, BorderStyleType style = BorderStyleType.Solid, IReadOnlyList<float>? dashPattern = null)`
+
+Initialises a border style.
+
+**Parameters**
+
+- `width` — Border width in PDF user-space units. Must be ≥ 0.
+- `style` — Border style kind. Default Solid.
+- `dashPattern` — Dash pattern (alternating on/off lengths). Required when `style` is `BorderStyleType.Dashed`; ignored otherwise. Null is treated as the default [3] for Dashed.
+
 ## Properties
 
 ### `Width`

@@ -15,6 +15,12 @@ RFC 6960 §4.2.1:
  SingleResponse ::= SEQUENCE { certID            CertID, certStatus        CertStatus, thisUpdate        GeneralizedTime, nextUpdate        [0] EXPLICIT GeneralizedTime OPTIONAL, singleExtensions  [1] EXPLICIT Extensions OPTIONAL } 
 ```
 
+## Constructors
+
+### `SingleResponse(CertId certId, CertStatus status, DateTimeOffset thisUpdate, DateTimeOffset? nextUpdate)`
+
+Initialises a new single response.
+
 ## Properties
 
 ### `CertId`

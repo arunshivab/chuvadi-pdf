@@ -21,6 +21,7 @@ using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
+using Chuvadi.Pdf.Operations;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Redaction;
@@ -194,6 +195,14 @@ public static class Redactor
         byte[][] overlayBytes = new byte[work.Count][];
         HashSet<int>[] redactedMcids = new HashSet<int>[work.Count];
 
+        // Partly redacted images: each page's blanked copies, added to the
+        // page's resources in phase 3.
+        List<BlankedImage>[] blankedImages = new List<BlankedImage>[work.Count];
+        for (int i = 0; i < work.Count; i++)
+        {
+            blankedImages[i] = new List<BlankedImage>();
+        }
+
         if (options.MaxDegreeOfParallelism == 1)
         {
             for (int i = 0; i < work.Count; i++)
@@ -201,7 +210,7 @@ public static class Redactor
                 (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
                     RewriteContent(
                         originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns);
+                        work[i].Page.Resources, work[i].Patterns, blankedImages[i]);
                 redactedBytes[i] = rewritten.Bytes;
                 redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
@@ -222,7 +231,7 @@ public static class Redactor
                 (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
                     RewriteContent(
                         originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns);
+                        work[i].Page.Resources, work[i].Patterns, blankedImages[i]);
                 redactedBytes[i] = rewritten.Bytes;
                 redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
@@ -233,6 +242,7 @@ public static class Redactor
         // Phase 3 (serial) — allocate object numbers and assemble the output in
         // stable order, so the result is identical regardless of parallelism.
         List<PdfDictionary> modifiedPages = new List<PdfDictionary>(work.Count);
+        HashSet<int> strippedPageExtras = new HashSet<int>();
         for (int i = 0; i < work.Count; i++)
         {
             PdfObjectId redactedId = new PdfObjectId(nextObjectNum++, 0);
@@ -258,30 +268,40 @@ public static class Redactor
                 new PdfReference(overlayId),
             ]);
             modifiedPage.Set(PdfName.Contents, contents);
+            StripPrivateEntries(modifiedPage, strippedPageExtras);
             allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
             modifiedPages.Add(modifiedPage);
             rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
         }
 
-        Dictionary<int, (PdfDictionary Dict, byte[] Content)> rewrittenForms =
+        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> rewrittenForms =
             RewriteCollectedForms(run, allObjects, removedContentStreamNums);
 
         // An image whose Do was removed must leave the file, not just the
         // content stream: prune it from the rewritten pages' and forms'
         // /XObject resources, then omit it below if nothing else reaches it.
-        HashSet<int> orphanImageCandidates = new HashSet<int>();
+        HashSet<int> orphanImageCandidates = new HashSet<int>(strippedPageExtras);
         for (int i = 0; i < work.Count; i++)
         {
             PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
+            AddBlankedImages(modifiedPages[i], work[i].Page.Resources, blankedImages[i], run, allObjects, ref nextObjectNum);
         }
 
-        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content)> form in rewrittenForms)
+        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> form in rewrittenForms)
         {
             PdfDictionary? formResources = form.Value.Dict.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
                 ? run.Store.Resolve(fr) as PdfDictionary
                 : null;
             PruneUnusedImages(form.Value.Dict, formResources, form.Value.Content, run, orphanImageCandidates);
+            AddBlankedImages(form.Value.Dict, formResources, form.Value.Images, run, allObjects, ref nextObjectNum);
+            StripPrivateEntries(form.Value.Dict, orphanImageCandidates);
         }
+
+        // Resources a rewritten page inherits from a page-tree node: the
+        // page now carries its own (pruned) copy, and the node's resources
+        // keep only what the pages still inheriting them use.
+        Dictionary<int, PdfDictionary> replacedNodes = PruneInheritedResources(
+            document, pageIds, work, modifiedPages, rewrittenPageNums, run, pipeline, orphanImageCandidates);
 
         // LA-04: neutralise the structure tree so redacted text cannot be
         // recovered through /ActualText, /Alt, or marked-content references in the
@@ -358,6 +378,12 @@ public static class Redactor
             if (rewrittenStructObjects.TryGetValue(obj.Id.ObjectNumber, out PdfPrimitive? rewrittenStruct))
             {
                 allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenStruct));
+                continue;
+            }
+
+            if (replacedNodes.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? replacedNode))
+            {
+                allObjects.Add(new PdfIndirectObject(obj.Id, replacedNode));
                 continue;
             }
 
@@ -460,9 +486,12 @@ public static class Redactor
         public PdfDictionary? NamedTextProperties { get; set; }
     }
 
+    // blankedImages receives the blanked copies of partly redacted images;
+    // null when new images cannot be added to the content's resources (a
+    // form that inherits its resources), and such images are then removed.
     private static (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) RewriteContent(
         byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources,
-        IReadOnlyList<PatternRule> patterns)
+        IReadOnlyList<PatternRule> patterns, List<BlankedImage>? blankedImages)
     {
         using (MemoryStream input = new MemoryStream(content))
         using (MemoryStream output = new MemoryStream())
@@ -470,6 +499,7 @@ public static class Redactor
         {
             RedactState state = new RedactState();
             state.Patterns = patterns;
+            state.BlankedImages = blankedImages;
             List<PdfToken> pendingOperands = new List<PdfToken>();
             PathAccumulator path = new PathAccumulator();
 
@@ -548,7 +578,11 @@ public static class Redactor
                 // redaction from the CTM (it paints the unit square, like Do).
                 if (token.RawText == "BI")
                 {
-                    HandleInlineImage(tok, content, Sink(), state, contexts, token.ByteOffset);
+                    if (HandleInlineImage(tok, content, Sink(), state, contexts, token.ByteOffset, run, resources))
+                    {
+                        NoteDropped();
+                    }
+
                     pendingOperands.Clear();
                     continue;
                 }
@@ -762,6 +796,52 @@ public static class Redactor
                     List<PdfToken> stringOnly = new List<PdfToken> { pendingOperands[2] };
                     if (EmitRedactedText(sink, stringOnly, state, contexts))
                     {
+                        NoteDropped();
+                    }
+
+                    pendingOperands.Clear();
+                    continue;
+                }
+
+                // An image XObject meeting a redaction rectangle: only the
+                // covered pixels are blanked (in a new image under a new
+                // name); an image wholly covered, or one that cannot be
+                // decoded, is removed.
+                if (op == "Do"
+                    && ResolveXObjectRef(pendingOperands, resources, run.Store) is { } placed
+                    && IsImage(placed.Stream)
+                    && ShouldRedactImageAtCtm(state, contexts))
+                {
+                    (int, Transform) cacheKey = (placed.ObjNum, state.Ctm);
+                    if (!state.BlankedImageCache.TryGetValue(cacheKey, out (ImageBlankOutcome Outcome, string? Name) edit))
+                    {
+                        PdfStream imageStream = placed.Stream;
+                        ImageBlankOutcome outcome = BlankImageAtCtm(
+                            () =>
+                            {
+                                lock (run.Sync)
+                                {
+                                    return ImageSampleCropper.FromXObject(imageStream, run.Store);
+                                }
+                            },
+                            state, contexts, run, resources, out string? newName);
+                        edit = (outcome, newName);
+                        state.BlankedImageCache[cacheKey] = edit;
+                    }
+
+                    if (edit.Outcome == ImageBlankOutcome.Untouched)
+                    {
+                        MemoryStream sink = Sink();
+                        WriteTokens(sink, pendingOperands);
+                        WriteRaw(sink, "Do\n");
+                    }
+                    else
+                    {
+                        if (edit.Outcome == ImageBlankOutcome.Blanked && edit.Name is string blankedName)
+                        {
+                            WriteRaw(Sink(), "/" + blankedName + " Do\n");
+                        }
+
                         NoteDropped();
                     }
 
@@ -1270,13 +1350,17 @@ public static class Redactor
     /// </summary>
     /// <summary>
     /// Consumes an inline image (<c>BI … ID &lt;binary&gt; EI</c>) as one unit.
-    /// The image is dropped when the unit square mapped by the current CTM
-    /// intersects a redaction rectangle (inline images paint the unit square,
-    /// like <c>Do</c> images); otherwise the original bytes are copied verbatim.
+    /// When the unit square mapped by the current CTM meets a redaction
+    /// rectangle (inline images paint the unit square, like <c>Do</c> images)
+    /// the covered pixels are blanked and the image is re-emitted as a new
+    /// image XObject; a wholly covered or undecodable image is removed.
+    /// Otherwise the original bytes are copied verbatim. Returns true when the
+    /// image was changed or removed.
     /// </summary>
-    private static void HandleInlineImage(
+    private static bool HandleInlineImage(
         PdfTokenizer tok, byte[] content, MemoryStream output,
-        RedactState state, IReadOnlyList<RedactContext> contexts, long biStart)
+        RedactState state, IReadOnlyList<RedactContext> contexts, long biStart,
+        RedactRun run, PdfDictionary? resources)
     {
         // Exact-extent consumption (3.18): /W /H /BPC /CS give the data length
         // for unfiltered images, so a byte pair that merely looks like "EI"
@@ -1289,16 +1373,227 @@ public static class Redactor
             // unknowable — keep it verbatim rather than guessing what to drop.
             output.Write(content, (int)biStart, content.Length - (int)biStart);
             tok.Seek(content.Length);
-            return;
+            return false;
         }
 
         if (!ShouldRedactImageAtCtm(state, contexts))
         {
             output.Write(content, (int)biStart, eiEnd - (int)biStart);
             output.WriteByte((byte)'\n');
+            tok.Seek(eiEnd);
+            return false;
         }
 
+        ImageBlankOutcome outcome = BlankImageAtCtm(
+            () =>
+            {
+                lock (run.Sync)
+                {
+                    return ImageSampleCropper.FromInline(content, (int)biStart, eiEnd, resources, run.Store);
+                }
+            },
+            state, contexts, run, resources, out string? name);
+
         tok.Seek(eiEnd);
+        if (outcome == ImageBlankOutcome.Untouched)
+        {
+            output.Write(content, (int)biStart, eiEnd - (int)biStart);
+            output.WriteByte((byte)'\n');
+            return false;
+        }
+
+        if (outcome == ImageBlankOutcome.Blanked && name is not null)
+        {
+            WriteRaw(output, "/" + name + " Do\n");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Partial image redaction: maps every redaction rectangle into the
+    /// image's unit square (through the current CTM and each context's
+    /// placement) and blanks the pixels whose cells meet one, keeping the
+    /// rest of the image. A blanked copy is recorded under a new resource
+    /// name. Returns <see cref="ImageBlankOutcome.Failed"/> (the caller then
+    /// removes the image) when new images cannot be added here or the
+    /// placement is singular.
+    /// </summary>
+    private static ImageBlankOutcome BlankImageAtCtm(
+        Func<ImageSource?> load, RedactState state, IReadOnlyList<RedactContext> contexts,
+        RedactRun run, PdfDictionary? resources, out string? name)
+    {
+        name = null;
+        if (state.BlankedImages is null || state.BlankedImages.Count >= MaxBlankedImagesPerStream)
+        {
+            return ImageBlankOutcome.Failed;
+        }
+
+        List<List<(double X, double Y)>> regions = new List<List<(double X, double Y)>>();
+        for (int c = 0; c < contexts.Count; c++)
+        {
+            RedactContext context = contexts[c];
+            if (context.Rects.Count == 0)
+            {
+                continue;
+            }
+
+            Transform inverse;
+            try
+            {
+                inverse = state.Ctm.Multiply(context.BaseCtm).Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                return ImageBlankOutcome.Failed;
+            }
+
+            foreach (RectangleF r in context.Rects)
+            {
+                List<(double X, double Y)> region = new List<(double X, double Y)>(4);
+                foreach (PointF corner in new[]
+                {
+                    new PointF(r.X, r.Y),
+                    new PointF(r.X + r.Width, r.Y),
+                    new PointF(r.X + r.Width, r.Y + r.Height),
+                    new PointF(r.X, r.Y + r.Height),
+                })
+                {
+                    PointF u = inverse.TransformPoint(corner);
+                    region.Add((u.X, u.Y));
+                }
+
+                regions.Add(region);
+            }
+        }
+
+        List<(PdfReference Placeholder, PdfStream Stream)> masks = new List<(PdfReference Placeholder, PdfStream Stream)>();
+        PdfReference Allocate(PdfStream stream)
+        {
+            PdfReference placeholder = new PdfReference(PdfObjectId.Invalid);
+            masks.Add((placeholder, stream));
+            return placeholder;
+        }
+
+        ImageBlankOutcome outcome = ImageSampleCropper.BlankRegions(load, regions, Allocate, out PdfStream? edited);
+        if (outcome == ImageBlankOutcome.Blanked)
+        {
+            if (edited is null)
+            {
+                return ImageBlankOutcome.Failed;
+            }
+
+            name = NewBlankedImageName(state.BlankedImages, resources, run);
+            state.BlankedImages.Add(new BlankedImage(name, edited, masks));
+        }
+
+        return outcome;
+    }
+
+    // Blanked copies one content stream may add; past this (a crafted page
+    // placing one image many times) further partly covered images are
+    // removed whole, which is always safe (B15).
+    private const int MaxBlankedImagesPerStream = 256;
+
+    // A resource name for a blanked image that no existing XObject uses.
+    private static string NewBlankedImageName(
+        List<BlankedImage> taken, PdfDictionary? resources, RedactRun run)
+    {
+        PdfDictionary? xobjects = null;
+        if (resources is not null && resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv))
+        {
+            lock (run.Sync)
+            {
+                xobjects = run.Store.Resolve(xv) as PdfDictionary;
+            }
+        }
+
+        HashSet<string> used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (BlankedImage image in taken)
+        {
+            used.Add(image.Name);
+        }
+
+        int n = taken.Count;
+        while (true)
+        {
+            string candidate = "CvRedIm" + n.ToString(CultureInfo.InvariantCulture);
+            if (!used.Contains(candidate) && (xobjects is null || !xobjects.ContainsKey(PdfName.Intern(candidate))))
+            {
+                return candidate;
+            }
+
+            n++;
+        }
+    }
+
+    // Adds a content stream's blanked images to its container's resources
+    // (copied, never edited in place), giving each image and its masks new
+    // object numbers in a stable order.
+    private static void AddBlankedImages(
+        PdfDictionary container, PdfDictionary? baseResources, List<BlankedImage> images,
+        RedactRun run, List<PdfIndirectObject> allObjects, ref int nextObjectNum)
+    {
+        if (images.Count == 0)
+        {
+            return;
+        }
+
+        PdfDictionary? current = container.TryGetValue(PdfName.Resources, out PdfPrimitive? rv)
+            ? run.Store.Resolve(rv) as PdfDictionary
+            : baseResources;
+        PdfDictionary resources = current is null ? new PdfDictionary() : CopyDictionary(current);
+        PdfDictionary xobjects = resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv)
+            && run.Store.Resolve(xv) is PdfDictionary existing
+                ? CopyDictionary(existing)
+                : new PdfDictionary();
+
+        foreach (BlankedImage image in images)
+        {
+            List<(PdfReference Placeholder, PdfReference Actual)> assigned =
+                new List<(PdfReference Placeholder, PdfReference Actual)>();
+            foreach ((PdfReference placeholder, PdfStream mask) in image.Masks)
+            {
+                PdfObjectId maskId = new PdfObjectId(nextObjectNum++, 0);
+                assigned.Add((placeholder, new PdfReference(maskId)));
+                allObjects.Add(new PdfIndirectObject(maskId, mask));
+            }
+
+            ReplacePlaceholders(image.Image.Dictionary, assigned);
+            foreach ((PdfReference _, PdfStream mask) in image.Masks)
+            {
+                ReplacePlaceholders(mask.Dictionary, assigned);
+            }
+
+            PdfObjectId imageId = new PdfObjectId(nextObjectNum++, 0);
+            allObjects.Add(new PdfIndirectObject(imageId, image.Image));
+            xobjects.Set(PdfName.Intern(image.Name), new PdfReference(imageId));
+        }
+
+        resources.Set(PdfName.XObject, xobjects);
+        container.Set(PdfName.Resources, resources);
+    }
+
+    private static void ReplacePlaceholders(
+        PdfDictionary dict, List<(PdfReference Placeholder, PdfReference Actual)> assigned)
+    {
+        List<PdfName> keys = new List<PdfName>(dict.Keys);
+        foreach (PdfName key in keys)
+        {
+            if (dict[key] is not PdfReference value)
+            {
+                continue;
+            }
+
+            foreach ((PdfReference placeholder, PdfReference actual) in assigned)
+            {
+                if (ReferenceEquals(value, placeholder))
+                {
+                    dict.Set(key, actual);
+                    break;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -2762,6 +3057,13 @@ public static class Redactor
         return resolved is not null && IsForm(resolved.Value.Stream);
     }
 
+    private static bool IsImage(PdfStream stream)
+    {
+        return stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? subtype)
+            && subtype is PdfName name
+            && name.Value == "Image";
+    }
+
     private static bool IsForm(PdfStream stream)
     {
         return stream.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? subtype)
@@ -2959,11 +3261,11 @@ public static class Redactor
     // Rewrites every collected form XObject's content stream in place (same
     // object id), removing in-rect text under any of its placements, and marks
     // the original for exclusion so no unredacted copy survives in the output.
-    private static Dictionary<int, (PdfDictionary Dict, byte[] Content)> RewriteCollectedForms(
+    private static Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> RewriteCollectedForms(
         RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
     {
-        Dictionary<int, (PdfDictionary Dict, byte[] Content)> rewritten =
-            new Dictionary<int, (PdfDictionary Dict, byte[] Content)>();
+        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> rewritten =
+            new Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)>();
         foreach (KeyValuePair<int, List<RedactContext>> kvp in run.FormInvocations)
         {
             int objNum = kvp.Key;
@@ -2974,7 +3276,14 @@ public static class Redactor
 
             byte[] formBytes = DecodeStream(form, run.Pipeline);
             PdfDictionary? formResources = ResolveFormResources(form, null, run.Store);
-            byte[] redacted = RewriteContent(formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>()).Bytes;
+            // Blanked images join the form's own resources; a form that
+            // inherits its resources cannot take new names, so a partly
+            // covered image in it is removed instead.
+            List<BlankedImage> images = new List<BlankedImage>();
+            bool ownResources = form.Dictionary.ContainsKey(PdfName.Resources) && formResources is not null;
+            byte[] redacted = RewriteContent(
+                formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>(),
+                ownResources ? images : null).Bytes;
 
             PdfDictionary newDict = CopyDictionary(form.Dictionary);
             newDict.Remove(PdfName.Intern("Filter"));
@@ -2983,13 +3292,305 @@ public static class Redactor
 
             allObjects.Add(new PdfIndirectObject(new PdfObjectId(objNum, 0), new PdfStream(newDict, redacted)));
             excluded.Add(objNum);
-            rewritten[objNum] = (newDict, redacted);
+            rewritten[objNum] = (newDict, redacted, images);
+            run.RewrittenForms[objNum] = redacted;
         }
 
         return rewritten;
     }
 
     // ── Orphaned-resource removal ─────────────────────────────────────────
+
+    // A redacted page's thumbnail (/Thumb) is a picture of the unredacted
+    // page, and /PieceInfo (on a page or a form) holds the authoring
+    // application's private data (often a full copy of the original
+    // artwork): both are removed from the rewritten page or form, and the
+    // objects they reference become removal candidates (omitted unless
+    // something else still reaches them).
+    private static void StripPrivateEntries(PdfDictionary page, HashSet<int> candidates)
+    {
+        foreach (string key in new[] { "Thumb", "PieceInfo" })
+        {
+            PdfName name = PdfName.Intern(key);
+            if (page.TryGetValue(name, out PdfPrimitive? value))
+            {
+                CollectDirectReferences(value, candidates, 0);
+                page.Remove(name);
+            }
+        }
+    }
+
+    // Prunes resources a rewritten page shares with other pages: resources
+    // inherited from a page-tree node, and resource dictionaries that are
+    // indirect objects (which other pages or nodes may reference). Each
+    // rewritten page first gets its own direct copy (already pruned when its
+    // content no longer uses an entry); then each shared node or object
+    // keeps only the entries still used by the pages that were not
+    // rewritten and use it (none left: every prunable entry goes). A page
+    // whose content cannot be decoded draws nothing in any viewer and
+    // contributes no uses. Returns the replacement objects by number.
+    private static Dictionary<int, PdfDictionary> PruneInheritedResources(
+        PdfDocument document, Dictionary<int, PdfObjectId> pageIds, List<RedactionWork> work,
+        List<PdfDictionary> modifiedPages, HashSet<int> rewrittenPageNums, RedactRun run,
+        FilterPipeline pipeline, HashSet<int> candidates)
+    {
+        Dictionary<int, PdfDictionary> replaced = new Dictionary<int, PdfDictionary>();
+
+        // Shared holders: a node with direct /Resources (by node number), or
+        // an indirect resource dictionary (by its own number).
+        Dictionary<int, PdfDictionary> nodeHolders = new Dictionary<int, PdfDictionary>();
+        HashSet<int> sharedDictionaries = new HashSet<int>();
+        for (int i = 0; i < work.Count; i++)
+        {
+            (PdfPrimitive? entry, int nodeNum, PdfDictionary? node) = ResourceEntry(work[i].Page.Dictionary, run.Store);
+            if (entry is PdfReference shared)
+            {
+                sharedDictionaries.Add(shared.ObjectId.ObjectNumber);
+            }
+            else if (entry is not null && node is not null)
+            {
+                nodeHolders[nodeNum] = node;
+            }
+
+            PdfPrimitive? current = modifiedPages[i].TryGetValue(PdfName.Resources, out PdfPrimitive? own) ? own : null;
+            if ((current is null || current is PdfReference)
+                && (current is null ? work[i].Page.Resources : run.Store.Resolve(current) as PdfDictionary) is PdfDictionary effective)
+            {
+                modifiedPages[i].Set(PdfName.Resources, CopyDictionary(effective));
+            }
+        }
+
+        if (nodeHolders.Count == 0 && sharedDictionaries.Count == 0)
+        {
+            return replaced;
+        }
+
+        // Content of every page not rewritten, by the holder it draws with.
+        Dictionary<int, MemoryStream> nodeUses = new Dictionary<int, MemoryStream>();
+        Dictionary<int, MemoryStream> dictionaryUses = new Dictionary<int, MemoryStream>();
+        try
+        {
+            for (int p = 0; p < document.PageCount; p++)
+            {
+                if (!pageIds.TryGetValue(p, out PdfObjectId id) || rewrittenPageNums.Contains(id.ObjectNumber))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[p];
+                (PdfPrimitive? entry, int nodeNum, PdfDictionary? node) = ResourceEntry(page.Dictionary, run.Store);
+                MemoryStream? sink = null;
+                if (entry is PdfReference shared && sharedDictionaries.Contains(shared.ObjectId.ObjectNumber))
+                {
+                    if (!dictionaryUses.TryGetValue(shared.ObjectId.ObjectNumber, out sink))
+                    {
+                        sink = new MemoryStream();
+                        dictionaryUses[shared.ObjectId.ObjectNumber] = sink;
+                    }
+                }
+                else if (entry is not null && entry is not PdfReference && node is not null && nodeHolders.ContainsKey(nodeNum))
+                {
+                    if (!nodeUses.TryGetValue(nodeNum, out sink))
+                    {
+                        sink = new MemoryStream();
+                        nodeUses[nodeNum] = sink;
+                    }
+                }
+
+                if (sink is null)
+                {
+                    continue;
+                }
+
+                byte[] content;
+                try
+                {
+                    content = LoadContentBytes(page, run.Store, pipeline);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                sink.Write(content, 0, content.Length);
+                sink.WriteByte((byte)'\n');
+            }
+
+            foreach (KeyValuePair<int, PdfDictionary> holder in nodeHolders)
+            {
+                if (run.Store.Resolve(holder.Value[PdfName.Resources]) is not PdfDictionary nodeResources)
+                {
+                    continue;
+                }
+
+                byte[] uses = nodeUses.TryGetValue(holder.Key, out MemoryStream? u) ? u.ToArray() : Array.Empty<byte>();
+                PdfDictionary node = CopyDictionary(holder.Value);
+                node.Set(PdfName.Resources, nodeResources);
+                PruneUnusedImages(node, nodeResources, uses, run, candidates);
+                if (!ReferenceEquals(node[PdfName.Resources], nodeResources))
+                {
+                    replaced[holder.Key] = node;
+                }
+            }
+
+            // A resource dictionary also named by a form, pattern, appearance
+            // or font is used by content not scanned here: it is left whole.
+            HashSet<int> otherwiseUsed = sharedDictionaries.Count > 0
+                ? ReferencedOutsidePageResources(document.Objects)
+                : new HashSet<int>();
+            foreach (int number in sharedDictionaries)
+            {
+                if (otherwiseUsed.Contains(number)
+                    || run.Store.ResolveById(new PdfObjectId(number, 0)) is not PdfDictionary sharedResources)
+                {
+                    continue;
+                }
+
+                byte[] uses = dictionaryUses.TryGetValue(number, out MemoryStream? u) ? u.ToArray() : Array.Empty<byte>();
+                PdfDictionary holder = new PdfDictionary();
+                holder.Set(PdfName.Resources, sharedResources);
+                PruneUnusedImages(holder, sharedResources, uses, run, candidates);
+                if (holder[PdfName.Resources] is PdfDictionary pruned && !ReferenceEquals(pruned, sharedResources))
+                {
+                    replaced[number] = pruned;
+                }
+            }
+        }
+        finally
+        {
+            foreach (MemoryStream ms in nodeUses.Values)
+            {
+                ms.Dispose();
+            }
+
+            foreach (MemoryStream ms in dictionaryUses.Values)
+            {
+                ms.Dispose();
+            }
+        }
+
+        return replaced;
+    }
+
+    // Object numbers referenced anywhere except as the /Resources entry of
+    // a page or page-tree node.
+    private static HashSet<int> ReferencedOutsidePageResources(PdfObjectStore store)
+    {
+        HashSet<int> found = new HashSet<int>();
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        foreach (PdfIndirectObject obj in store.Objects)
+        {
+            pending.Push(obj.Value);
+            while (pending.Count > 0)
+            {
+                switch (pending.Pop())
+                {
+                    case PdfReference r:
+                        found.Add(r.ObjectId.ObjectNumber);
+                        break;
+                    case PdfDictionary d:
+                        bool pageTree = d.TryGetValue(PdfName.Type, out PdfPrimitive? t)
+                            && t is PdfName tn && (tn.Value == "Page" || tn.Value == "Pages");
+                        foreach (PdfName key in d.Keys)
+                        {
+                            if (!(pageTree && key.Value == "Resources"))
+                            {
+                                pending.Push(d[key]);
+                            }
+                        }
+
+                        break;
+                    case PdfArray arr:
+                        for (int i = 0; i < arr.Count; i++)
+                        {
+                            pending.Push(arr[i]);
+                        }
+
+                        break;
+                    case PdfStream st:
+                        pending.Push(st.Dictionary);
+                        break;
+                }
+            }
+        }
+
+        return found;
+    }
+
+    // A page's effective /Resources entry as written (its own, or the
+    // nearest ancestor's), with that ancestor's number and dictionary when
+    // inherited (0 and null when the page has its own).
+    private static (PdfPrimitive? Entry, int NodeNum, PdfDictionary? Node) ResourceEntry(
+        PdfDictionary page, PdfObjectStore store)
+    {
+        if (page.TryGetValue(PdfName.Resources, out PdfPrimitive? own))
+        {
+            return (own, 0, null);
+        }
+
+        if (FindResourceHolder(page, store) is { } holder)
+        {
+            return (holder.Node[PdfName.Resources], holder.ObjNum, holder.Node);
+        }
+
+        return (null, 0, null);
+    }
+
+    // The nearest page-tree ancestor holding /Resources for a page that has
+    // none of its own, with its object number; null when there is none.
+    private static (int ObjNum, PdfDictionary Node)? FindResourceHolder(PdfDictionary page, PdfObjectStore store)
+    {
+        PdfDictionary current = page;
+        for (int depth = 0; depth < 64; depth++)
+        {
+            if (!current.TryGetValue(PdfName.Intern("Parent"), out PdfPrimitive? parentRef)
+                || parentRef is not PdfReference reference
+                || store.Resolve(parentRef) is not PdfDictionary parent)
+            {
+                return null;
+            }
+
+            if (parent.ContainsKey(PdfName.Resources))
+            {
+                return (reference.ObjectId.ObjectNumber, parent);
+            }
+
+            current = parent;
+        }
+
+        return null;
+    }
+
+    // Adds the object numbers of references held directly in a value or in
+    // its direct (non-indirect) dictionaries and arrays.
+    private static void CollectDirectReferences(PdfPrimitive value, HashSet<int> into, int depth)
+    {
+        if (depth > 32)
+        {
+            return;
+        }
+
+        switch (value)
+        {
+            case PdfReference r:
+                into.Add(r.ObjectId.ObjectNumber);
+                break;
+            case PdfDictionary d:
+                foreach (PdfName key in d.Keys)
+                {
+                    CollectDirectReferences(d[key], into, depth + 1);
+                }
+
+                break;
+            case PdfArray a:
+                for (int i = 0; i < a.Count; i++)
+                {
+                    CollectDirectReferences(a[i], into, depth + 1);
+                }
+
+                break;
+        }
+    }
 
     // Resource categories whose entries carry drawable content and are
     // referenced from content by name: images and forms (Do), patterns
@@ -3220,15 +3821,24 @@ public static class Redactor
                     && visitedForms.Add(formRef.ObjectId.ObjectNumber))
                 {
                     // A form without its own resources draws with these ones.
+                    // A rewritten form is written with its redacted content,
+                    // so that content (not the original) decides what it uses.
                     byte[] formContent;
-                    try
+                    if (run.RewrittenForms.TryGetValue(formRef.ObjectId.ObjectNumber, out byte[]? rewrittenContent))
                     {
-                        formContent = DecodeStream(form, run.Pipeline);
+                        formContent = rewrittenContent;
                     }
-                    catch (Exception)
+                    else
                     {
-                        complete = false;
-                        return;
+                        try
+                        {
+                            formContent = DecodeStream(form, run.Pipeline);
+                        }
+                        catch (Exception)
+                        {
+                            complete = false;
+                            return;
+                        }
                     }
 
                     CollectInvokedNames(
@@ -3381,6 +3991,18 @@ public static class Redactor
         }
     }
 
+    // A structure tree object reference (PDF 14.7.4.3): /Type /OBJR, or an
+    // untyped dictionary with /Obj and no structure type.
+    private static bool IsObjectReference(PdfDictionary d)
+    {
+        if (d.TryGetValue(PdfName.Type, out PdfPrimitive? type) && type is PdfName name)
+        {
+            return name.Value == "OBJR";
+        }
+
+        return d.ContainsKey(PdfName.Intern("Obj")) && !d.ContainsKey(PdfName.Intern("S"));
+    }
+
     // Drops candidate objects the output no longer reaches from the trailer.
     private static List<PdfIndirectObject> OmitUnreachable(
         List<PdfIndirectObject> objects, PdfDictionary trailer, HashSet<int> candidates)
@@ -3459,8 +4081,18 @@ public static class Redactor
 
                     break;
                 case PdfDictionary d:
+                    bool objectReference = IsObjectReference(d);
                     foreach (PdfName key in d.Keys)
                     {
+                        // A structure element's object reference (OBJR) only
+                        // labels an object; it does not keep a removed one
+                        // (an image no longer drawn) in the file.
+                        if (objectReference && key.Value == "Obj" && d[key] is PdfReference labelled
+                            && candidates.Contains(labelled.ObjectId.ObjectNumber))
+                        {
+                            continue;
+                        }
+
                         pending.Push(d[key]);
                     }
 
@@ -4181,6 +4813,14 @@ internal sealed class RedactState
     // overlay from the rectangles). Filled by the text-showing operators.
     internal List<RectangleF> PatternOverlayBoxes { get; } = new List<RectangleF>();
 
+    // Blanked copies of partly redacted images (null when new images cannot
+    // be added to this content's resources), and the outcome per image and
+    // placement so a repeated Do reuses one copy.
+    internal List<BlankedImage>? BlankedImages { get; set; }
+
+    internal Dictionary<(int, Transform), (ImageBlankOutcome Outcome, string? Name)> BlankedImageCache { get; } =
+        new Dictionary<(int, Transform), (ImageBlankOutcome Outcome, string? Name)>();
+
     // Text-state spacing (PDF 9.4.4): added to each glyph's advance in text
     // space. Word spacing applies only to the single-byte space (code 32).
     // Both are part of the graphics state and are saved/restored by q/Q.
@@ -4291,6 +4931,27 @@ internal sealed class RedactState
 }
 
 /// <summary>
+/// A partly redacted image: its blanked copy, the resource name the rewritten
+/// content uses for it, and its masks (referenced from the copy through
+/// placeholder references until object numbers are assigned).
+/// </summary>
+internal sealed class BlankedImage
+{
+    public BlankedImage(string name, PdfStream image, List<(PdfReference Placeholder, PdfStream Stream)> masks)
+    {
+        Name = name;
+        Image = image;
+        Masks = masks;
+    }
+
+    public string Name { get; }
+
+    public PdfStream Image { get; }
+
+    public List<(PdfReference Placeholder, PdfStream Stream)> Masks { get; }
+}
+
+/// <summary>
 /// A redaction context: text or images are removed when, after mapping by
 /// <see cref="BaseCtm"/> into page device space, they intersect any of
 /// <see cref="Rects"/>. Page content uses the identity transform; a form's
@@ -4348,6 +5009,12 @@ internal sealed class RedactRun
 
     /// <summary>Form object number to the placements at which it is invoked.</summary>
     public Dictionary<int, List<RedactContext>> FormInvocations { get; } = new();
+
+    /// <summary>
+    /// Form object number to its redacted content, once rewritten; resource
+    /// pruning reads a rewritten form's uses from this, not the original.
+    /// </summary>
+    public Dictionary<int, byte[]> RewrittenForms { get; } = new();
 
     /// <summary>Guards <see cref="FormInvocations"/> during parallel collection.</summary>
     public object Sync { get; } = new();

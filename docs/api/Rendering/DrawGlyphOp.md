@@ -14,6 +14,18 @@ Emitted by the builder once per visible glyph in a text-showing operator (Tj, TJ
 
  The outline is filled (not stroked) by default; PDF supports stroked and outline-only text rendering modes which a later op type may model. In v2.0.0 R1 the rendering-mode-3 (invisible text) case is handled by the builder simply not emitting glyph ops.
 
+## Constructors
+
+### `DrawGlyphOp(Path path, ColorF color, IReadOnlyList<ClipPath>? clips = null)`
+
+Initialises a `DrawGlyphOp`.
+
+**Parameters**
+
+- `path` — The glyph outline in user space (CTM + text matrix applied).
+- `color` — The glyph fill colour.
+- `clips` — Clip paths active when this op was emitted. Null or empty means no clip. <exception cref="ArgumentNullException"> Thrown when `path` is null. </exception>
+
 ## Properties
 
 ### `Path`

@@ -8,6 +8,24 @@ Writes a document outline (bookmark tree) onto an existing document, replacing a
 public static class OutlineWriter
 ```
 
+## Methods
+
+### `Apply`
+
+__static__
+
+```csharp
+static void Apply(Stream output, PdfDocument document, IReadOnlyList<OutlineEntry> entries)
+```
+
+Writes `entries` as the document outline and emits the result to `output`. An empty list writes no outline (and removes any existing one from the catalog).
+
+**Parameters**
+
+- `output` — The stream to write the updated PDF to.
+- `document` — The source document.
+- `entries` — The top-level bookmarks, in order. <exception cref="ArgumentNullException"> Thrown when any argument is null. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/OutlineWriter.cs`](../../../src/Chuvadi.Pdf.Operations/OutlineWriter.cs)_

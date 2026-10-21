@@ -9,20 +9,23 @@
 
 ## Last Updated
 
-2026-10-19 — v3.21.0: tiling patterns over 4,096 tiles repeated (raster
-bitmap tile with area budget, SVG `<pattern>`); xref recovery whitespace-
-tolerant, never returns a different live object (null plus warning, lazy
-warnings); PDF-14 layer visibility when rendering/extracting
-(`OptionalContentVisibility`, OFF layers hidden by default); PDF-15
-`/UserUnit`, viewports and `/Measure`. Released: v3.19.0 and v3.20.0 (2026-10-14).
-Last released version: v3.20.0.
+2026-10-19 — v3.22.0 (backlog scope A): partial image redaction (only the
+covered pixels are blanked; verifier understands blanked images); Scrub
+residuals (tiling-pattern cells scrubbed to what can show, mesh shadings
+trimmed, crossing annotation appearances scrubbed, unused patterns/shadings
+pruned, `/Thumb` and `/PieceInfo` dropped); pattern strokes in SVG
+(stroke-outline mask); gen_api_docs multi-line signatures. Fixed: an `OBJR`
+structure label, or resources inherited from the page tree / shared between
+pages, kept a removed image in the file. Open: BACKLOG 17 (Scrub residuals),
+18 (pattern cells under redaction), 19 (verifier on palette images).
+Released: v3.21.0 (2026-10-19). Last released version: v3.21.0.
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,651 tests across 30 in-solution test projects,
-0 failures (v3.21.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,693 tests across 30 in-solution test projects,
+0 failures (v3.22.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -138,7 +141,7 @@ flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuge
 — the library's job ends there; the Chuvadi Reader picks packages up from that
 feed on its own side. Never `dotnet nuget push` (it creates a mismatched
 hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
-**3.20.0** (3.21.0 pending merge + pack on Arun's machine).
+**3.21.0** (3.22.0 pending merge + pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 
@@ -169,8 +172,11 @@ Releases publish to local folder feeds only, never to nuget.org.
 - ~~Text under `cm` / `Ts` / `Tz` escaping redaction~~ — **fixed in 3.20.0**
   (adversarial review). Documents redacted before 3.20 whose text is placed
   through a content-stream `cm` should be re-redacted.
-- **Pixel-level partial image redaction** — open (BACKLOG item 16): a box
-  over part of an image removes the whole image.
+- ~~Pixel-level partial image redaction~~ — **shipped in 3.22.0**: only the
+  covered pixels are blanked.
+- ~~Tagged-image leak~~ — **fixed in 3.22.0**: a structure-tree `OBJR` to an
+  image removed by redaction or Scrub kept its pixels in the file. Documents
+  processed before 3.22 with tagged images should be processed again.
 
 See `docs/BACKLOG.md` for the full open roadmap.
 

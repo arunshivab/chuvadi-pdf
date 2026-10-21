@@ -12,6 +12,12 @@ public sealed class LinearizationInfo
 
 Per ISO 32000-1:2008 §F.2 a linearized PDF's first object (or one very close to the head) is a dictionary with /Linearized set to 1.0 and other entries describing the layout. This class exposes those entries in a strongly-typed form. Returned by `LinearizationReader.TryRead(Chuvadi.Pdf.Objects.PdfObjectStore)` when the document is linearized.
 
+## Constructors
+
+### `LinearizationInfo(double linearizedVersion, long fileLength, IReadOnlyList<long> hintOffsetsAndLengths, int firstPageObjectNumber, long endOfFirstPage, int pageCount, long mainXrefOffset)`
+
+Initialises a new `LinearizationInfo`.
+
 ## Properties
 
 ### `LinearizedVersion`

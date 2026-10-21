@@ -26,6 +26,24 @@ Applies a header and/or footer to `document`.
 - `document` — The source document.
 - `options` — Header/footer content and layout options. <exception cref="ArgumentNullException"> Thrown when any argument is null. </exception>
 
+### `ResolveSegments`
+
+__static__
+
+```csharp
+static IReadOnlyList<HeaderFooterSegment> ResolveSegments(PdfDocument document, int pageIndex, HeaderFooterOptions options)
+```
+
+Resolves exactly what `Apply` would draw on one page — each non-empty header/footer segment with its token-substituted text and its placement — without writing a document. A live preview built from these segments matches the output byte-for-byte in text and position, because `Apply` draws from the same computation.
+
+**Parameters**
+
+- `document` — The document the options will be applied to.
+- `pageIndex` — Zero-based page to resolve.
+- `options` — The header/footer options.
+
+**Returns:** The segments in drawing order (header left/centre/right, then footer). Empty when `pageIndex` is not targeted by `HeaderFooterOptions.PageIndices` or nothing resolves to text. <exception cref="ArgumentNullException"> Thrown when `document` or `options` is null. </exception> <exception cref="ArgumentOutOfRangeException"> Thrown when `pageIndex` is outside the document. </exception>
+
 ### `ResolveText`
 
 __static__

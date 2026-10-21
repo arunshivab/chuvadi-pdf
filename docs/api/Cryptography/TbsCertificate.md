@@ -16,6 +16,12 @@ Structure:
 ```
  The RawEncoding property holds the exact bytes of this TBSCertificate SEQUENCE — these are the bytes whose hash the signatureValue covers. Preserving them losslessly is what makes signature verification possible.
 
+## Constructors
+
+### `TbsCertificate(int version, BigInteger serialNumber, AlgorithmIdentifier signature, X509Name issuer, Validity validity, X509Name subject, SubjectPublicKeyInfo subjectPublicKeyInfo, BitStringValue? issuerUniqueId, BitStringValue? subjectUniqueId, IList<X509Extension>? extensions, byte[] rawEncoding)`
+
+Initialises a new TbsCertificate.
+
 ## Properties
 
 ### `Version`

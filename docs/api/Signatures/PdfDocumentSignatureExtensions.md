@@ -34,6 +34,16 @@ Reads the bytes covered by `signature`'s /ByteRange from the underlying file.
 
 **Remarks:** These are the bytes whose hash the signature actually covers. Pass them (or a hash of them) to the verification step alongside the decoded CMS SignedData.
 
+### `CopySignedBytes`
+
+__static__
+
+```csharp
+static void CopySignedBytes(this PdfDocument document, PdfSignature signature, System.IO.Stream destination)
+```
+
+Streams the bytes covered by `signature`'s /ByteRange into `destination`. Use for files larger than 2 GiB or when feeding a hash incrementally.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Signatures/PdfDocumentSignatureExtensions.cs`](../../../src/Chuvadi.Pdf.Signatures/PdfDocumentSignatureExtensions.cs)_

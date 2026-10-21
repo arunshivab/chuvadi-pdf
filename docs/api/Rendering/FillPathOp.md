@@ -14,6 +14,19 @@ Emitted by the builder for the PDF path-painting operators f / F / f* (fill only
 
  The path is in PDF user space with the current transformation matrix already applied.
 
+## Constructors
+
+### `FillPathOp(Path path, ColorF color, FillRule rule, IReadOnlyList<ClipPath>? clips = null)`
+
+Initialises a `FillPathOp`.
+
+**Parameters**
+
+- `path` — The path to fill, with CTM already applied.
+- `color` — The fill colour.
+- `rule` — The fill rule (non-zero winding or even-odd).
+- `clips` — Clip paths active when this op was emitted. Null or empty means no clip. <exception cref="ArgumentNullException"> Thrown when `path` is null. </exception>
+
 ## Properties
 
 ### `Path`

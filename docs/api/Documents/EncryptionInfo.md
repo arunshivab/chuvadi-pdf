@@ -14,6 +14,21 @@ Returned from `PdfDocument.Encryption` when the document is encrypted; `null` wh
 
  The permission decoder properties (`AllowPrint`, `AllowModify`, etc.) interpret the `Permissions` bit mask per PDF 32000-1:2008 §7.6.3.2, Table 22. These flags are advisory only: a viewer is free to honour or ignore them, and an owner password bypasses them entirely.
 
+## Constructors
+
+### `EncryptionInfo(EncryptionAlgorithm algorithm, int keyLength, int revision, int version, int permissions, bool encryptMetadata)`
+
+Initialises an `EncryptionInfo`.
+
+**Parameters**
+
+- `algorithm` — Algorithm in use.
+- `keyLength` — Key length in bytes.
+- `revision` — PDF /R revision (2..6).
+- `version` — PDF /V version (1..5).
+- `permissions` — PDF /P permission bit mask.
+- `encryptMetadata` — Whether /Metadata streams are encrypted.
+
 ## Properties
 
 ### `Algorithm`

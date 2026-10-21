@@ -12,6 +12,12 @@ public sealed class LineAnnotation : PdfAnnotation
 
 The line runs from `Start` to `End`, both in PDF user-space coordinates. The annotation `PdfAnnotation.Rect` must enclose both endpoints.
 
+## Constructors
+
+### `LineAnnotation(int pageIndex, RectangleF rect, PointF start, PointF end, BorderStyle? borderStyle = null, LineEnding lineEndingStart = LineEnding.None, LineEnding lineEndingEnd = LineEnding.None, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a line annotation.
+
 ## Properties
 
 ### `Start`

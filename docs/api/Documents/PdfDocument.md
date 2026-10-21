@@ -183,6 +183,76 @@ Opens a PDF document from a file path.
 
 **Remarks:** Synchronous blocking I/O against the file system. Use `OpenAsync(string, CancellationToken)` for cross-platform code.
 
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(Stream stream, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens a PDF document from the given stream.
+
+**Parameters**
+
+- `stream` — A readable PDF stream. Need not be seekable.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Remarks:** The input stream is fully buffered into memory before parsing begins, making this method WebAssembly-compatible and tolerant of non-seekable streams. The document owns the internal buffer; the caller retains responsibility for disposing `stream`.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(Stream stream, string password, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens an encrypted PDF document with the given password.
+
+**Parameters**
+
+- `stream` — A readable PDF stream. Need not be seekable.
+- `password` — User or owner password. Empty string for default.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Remarks:** See `OpenAsync(Stream, CancellationToken)` for the buffering and cancellation semantics. For unencrypted PDFs the password is ignored.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(string path, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens a PDF document from a file path.
+
+**Parameters**
+
+- `path` — The path to the PDF file.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Remarks:** Opens the file with `FileStream` configured for async I/O, buffers it fully into memory, then parses. The file handle is released before this method returns.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(string path, string password, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens an encrypted PDF document from a file path.
+
+**Parameters**
+
+- `path` — The path to the PDF file.
+- `password` — User or owner password. Empty string for default.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Remarks:** See `OpenAsync(string, CancellationToken)` for I/O semantics.
+
 ### `GetInfoString`
 
 ```csharp

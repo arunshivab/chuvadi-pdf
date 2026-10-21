@@ -8,6 +8,12 @@ Rubber-stamp annotation (§12.5.6.12), e.g., "Approved", "Confidential".
 public sealed class StampAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `StampAnnotation(int pageIndex, RectangleF rect, string stampName, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a stamp annotation.
+
 ## Properties
 
 ### `StampName`

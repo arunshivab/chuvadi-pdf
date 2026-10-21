@@ -16,6 +16,24 @@ Built by `DisplayListBuilder.Build(PdfDocument, int, bool)`; consumed by output 
 
  v2.1.2: also exposes the page's font dictionaries keyed by the resource name used in `TextOp.FontKey`. This allows downstream renderers that want to embed font programs (e.g. `SvgRenderer` emitting CSS `@font-face` rules with base64-encoded TrueType data URLs) to access the source font dictionaries without re-walking the page resources or holding a reference to the original `PdfDocument`.
 
+## Constructors
+
+### `PageDisplayList(IReadOnlyList<RenderOp> ops, double mediaWidth, double mediaHeight, int rotation)`
+
+Initialises a display list with the given ops and page metadata, with no font dictionaries attached. Equivalent to passing an empty dictionary for the font registry overload.
+
+### `PageDisplayList(IReadOnlyList<RenderOp> ops, double mediaWidth, double mediaHeight, int rotation, IReadOnlyDictionary<string, PdfDictionary> fontDictsByKey)`
+
+Initialises a display list with the given ops, page metadata, and the page's font dictionaries keyed by the resource-name used in `TextOp.FontKey` (e.g. `"F1"`, `"TT2"`).
+
+### `PageDisplayList(IReadOnlyList<RenderOp> ops, double mediaWidth, double mediaHeight, int rotation, IReadOnlyDictionary<string, PdfDictionary> fontDictsByKey, IReadOnlyList<RenderingDiagnostic> diagnostics)`
+
+Initialises a display list with the given ops, page metadata, font dictionaries, and the diagnostics accumulated during build (graceful-degradation events such as a font that could not be resolved). New in v2.1.8.
+
+### `PageDisplayList(IReadOnlyList<RenderOp> ops, double mediaWidth, double mediaHeight, int rotation, IReadOnlyDictionary<string, PdfDictionary> fontDictsByKey, IReadOnlyList<RenderingDiagnostic> diagnostics, IReadOnlyList<OptionalContentGroup> optionalContentGroups)`
+
+Initialises a display list with the given ops, page metadata, font dictionaries, diagnostics, and the document's optional-content groups (layers) declared in /OCProperties/OCGs. New in v2.3. Individual ops reference these layers by name through `RenderOp.Layers`.
+
 ## Properties
 
 ### `MediaWidth`

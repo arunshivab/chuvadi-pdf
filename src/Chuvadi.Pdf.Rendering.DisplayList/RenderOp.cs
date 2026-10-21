@@ -319,6 +319,28 @@ public sealed class ClipOp : RenderOp
 
     /// <summary>Fill rule for the clip region.</summary>
     public FillRule FillRule { get; init; } = FillRule.NonZero;
+
+    /// <summary>
+    /// When set, the clip region is the area a stroke of
+    /// <see cref="Geometry"/> in this style would paint (its outline), not
+    /// the path's interior: content after the clip shows only where the
+    /// stroke would. Used for a stroke whose colour is a pattern.
+    /// <see cref="FillRule"/> does not apply.
+    /// </summary>
+    public StrokeStyle? Stroke { get; init; }
+
+    /// <summary>
+    /// How far a stroke in <paramref name="style"/> can reach beyond its path
+    /// (page units): half the line width, scaled by the miter limit (or the
+    /// diagonal of a square cap, whichever is larger).
+    /// </summary>
+    /// <param name="style">The stroke style.</param>
+    /// <returns>The reach.</returns>
+    public static double StrokeReach(StrokeStyle style)
+    {
+        ArgumentNullException.ThrowIfNull(style);
+        return Math.Abs(style.LineWidth) / 2 * Math.Max(Math.Sqrt(2), style.MiterLimit);
+    }
 }
 
 /// <summary>Pushes or pops a graphics-state transformation matrix.</summary>

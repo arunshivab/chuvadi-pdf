@@ -8,6 +8,12 @@ Sticky-note text annotation (§12.5.6.4).
 public sealed class TextAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `TextAnnotation(int pageIndex, RectangleF rect, string contents, string iconName = "Note", bool isOpen = false, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a sticky-note annotation.
+
 ## Properties
 
 ### `IconName`

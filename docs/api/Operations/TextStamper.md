@@ -15,6 +15,30 @@ public static class TextStamper
 __static__
 
 ```csharp
+static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, string? filePath = null, DateTimeOffset? timestamp = null)
+```
+
+Stamps `template` onto the requested pages.
+
+**Parameters**
+
+- `output` — The stream to write the updated PDF to.
+- `document` — The source document.
+- `pageIndices` — Zero-based page indices to stamp. Null stamps every page.
+- `template` — The text template (may contain tokens).
+- `anchor` — Where on the page to place the text.
+- `marginX` — Horizontal inset from the page edge, in points.
+- `marginY` — Vertical inset from the page edge, in points.
+- `fontSize` — Font size in points.
+- `color` — Text colour.
+- `filePath` — Source file path for the `{filename}`/`{filepath}` tokens, or null.
+- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, or `template` is null. </exception>
+
+### `Apply`
+
+__static__
+
+```csharp
 static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null)
 ```
 

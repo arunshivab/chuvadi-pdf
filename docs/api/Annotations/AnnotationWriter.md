@@ -12,6 +12,18 @@ public static class AnnotationWriter
 
 For each annotation, builds the corresponding PDF dictionary, appends an indirect-object reference to each targeted page's `/Annots` array, and writes the modified document. The original document is not changed.
 
+## Methods
+
+### `Add`
+
+__static__
+
+```csharp
+static void Add(Stream output, PdfDocument document, IEnumerable<PdfAnnotation> annotations)
+```
+
+Writes `document` with the given annotations added to `output`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Annotations/AnnotationWriter.cs`](../../../src/Chuvadi.Pdf.Annotations/AnnotationWriter.cs)_

@@ -76,6 +76,72 @@ Splits a document into individual single-page PDFs.
 
 **Returns:** A list of `MemoryStream` objects, one per page, each containing a valid single-page PDF.
 
+### `ExtractPages`
+
+__static__
+
+```csharp
+static void ExtractPages(Stream output, PdfDocument document, int startIndex, int count)
+```
+
+Extracts a contiguous range of pages from a document into a new PDF.
+
+**Parameters**
+
+- `output` — The stream to write the extracted pages to.
+- `document` — The source document.
+- `startIndex` — Zero-based index of the first page to include.
+- `count` — The number of pages to include.
+
+### `DeletePages`
+
+__static__
+
+```csharp
+static void DeletePages(Stream output, PdfDocument document, IEnumerable<int> pageIndices)
+```
+
+Writes a new PDF containing all pages except those at the given indices.
+
+**Parameters**
+
+- `output` — The stream to write the result to.
+- `document` — The source document.
+- `pageIndices` — Zero-based indices of pages to remove.
+
+### `RotatePages`
+
+__static__
+
+```csharp
+static void RotatePages(Stream output, PdfDocument document, int degrees, IEnumerable<int>? pageIndices = null)
+```
+
+Writes a new PDF with the specified pages rotated by the given angle.
+
+**Parameters**
+
+- `output` — The stream to write the result to.
+- `document` — The source document.
+- `degrees` — Rotation in degrees. Must be 0, 90, 180, or 270. Applied in addition to any existing /Rotate value on the page.
+- `pageIndices` — Zero-based indices of pages to rotate. Pass null or empty to rotate all pages.
+
+### `ReorderPages`
+
+__static__
+
+```csharp
+static void ReorderPages(Stream output, PdfDocument document, IReadOnlyList<int> newOrder)
+```
+
+Writes a new PDF with pages in the order specified by `newOrder`.
+
+**Parameters**
+
+- `output` — The stream to write the result to.
+- `document` — The source document.
+- `newOrder` — A permutation of zero-based page indices specifying the new order. Must contain exactly one entry per page.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/PageOperations.cs`](../../../src/Chuvadi.Pdf.Operations/PageOperations.cs)_

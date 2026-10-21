@@ -70,6 +70,14 @@ bool ContainsKey(PdfName key) => _entries.ContainsKey(key)
 
 <inheritdoc/>
 
+### `TryGetValue`
+
+```csharp
+bool TryGetValue(PdfName key, [MaybeNullWhen(false)] out PdfPrimitive value)
+```
+
+<inheritdoc/>
+
 ### `Set`
 
 ```csharp

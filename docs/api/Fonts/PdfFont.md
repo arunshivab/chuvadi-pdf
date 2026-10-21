@@ -53,6 +53,23 @@ static PdfFont Default()
 
 Returns a default font that maps codes directly to their Latin-1 equivalents. Used when no font dictionary is available.
 
+### `FromMappings`
+
+__static__
+
+```csharp
+static PdfFont FromMappings(IReadOnlyDictionary<int, string>? toUnicodeMap, IReadOnlyList<CodespaceRange>? codespaceRanges = null, PdfFontEncoding? encoding = null, bool isComposite = false)
+```
+
+Constructs a font directly from explicit mappings, bypassing PDF dictionary parsing. Useful for synthetic PDFs, programmatic font construction, and unit tests that need deterministic mapping state.
+
+**Parameters**
+
+- `toUnicodeMap` — Source-code-to-Unicode mapping. Keys are 1- to 4-byte codes packed big-endian into an int (e.g. the byte sequence 0xE2 0x9C 0x93 is the key 0xE29C93). May be `null`.
+- `codespaceRanges` — Optional codespace declarations from the source CMap. Used (together with the maximum key in `toUnicodeMap`) to bound the byte window the decoder considers. May be `null`.
+- `encoding` — Optional single-byte encoding for fallback when no `toUnicodeMap` entry matches a position.
+- `isComposite` — Whether this represents a Type0/composite font. Affects the default byte-window width when neither codespace ranges nor mapping keys suggest a wider window.
+
 ### `Decode`
 
 ```csharp

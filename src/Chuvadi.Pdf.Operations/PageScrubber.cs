@@ -66,6 +66,24 @@ internal static class PageScrubber
         return ScrubCore(content, x0, y0, x1, y1, resources, resolver, allocate, Matrix3x3.Identity, 0);
     }
 
+    /// <summary>
+    /// Scrubs a form-like content stream (an annotation appearance) whose
+    /// content space maps to page space through <paramref name="placement"/>,
+    /// without the page-level hard-clip backstop.
+    /// </summary>
+    internal static ScrubResult ScrubPlaced(
+        byte[] content,
+        double x0, double y0, double x1, double y1,
+        PdfDictionary? resources,
+        IPdfObjectResolver resolver,
+        Func<PdfStream, PdfReference> allocate,
+        Matrix3x3 placement)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(resolver);
+        return ScrubCore(content, x0, y0, x1, y1, resources, resolver, allocate, placement, 1);
+    }
+
     // Nested form XObjects are scrubbed recursively up to this depth; deeper
     // forms (or cycles) are removed rather than kept unscrubbed (B15).
     private const int MaxFormDepth = 8;
@@ -87,6 +105,22 @@ internal static class PageScrubber
         StringBuilder output = new StringBuilder(content.Length + 64);
         List<(string Name, PdfStream Stream)> newXObjects = new List<(string, PdfStream)>();
         HashSet<string> referenced = new HashSet<string>(StringComparer.Ordinal);
+
+        // Pattern names selected as a colour (scn/SCN), and each shading
+        // painted by sh with the CTM it was painted under: the resources
+        // keep only these, trimmed to the box.
+        HashSet<string> patternNames = new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<string, List<Matrix3x3>> shadingUses = new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
+
+        // The current fill and stroke pattern names (saved by q, restored by
+        // Q), and for each pattern the page-space extent it is painted over
+        // (a filled path's bounds; the whole box for strokes, text, forms and
+        // stencil images, whose painted extent is not modelled here).
+        string? fillPattern = null;
+        string? strokePattern = null;
+        Stack<(string? Fill, string? Stroke)> patternStack = new Stack<(string? Fill, string? Stroke)>();
+        Dictionary<string, (double X0, double Y0, double X1, double Y1)> patternExtents =
+            new Dictionary<string, (double X0, double Y0, double X1, double Y1)>(StringComparer.Ordinal);
 
         // Hard-clip backstop: confines anything echoed verbatim to the crop box.
         if (depth == 0)
@@ -162,6 +196,97 @@ internal static class PageScrubber
             clipMaxY = Math.Min(clipMaxY, maxY);
         }
 
+        void ExtendPattern(string? name, double ex0, double ey0, double ex1, double ey1)
+        {
+            if (name is null)
+            {
+                return;
+            }
+
+            patternExtents[name] = patternExtents.TryGetValue(name, out (double X0, double Y0, double X1, double Y1) e)
+                ? (Math.Min(e.X0, ex0), Math.Min(e.Y0, ey0), Math.Max(e.X1, ex1), Math.Max(e.Y1, ey1))
+                : (ex0, ey0, ex1, ey1);
+        }
+
+        // Updates the current pattern names and records where a painting
+        // operator paints with them. Runs before the operator is handled,
+        // while the path being painted is still buffered.
+        void TrackPatternPaint(string op)
+        {
+            string? lastName = operandTexts.Count > 0 && operandTexts[^1].StartsWith('/')
+                ? DecodeNameToken(operandTexts[^1])
+                : null;
+            switch (op)
+            {
+                case "q":
+                    patternStack.Push((fillPattern, strokePattern));
+                    return;
+                case "Q":
+                    if (patternStack.Count > 0)
+                    {
+                        (fillPattern, strokePattern) = patternStack.Pop();
+                    }
+
+                    return;
+                case "scn":
+                    fillPattern = lastName;
+                    return;
+                case "SCN":
+                    strokePattern = lastName;
+                    return;
+                case "cs" or "sc" or "g" or "rg" or "k":
+                    fillPattern = null;
+                    return;
+                case "CS" or "SC" or "G" or "RG" or "K":
+                    strokePattern = null;
+                    return;
+                case "f" or "F" or "f*" or "B" or "B*" or "b" or "b*":
+                    if (fillPattern is not null && !pendingClip)
+                    {
+                        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+                        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+                        foreach (List<(double X, double Y)> subpath in subpaths)
+                        {
+                            foreach ((double px, double py) in subpath)
+                            {
+                                (double dx, double dy) = ScrubGeometry.Transform(ctm, px, py);
+                                minX = Math.Min(minX, dx);
+                                minY = Math.Min(minY, dy);
+                                maxX = Math.Max(maxX, dx);
+                                maxY = Math.Max(maxY, dy);
+                            }
+                        }
+
+                        if (minX <= maxX)
+                        {
+                            ExtendPattern(fillPattern, minX, minY, maxX, maxY);
+                        }
+                    }
+                    else if (fillPattern is not null)
+                    {
+                        ExtendPattern(fillPattern, x0, y0, x1, y1);
+                    }
+
+                    if (op is "B" or "B*" or "b" or "b*")
+                    {
+                        ExtendPattern(strokePattern, x0, y0, x1, y1);
+                    }
+
+                    return;
+                case "S" or "s":
+                    ExtendPattern(strokePattern, x0, y0, x1, y1);
+                    return;
+                case "Tj" or "TJ" or "'" or "\"":
+                    ExtendPattern(fillPattern, x0, y0, x1, y1);
+                    ExtendPattern(strokePattern, x0, y0, x1, y1);
+                    return;
+                case "Do" or "BI":
+                    ExtendPattern(fillPattern, x0, y0, x1, y1);
+                    ExtendPattern(strokePattern, x0, y0, x1, y1);
+                    return;
+            }
+        }
+
         while (true)
         {
             PdfToken token = tok.Read();
@@ -183,6 +308,7 @@ internal static class PageScrubber
             }
 
             string op = token.RawText;
+            TrackPatternPaint(op);
 
             switch (op)
             {
@@ -497,6 +623,17 @@ internal static class PageScrubber
                         && Math.Min(clipMaxY, y1) > Math.Max(clipMinY, y0))
                     {
                         EchoVerbatim(output, operandTexts, op);
+                        if (operandTexts.Count > 0 && operandTexts[^1].StartsWith('/'))
+                        {
+                            string shadingName = DecodeNameToken(operandTexts[^1]);
+                            if (!shadingUses.TryGetValue(shadingName, out List<Matrix3x3>? uses))
+                            {
+                                uses = new List<Matrix3x3>();
+                                shadingUses[shadingName] = uses;
+                            }
+
+                            uses.Add(ctm);
+                        }
                     }
 
                     break;
@@ -511,6 +648,11 @@ internal static class PageScrubber
                     break;
 
                 default:
+                    if ((op == "scn" || op == "SCN") && operandTexts.Count > 0 && operandTexts[^1].StartsWith('/'))
+                    {
+                        patternNames.Add(DecodeNameToken(operandTexts[^1]));
+                    }
+
                     EchoVerbatim(output, operandTexts, op);
                     break;
             }
@@ -524,7 +666,15 @@ internal static class PageScrubber
             output.Append("Q\n");
         }
 
-        return new ScrubResult(Encoding.Latin1.GetBytes(output.ToString()), newXObjects, referenced);
+        return new ScrubResult(Encoding.Latin1.GetBytes(output.ToString()), newXObjects, referenced)
+        {
+            Patterns = patternNames,
+            PatternExtents = patternExtents,
+            ShadingUses = shadingUses,
+            BaseCtm = initialCtm,
+            Box = (x0, y0, x1, y1),
+            Depth = depth,
+        };
     }
 
     /// <summary>Result of a scrub: rewritten content plus any newly created image XObjects.</summary>
@@ -548,6 +698,32 @@ internal static class PageScrubber
         /// longer used and must be pruned, or its full content stays in the file.
         /// </summary>
         internal HashSet<string> ReferencedXObjects { get; }
+
+        /// <summary>Pattern names the scrubbed content selects as a colour.</summary>
+        internal HashSet<string> Patterns { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// For each pattern, the page-space rectangle it is painted over (not
+        /// yet limited to the box); a pattern absent here paints nothing.
+        /// </summary>
+        internal Dictionary<string, (double X0, double Y0, double X1, double Y1)> PatternExtents { get; init; } =
+            new Dictionary<string, (double X0, double Y0, double X1, double Y1)>(StringComparer.Ordinal);
+
+        /// <summary>Shading names the scrubbed content paints with sh, and the CTM of each use.</summary>
+        internal Dictionary<string, List<Matrix3x3>> ShadingUses { get; init; } =
+            new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Maps the content's own space to the space of <see cref="Box"/>
+        /// (identity for a page; a form's placement for a form).
+        /// </summary>
+        internal Matrix3x3 BaseCtm { get; init; } = Matrix3x3.Identity;
+
+        /// <summary>The crop rectangle the content was scrubbed to.</summary>
+        internal (double X0, double Y0, double X1, double Y1) Box { get; init; }
+
+        /// <summary>Form nesting depth of the scrubbed content (0 for a page).</summary>
+        internal int Depth { get; init; }
     }
 
     // ── Text ─────────────────────────────────────────────────────────────────
@@ -1086,7 +1262,7 @@ internal static class PageScrubber
         PdfDictionary newDict = new PdfDictionary();
         foreach (PdfName key in dict.Keys)
         {
-            if (key.Value is "Filter" or "DecodeParms" or "Length" or "Resources")
+            if (key.Value is "Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo")
             {
                 continue;
             }
@@ -1139,7 +1315,379 @@ internal static class PageScrubber
         }
 
         copy.Set(PdfName.Intern("XObject"), xobjects);
+
+        // Patterns and shadings: unused entries are pruned (their content
+        // would stay in the file), used tiling-pattern cells are scrubbed to
+        // the part that can show in the box, and mesh shadings keep only
+        // the triangles or patches that can paint in it.
+        if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("Pattern"))) is PdfDictionary patterns)
+        {
+            PdfDictionary keptPatterns = new PdfDictionary();
+            foreach (PdfName key in patterns.Keys)
+            {
+                if (result.Patterns.Contains(key.Value))
+                {
+                    keptPatterns.Set(key, ScrubPattern(patterns[key], PaintedRegion(result, key.Value), result, resolver, allocate));
+                }
+            }
+
+            copy.Set(PdfName.Intern("Pattern"), keptPatterns);
+        }
+
+        if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("Shading"))) is PdfDictionary shadings)
+        {
+            PdfDictionary keptShadings = new PdfDictionary();
+            foreach (PdfName key in shadings.Keys)
+            {
+                if (!result.ShadingUses.TryGetValue(key.Value, out List<Matrix3x3>? uses))
+                {
+                    continue;
+                }
+
+                PdfPrimitive value = shadings[key];
+                (double bx0, double by0, double bx1, double by1) = result.Box;
+                if (MeshShadingTrimmer.Trim(value, uses, bx0, by0, bx1, by1, resolver, out PdfStream? trimmed)
+                    == MeshShadingTrimmer.Outcome.Trimmed && trimmed is not null)
+                {
+                    value = allocate(trimmed);
+                }
+
+                keptShadings.Set(key, value);
+            }
+
+            copy.Set(PdfName.Intern("Shading"), keptShadings);
+        }
+
         return copy;
+    }
+
+    // A pattern kept by scrubbed content: a tiling pattern's cell is
+    // scrubbed to what can show in the box; a shading pattern's mesh is
+    // trimmed. Anything else is kept as is.
+    // The part of the box a pattern is painted over, or null when it paints
+    // nothing there.
+    private static (double X0, double Y0, double X1, double Y1)? PaintedRegion(ScrubResult owner, string name)
+    {
+        if (!owner.PatternExtents.TryGetValue(name, out (double X0, double Y0, double X1, double Y1) extent))
+        {
+            return null;
+        }
+
+        (double bx0, double by0, double bx1, double by1) = owner.Box;
+        double rx0 = Math.Max(bx0, extent.X0);
+        double ry0 = Math.Max(by0, extent.Y0);
+        double rx1 = Math.Min(bx1, extent.X1);
+        double ry1 = Math.Min(by1, extent.Y1);
+        return rx1 > rx0 && ry1 > ry0 ? (rx0, ry0, rx1, ry1) : null;
+    }
+
+    private static PdfPrimitive ScrubPattern(
+        PdfPrimitive value, (double X0, double Y0, double X1, double Y1)? region, ScrubResult owner,
+        IPdfObjectResolver resolver, Func<PdfStream, PdfReference> allocate)
+    {
+        PdfPrimitive? resolved = Res(resolver, value);
+        if (resolved is PdfStream tiling && NumOf(resolver, tiling.Dictionary.GetAs<PdfPrimitive>(PdfName.Intern("PatternType")) ?? PdfNull.Value) == 1)
+        {
+            return ScrubTilingPattern(tiling, region, owner, resolver, allocate) ?? value;
+        }
+
+        if (resolved is PdfDictionary shadingPattern
+            && NumOf(resolver, shadingPattern.GetAs<PdfPrimitive>(PdfName.Intern("PatternType")) ?? PdfNull.Value) == 2
+            && shadingPattern.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shading))
+        {
+            Matrix3x3 toPage = ReadMatrix(shadingPattern, resolver).Multiply(owner.BaseCtm);
+            (double bx0, double by0, double bx1, double by1) = region ?? owner.Box;
+            Matrix3x3[] uses = region is null ? Array.Empty<Matrix3x3>() : new[] { toPage };
+            if (MeshShadingTrimmer.Trim(shading, uses, bx0, by0, bx1, by1, resolver, out PdfStream? trimmed)
+                == MeshShadingTrimmer.Outcome.Trimmed && trimmed is not null)
+            {
+                PdfDictionary copy = new PdfDictionary();
+                foreach (PdfName key in shadingPattern.Keys)
+                {
+                    copy.Set(key, shadingPattern[key]);
+                }
+
+                copy.Set(PdfName.Intern("Shading"), allocate(trimmed));
+                return copy;
+            }
+        }
+
+        return value;
+    }
+
+    // Most tile copies a cell is checked against before it is kept whole.
+    private const int MaxTileCopies = 4096;
+
+    // Scrubs a tiling pattern's cell (PDF 8.7.3.1). The cell repeats every
+    // XStep x YStep in pattern space; only the parts of the cell that some
+    // tile copy brings into the box can show. One such copy: the cell is
+    // scrubbed exactly against the box through that copy's placement.
+    // Several: it is scrubbed to the bounding box (in cell space) of their
+    // visible parts — kept whole when that is the whole cell. No copy: the
+    // cell is emptied. Returns null to keep the pattern unchanged.
+    private static PdfPrimitive? ScrubTilingPattern(
+        PdfStream pattern, (double X0, double Y0, double X1, double Y1)? region, ScrubResult owner,
+        IPdfObjectResolver resolver, Func<PdfStream, PdfReference> allocate)
+    {
+        PdfDictionary dict = pattern.Dictionary;
+        if (owner.Depth + 1 >= MaxFormDepth)
+        {
+            // Too deep (or a pattern cycle): the cell is emptied (B15).
+            PdfDictionary emptied = new PdfDictionary();
+            foreach (PdfName key in dict.Keys)
+            {
+                if (key.Value is not ("Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo"))
+                {
+                    emptied.Set(key, dict[key]);
+                }
+            }
+
+            emptied.Set(PdfName.Resources, new PdfDictionary());
+            emptied.Set(PdfName.Length, 0);
+            return allocate(new PdfStream(emptied, Array.Empty<byte>()));
+        }
+
+        Matrix3x3 toPage = ReadMatrix(dict, resolver).Multiply(owner.BaseCtm);
+        if (!ScrubGeometry.TryInvert(toPage, out Matrix3x3 inverse)
+            || Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("BBox"))) is not PdfArray bbox || bbox.Count < 4)
+        {
+            return null;
+        }
+
+        double cx0 = Math.Min(NumOf(resolver, bbox[0]), NumOf(resolver, bbox[2]));
+        double cx1 = Math.Max(NumOf(resolver, bbox[0]), NumOf(resolver, bbox[2]));
+        double cy0 = Math.Min(NumOf(resolver, bbox[1]), NumOf(resolver, bbox[3]));
+        double cy1 = Math.Max(NumOf(resolver, bbox[1]), NumOf(resolver, bbox[3]));
+        double xs = Math.Abs(NumOf(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("XStep")) ?? PdfNull.Value));
+        double ys = Math.Abs(NumOf(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("YStep")) ?? PdfNull.Value));
+        if (xs < 1e-9 || ys < 1e-9 || cx1 - cx0 < 1e-9 || cy1 - cy0 < 1e-9)
+        {
+            return null;
+        }
+
+        // Only the painted part of the box matters; painted nowhere in the
+        // box, the cell is emptied.
+        (double X0, double Y0, double X1, double Y1) box = region ?? owner.Box;
+        List<(double X, double Y)> boxInPattern = ScrubGeometry.TransformRectCorners(inverse, box.X0, box.Y0, box.X1, box.Y1);
+        double bx0 = double.PositiveInfinity, by0 = double.PositiveInfinity;
+        double bx1 = double.NegativeInfinity, by1 = double.NegativeInfinity;
+        foreach ((double x, double y) in boxInPattern)
+        {
+            bx0 = Math.Min(bx0, x);
+            by0 = Math.Min(by0, y);
+            bx1 = Math.Max(bx1, x);
+            by1 = Math.Max(by1, y);
+        }
+
+        double iMin = Math.Floor((bx0 - cx1) / xs);
+        double iMax = Math.Ceiling((bx1 - cx0) / xs);
+        double jMin = Math.Floor((by0 - cy1) / ys);
+        double jMax = Math.Ceiling((by1 - cy0) / ys);
+        if ((iMax - iMin + 1) * (jMax - jMin + 1) > MaxTileCopies)
+        {
+            return null;
+        }
+
+        List<(double X, double Y)> cell = new List<(double X, double Y)>
+        {
+            (cx0, cy0), (cx1, cy0), (cx1, cy1), (cx0, cy1),
+        };
+        List<(long I, long J, List<(double X, double Y)> Piece)> pieces =
+            new List<(long I, long J, List<(double X, double Y)> Piece)>();
+        for (long i = (long)iMin; region is not null && i <= (long)iMax; i++)
+        {
+            for (long j = (long)jMin; j <= (long)jMax; j++)
+            {
+                List<(double X, double Y)> shifted = new List<(double X, double Y)>(4);
+                foreach ((double x, double y) in boxInPattern)
+                {
+                    shifted.Add((x - (i * xs), y - (j * ys)));
+                }
+
+                // A copy that only touches the cell's edge shows none of it.
+                List<(double X, double Y)> piece = ScrubGeometry.ClipPolygon(shifted, cell);
+                if (piece.Count >= 3 && Math.Abs(PolygonArea(piece)) > 1e-9 * (cx1 - cx0) * (cy1 - cy0))
+                {
+                    pieces.Add((i, j, piece));
+                }
+            }
+        }
+
+        PdfDictionary? cellResources = Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Resources)) as PdfDictionary;
+        byte[] content;
+        try
+        {
+            content = pieces.Count == 0 ? Array.Empty<byte>() : DecodeFormContent(pattern);
+        }
+        catch (Exception)
+        {
+            content = Array.Empty<byte>(); // undecodable cell: emptied (B15)
+            pieces.Clear();
+        }
+
+        ScrubResult? nested = null;
+        if (pieces.Count == 1)
+        {
+            Matrix3x3 copyPlacement = new Matrix3x3(1, 0, 0, 1, pieces[0].I * xs, pieces[0].J * ys).Multiply(toPage);
+            nested = ScrubCore(content, box.X0, box.Y0, box.X1, box.Y1, cellResources, resolver, allocate, copyPlacement, owner.Depth + 1);
+        }
+        else if (pieces.Count > 1)
+        {
+            // Visible parts whose bounding boxes overlap are merged into one
+            // group; separate groups keep the gaps between them (a cell
+            // with spacing between tiles shows only strips of itself).
+            List<(double X0, double Y0, double X1, double Y1, int Piece)> groups = GroupBounds(pieces);
+            const double Eps = 1e-6;
+            if (groups.Count == 1)
+            {
+                (double ux0, double uy0, double ux1, double uy1, int _) = groups[0];
+                if (ux0 <= cx0 + Eps && uy0 <= cy0 + Eps && ux1 >= cx1 - Eps && uy1 >= cy1 - Eps)
+                {
+                    return null;
+                }
+
+                nested = ScrubCore(content, ux0, uy0, ux1, uy1, cellResources, resolver, allocate, Matrix3x3.Identity, owner.Depth + 1);
+            }
+            else
+            {
+                // One form per group, bounded by its group's box; the cell
+                // draws them in turn. A group of one visible part is scrubbed
+                // exactly against the box through its tile copy's placement
+                // (a rotated pattern's parts are not axis-aligned in the
+                // cell); a merged group is scrubbed to its box in the cell.
+                StringBuilder cellContent = new StringBuilder();
+                PdfDictionary groupForms = new PdfDictionary();
+                for (int g = 0; g < groups.Count; g++)
+                {
+                    (double gx0, double gy0, double gx1, double gy1, int single) = groups[g];
+                    ScrubResult part = single >= 0
+                        ? ScrubCore(
+                            content, box.X0, box.Y0, box.X1, box.Y1, cellResources, resolver, allocate,
+                            new Matrix3x3(1, 0, 0, 1, pieces[single].I * xs, pieces[single].J * ys).Multiply(toPage),
+                            owner.Depth + 1)
+                        : ScrubCore(content, gx0, gy0, gx1, gy1, cellResources, resolver, allocate, Matrix3x3.Identity, owner.Depth + 1);
+                    PdfDictionary formDict = new PdfDictionary();
+                    formDict.Set(PdfName.Type, PdfName.Intern("XObject"));
+                    formDict.Set(PdfName.Subtype, PdfName.Intern("Form"));
+                    formDict.Set(PdfName.Intern("BBox"), new PdfArray(new PdfPrimitive[]
+                    {
+                        new PdfReal(gx0), new PdfReal(gy0), new PdfReal(gx1), new PdfReal(gy1),
+                    }));
+                    formDict.Set(PdfName.Resources, BuildScrubbedResources(cellResources, part, resolver, allocate));
+                    formDict.Set(PdfName.Length, part.Content.Length);
+                    string formName = "ScrubCell" + g.ToString(CultureInfo.InvariantCulture);
+                    groupForms.Set(PdfName.Intern(formName), allocate(new PdfStream(formDict, part.Content)));
+                    cellContent.Append('/').Append(formName).Append(" Do\n");
+                }
+
+                PdfDictionary groupDict = new PdfDictionary();
+                foreach (PdfName key in dict.Keys)
+                {
+                    if (key.Value is not ("Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo"))
+                    {
+                        groupDict.Set(key, dict[key]);
+                    }
+                }
+
+                PdfDictionary groupResources = new PdfDictionary();
+                groupResources.Set(PdfName.Intern("XObject"), groupForms);
+                groupDict.Set(PdfName.Resources, groupResources);
+                byte[] groupContent = Encoding.Latin1.GetBytes(cellContent.ToString());
+                groupDict.Set(PdfName.Length, groupContent.Length);
+                return allocate(new PdfStream(groupDict, groupContent));
+            }
+        }
+
+        PdfDictionary newDict = new PdfDictionary();
+        foreach (PdfName key in dict.Keys)
+        {
+            if (key.Value is "Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo")
+            {
+                continue;
+            }
+
+            newDict.Set(key, dict[key]);
+        }
+
+        byte[] newContent = nested?.Content ?? Array.Empty<byte>();
+        newDict.Set(
+            PdfName.Resources,
+            nested is null ? new PdfDictionary() : BuildScrubbedResources(cellResources, nested, resolver, allocate));
+        newDict.Set(PdfName.Length, newContent.Length);
+        return allocate(new PdfStream(newDict, newContent));
+    }
+
+    // Bounding boxes of the visible cell parts, merged while any two
+    // overlap; each carries the index of its part when it holds just one
+    // (-1 once merged).
+    private static List<(double X0, double Y0, double X1, double Y1, int Piece)> GroupBounds(
+        List<(long I, long J, List<(double X, double Y)> Piece)> pieces)
+    {
+        List<(double X0, double Y0, double X1, double Y1, int Piece)> boxes =
+            new List<(double X0, double Y0, double X1, double Y1, int Piece)>();
+        for (int index = 0; index < pieces.Count; index++)
+        {
+            List<(double X, double Y)> piece = pieces[index].Piece;
+            double x0 = double.PositiveInfinity, y0 = double.PositiveInfinity;
+            double x1 = double.NegativeInfinity, y1 = double.NegativeInfinity;
+            foreach ((double x, double y) in piece)
+            {
+                x0 = Math.Min(x0, x);
+                y0 = Math.Min(y0, y);
+                x1 = Math.Max(x1, x);
+                y1 = Math.Max(y1, y);
+            }
+
+            boxes.Add((x0, y0, x1, y1, index));
+        }
+
+        bool merged = true;
+        while (merged)
+        {
+            merged = false;
+            for (int a = 0; a < boxes.Count && !merged; a++)
+            {
+                for (int b = a + 1; b < boxes.Count; b++)
+                {
+                    (double ax0, double ay0, double ax1, double ay1, int _) = boxes[a];
+                    (double bx0, double by0, double bx1, double by1, int _) = boxes[b];
+                    if (ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1)
+                    {
+                        boxes[a] = (Math.Min(ax0, bx0), Math.Min(ay0, by0), Math.Max(ax1, bx1), Math.Max(ay1, by1), -1);
+                        boxes.RemoveAt(b);
+                        merged = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return boxes;
+    }
+
+    private static double PolygonArea(List<(double X, double Y)> polygon)
+    {
+        double area = 0;
+        for (int i = 0; i < polygon.Count; i++)
+        {
+            (double ax, double ay) = polygon[i];
+            (double bx, double by) = polygon[(i + 1) % polygon.Count];
+            area += (ax * by) - (bx * ay);
+        }
+
+        return area / 2;
+    }
+
+    private static Matrix3x3 ReadMatrix(PdfDictionary dict, IPdfObjectResolver resolver)
+    {
+        if (Res(resolver, dict.GetAs<PdfPrimitive>(PdfName.Intern("Matrix"))) is PdfArray m && m.Count >= 6)
+        {
+            return new Matrix3x3(
+                NumOf(resolver, m[0]), NumOf(resolver, m[1]), NumOf(resolver, m[2]),
+                NumOf(resolver, m[3]), NumOf(resolver, m[4]), NumOf(resolver, m[5]));
+        }
+
+        return Matrix3x3.Identity;
     }
 
     private static byte[] DecodeFormContent(PdfStream form)

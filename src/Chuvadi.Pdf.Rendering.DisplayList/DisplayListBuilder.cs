@@ -470,6 +470,8 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Gray(gray);
             _stack.Current.StrokeColorSpace = null;
+            _stack.Current.StrokeShadingPattern = null;
+            _stack.Current.StrokeTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -488,6 +490,8 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Rgb(r, g, b);
             _stack.Current.StrokeColorSpace = null;
+            _stack.Current.StrokeShadingPattern = null;
+            _stack.Current.StrokeTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -506,6 +510,8 @@ public static class DisplayListBuilder
             if (_suppressColorOps) { return; }
             _stack.Current.StrokeColor = PdfColor.Cmyk(c, m, y, k);
             _stack.Current.StrokeColorSpace = null;
+            _stack.Current.StrokeShadingPattern = null;
+            _stack.Current.StrokeTilingPattern = null;
         }
 
         /// <inheritdoc />
@@ -522,6 +528,8 @@ public static class DisplayListBuilder
             if (stroke)
             {
                 _stack.Current.StrokeColorSpace = space;
+                _stack.Current.StrokeShadingPattern = null;
+                _stack.Current.StrokeTilingPattern = null;
             }
             else
             {
@@ -578,6 +586,8 @@ public static class DisplayListBuilder
             if (stroke)
             {
                 _stack.Current.StrokeColor = color;
+                _stack.Current.StrokeShadingPattern = null;
+                _stack.Current.StrokeTilingPattern = null;
             }
             else
             {
@@ -592,23 +602,28 @@ public static class DisplayListBuilder
         {
             if (_suppressColorOps) { return; }
 
-            // Legacy behaviour for the parts that stay unpainted: the flat
-            // colour is left unchanged. A PatternType 2 (shading) fill pattern
-            // is recorded so fills paint its gradient clipped to the path;
-            // tiling patterns and stroke patterns are deferred in this
-            // pipeline.
+            // The flat colour is left unchanged (it stays the fallback for
+            // anything a pattern cannot paint). The pattern is recorded for
+            // the fill or the stroke: a fill paints it clipped to the path,
+            // a stroke through the path's stroke outline.
             SetColorN(components, hasName: true, stroke);
+            BuilderState current = _stack.Current;
             if (stroke)
             {
-                return;
+                current.StrokeShadingPattern = null;
+                current.StrokePatternMatrix = AffineMatrix.Identity;
+                current.StrokeTilingPattern = null;
+                current.StrokeTilingMatrix = AffineMatrix.Identity;
+                current.StrokeTilingColor = null;
             }
-
-            BuilderState current = _stack.Current;
-            current.FillShadingPattern = null;
-            current.FillPatternMatrix = AffineMatrix.Identity;
-            current.FillTilingPattern = null;
-            current.FillTilingMatrix = AffineMatrix.Identity;
-            current.FillTilingColor = null;
+            else
+            {
+                current.FillShadingPattern = null;
+                current.FillPatternMatrix = AffineMatrix.Identity;
+                current.FillTilingPattern = null;
+                current.FillTilingMatrix = AffineMatrix.Identity;
+                current.FillTilingColor = null;
+            }
 
             if (_resources is null
                 || !_resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv))
@@ -647,15 +662,26 @@ public static class DisplayListBuilder
 
             if (patternType == 1 && resolved is PdfStream cell)
             {
-                current.FillTilingPattern = cell;
-                current.FillTilingMatrix = matrix;
-                current.FillTilingColor = components.Length switch
+                PdfColor? underlying = components.Length switch
                 {
                     1 => PdfColor.Gray(components[0]),
                     3 => PdfColor.Rgb(components[0], components[1], components[2]),
                     4 => PdfColor.Cmyk(components[0], components[1], components[2], components[3]),
                     _ => null,
                 };
+                if (stroke)
+                {
+                    current.StrokeTilingPattern = cell;
+                    current.StrokeTilingMatrix = matrix;
+                    current.StrokeTilingColor = underlying;
+                }
+                else
+                {
+                    current.FillTilingPattern = cell;
+                    current.FillTilingMatrix = matrix;
+                    current.FillTilingColor = underlying;
+                }
+
                 return;
             }
 
@@ -665,8 +691,16 @@ public static class DisplayListBuilder
                 return;
             }
 
-            current.FillShadingPattern = shadingRef;
-            current.FillPatternMatrix = matrix;
+            if (stroke)
+            {
+                current.StrokeShadingPattern = shadingRef;
+                current.StrokePatternMatrix = matrix;
+            }
+            else
+            {
+                current.FillShadingPattern = shadingRef;
+                current.FillPatternMatrix = matrix;
+            }
         }
 
         private double NumOf(PdfPrimitive p)
@@ -1362,61 +1396,90 @@ public static class DisplayListBuilder
         {
             if (!s.HasCurrentPath) { return; }
 
-            // A PatternType 1 (tiling) fill pattern replays its cell across the
-            // path, clipped to it. A combined fill-and-stroke still strokes the
-            // outline afterwards. PDF 32000-1:2008 §8.7.3.
-            if (mode != PaintMode.Stroke && s.FillTilingPattern is not null)
+            // A fill or stroke whose colour is a pattern paints the pattern
+            // through the path: a PatternType 1 (tiling) pattern replays its
+            // cell, a PatternType 2 (shading) pattern paints its gradient. A
+            // fill is clipped to the path's interior, a stroke to its stroke
+            // outline. PDF 32000-1:2008 §8.7.3.
+            bool fillPattern = mode != PaintMode.Stroke
+                && (s.FillTilingPattern is not null || s.FillShadingPattern is not null);
+            bool strokePattern = mode != PaintMode.Fill
+                && (s.StrokeTilingPattern is not null || s.StrokeShadingPattern is not null);
+            if (!fillPattern && !strokePattern)
             {
-                Add(new TransformOp { Push = true, Ctm = s.Ctm });
-                Add(new ClipOp
-                {
-                    Geometry = s.CurrentPath,
-                    FillRule = rule,
-                });
-                EmitTilingPattern(s);
-                Add(new TransformOp { Push = false, Ctm = s.Ctm });
-
-                if (mode == PaintMode.FillAndStroke)
-                {
-                    EmitPathCore(s, PaintMode.Stroke, rule);
-                }
-
+                EmitPathCore(s, mode, rule);
                 s.ResetPath();
                 return;
             }
 
-            // A PatternType 2 (shading) fill pattern paints its gradient
-            // clipped to the path instead of a flat fill. A combined
-            // fill-and-stroke still strokes the outline afterwards.
-            if (mode != PaintMode.Stroke && s.FillShadingPattern is not null)
+            if (mode != PaintMode.Stroke)
             {
-                Add(new TransformOp { Push = true, Ctm = s.Ctm });
-                Add(new ClipOp
+                if (fillPattern)
                 {
-                    Geometry = s.CurrentPath,
-                    FillRule = rule,
-                });
-                EmitShadingOp(s.FillShadingPattern, s.FillPatternMatrix);
-                Add(new TransformOp { Push = false, Ctm = s.Ctm });
+                    Add(new TransformOp { Push = true, Ctm = s.Ctm });
+                    Add(new ClipOp
+                    {
+                        Geometry = s.CurrentPath,
+                        FillRule = rule,
+                    });
+                    if (s.FillTilingPattern is not null)
+                    {
+                        EmitTilingPattern(s, s.FillTilingPattern, s.FillTilingMatrix, s.FillTilingColor ?? s.FillColor, 0);
+                    }
+                    else
+                    {
+                        EmitShadingOp(s.FillShadingPattern!, s.FillPatternMatrix);
+                    }
 
-                if (mode == PaintMode.FillAndStroke)
+                    Add(new TransformOp { Push = false, Ctm = s.Ctm });
+                }
+                else
+                {
+                    EmitPathCore(s, PaintMode.Fill, rule);
+                }
+            }
+
+            if (mode != PaintMode.Fill)
+            {
+                if (strokePattern)
+                {
+                    StrokeStyle style = StrokeStyleOf(s);
+                    Add(new TransformOp { Push = true, Ctm = s.Ctm });
+                    Add(new ClipOp
+                    {
+                        Geometry = s.CurrentPath,
+                        FillRule = rule,
+                        Stroke = style,
+                    });
+                    if (s.StrokeTilingPattern is not null)
+                    {
+                        EmitTilingPattern(
+                            s, s.StrokeTilingPattern, s.StrokeTilingMatrix, s.StrokeTilingColor ?? s.StrokeColor,
+                            ClipOp.StrokeReach(style));
+                    }
+                    else
+                    {
+                        EmitShadingOp(s.StrokeShadingPattern!, s.StrokePatternMatrix);
+                    }
+
+                    Add(new TransformOp { Push = false, Ctm = s.Ctm });
+                }
+                else
                 {
                     EmitPathCore(s, PaintMode.Stroke, rule);
                 }
-
-                s.ResetPath();
-                return;
             }
 
-            EmitPathCore(s, mode, rule);
             s.ResetPath();
         }
 
         // Builds the tile placements covering the current path and emits one
         // TilingPatternOp. Cells are built once per (cell, underlying colour).
-        private void EmitTilingPattern(BuilderState s)
+        // The tiles cover the path's bounds grown by reach (a stroke's half
+        // width and joins); underlyingColor colours an uncoloured cell.
+        private void EmitTilingPattern(
+            BuilderState s, PdfStream cell, AffineMatrix patternToPage, PdfColor underlyingColor, double reach)
         {
-            PdfStream cell = s.FillTilingPattern!;
             PdfDictionary dict = cell.Dictionary;
             if (_patternDepth >= MaxPatternDepth
                 || !dict.TryGetValue(PdfName.Intern("BBox"), out PdfPrimitive? bboxPrim)
@@ -1439,12 +1502,16 @@ public static class DisplayListBuilder
                 return;
             }
 
-            AffineMatrix patternToPage = s.FillTilingMatrix;
             if (!TryInvert(patternToPage, out AffineMatrix pageToPattern)
                 || !TryPathBounds(s.CurrentPath, out double minPx, out double minPy, out double maxPx, out double maxPy))
             {
                 return;
             }
+
+            minPx -= reach;
+            minPy -= reach;
+            maxPx += reach;
+            maxPy += reach;
 
             double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
             double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
@@ -1468,7 +1535,7 @@ public static class DisplayListBuilder
             }
 
             bool uncoloured = IntOf(dict, "PaintType", 1) == 2;
-            PdfColor? underlying = uncoloured ? (s.FillTilingColor ?? s.FillColor) : null;
+            PdfColor? underlying = uncoloured ? underlyingColor : null;
             PageDisplayList? cellList = GetOrBuildTilingCell(cell, underlying);
             if (cellList is null || cellList.Count == 0)
             {
@@ -1629,15 +1696,18 @@ public static class DisplayListBuilder
             maxY = Math.Max(maxY, y);
         }
 
+        // The stroke style a path is painted with, its width in page space.
+        private static StrokeStyle StrokeStyleOf(BuilderState s) => new StrokeStyle(
+            LineWidth: s.LineWidth * Math.Max(Math.Abs(s.Ctm.A), Math.Abs(s.Ctm.D)),
+            Cap: s.LineCap,
+            Join: s.LineJoin,
+            MiterLimit: s.MiterLimit,
+            DashArray: s.DashArray,
+            DashPhase: s.DashPhase);
+
         private void EmitPathCore(BuilderState s, PaintMode mode, FillRule rule)
         {
-            StrokeStyle? stroke = mode != PaintMode.Fill ? new StrokeStyle(
-                LineWidth: s.LineWidth * Math.Max(Math.Abs(s.Ctm.A), Math.Abs(s.Ctm.D)),
-                Cap: s.LineCap,
-                Join: s.LineJoin,
-                MiterLimit: s.MiterLimit,
-                DashArray: s.DashArray,
-                DashPhase: s.DashPhase) : null;
+            StrokeStyle? stroke = mode != PaintMode.Fill ? StrokeStyleOf(s) : null;
             Add(new PathOp
             {
                 BlendMode = _stack.Current.BlendMode,

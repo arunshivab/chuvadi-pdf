@@ -8,6 +8,12 @@ A single bookmark in the document outline tree. PDF 32000-1:2008 §12.3.3 — Do
 public sealed class OutlineItem
 ```
 
+## Constructors
+
+### `OutlineItem(string title, int destinationPageIndex, IReadOnlyList<OutlineItem> children)`
+
+Initialises a new `OutlineItem`.
+
 ## Properties
 
 ### `Title`

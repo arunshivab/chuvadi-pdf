@@ -14,6 +14,24 @@ RSASSA-PSS is the modern RSA signature scheme; unlike PKCS#1 v1.5 it uses a prob
 
  Conventional defaults: MGF1 hash = signing hash; salt length = digest size. The constructor takes these as parameters in case the caller needs a non-default profile.
 
+## Constructors
+
+### `RsaPssSigner(RsaPrivateKey privateKey, X509Certificate certificate, HashAlgorithmName hashAlgorithm)`
+
+Creates an RSASSA-PSS signer with conventional defaults (MGF1 hash = signing hash; salt length = digest size).
+
+### `RsaPssSigner(RsaPrivateKey privateKey, X509Certificate certificate, HashAlgorithmName hashAlgorithm, HashAlgorithmName mgfHashAlgorithm, int saltLength)`
+
+Creates an RSASSA-PSS signer with the given parameters.
+
+**Parameters**
+
+- `privateKey` — The RSA private key.
+- `certificate` — The matching certificate.
+- `hashAlgorithm` — Hash used for the message digest and EMSA-PSS.
+- `mgfHashAlgorithm` — Hash used inside MGF1.
+- `saltLength` — Salt length in bytes.
+
 ## Properties
 
 ### `Certificate`

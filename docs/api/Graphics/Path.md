@@ -86,6 +86,14 @@ Path CubicBezierTo(PointF cp1, PointF cp2, PointF endpoint)
 
 Appends a cubic Bezier curve. PDF operator 'c': current point → cp1 → cp2 → endpoint. PDF 32000-1:2008 §8.5.2.3.
 
+### `CubicBezierTo`
+
+```csharp
+Path CubicBezierTo(double cx1, double cy1, double cx2, double cy2, double ex, double ey)
+```
+
+Appends a cubic Bezier curve from coordinates.
+
 ### `ClosePath`
 
 ```csharp

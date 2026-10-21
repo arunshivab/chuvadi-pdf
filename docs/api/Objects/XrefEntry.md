@@ -110,6 +110,22 @@ Initialises a new free `XrefEntry`.
 - `generation` — Generation to use if the object is reused.
 - `nextFreeObjectNumber` — Object number of the next free object (linked list of free objects).
 
+### `Compressed`
+
+__static__
+
+```csharp
+static XrefEntry Compressed(int objectNumber, int streamObjectNumber, int indexInStream)
+```
+
+Initialises a new compressed `XrefEntry` for an object stored inside an object stream (PDF 1.5+).
+
+**Parameters**
+
+- `objectNumber` — This object's number.
+- `streamObjectNumber` — Object number of the object stream containing this object.
+- `indexInStream` — Zero-based index of this object within the object stream.
+
 ### `PdfObjectId`
 
 ```csharp

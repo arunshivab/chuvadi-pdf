@@ -16,6 +16,19 @@ Emitted by the builder for the PDF Do operator when the named XObject has Subtyp
 
  Image colour conversion (CMYK to RGB, indexed colour expansion, etc.) is performed at decode time. `ImageFrame.Pixels` is always in `PixelBuffer` BGRA format regardless of the original source.
 
+## Constructors
+
+### `DrawImageOp(ImageFrame image, Transform deviceTransform, IReadOnlyList<ClipPath>? clips = null, double alpha = 1.0)`
+
+Initialises a `DrawImageOp`.
+
+**Parameters**
+
+- `image` — The decoded image frame.
+- `deviceTransform` — The CTM at the moment of the Do operator. Maps the image's unit square (0,0)–(1,1) into PDF user space.
+- `clips` — Clip paths active when this op was emitted. Null or empty means no clip.
+- `alpha` — Constant image opacity from ExtGState /ca, 0..1. Default 1 (opaque). <exception cref="ArgumentNullException"> Thrown when `image` is null. </exception>
+
 ## Properties
 
 ### `Image`

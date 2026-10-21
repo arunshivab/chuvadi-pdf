@@ -16,6 +16,12 @@ Structure:
 ```
  At least one of the three fields is typically present. Most certificates supply only keyIdentifier (matching the issuer's SubjectKeyIdentifier). Chuvadi exposes all three; the GeneralNames payload is kept raw because the GeneralName CHOICE has its own non-trivial decoder.
 
+## Constructors
+
+### `AuthorityKeyIdentifierExtension(byte[]? keyIdentifier, byte[]? authorityCertIssuerRaw, BigInteger? authorityCertSerialNumber)`
+
+Initialises a new AuthorityKeyIdentifierExtension.
+
 ## Properties
 
 ### `KeyIdentifier`

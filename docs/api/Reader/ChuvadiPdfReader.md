@@ -14,6 +14,56 @@ public sealed class ChuvadiPdfReader : IPdfReader
 
 Initialises a new `ChuvadiPdfReader`.
 
+## Methods
+
+### `OpenAsync`
+
+```csharp
+Task<PdfDocument> OpenAsync(Stream stream, string fileName, string? password = null, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
+### `RenderPageSvgAsync`
+
+```csharp
+Task<string> RenderPageSvgAsync(PdfDocument document, int pageIndex, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
+### `RenderThumbnailAsync`
+
+```csharp
+Task<string> RenderThumbnailAsync(PdfDocument document, int pageIndex, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
+### `GetOutlinesAsync`
+
+```csharp
+Task<IReadOnlyList<OutlineItem>> GetOutlinesAsync(PdfDocument document, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
+### `SearchAsync`
+
+```csharp
+async IAsyncEnumerable<SearchMatch> SearchAsync(PdfDocument document, string query, SearchOptions options, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
+### `GetTextRunsAsync`
+
+```csharp
+Task<IReadOnlyList<TextRun>> GetTextRunsAsync(PdfDocument document, int pageIndex, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Reader/ChuvadiPdfReader.cs`](../../../src/Chuvadi.Pdf.Reader/ChuvadiPdfReader.cs)_

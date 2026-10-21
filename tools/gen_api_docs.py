@@ -270,6 +270,26 @@ def parse_file(path: Path) -> list[TypeDecl]:
     return types
 
 
+def param_list_end(text: str) -> int:
+    """Index of the ")" closing the first parameter list, or -1 if still open."""
+    depth = 0
+    started = False
+    in_string = False
+    for k, ch in enumerate(text):
+        if ch == '"' and (k == 0 or text[k - 1] != "\\"):
+            in_string = not in_string
+        if in_string:
+            continue
+        if ch == "(":
+            depth += 1
+            started = True
+        elif ch == ")" and started:
+            depth -= 1
+            if depth == 0:
+                return k
+    return -1
+
+
 def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
     """Parse public members within a type body."""
     members: list[Member] = []
@@ -325,6 +345,39 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
         if nested_depth > 1:
             i += 1
             continue
+
+        # A declaration whose parameter list spans several lines
+        # ("public void DrawLine(" … "double y)") is joined into one line
+        # before matching, so multi-line signatures are documented too. An
+        # expression body that follows the parameter list ("=> …", possibly
+        # itself spanning lines) is cut off: the signature ends at ")".
+        if re.match(r'^\s*public\b', line) and line.count("(") > line.count(")"):
+            j = i
+            joined = line.rstrip()
+            while param_list_end(joined) < 0 and j + 1 < len(body_lines):
+                j += 1
+                continuation = body_lines[j]
+                for ch in continuation:
+                    if ch == "{":
+                        nested_depth += 1
+                    elif ch == "}":
+                        nested_depth -= 1
+                joined += " " + continuation.strip()
+            end = param_list_end(joined)
+            if end >= 0 and joined[end + 1:].lstrip().startswith("=>"):
+                joined = joined[:end + 1] + ";"
+                # Skip the rest of a multi-line expression body.
+                while not body_lines[j].rstrip().endswith(";") and j + 1 < len(body_lines):
+                    j += 1
+                    for ch in body_lines[j]:
+                        if ch == "{":
+                            nested_depth += 1
+                        elif ch == "}":
+                            nested_depth -= 1
+            line = re.sub(r'\s+', ' ', joined)
+            line = re.sub(r'\(\s+', '(', line)
+            line = re.sub(r'\s+\)', ')', line)
+            i = j
 
         mm = MEMBER_DECL.match(line)
         if mm:

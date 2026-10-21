@@ -21,6 +21,12 @@ Structure:
 - Certificates set containing the signer's cert and (typically) the issuing CA chain. 
 - One SignerInfo with signedAttrs containing contentType, messageDigest, signingTime, and SigningCertificateV2 (CAdES baseline).  CRLs in the SignedData are rare; revocation information for CAdES typically arrives via the revocationValues unsigned attribute.
 
+## Constructors
+
+### `SignedData(int version, IList<AlgorithmIdentifier> digestAlgorithms, EncapsulatedContentInfo encapContentInfo, IList<X509Certificate> certificates, IList<byte[]> crls, IList<SignerInfo> signerInfos)`
+
+Initialises a new SignedData.
+
 ## Properties
 
 ### `Version`

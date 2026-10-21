@@ -14,6 +14,16 @@ The DSS is a dictionary on the document Catalog (key `/DSS`) carrying long-term 
 
  This class extracts the top-level `/Certs`, `/CRLs`, and `/OCSPs` arrays and decodes each into the corresponding Chuvadi type. Streams that fail to decode are silently skipped rather than failing the whole extraction — a single malformed CRL inside a DSS shouldn't poison the rest. The optional `/VRI` sub-dictionary (per-signature validation info, also defined in §12.8.4.3) is not yet parsed and is reserved for a future session.
 
+## Constructors
+
+### `DocumentSecurityStore(IList<X509Certificate> certificates, IList<CertificateList> crls, IList<OcspResponse> ocspResponses)`
+
+Initialises a new DSS snapshot.
+
+### `DocumentSecurityStore(IList<X509Certificate> certificates, IList<CertificateList> crls, IList<OcspResponse> ocspResponses, IDictionary<string, VriEntry> vri)`
+
+Initialises a new DSS snapshot including a VRI sub-dictionary.
+
 ## Properties
 
 ### `Vri`

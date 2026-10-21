@@ -8,6 +8,26 @@ Recolours existing pages by drawing a solid background fill behind the page cont
 public static class PageOverlay
 ```
 
+## Methods
+
+### `Apply`
+
+__static__
+
+```csharp
+static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, ColorF? background, float contentOpacity)
+```
+
+Writes `document` to `output` with the requested pages recoloured.
+
+**Parameters**
+
+- `output` — The stream to write the updated PDF to.
+- `document` — The source document.
+- `pageIndices` — Zero-based indices of pages to recolour. Null recolours every page.
+- `background` — Fill colour drawn behind the page content, or null for no fill.
+- `contentOpacity` — Opacity of the existing content, 0 (fully transparent) to 1 (unchanged). <exception cref="ArgumentNullException"> Thrown when `output` or `document` is null. </exception> <exception cref="ArgumentOutOfRangeException"> Thrown when `contentOpacity` is outside [0, 1]. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/PageOverlay.cs`](../../../src/Chuvadi.Pdf.Operations/PageOverlay.cs)_

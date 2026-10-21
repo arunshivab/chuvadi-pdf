@@ -58,6 +58,41 @@ Opens a PDF file with the given password. For unencrypted PDFs the password is i
 
 **Remarks:** Synchronous blocking I/O. Not supported on WebAssembly; use `OpenAsync(Stream, string, CancellationToken)` for cross-platform code.
 
+### `OpenAsync`
+
+__static__
+
+```csharp
+static Task<PdfReader> OpenAsync(Stream stream, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens a PDF file from the given readable stream.
+
+**Parameters**
+
+- `stream` — A readable stream containing the PDF. Need not be seekable.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Remarks:** The input stream is fully buffered into memory before parsing begins, making this method WebAssembly-compatible and tolerant of non-seekable streams (HTTP responses, decompression streams, pipes). The cost is a full-file buffer in RAM for the lifetime of the document; for large PDFs on a desktop runtime, the synchronous `Open(Stream, bool)` overload is more memory-efficient. Cancellation is checked before and after the buffer fill. Once parsing begins it runs to completion on the buffered bytes. The reader owns the internal memory buffer; the caller retains responsibility for disposing `stream`.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static Task<PdfReader> OpenAsync(Stream stream, string password, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens an encrypted PDF file with the given password.
+
+**Parameters**
+
+- `stream` — A readable stream containing the PDF. Need not be seekable.
+- `password` — User or owner password. Empty string for default.
+- `cancellationToken` — A token that cancels the buffer fill. <exception cref="PdfParseException">Thrown when the password is incorrect.</exception>
+
+**Remarks:** See `OpenAsync(Stream, CancellationToken)` for the buffering and cancellation semantics. For unencrypted PDFs the password is ignored.
+
 ### `ReadFileBytes`
 
 ```csharp

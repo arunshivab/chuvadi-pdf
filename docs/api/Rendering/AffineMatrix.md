@@ -24,6 +24,24 @@ static AffineMatrix Identity
 
 Identity transform.
 
+## Methods
+
+### `Multiply`
+
+```csharp
+AffineMatrix Multiply(AffineMatrix other)
+```
+
+Returns this × `other` (this is applied after other in PDF terms).
+
+### `ToSvgMatrix`
+
+```csharp
+string ToSvgMatrix(string fmt = "0.######")
+```
+
+Returns the SVG matrix(...) function representation.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/AffineMatrix.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/AffineMatrix.cs)_

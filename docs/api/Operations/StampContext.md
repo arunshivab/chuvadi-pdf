@@ -17,6 +17,31 @@ Substitutes tokens in a stamp template into final text for one page. Supported t
 public sealed class StampContext
 ```
 
+## Constructors
+
+### `StampContext(int pageNumber, int totalPages, string? filePath, DateTimeOffset? timestamp)`
+
+Initialises a stamp context for one page.
+
+**Parameters**
+
+- `pageNumber` — 1-based page number.
+- `totalPages` — Total page count.
+- `filePath` — Source file path, or null if unknown.
+- `timestamp` — Caller-supplied timestamp, or null.
+
+### `StampContext(int pageNumber, int totalPages, string? filePath, DateTimeOffset? timestamp, string? number)`
+
+Initialises a stamp context for one page, including a styled number.
+
+**Parameters**
+
+- `pageNumber` — 1-based page number.
+- `totalPages` — Total page count.
+- `filePath` — Source file path, or null if unknown.
+- `timestamp` — Caller-supplied timestamp, or null.
+- `number` — Pre-formatted numbering label for the `{number}` token, or null.
+
 ## Properties
 
 ### `PageNumber`

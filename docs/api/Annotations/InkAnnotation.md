@@ -8,6 +8,12 @@ Free-hand ink annotation (§12.5.6.13). Each stroke is a polyline of points in P
 public sealed class InkAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `InkAnnotation(int pageIndex, RectangleF rect, IReadOnlyList<IReadOnlyList<PointF>> strokes, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises an ink annotation.
+
 ## Properties
 
 ### `Strokes`

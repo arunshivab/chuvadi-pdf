@@ -44,6 +44,26 @@ Computes the signed area enclosed by the flattened subpaths (positive for counte
 
 **Returns:** The summed signed area.
 
+### `Contains`
+
+__static__
+
+```csharp
+static bool Contains(this PathGeometry geometry, double x, double y, FillRule rule, double tolerance = DefaultTolerance)
+```
+
+Tests whether the point (`x`, `y`) lies inside the path under the given fill rule.
+
+**Parameters**
+
+- `geometry` — The path.
+- `x` — Point x.
+- `y` — Point y.
+- `rule` — Fill rule deciding insideness.
+- `tolerance` — Curve-flattening tolerance.
+
+**Returns:** True when the point is inside.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/PathGeometryAccessors.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/PathGeometryAccessors.cs)_

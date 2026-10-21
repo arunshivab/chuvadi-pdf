@@ -16,6 +16,12 @@ RFC 6960 §4.1.1:
 ```
  The two hashes are computed over the issuer cert's `tbsCertificate.subject` (DER bytes) and the `BIT STRING` content of its `subjectPublicKey` respectively, using `hashAlgorithm`.
 
+## Constructors
+
+### `CertId(AlgorithmIdentifier hashAlgorithm, byte[] issuerNameHash, byte[] issuerKeyHash, BigInteger serialNumber)`
+
+Initialises a new CertID.
+
 ## Properties
 
 ### `HashAlgorithm`

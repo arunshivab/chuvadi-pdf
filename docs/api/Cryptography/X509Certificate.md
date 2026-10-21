@@ -20,6 +20,12 @@ Structure:
 - Verifying that hash against `SignatureValue` using the issuer's public key. 
 - Confirming the algorithm declared in TBS (TbsCertificate.Signature) matches `SignatureAlgorithm` — RFC 5280 §4.1.1.2.
 
+## Constructors
+
+### `X509Certificate(TbsCertificate tbs, AlgorithmIdentifier signatureAlgorithm, BitStringValue signatureValue, byte[] rawEncoding)`
+
+Initialises a new X509Certificate.
+
 ## Properties
 
 ### `Tbs`

@@ -8,6 +8,12 @@ A single AcroForm field, read from a PDF document. PDF 32000-1:2008 §12.7.3 —
 public sealed class FormField
 ```
 
+## Constructors
+
+### `FormField(string fullyQualifiedName, FormFieldType type, string? value, PdfObjectId objectId, IReadOnlyList<FormField> children)`
+
+Initialises a new `FormField`.
+
 ## Properties
 
 ### `FullyQualifiedName`

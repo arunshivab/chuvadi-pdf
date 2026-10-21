@@ -8,6 +8,27 @@ Sets document-information metadata (Title, Author, Subject, Keywords) on an exis
 public static class DocumentInfo
 ```
 
+## Methods
+
+### `Apply`
+
+__static__
+
+```csharp
+static void Apply(Stream output, PdfDocument document, string? title = null, string? author = null, string? subject = null, string? keywords = null)
+```
+
+Writes `document` to `output` with the given information-dictionary entries applied. Any parameter left null is preserved from the source document; a non-null value (including the empty string) replaces it.
+
+**Parameters**
+
+- `output` — The stream to write the updated PDF to.
+- `document` — The source document.
+- `title` — New /Title, or null to leave unchanged.
+- `author` — New /Author, or null to leave unchanged.
+- `subject` — New /Subject, or null to leave unchanged.
+- `keywords` — New /Keywords, or null to leave unchanged. <exception cref="ArgumentNullException"> Thrown when `output` or `document` is null. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/DocumentInfo.cs`](../../../src/Chuvadi.Pdf.Operations/DocumentInfo.cs)_

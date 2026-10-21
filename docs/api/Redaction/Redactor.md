@@ -16,6 +16,18 @@ The principle: cover-up alone is not redaction. Drawing a black rectangle on top
 - Image content is not redacted (Phase 3). 
 - Form XObjects are not recursed into (Phase 3).
 
+## Methods
+
+### `Apply`
+
+__static__
+
+```csharp
+static void Apply(Stream output, PdfDocument document, RedactionOptions options)
+```
+
+Applies the redactions in `options` to `document` and writes the result to `output`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Redaction/Redactor.cs`](../../../src/Chuvadi.Pdf.Redaction/Redactor.cs)_
