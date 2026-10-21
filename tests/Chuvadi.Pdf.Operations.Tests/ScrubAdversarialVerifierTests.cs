@@ -71,11 +71,14 @@ public sealed class ScrubAdversarialVerifierTests
         using MemoryStream output = new MemoryStream();
         PageCrop[] crops = { new PageCrop(0, CropBox, PageCropMode.Scrub) };
         PageCropper.Crop(output, source, crops);
-        string whole = Encoding.Latin1.GetString(output.ToArray());
-
-        Assert.True(whole.Contains("SHAREDAPPEARANCE", StringComparison.Ordinal),
-            "the appearance stream shared with a KEPT annotation was omitted "
-            + "from the output, leaving the kept annotation's /AP dangling");
+        // Since 3.22 a kept annotation's appearance is itself scrubbed to the
+        // box (a new stream); it must resolve, not dangle.
+        using PdfDocument result = PdfDocument.Open(new MemoryStream(output.ToArray()), leaveOpen: false);
+        PdfArray annots = (PdfArray)result.Objects.Resolve(result.Pages[0].Dictionary[PdfName.Intern("Annots")]);
+        PdfPrimitive keptAnnot = Assert.Single(annots);
+        PdfDictionary kept = (PdfDictionary)result.Objects.Resolve(keptAnnot);
+        PdfDictionary appearance = (PdfDictionary)result.Objects.Resolve(kept[PdfName.Intern("AP")]);
+        Assert.IsType<PdfStream>(result.Objects.Resolve(appearance[PdfName.Intern("N")]));
     }
 
     // A clip set and fully restored by Q must not suppress a later sh.

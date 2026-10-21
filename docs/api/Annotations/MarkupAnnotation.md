@@ -8,6 +8,12 @@ Text-markup annotation (§12.5.6.10): Highlight, Underline, Squiggly, or StrikeO
 public sealed class MarkupAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `MarkupAnnotation(AnnotationType markupType, int pageIndex, RectangleF rect, IReadOnlyList<float> quadPoints, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a text-markup annotation.
+
 ## Properties
 
 ### `QuadPoints`

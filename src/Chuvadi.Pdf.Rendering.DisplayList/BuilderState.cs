@@ -47,6 +47,20 @@ internal sealed class BuilderState
     internal AffineMatrix FillTilingMatrix { get; set; } = AffineMatrix.Identity;
 
     internal PdfColor? FillTilingColor { get; set; }
+
+    // The same for the stroke colour (SCN /Name): a shading pattern's
+    // /Shading and matrix, or a tiling pattern's cell, matrix and underlying
+    // colour. Strokes paint the pattern through their outline. Cleared by
+    // every non-pattern stroke-colour operator.
+    internal PdfPrimitive? StrokeShadingPattern { get; set; }
+
+    internal AffineMatrix StrokePatternMatrix { get; set; } = AffineMatrix.Identity;
+
+    internal PdfStream? StrokeTilingPattern { get; set; }
+
+    internal AffineMatrix StrokeTilingMatrix { get; set; } = AffineMatrix.Identity;
+
+    internal PdfColor? StrokeTilingColor { get; set; }
     internal double LineWidth { get; set; } = 1.0;
     internal LineCap LineCap { get; set; }
     internal LineJoin LineJoin { get; set; }
@@ -164,6 +178,11 @@ internal sealed class BuilderState
         FillTilingPattern = FillTilingPattern,
         FillTilingMatrix = FillTilingMatrix,
         FillTilingColor = FillTilingColor,
+        StrokeShadingPattern = StrokeShadingPattern,
+        StrokePatternMatrix = StrokePatternMatrix,
+        StrokeTilingPattern = StrokeTilingPattern,
+        StrokeTilingMatrix = StrokeTilingMatrix,
+        StrokeTilingColor = StrokeTilingColor,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,

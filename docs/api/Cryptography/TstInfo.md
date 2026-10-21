@@ -16,6 +16,12 @@ RFC 3161 §2.4.2:
 ```
  Chuvadi parses the mandatory fields and the most useful optional ones (genTime, messageImprint, serialNumber); other optional fields are preserved as raw bytes in `RawEncoding` for advanced callers.
 
+## Constructors
+
+### `TstInfo(int version, ObjectIdentifier policy, MessageImprint messageImprint, BigInteger serialNumber, DateTimeOffset genTime, byte[] rawEncoding)`
+
+Initialises a new TstInfo.
+
 ## Properties
 
 ### `Version`

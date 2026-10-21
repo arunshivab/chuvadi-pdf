@@ -52,6 +52,16 @@ Returns the text runs of `pageIndex` in reading order.
 
 **Remarks:** Glyph-level positions are derived from font-metric data (PDF /Widths or /W tables); selection-overlay consumers can use these for native browser text selection.
 
+### `SearchAsync`
+
+__static__
+
+```csharp
+static System.Collections.Generic.IAsyncEnumerable<SearchMatch> SearchAsync(this PdfDocument document, string query, SearchOptions? options = null, System.Threading.CancellationToken cancellationToken = default)
+```
+
+Searches the document for occurrences of `query`, streaming matches as they are found.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/PdfPageExtensions.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/PdfPageExtensions.cs)_

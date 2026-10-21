@@ -12,6 +12,18 @@ public static class DocumentSearch
 
 Builds on `PdfPageExtensions.GetTextRuns`. Concatenates the page's text runs in reading order, performs a sliding-window string search, and emits matches as they're found. Cancellation is checked between pages and between matches.
 
+## Methods
+
+### `SearchAsync`
+
+__static__
+
+```csharp
+static async IAsyncEnumerable<SearchMatch> SearchAsync(PdfDocument document, string query, SearchOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+```
+
+Searches the document for occurrences of `query`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/DocumentSearch.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/DocumentSearch.cs)_

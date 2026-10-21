@@ -58,6 +58,14 @@ byte[] Decode(string filterName, byte[] encoded, FilterParameters? parms = null)
 
 Decodes `encoded` by removing the named filter.
 
+### `DecodeChain`
+
+```csharp
+byte[] DecodeChain(IReadOnlyList<string> filterNames, byte[] encoded, IReadOnlyList<FilterParameters?>? parmsArray = null)
+```
+
+Decodes `encoded` through a chain of filters, first to last.
+
 ### `Encode`
 
 ```csharp

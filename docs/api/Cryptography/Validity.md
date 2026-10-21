@@ -16,6 +16,12 @@ Structure:
 ```
  Per RFC 5280 §4.1.2.5: certificates whose end date is before 2050 must use UTCTime; certificates whose end date is 2050 or later must use GeneralizedTime. Chuvadi tracks the original encoded form of each endpoint so it can re-serialise without changing the wire format.
 
+## Constructors
+
+### `Validity(DateTimeOffset notBefore, DateTimeOffset notAfter, Asn1UniversalTag notBeforeTag, Asn1UniversalTag notAfterTag)`
+
+Initialises a new Validity.
+
 ## Properties
 
 ### `NotBefore`

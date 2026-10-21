@@ -27,14 +27,25 @@ public static class RenderOpBounds
         return op.Geometry.Bounds(tolerance);
     }
 
-    /// <summary>The tight page-space bounds of a clip path's flattened geometry.</summary>
+    /// <summary>
+    /// The tight page-space bounds of a clip path's flattened geometry (grown by
+    /// the stroke's reach for a stroke-outline clip).
+    /// </summary>
     /// <param name="op">The clip op.</param>
     /// <param name="tolerance">Curve-flattening tolerance.</param>
     /// <returns>The bounding box.</returns>
     public static Rect Bounds(this ClipOp op, double tolerance = DefaultTolerance)
     {
         ArgumentNullException.ThrowIfNull(op);
-        return op.Geometry.Bounds(tolerance);
+        Rect bounds = op.Geometry.Bounds(tolerance);
+        if (op.Stroke is null)
+        {
+            return bounds;
+        }
+
+        // A stroke-outline clip reaches past the path by the stroke's extent.
+        double reach = ClipOp.StrokeReach(op.Stroke);
+        return new Rect(bounds.X - reach, bounds.Y - reach, bounds.Width + (2 * reach), bounds.Height + (2 * reach));
     }
 
     /// <summary>

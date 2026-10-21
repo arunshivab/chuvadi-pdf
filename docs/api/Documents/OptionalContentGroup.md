@@ -12,6 +12,12 @@ public sealed class OptionalContentGroup
 
 PDF 32000 §8.11 defines optional content as graphics that can be selectively shown or hidden by the viewer. Common uses: anatomical overlays in medical imaging, engineering drawing layers, multi-language annotation sets.
 
+## Constructors
+
+### `OptionalContentGroup(string name, bool isVisibleByDefault, IReadOnlyList<string> intents)`
+
+Initialises a new `OptionalContentGroup`.
+
 ## Properties
 
 ### `Name`

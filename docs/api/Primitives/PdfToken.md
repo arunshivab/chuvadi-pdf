@@ -60,6 +60,16 @@ Returns true if this token has type `PdfTokenType.EndOfStream`.
 
 ## Methods
 
+### `new`
+
+__static__
+
+```csharp
+static readonly PdfToken EndOfStream = new(PdfTokenType.EndOfStream, [], -1)
+```
+
+A sentinel token representing the end of the stream.
+
 ### `Encoding.Latin1.GetString`
 
 ```csharp

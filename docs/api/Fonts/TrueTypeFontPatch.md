@@ -16,6 +16,25 @@ PDF symbol fonts (Wingdings, Symbol, Webdings, ZapfDingbats, MT Extra, and simil
 
  This approach mirrors pdf2htmlEX's font remapping strategy. The alternative of mutating the original cmap in place would require parsing every cmap subtable format the source font might use; replacing the table is simpler and equally effective for the SVG use case.
 
+## Methods
+
+### `WithAugmentedCmap`
+
+__static__
+
+```csharp
+static byte[] WithAugmentedCmap(byte[] fontBytes, IReadOnlyDictionary<int, int> unicodeToGid)
+```
+
+Returns a copy of `fontBytes` whose cmap table has been replaced by a fresh table containing the given Unicode-to-glyph mappings. The original cmap subtables are discarded.
+
+**Parameters**
+
+- `fontBytes` — Original TrueType/OpenType font program bytes.
+- `unicodeToGid` — Map from Unicode code point to glyph index. Code points outside the BMP (>= 0x10000) trigger a format-12 cmap subtable; if all code points are in the BMP the result uses format 4.
+
+**Returns:** New font program bytes with the cmap table replaced. <exception cref="ArgumentNullException"> Thrown when `fontBytes` or `unicodeToGid` is null. </exception> <exception cref="FontRenderingException"> Thrown when the input bytes are not a valid TrueType/OpenType font or are too short to contain an offset table. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeFontPatch.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeFontPatch.cs)_

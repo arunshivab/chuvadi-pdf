@@ -8,6 +8,25 @@ Fills a region with a tiling pattern described for repetition rather than tile b
 public sealed class TilingFillOp : RenderOp
 ```
 
+## Constructors
+
+### `TilingFillOp(PageDisplayList cell, Transform patternMatrix, double xStep, double yStep, double cellOriginX, double cellOriginY, double cellWidth, double cellHeight, RectangleF region, IReadOnlyList<ClipPath>? clips)`
+
+Initialises a tiling fill.
+
+**Parameters**
+
+- `cell` — The pattern cell's display list, in pattern space.
+- `patternMatrix` — Maps pattern space to the op's user space.
+- `xStep` — Horizontal repeat step, in pattern space (positive).
+- `yStep` — Vertical repeat step, in pattern space (positive).
+- `cellOriginX` — The cell's /BBox lower-left x.
+- `cellOriginY` — The cell's /BBox lower-left y.
+- `cellWidth` — The cell's /BBox width.
+- `cellHeight` — The cell's /BBox height.
+- `region` — Bounds of the filled region, in user space.
+- `clips` — Clips active for the fill (including the filled path).
+
 ## Properties
 
 ### `Cell`

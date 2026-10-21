@@ -44,6 +44,14 @@ TimeStampResponse Fetch(TimeStampRequest request)
 
 <inheritdoc />
 
+### `FetchAsync`
+
+```csharp
+async Task<TimeStampResponse> FetchAsync(TimeStampRequest request, CancellationToken cancellationToken = default)
+```
+
+<inheritdoc />
+
 ---
 
 _Source: [`src/Chuvadi.Cryptography/Timestamps/HttpTsaClient.cs`](../../../src/Chuvadi.Cryptography/Timestamps/HttpTsaClient.cs)_

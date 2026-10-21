@@ -153,11 +153,21 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.22.0 (backlog scope A):
+- **Partial image redaction** — only the covered pixels are blanked (was
+  open item 16).
+- **Scrub residuals** — tiling-pattern cells scrubbed to what can show,
+  mesh shadings trimmed to in-box elements, crossing annotation appearances
+  scrubbed, unused patterns/shadings and `/Thumb` / `/PieceInfo` removed
+  (was open item 7, except the parts listed under item 17).
+- **Pattern strokes in SVG** — stroke-outline mask (was open item 2).
+- **API docs for multi-line signatures** (was open item 15).
+
 ---
 
 ## Open roadmap
 
-Status verified against code at v3.21.0. Items are independent and may be
+Status verified against code at v3.22.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -165,11 +175,6 @@ re-ordered.
 through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
 
 ### Rendering follow-ups
-**2. Pattern strokes in the SVG pipeline.** Pattern fills (tiling and shading)
-ship in SVG and pattern strokes ship in raster; a pattern set as the STROKE
-colour in SVG still falls back to the previous flat colour. Needs the stroke
-outline as an SVG mask or clip.
-
 **3. Page boxes in the default renderers.** SVG and raster render the
 MediaBox in unrotated user space; `/Rotate` is applied only with the opt-in
 `ApplyPageRotation` (3.19), and the CropBox is not used to bound the output.
@@ -193,12 +198,14 @@ DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
 
 ### Scrub-crop residuals
-**7. Pattern and shading content under Scrub.** Images and forms are now
-cropped or scrubbed; a pattern cell's content and a shading that overlaps
-the crop box are still kept whole (confined by the backstop clip), so their
-off-box portion remains in the file. An annotation appearance partially
-overlapping the box is likewise kept whole. (Redaction, unlike Scrub, now
-drops a pattern entirely once nothing on the page paints with it — 3.20.)
+**17. Remaining Scrub residuals (after 3.22).** Kept whole under Scrub:
+function-based, axial and radial shadings (types 1–3; their data is a
+colour function, not positioned content); ExtGState soft-mask groups
+(`/SMask /G` forms, including any mesh shading inside one); where the
+visible parts of a tiling cell overlap, the merged group is scrubbed to its
+bounding box in the cell, not the exact union.
+Chuvadi does not render mesh shadings (types 4–7), so trimmed meshes are
+verified structurally; check them visually in another viewer.
 
 ### Rendering (major-version switch)
 **9. /UserUnit in the default renderers.** `PdfPage.UserUnit` is exposed
@@ -227,19 +234,19 @@ dependency; still needs bitonal detection + G4 and JBIG2 encode (#10).
 suite; the optimisation *target knob* ("smallest file at visually lossless")
 that would drive the image-recoding stack does not.
 
-### Tooling
-**15. API doc generator skips some multi-line signatures.**
-`tools/gen_api_docs.py` omits a few public methods whose declaration spans
-several lines (for example `PageBuilder.DrawLine`, `DrawText`, `DrawArrow`).
-The CI check compares against the same generator, so it stays green;
-fixing the parser regenerates many pages, so it is its own small PR.
-
 ### Redaction follow-ups
-**16. Pixel-level partial image redaction.** A redaction box over part of an
-image removes the whole image (over-redact, by design). Scanned pages
-therefore lose the entire page image when one word is redacted. Cropping or
-blanking only the covered samples (the Scrub cropper already does this at
-the sample level) would keep the rest of the scan.
+**18. Tiling-pattern cells under redaction.** Redaction removes the painted
+pattern area inside a box, but the cell's own content (for example an image
+in a large single-tile cell) is kept whole when the pattern still paints
+elsewhere on the page, so the part of it that fell under the box remains in
+the file. Needs the Scrub cell treatment (per tile copy) applied against the
+redaction boxes.
+
+**19. Verifier on blanked palette images.** `RedactionVerifier` checks a
+partly redacted image's pixels in the region; for a palette (`/Indexed`)
+image the blanked index 0 maps to the palette's first colour, so the
+verifier still reports it (a false positive, never a missed leak). Fix by
+exposing raw index samples on the display list's image op.
 
 ---
 

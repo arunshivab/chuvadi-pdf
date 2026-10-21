@@ -30,6 +30,22 @@ internal enum ImageCropOutcome
     Failed,
 }
 
+/// <summary>What blanking regions of an image produced.</summary>
+internal enum ImageBlankOutcome
+{
+    /// <summary>No pixel meets a region: keep the original image.</summary>
+    Untouched,
+
+    /// <summary>A region covers the whole image: remove it.</summary>
+    Covered,
+
+    /// <summary>The pixels meeting a region were blanked in a new image.</summary>
+    Blanked,
+
+    /// <summary>The image could not be decoded for blanking.</summary>
+    Failed,
+}
+
 /// <summary>
 /// Decoded-image description used for sample-level cropping. Built from an
 /// image XObject or an inline image; colour space and decode semantics are
@@ -53,6 +69,9 @@ internal sealed class ImageSource
     internal ImageSource? MaskImage;
     internal PdfArray? ColorKeyMask;
     internal PdfPrimitive? SMaskInData;
+    internal PdfPrimitive? Matte;
+    internal PdfPrimitive? OptionalContent;
+    internal PdfPrimitive? StructParent;
 }
 
 /// <summary>
@@ -191,11 +210,59 @@ internal static class ImageSampleCropper
         bool blankBit = src.ImageMask && !DecodeInverted(decode);
         byte[] sub = ExtractSubRect(samples, w, h, comps, bpc, c0, c1, r0, r1, blankOutside, blankBit);
 
+        PdfDictionary dict = NewImageDictionary(src, c1 - c0, r1 - r0, bpc, colorSpace, decode);
+
+        // Masks are cropped to the same fractional region of the unit square
+        // (they are stretched over it), on their own pixel grids.
+        if (src.SMask is not null || src.MaskImage is not null)
+        {
+            if (allocate is null)
+            {
+                return null;
+            }
+
+            if (src.SMask is not null)
+            {
+                PdfStream? mask = CropImage(src.SMask, fu0, fv0, fu1, fv1, blankOutside, allocate, out _, out _, out _, out _);
+                if (mask is null)
+                {
+                    return null;
+                }
+
+                dict.Set(PdfName.Intern("SMask"), allocate(mask));
+            }
+
+            if (src.MaskImage is not null)
+            {
+                PdfStream? mask = CropImage(src.MaskImage, fu0, fv0, fu1, fv1, blankOutside, allocate, out _, out _, out _, out _);
+                if (mask is null)
+                {
+                    return null;
+                }
+
+                dict.Set(PdfName.Intern("Mask"), allocate(mask));
+            }
+        }
+
+        byte[] flate = FlateEncode(sub);
+        dict.Set(PdfName.Filter, PdfName.Intern("FlateDecode"));
+        dict.Set(PdfName.Length, flate.Length);
+        return new PdfStream(dict, flate);
+    }
+
+    // The image dictionary shared by cropped and blanked images: geometry,
+    // colour, decode and rendering entries carried through unchanged, plus
+    // the colour-key mask, soft-mask matte, optional-content membership and
+    // structure parent (so a hidden-layer image stays hidden and a tagged
+    // figure keeps its structure link).
+    private static PdfDictionary NewImageDictionary(
+        ImageSource src, int width, int height, int bpc, PdfPrimitive? colorSpace, PdfArray? decode)
+    {
         PdfDictionary dict = new PdfDictionary();
         dict.Set(PdfName.Type, PdfName.Intern("XObject"));
         dict.Set(PdfName.Subtype, PdfName.Intern("Image"));
-        dict.Set(PdfName.Intern("Width"), c1 - c0);
-        dict.Set(PdfName.Intern("Height"), r1 - r0);
+        dict.Set(PdfName.Intern("Width"), width);
+        dict.Set(PdfName.Intern("Height"), height);
         dict.Set(PdfName.Intern("BitsPerComponent"), bpc);
         if (src.ImageMask)
         {
@@ -231,8 +298,178 @@ internal static class ImageSampleCropper
             dict.Set(PdfName.Intern("SMaskInData"), src.SMaskInData);
         }
 
-        // Masks are cropped to the same fractional region of the unit square
-        // (they are stretched over it), on their own pixel grids.
+        if (src.Matte is not null)
+        {
+            dict.Set(PdfName.Intern("Matte"), src.Matte);
+        }
+
+        if (src.OptionalContent is not null)
+        {
+            dict.Set(PdfName.Intern("OC"), src.OptionalContent);
+        }
+
+        if (src.StructParent is not null)
+        {
+            dict.Set(PdfName.Intern("StructParent"), src.StructParent);
+        }
+
+        return dict;
+    }
+
+    /// <summary>
+    /// Blanks every pixel whose cell meets one of <paramref name="regions"/>
+    /// (convex polygons in the image's unit-square space, v up), keeping the
+    /// rest of the image byte for byte at its original size. Soft masks and
+    /// stencil masks are blanked over the same regions on their own pixel
+    /// grids. Blanked colour samples become zero; blanked stencil-mask
+    /// samples become the "paint nothing" value; blanked soft-mask samples
+    /// become fully transparent. The result is re-encoded (Flate).
+    /// </summary>
+    internal static ImageBlankOutcome BlankRegions(
+        Func<ImageSource?> load,
+        IReadOnlyList<List<(double X, double Y)>> regions,
+        Func<PdfStream, PdfReference>? allocate,
+        out PdfStream? edited)
+    {
+        edited = null;
+        List<(double X, double Y)> unit = new List<(double X, double Y)>
+        {
+            (0, 0), (1, 0), (1, 1), (0, 1),
+        };
+
+        List<List<(double X, double Y)>> hits = new List<List<(double X, double Y)>>();
+        foreach (List<(double X, double Y)> region in regions)
+        {
+            if (region.Count < 3)
+            {
+                continue;
+            }
+
+            bool coversAll = true;
+            foreach ((double X, double Y) corner in unit)
+            {
+                if (!ScrubGeometry.PointInside(region, corner.X, corner.Y))
+                {
+                    coversAll = false;
+                    break;
+                }
+            }
+
+            if (coversAll)
+            {
+                return ImageBlankOutcome.Covered;
+            }
+
+            List<(double X, double Y)> clipped = ScrubGeometry.ClipPolygon(region, unit);
+            if (clipped.Count >= 3)
+            {
+                hits.Add(clipped);
+            }
+        }
+
+        if (hits.Count == 0)
+        {
+            return ImageBlankOutcome.Untouched;
+        }
+
+        ImageSource? source;
+        try
+        {
+            source = load();
+        }
+        catch (Exception)
+        {
+            source = null;
+        }
+
+        if (source is null)
+        {
+            return ImageBlankOutcome.Failed;
+        }
+
+        PdfStream? result;
+        try
+        {
+            result = BlankImage(source, hits, allocate);
+        }
+        catch (Exception)
+        {
+            result = null;
+        }
+
+        if (result is null)
+        {
+            return ImageBlankOutcome.Failed;
+        }
+
+        edited = result;
+        return ImageBlankOutcome.Blanked;
+    }
+
+    // Unit-square inset applied to a pixel cell before the blanking test.
+    private const double CellInset = 1e-9;
+
+    // Blanks one image (and its masks) over the regions, at full size.
+    private static PdfStream? BlankImage(
+        ImageSource src, List<List<(double X, double Y)>> regions, Func<PdfStream, PdfReference>? allocate)
+    {
+        if (!TryDecodeSamples(src, out byte[] samples, out int bpc, out int comps, out PdfPrimitive? colorSpace, out PdfArray? decode))
+        {
+            return null;
+        }
+
+        int w = src.Width;
+        int h = src.Height;
+        int pixelBits = comps * bpc;
+        long rowBytes = (((long)w * pixelBits) + 7) / 8;
+        long total = rowBytes * h;
+        if (total > int.MaxValue)
+        {
+            return null;
+        }
+
+        byte[] output = new byte[total];
+        Buffer.BlockCopy(samples, 0, output, 0, (int)total);
+        bool blankBit = src.ImageMask && !DecodeInverted(decode);
+
+        const double Eps = 1e-9;
+        foreach (List<(double X, double Y)> region in regions)
+        {
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+            foreach ((double x, double y) in region)
+            {
+                minX = Math.Min(minX, x);
+                minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x);
+                maxY = Math.Max(maxY, y);
+            }
+
+            int c0 = Math.Clamp((int)Math.Floor((minX * w) - Eps), 0, w);
+            int c1 = Math.Clamp((int)Math.Ceiling((maxX * w) + Eps), 0, w);
+            int r0 = Math.Clamp((int)Math.Floor(((1.0 - maxY) * h) - Eps), 0, h);
+            int r1 = Math.Clamp((int)Math.Ceiling(((1.0 - minY) * h) + Eps), 0, h);
+            for (int row = r0; row < r1; row++)
+            {
+                int rowStart = (int)(row * rowBytes);
+                for (int col = c0; col < c1; col++)
+                {
+                    // Shrunk by a hair so a cell that only shares an edge
+                    // with the region (no area inside it) is kept.
+                    if (CellIntersects(
+                        region,
+                        ((double)col / w) + CellInset,
+                        1.0 - ((double)(row + 1) / h) + CellInset,
+                        ((double)(col + 1) / w) - CellInset,
+                        1.0 - ((double)row / h) - CellInset))
+                    {
+                        BlankPixel(output, rowStart, col * pixelBits, pixelBits, blankBit);
+                    }
+                }
+            }
+        }
+
+        PdfDictionary dict = NewImageDictionary(src, w, h, bpc, colorSpace, decode);
         if (src.SMask is not null || src.MaskImage is not null)
         {
             if (allocate is null)
@@ -242,7 +479,7 @@ internal static class ImageSampleCropper
 
             if (src.SMask is not null)
             {
-                PdfStream? mask = CropImage(src.SMask, fu0, fv0, fu1, fv1, blankOutside, allocate, out _, out _, out _, out _);
+                PdfStream? mask = BlankImage(src.SMask, regions, allocate);
                 if (mask is null)
                 {
                     return null;
@@ -253,7 +490,7 @@ internal static class ImageSampleCropper
 
             if (src.MaskImage is not null)
             {
-                PdfStream? mask = CropImage(src.MaskImage, fu0, fv0, fu1, fv1, blankOutside, allocate, out _, out _, out _, out _);
+                PdfStream? mask = BlankImage(src.MaskImage, regions, allocate);
                 if (mask is null)
                 {
                     return null;
@@ -263,7 +500,7 @@ internal static class ImageSampleCropper
             }
         }
 
-        byte[] flate = FlateEncode(sub);
+        byte[] flate = FlateEncode(output);
         dict.Set(PdfName.Filter, PdfName.Intern("FlateDecode"));
         dict.Set(PdfName.Length, flate.Length);
         return new PdfStream(dict, flate);
@@ -538,6 +775,9 @@ internal static class ImageSampleCropper
         src.Interpolate = d.TryGetValue(PdfName.Intern("Interpolate"), out PdfPrimitive? ip) ? resolver.Resolve(ip) : null;
         src.Intent = d.TryGetValue(PdfName.Intern("Intent"), out PdfPrimitive? it) ? resolver.Resolve(it) : null;
         src.SMaskInData = d.TryGetValue(PdfName.Intern("SMaskInData"), out PdfPrimitive? sid) ? resolver.Resolve(sid) : null;
+        src.Matte = d.TryGetValue(PdfName.Intern("Matte"), out PdfPrimitive? matte) ? resolver.Resolve(matte) : null;
+        src.OptionalContent = d.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) ? oc : null;
+        src.StructParent = d.TryGetValue(PdfName.Intern("StructParent"), out PdfPrimitive? sp) ? resolver.Resolve(sp) : null;
         src.Components = src.ImageMask ? 1 : ComponentsOf(resolver.Resolve(src.ColorSpace ?? PdfNull.Value), resolver);
         if (!src.ImageMask && src.Components <= 0)
         {
@@ -746,7 +986,7 @@ internal static class ImageSampleCropper
     }
 
     // Components per sample for an image colour space (§8.6); -1 when unknown.
-    private static int ComponentsOf(PdfPrimitive cs, IPdfObjectResolver resolver)
+    internal static int ComponentsOf(PdfPrimitive cs, IPdfObjectResolver resolver)
     {
         if (cs is PdfName name)
         {

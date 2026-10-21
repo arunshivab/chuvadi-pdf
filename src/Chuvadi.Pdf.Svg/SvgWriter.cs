@@ -358,6 +358,23 @@ internal sealed class SvgWriter
         return id;
     }
 
+    /// <summary>
+    /// Adds a <c>&lt;mask&gt;</c> whose content is the path stroked in white
+    /// with the given stroke attributes, so a group masked by it shows only
+    /// where the stroke would paint. The mask region is the given rectangle
+    /// in user space.
+    /// </summary>
+    internal string AddStrokeMask(string pathData, string strokeAttrs, double x, double y, double width, double height)
+    {
+        string id = $"smask{_defs.Length:X}_{pathData.GetHashCode():X}";
+        _defs.Append("<mask id=\"").Append(id).Append("\" maskUnits=\"userSpaceOnUse\" x=\"")
+            .Append(F(x)).Append("\" y=\"").Append(F(y)).Append("\" width=\"").Append(F(width))
+            .Append("\" height=\"").Append(F(height)).Append("\">");
+        _defs.Append("<path d=\"").Append(EscapeXml(pathData)).Append("\" fill=\"none\" stroke=\"#fff\" ")
+            .Append(strokeAttrs).Append("/></mask>");
+        return id;
+    }
+
     /// <summary>Adds an <c>@font-face</c> rule.</summary>
     /// <remarks>
     /// The font family and format strings are escaped for CSS — embedded

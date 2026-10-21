@@ -8,6 +8,12 @@ Square (rectangle outline) annotation. PDF 32000-1:2008 §12.5.6.8.
 public sealed class SquareAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `SquareAnnotation(int pageIndex, RectangleF rect, BorderStyle? borderStyle = null, ColorF? interiorColor = null, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a square annotation.
+
 ## Properties
 
 ### `BorderStyle`

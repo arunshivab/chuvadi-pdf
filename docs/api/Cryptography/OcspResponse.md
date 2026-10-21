@@ -16,6 +16,12 @@ RFC 6960 §4.2.1:
 ```
  Chuvadi decodes the BasicOCSPResponse payload when present (the dominant response type in practice).
 
+## Constructors
+
+### `OcspResponse(OcspResponseStatus status, ObjectIdentifier? responseType, BasicOcspResponse? basicResponse, byte[] rawEncoding)`
+
+Initialises a new OcspResponse.
+
 ## Properties
 
 ### `Status`

@@ -12,6 +12,18 @@ public static class Hmac
 
 Implementation directly follows RFC 2104 §2. The key is reduced to blocksize bytes (hashed if longer, zero-padded if shorter); inner and outer pads are XORed with 0x36 and 0x5C respectively; the MAC is `H(K xor opad || H(K xor ipad || message))`.
 
+## Methods
+
+### `Compute`
+
+__static__
+
+```csharp
+static byte[] Compute(HashAlgorithmName hashAlgorithm, ReadOnlySpan<byte> key, ReadOnlySpan<byte> message)
+```
+
+Computes `HMAC-H(key, message)`.
+
 ---
 
 _Source: [`src/Chuvadi.Cryptography/Hashing/Hmac.cs`](../../../src/Chuvadi.Cryptography/Hashing/Hmac.cs)_

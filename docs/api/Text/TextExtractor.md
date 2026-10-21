@@ -18,6 +18,17 @@ public sealed class TextExtractor
 - Applies the chosen `ExtractionStrategy` to the resulting fragments. 
 - Returns the extracted text as a plain Unicode string.  Phase 1 scope: born-digital text only. Image-embedded text requires OCR (Phase 3). PDF 32000-1:2008 §9.10 — Extraction of text content.
 
+## Constructors
+
+### `TextExtractor(PdfObjectStore objects, ExtractionStrategy strategy = ExtractionStrategy.Operator)`
+
+Initialises a `TextExtractor` for a document's object store.
+
+**Parameters**
+
+- `objects` — The document's object store, used to resolve references.
+- `strategy` — The extraction strategy to use. Defaults to `ExtractionStrategy.Operator`.
+
 ## Properties
 
 ### `OptionalContent`

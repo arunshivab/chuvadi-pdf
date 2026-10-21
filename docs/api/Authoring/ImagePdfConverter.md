@@ -58,6 +58,32 @@ static void Convert(byte[] image, Stream output, ImagePdfOptions? options = null
 
 Converts a single image and writes the PDF to a stream.
 
+### `Convert`
+
+__static__
+
+```csharp
+static void Convert(IReadOnlyList<byte[]> images, Stream output, ImagePdfOptions? options = null)
+```
+
+Converts several images and writes the PDF to a stream.
+
+### `ConvertFile`
+
+__static__
+
+```csharp
+static void ConvertFile(string imagePath, string outputPath, ImagePdfOptions? options = null)
+```
+
+Converts an image file on disk to a PDF file on disk.
+
+**Parameters**
+
+- `imagePath` — Path of the source image (JPEG, PNG, TIFF, or BMP).
+- `outputPath` — Path of the PDF to create (overwritten when present).
+- `options` — Conversion options; null uses `ImagePdfOptions.Default`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Authoring/ImagePdfConverter.cs`](../../../src/Chuvadi.Pdf.Authoring/ImagePdfConverter.cs)_

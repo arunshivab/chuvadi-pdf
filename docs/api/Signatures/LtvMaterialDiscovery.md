@@ -17,6 +17,26 @@ For each cert in the chain (leaf first):
 
  Per-URL failures are tolerated: discovery collects what it can and reports failures via `DiscoveryHooks.OnFetchFailed`.
 
+## Methods
+
+### `DiscoverAsync`
+
+__static__
+
+```csharp
+static async Task<LtvOptions> DiscoverAsync(IReadOnlyList<X509Certificate> chain, HttpClient httpClient, Func<X509Certificate, X509Certificate, byte[]>? ocspRequestFactory = null, DiscoveryHooks? hooks = null, CancellationToken cancellationToken = default)
+```
+
+Discovers LTV material for the signer's chain.
+
+**Parameters**
+
+- `chain` — The chain ordered leaf → intermediates → root.
+- `httpClient` — HTTP client used to fetch CRLs and OCSP responses.
+- `ocspRequestFactory` — Optional. Builds an OCSP request body for (cert, issuer). When null, OCSP fetching is skipped.
+- `hooks` — Optional discovery hooks.
+- `cancellationToken` — Cancellation token.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Signatures/Signing/LtvMaterialDiscovery.cs`](../../../src/Chuvadi.Pdf.Signatures/Signing/LtvMaterialDiscovery.cs)_

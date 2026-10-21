@@ -14,6 +14,50 @@ Corner coordinates are in source-image pixels with the origin at the top-left an
 
  Each output pixel is mapped back through the homography and sampled bilinearly on alpha-premultiplied values, so transparent regions do not bleed dark fringes. The result is a new BGRA frame; the source is not modified.
 
+## Methods
+
+### `Correct`
+
+__static__
+
+```csharp
+static ImageFrame Correct(ImageFrame source, PointF topLeft, PointF topRight, PointF bottomRight, PointF bottomLeft)
+```
+
+Straightens the quadrilateral to a rectangle sized from its edges: the width is the longer of the top and bottom edges, the height the longer of the left and right edges (each rounded, at least one pixel).
+
+**Parameters**
+
+- `source` — The source image.
+- `topLeft` — The quadrilateral's top-left corner.
+- `topRight` — The top-right corner.
+- `bottomRight` — The bottom-right corner.
+- `bottomLeft` — The bottom-left corner.
+
+**Returns:** The corrected image. <exception cref="ArgumentNullException">Thrown when `source` is null.</exception> <exception cref="ArgumentException">Thrown when the corners do not form a convex quadrilateral.</exception>
+
+### `Correct`
+
+__static__
+
+```csharp
+static ImageFrame Correct(ImageFrame source, PointF topLeft, PointF topRight, PointF bottomRight, PointF bottomLeft, int outputWidth, int outputHeight)
+```
+
+Straightens the quadrilateral to a rectangle of the given size.
+
+**Parameters**
+
+- `source` — The source image.
+- `topLeft` — The quadrilateral's top-left corner.
+- `topRight` — The top-right corner.
+- `bottomRight` — The bottom-right corner.
+- `bottomLeft` — The bottom-left corner.
+- `outputWidth` — Output width in pixels (1 to `MaxDimension`).
+- `outputHeight` — Output height in pixels (1 to `MaxDimension`).
+
+**Returns:** The corrected image. <exception cref="ArgumentNullException">Thrown when `source` is null.</exception> <exception cref="ArgumentOutOfRangeException">Thrown when an output dimension is out of range.</exception> <exception cref="ArgumentException">Thrown when the corners do not form a convex quadrilateral.</exception>
+
 ## Fields
 
 ### `MaxDimension`

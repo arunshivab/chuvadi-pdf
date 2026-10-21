@@ -26,6 +26,23 @@ Gets a value indicating whether the region excludes everything, in which case no
 
 ## Methods
 
+### `Build`
+
+__static__
+
+```csharp
+static ClipRegion? Build(IReadOnlyList<List<List<PointF>>> clipSubPaths, IReadOnlyList<FillRule> rules)
+```
+
+Builds a clip region from device-space clip paths and their fill rules.
+
+**Parameters**
+
+- `clipSubPaths` — For each clip path, the flattened sub-paths in device space.
+- `rules` — The fill rule for each clip path (parallel to `clipSubPaths`).
+
+**Returns:** A region, or null when there are no clip paths (meaning "no clipping"). <exception cref="ArgumentNullException"> Thrown when `clipSubPaths` or `rules` is null. </exception> <exception cref="ArgumentException"> Thrown when the two lists differ in length. </exception>
+
 ### `Combine`
 
 ```csharp

@@ -18,6 +18,12 @@ RFC 5280 §5.1 defines a CRL as:
 
  This decoder accepts v1 and v2 CRLs but rejects delta CRLs (indicated by the `deltaCRLIndicator` extension being present). Indirect CRLs (with `issuingDistributionPoint`'s `indirectCRL` flag set) are also rejected — Chuvadi assumes the CRL is issued by the certificate's own issuer. A future session will lift these restrictions.
 
+## Constructors
+
+### `CertificateList(int version, AlgorithmIdentifier tbsSignatureAlgorithm, X509Name issuer, DateTimeOffset thisUpdate, DateTimeOffset? nextUpdate, IList<RevokedCertificate> revokedCertificates, BigInteger? crlNumber, byte[] tbsRawEncoding, AlgorithmIdentifier signatureAlgorithm, BitStringValue signatureValue, byte[] rawEncoding)`
+
+Initialises a new CertificateList.
+
 ## Properties
 
 ### `Version`

@@ -10,6 +10,97 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.22.0] - 2026-10-19
+
+Backlog scope A: pixel-level partial image redaction, Scrub residuals
+(pattern cells, mesh shadings, crossing annotation appearances), pattern
+strokes in SVG, and the API doc generator's multi-line signatures.
+
+### Added
+- **Partial image redaction (backlog 16).** A redaction box over part of an
+  image now blanks only the pixels whose cells reach into the box; the rest
+  of the image is kept, so redacting one word on a scanned page no longer
+  removes the whole scan. Works for image XObjects and inline images (an
+  inline image is re-emitted as an image XObject), any bits per component,
+  any colour space, rotated or skewed placements, JPEG images (decoded and
+  re-encoded losslessly with Flate), soft masks and stencil masks (blanked
+  over the same region on their own pixel grids). Blanked colour samples
+  are zero, blanked stencil samples paint nothing, blanked soft-mask samples
+  are transparent. An image wholly inside a box, one that cannot be decoded,
+  or one in a form that inherits its resources is still removed whole
+  (B15). The original image leaves the file unless something else still
+  draws it; the blanked copy keeps its `/OC`, `/Matte` and `/StructParent`.
+- **`RedactionVerifier` understands blanked images.** An image is reported
+  only when a pixel reaching into the region is not blank: all colour
+  samples zero, or fully transparent over a colour that is one value across
+  the whole image (a stencil). A picture hidden under a transparent soft
+  mask is still reported, and so is an image whose pixel layout cannot be
+  determined from its data (JPEG, or an ambiguous component count). Palette
+  (`/Indexed`) images are still reported conservatively.
+- **Pattern strokes in SVG (backlog 2).** A stroke whose colour is a tiling
+  or shading pattern (`SCN /Name`) paints the pattern through the stroke
+  outline — an SVG mask of the path stroked with its width, caps, joins,
+  miter limit and dashes — instead of the previous flat colour.
+  `ClipOp.Stroke` (stroke-outline clip) and `ClipOp.StrokeReach` are new in
+  the display list; `RenderOpBounds.Bounds(ClipOp)` grows by the stroke's
+  reach.
+
+### Changed
+- **Scrub residuals (backlog 7).** Under `PageCropMode.Scrub`:
+  - A tiling pattern's cell keeps only what can show in the box: the cell
+    is scrubbed against the part of the box the pattern is actually painted
+    over, through the one tile copy that reaches it (or to the bounding box
+    of the visible parts when several do); a cell that cannot show is
+    emptied. Patterns and shadings the scrubbed content no longer uses are
+    pruned from the resources.
+  - Mesh shadings (types 4–7, used by `sh` or by a shading pattern) keep
+    only the triangles or patches that can paint inside the box; kept
+    elements are re-encoded stand-alone (shared edges spelled out), a
+    lattice becomes a free-form mesh, and a mesh that cannot be parsed
+    unambiguously is removed (B15).
+  - A tile copy that is visible on its own is scrubbed exactly through its
+    placement (rotated patterns included); spaced tiles keep only the strips
+    that show.
+  - Every kept annotation's appearance streams (`/AP` N, R, D and their
+    states) are scrubbed to the box — an appearance can draw past its
+    `/Rect`.
+  - The page thumbnail (`/Thumb`) and `/PieceInfo` of a scrubbed page are
+    removed.
+- **Redacted pages drop `/Thumb` and `/PieceInfo`** (and rewritten forms,
+  and forms, patterns and appearances rewritten by Scrub, drop
+  `/PieceInfo`). A thumbnail pictures the unredacted page; `/PieceInfo`
+  holds the authoring application's private data.
+- **API docs: multi-line signatures (backlog 15).** `tools/gen_api_docs.py`
+  joins a declaration whose parameter list spans several lines (and cuts a
+  following expression body), so members such as `PageBuilder.DrawLine`,
+  `DrawText` and `DrawArrow` are now documented; 126 pages regenerated.
+- `Chuvadi.Pdf.Redaction` now references `Chuvadi.Pdf.Operations` (it reuses
+  the sample-level image editor).
+
+### Fixed
+- **A structure-tree label kept a removed image in the file.** A tagged
+  figure's object reference (`OBJR`) to an image removed by redaction or by
+  Scrub kept the image's pixels in the output. An object reference no longer
+  keeps a removed object; it is left pointing at nothing. Documents redacted
+  or scrubbed before 3.22 whose images are tagged this way should be
+  processed again.
+- **Shared or inherited resources kept a removed image in the file.** An
+  image listed in `/Resources` inherited from a page-tree node, or in an
+  indirect resource dictionary shared with other pages or nodes, stayed in
+  the output after redaction. Each rewritten page now gets its own resource
+  copy, and the shared node or dictionary keeps only what the remaining
+  pages draw (a page whose content cannot be decoded draws nothing). A
+  dictionary also used by a form, pattern, appearance or font is left whole.
+- **A resource-inheriting form kept a removed image in the file.** When a
+  form without its own `/Resources` drew a redacted image, resource pruning
+  read the form's original content and kept the image; the rewritten
+  content is now used.
+- An inline image removed inside a marked-content sequence now strips the
+  sequence's `/ActualText` / `/Alt` (as an image XObject already did).
+- Scrub-cropped images keep their `/OC` (a hidden-layer image stays
+  hidden), `/Matte` and `/StructParent`.
+
+---
 ## [3.21.0] - 2026-10-19
 
 Acrobat-aligned behaviour for two long-standing limits (tiling patterns with

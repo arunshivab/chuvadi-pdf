@@ -12,6 +12,12 @@ public sealed class VriEntry
 
 ISO 32000-2 §12.8.4.3: the VRI sub-dictionary maps each signature's SHA-1 hex (upper-case, 40 characters, of the binary bytes inside the signature dictionary's `/Contents`) to a per-signature dictionary containing `/Cert`, `/CRL`, and `/OCSP` arrays of stream references — the validation material that applies specifically to that signature, rather than the document as a whole. The optional `/TS` (PDF 2.0 timestamp token) and `/TU` (creation time) entries are not yet parsed.
 
+## Constructors
+
+### `VriEntry(IList<X509Certificate> certificates, IList<CertificateList> crls, IList<OcspResponse> ocspResponses)`
+
+Initialises a new VRI entry.
+
 ## Methods
 
 ### `new`

@@ -16,6 +16,22 @@ The signature algorithm OID is chosen from the hash:
 - SHA-384 → ecdsa-with-SHA384 (1.2.840.10045.4.3.3) 
 - SHA-512 → ecdsa-with-SHA512 (1.2.840.10045.4.3.4)  Any of these can be paired with any supported curve (P-256, P-384, P-521).
 
+## Constructors
+
+### `EcdsaCmsSigner(EcdsaPrivateKey privateKey, X509Certificate certificate, HashAlgorithmName hashAlgorithm)`
+
+Initialises a new signer.
+
+**Parameters**
+
+- `privateKey` — The ECDSA private key.
+- `certificate` — The X.509 certificate whose public key matches `privateKey`. Chuvadi does not verify that the cert and key match — it is the caller's responsibility to ensure consistency.
+- `hashAlgorithm` — SHA-256, SHA-384, or SHA-512.
+
+### `EcdsaCmsSigner(EcdsaPrivateKey privateKey, X509Certificate certificate, HashAlgorithmName hashAlgorithm, bool deterministic)`
+
+Same as the three-argument constructor but lets the caller opt into RFC 6979 deterministic nonces. When `deterministic` is true, signatures are bit-for-bit reproducible from the same inputs and immune to RNG failures.
+
 ## Properties
 
 ### `Deterministic`

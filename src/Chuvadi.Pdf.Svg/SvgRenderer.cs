@@ -1248,15 +1248,69 @@ public sealed class SvgRenderer
     private void EmitClip(ClipOp op, SvgWriter w, Stack<int> clipsOpenedPerScope)
     {
         string d = PathToSvg(op.Geometry, _opts.Precision);
-        string rule = op.FillRule == FillRule.EvenOdd ? "evenodd" : "nonzero";
-        string clipId = w.AddClipPath(d, rule);
-        w.OpenGroup(clipPathId: clipId);
+        if (op.Stroke is StrokeStyle stroke)
+        {
+            // A stroke-outline clip (a stroke painted with a pattern): SVG
+            // clip paths ignore strokes, so the outline becomes a luminance
+            // mask of the path stroked in white.
+            Rect bounds = op.Bounds();
+            string maskId = w.AddStrokeMask(
+                d, StrokeMaskAttrs(stroke), bounds.X, bounds.Y, bounds.Width, bounds.Height);
+            w.OpenGroup(extraAttrs: "mask=\"url(#" + maskId + ")\"");
+        }
+        else
+        {
+            string rule = op.FillRule == FillRule.EvenOdd ? "evenodd" : "nonzero";
+            string clipId = w.AddClipPath(d, rule);
+            w.OpenGroup(clipPathId: clipId);
+        }
 
         int current = clipsOpenedPerScope.Pop();
         clipsOpenedPerScope.Push(current + 1);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    // Stroke attributes for a stroke-outline mask: width (a zero-width PDF
+    // line is the thinnest visible line), caps, joins, miter limit, dashes.
+    private static string StrokeMaskAttrs(StrokeStyle stroke)
+    {
+        double width = stroke.LineWidth > 0 ? stroke.LineWidth : 1.0;
+        StringBuilder attrs = new StringBuilder();
+        attrs.Append("stroke-width=\"").Append(width.ToString("0.###", CultureInfo.InvariantCulture)).Append('"');
+        attrs.Append(" stroke-linecap=\"").Append(stroke.Cap switch
+        {
+            LineCap.Round => "round",
+            LineCap.Square => "square",
+            _ => "butt",
+        }).Append('"');
+        attrs.Append(" stroke-linejoin=\"").Append(stroke.Join switch
+        {
+            LineJoin.Round => "round",
+            LineJoin.Bevel => "bevel",
+            _ => "miter",
+        }).Append('"');
+        attrs.Append(" stroke-miterlimit=\"")
+            .Append(Math.Max(1.0, stroke.MiterLimit).ToString("0.###", CultureInfo.InvariantCulture)).Append('"');
+        if (stroke.DashArray is { Length: > 0 } dashes)
+        {
+            attrs.Append(" stroke-dasharray=\"");
+            for (int i = 0; i < dashes.Length; i++)
+            {
+                if (i > 0)
+                {
+                    attrs.Append(',');
+                }
+
+                attrs.Append(dashes[i].ToString("0.###", CultureInfo.InvariantCulture));
+            }
+
+            attrs.Append("\" stroke-dashoffset=\"")
+                .Append(stroke.DashPhase.ToString("0.###", CultureInfo.InvariantCulture)).Append('"');
+        }
+
+        return attrs.ToString();
+    }
 
     /// <summary>
     /// Returns the CSS font-family value for a PDF BaseFont, preferring an

@@ -8,6 +8,12 @@ A contiguous run of text on a page, with glyph-level positions for selection-ove
 public sealed class TextRun
 ```
 
+## Constructors
+
+### `TextRun(string unicode, Rect boundingBox, IReadOnlyList<GlyphPosition> glyphs, TextDirection direction, int readingOrderIndex, string fontFamily, int fontWeight, FontSlant slant, double fontSize, IReadOnlyList<string>? layers = null)`
+
+Initialises a text run.
+
 ## Properties
 
 ### `Unicode`

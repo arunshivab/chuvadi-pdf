@@ -8,6 +8,26 @@ Paints an axial or radial shading (the `sh` operator) across the active clip reg
 public sealed class ShadeOp : RenderOp
 ```
 
+## Constructors
+
+### `ShadeOp(bool isRadial, double x0, double y0, double x1, double y1, double r0, double r1, bool extendStart, bool extendEnd, IReadOnlyList<GradientStop> stops, IReadOnlyList<ClipPath>? clips = null)`
+
+Initialises a `ShadeOp`.
+
+**Parameters**
+
+- `isRadial` — True for a radial shading; false for axial.
+- `x0` — Start point / inner-circle centre x, page space.
+- `y0` — Start point / inner-circle centre y, page space.
+- `x1` — End point / outer-circle centre x, page space.
+- `y1` — End point / outer-circle centre y, page space.
+- `r0` — Inner circle radius in page space (radial only).
+- `r1` — Outer circle radius in page space (radial only).
+- `extendStart` — Whether the shading extends before the axis start.
+- `extendEnd` — Whether the shading extends past the axis end.
+- `stops` — Sampled colour stops in increasing offset order.
+- `clips` — Clip paths active when this op was emitted. <exception cref="ArgumentNullException">Thrown when `stops` is null.</exception>
+
 ## Properties
 
 ### `IsRadial`

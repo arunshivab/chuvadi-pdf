@@ -35,7 +35,7 @@ __static__
 static Rect Bounds(this ClipOp op, double tolerance = DefaultTolerance)
 ```
 
-The tight page-space bounds of a clip path's flattened geometry.
+The tight page-space bounds of a clip path's flattened geometry (grown by the stroke's reach for a stroke-outline clip).
 
 **Parameters**
 

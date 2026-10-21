@@ -10,6 +10,26 @@ public static class Placement
 
 ## Methods
 
+### `ScaleToFit`
+
+__static__
+
+```csharp
+static Transform ScaleToFit(double sourceWidth, double sourceHeight, double destinationWidth, double destinationHeight)
+```
+
+Scales a source box uniformly to fit a destination box (preserving aspect ratio) and centres it within that destination.
+
+### `Center`
+
+__static__
+
+```csharp
+static Transform Center(double sourceWidth, double sourceHeight, double destinationWidth, double destinationHeight)
+```
+
+Centres a source box within a destination box without scaling.
+
 ### `RotateIntoBox`
 
 __static__

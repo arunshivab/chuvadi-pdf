@@ -8,6 +8,12 @@ Polygon annotation: a closed shape connecting `Vertices`. PDF 32000-1:2008 §12.
 public sealed class PolygonAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `PolygonAnnotation(int pageIndex, RectangleF rect, IReadOnlyList<PointF> vertices, BorderStyle? borderStyle = null, ColorF? interiorColor = null, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a polygon annotation. <exception cref="ArgumentNullException">When `vertices` is null.</exception> <exception cref="ArgumentException">When fewer than 3 vertices are provided.</exception>
+
 ## Properties
 
 ### `Vertices`

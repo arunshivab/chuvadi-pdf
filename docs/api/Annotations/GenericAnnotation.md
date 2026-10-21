@@ -8,6 +8,12 @@ Catch-all annotation for subtypes not specifically modelled. Preserves the basic
 public sealed class GenericAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `GenericAnnotation(int pageIndex, RectangleF rect, string rawSubtype, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a generic (unmodelled-subtype) annotation.
+
 ## Properties
 
 ### `RawSubtype`

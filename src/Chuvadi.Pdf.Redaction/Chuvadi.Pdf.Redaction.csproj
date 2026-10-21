@@ -29,6 +29,7 @@
     <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
-</ItemGroup>
+    <ProjectReference Include="..\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
+  </ItemGroup>
 
 </Project>

@@ -8,6 +8,12 @@ The result of verifying a TimeStampToken.
 public sealed class TimeStampVerificationResult
 ```
 
+## Constructors
+
+### `TimeStampVerificationResult(TimeStampVerificationStatus status, string message, X509Certificate? signerCertificate, DateTimeOffset? timestamp)`
+
+Initialises a new result.
+
 ## Properties
 
 ### `Status`

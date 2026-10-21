@@ -16,6 +16,26 @@ Parsing an ASN.1 element decomposes naturally into three steps: read the tag, re
 
 ## Methods
 
+### `Read`
+
+__static__
+
+```csharp
+static int Read(byte[] source, int offset, out Asn1Tag tag, out int contentOffset, out int contentLength)
+```
+
+Reads a tag and length from `source` starting at `offset`.
+
+**Parameters**
+
+- `source` — Byte array containing the ASN.1 element.
+- `offset` — Position at which to begin reading.
+- `tag` — On success, the decoded tag.
+- `contentOffset` — On success, the offset of the first content byte.
+- `contentLength` — On success, the length of the content in bytes.
+
+**Returns:** The offset immediately after the encoded element (contentOffset + contentLength). <exception cref="ArgumentNullException">If source is null.</exception> <exception cref="Asn1Exception">If the tag or length is malformed, indefinite-length is used, or the element extends past the end of source.</exception>
+
 ### `Write`
 
 __static__

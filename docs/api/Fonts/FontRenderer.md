@@ -80,6 +80,21 @@ GlyphOutline GetGlyphOutline(int glyphId)
 
 Gets the glyph outline for a glyph index, in font design units (unscaled). Results are cached after first access.
 
+### `GetHintedGlyphOutline`
+
+```csharp
+GlyphOutline? GetHintedGlyphOutline(int glyphId, int ppem, bool light, bool autohintFallback = true)
+```
+
+Gets the glyph outline grid-fitted (hinted) at the given pixels-per-em, in device space, or `null` when the glyph cannot be hinted (for example a composite glyph, a CFF program, or a font without instructions). Callers should fall back to `GetGlyphOutline(int)` scaled to the same size. Results are cached per (glyph, ppem).
+
+**Parameters**
+
+- `glyphId` — Zero-based glyph index.
+- `ppem` — Target size in pixels per em; must be positive.
+- `light` — When true, grid-fit the Y axis only.
+- `autohintFallback` — When true (the default), glyphs of fonts with no hinting programs are grid-fitted by the geometric autohinter instead of returning null.
+
 ### `GetGlyphOutlineForChar`
 
 ```csharp

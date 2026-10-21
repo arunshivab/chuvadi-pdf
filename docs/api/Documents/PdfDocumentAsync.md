@@ -14,6 +14,28 @@ PDF parsing is inherently random-access (cross-reference table at file tail, ind
 
  Cancellation is checked at the buffering boundary. Once parsing begins, it runs to completion synchronously on the calling thread.
 
+## Methods
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(Stream stream, CancellationToken cancellationToken = default)
+```
+
+Opens a PDF from `stream` asynchronously. Buffers non-seekable streams into memory before parsing.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(Stream stream, string password, CancellationToken cancellationToken = default)
+```
+
+Opens an encrypted PDF asynchronously. Buffers non-seekable streams into memory before parsing.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/PdfDocumentAsync.cs`](../../../src/Chuvadi.Pdf.Documents/PdfDocumentAsync.cs)_

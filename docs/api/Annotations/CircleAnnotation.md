@@ -8,6 +8,12 @@ Circle (ellipse outline) annotation. The ellipse is inscribed in `PdfAnnotation.
 public sealed class CircleAnnotation : PdfAnnotation
 ```
 
+## Constructors
+
+### `CircleAnnotation(int pageIndex, RectangleF rect, BorderStyle? borderStyle = null, ColorF? interiorColor = null, string? contents = null, ColorF? color = null, string? author = null, float opacity = 1f)`
+
+Initialises a circle annotation.
+
 ## Properties
 
 ### `BorderStyle`

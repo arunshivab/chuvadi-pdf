@@ -57,6 +57,39 @@ int SoftMaskWidth
 
 Row stride of `SoftMask` (= buffer width).
 
+## Methods
+
+### `Fill`
+
+```csharp
+void Fill(PixelBuffer buffer, List<List<PointF>> subPaths, ColorF color, FillRule fillRule)
+```
+
+Fills the given sub-paths into the pixel buffer with the given colour and fill rule.
+
+**Parameters**
+
+- `buffer` — The pixel buffer to draw into.
+- `subPaths` — Sub-paths from `PathFlattener.Flatten`.
+- `color` — The fill colour.
+- `fillRule` — Non-zero winding or even-odd.
+
+### `Fill`
+
+```csharp
+void Fill(PixelBuffer buffer, List<List<PointF>> subPaths, ColorF color, FillRule fillRule, ClipRegion? clip)
+```
+
+Fills the given sub-paths into the pixel buffer, restricted to the supplied clip region.
+
+**Parameters**
+
+- `buffer` — The pixel buffer to draw into.
+- `subPaths` — Sub-paths from `PathFlattener.Flatten`, in device space.
+- `color` — The fill colour.
+- `fillRule` — Non-zero winding or even-odd.
+- `clip` — The clip region in device space, or null for no clipping. When non-null, a pixel is painted only when it lies inside the region (the intersection of every clip path the region was built from).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs`](../../../src/Chuvadi.Pdf.Rendering/ScanlineRasterizer.cs)_

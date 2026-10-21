@@ -13,7 +13,7 @@ public enum RedactionSurvivorKind
 | Name | Description |
 |---|---|
 | `Text` | A visible glyph (its approximate ink box meets the region). |
-| `Image` | A painted image whose placement meets the region. |
+| `Image` | A painted image whose placement meets the region and whose pixels there are not blanked (a partly redacted image with only blank pixels inside the region is not reported). |
 | `Path` | A painted path (fill or stroke ink) that meets the region. |
 | `Annotation` | An annotation whose rectangle meets the region. |
 

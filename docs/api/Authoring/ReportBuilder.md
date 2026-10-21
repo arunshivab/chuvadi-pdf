@@ -138,6 +138,22 @@ ReportBuilder AddTable(ReportTable table)
 
 Adds a table; tables longer than a page paginate automatically.
 
+### `AddImage`
+
+```csharp
+ReportBuilder AddImage(byte[] imageBytes, double? width = null, double? height = null, TextAlignment alignment = TextAlignment.Left, double spaceAfter = 8)
+```
+
+Adds an image (JPEG, PNG, TIFF, or BMP). When width/height are omitted the natural size at 96 DPI is used, capped to the content width. Supplying only one dimension preserves the aspect ratio.
+
+### `AddImage`
+
+```csharp
+ReportBuilder AddImage(ImageFrame image, double? width = null, double? height = null, TextAlignment alignment = TextAlignment.Left, double spaceAfter = 8)
+```
+
+Adds an already-decoded image frame. Same sizing rules as the byte overload.
+
 ### `AddSpacer`
 
 ```csharp
@@ -153,6 +169,14 @@ ReportBuilder AddPageBreak()
 ```
 
 Forces the following content onto a new page.
+
+### `AddHorizontalRule`
+
+```csharp
+ReportBuilder AddHorizontalRule(Color? color = null, double width = 0.75, double spaceAfter = 8)
+```
+
+Adds a horizontal rule across the content width.
 
 ### `ToByteArray`
 

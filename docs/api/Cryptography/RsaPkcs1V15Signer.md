@@ -16,6 +16,18 @@ Loaded from a PKCS#8 unencrypted private key plus the matching X.509 certificate
 - SHA-384 → sha384WithRSAEncryption (1.2.840.113549.1.1.12) 
 - SHA-512 → sha512WithRSAEncryption (1.2.840.113549.1.1.13)
 
+## Constructors
+
+### `RsaPkcs1V15Signer(RsaPrivateKey privateKey, X509Certificate certificate, HashAlgorithmName hashAlgorithm)`
+
+Initialises a new signer.
+
+**Parameters**
+
+- `privateKey` — The RSA private key.
+- `certificate` — The X.509 certificate whose public key matches `privateKey`. Chuvadi does not verify that the cert and key match — it is the caller's responsibility to ensure consistency.
+- `hashAlgorithm` — SHA-256, SHA-384, or SHA-512.
+
 ## Properties
 
 ### `Certificate`

@@ -16,6 +16,12 @@ ASN.1 structure (RFC 3161 §2.4.2):
 ```
  On success (`TimeStampStatus.Granted` or `TimeStampStatus.GrantedWithMods`), `TimeStampToken` is non-null and carries the TSA's signed token.
 
+## Constructors
+
+### `TimeStampResponse(TimeStampStatus status, IReadOnlyList<string> statusStrings, TimeStampToken? timeStampToken)`
+
+Initialises a new response.
+
 ## Properties
 
 ### `Status`

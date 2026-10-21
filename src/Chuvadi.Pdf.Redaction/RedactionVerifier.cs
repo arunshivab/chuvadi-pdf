@@ -19,7 +19,11 @@ public enum RedactionSurvivorKind
     /// <summary>A visible glyph (its approximate ink box meets the region).</summary>
     Text,
 
-    /// <summary>A painted image whose placement meets the region.</summary>
+    /// <summary>
+    /// A painted image whose placement meets the region and whose pixels there
+    /// are not blanked (a partly redacted image with only blank pixels inside
+    /// the region is not reported).
+    /// </summary>
     Image,
 
     /// <summary>A painted path (fill or stroke ink) that meets the region.</summary>
@@ -194,10 +198,11 @@ public static class RedactionVerifier
                     InspectText(t, outer, pageIndex, regions, into);
                     break;
                 case ImageOp img when img.Alpha > 0:
-                    List<(double X, double Y)> quad = Quad(img.Transform.Multiply(outer), 0, 0, 1, 1);
+                    AffineMatrix placement = img.Transform.Multiply(outer);
+                    List<(double X, double Y)> quad = Quad(placement, 0, 0, 1, 1);
                     foreach (RectangleF r in regions)
                     {
-                        if (PolygonMeetsRect(quad, r))
+                        if (PolygonMeetsRect(quad, r) && !IsImageBlankWithin(img, placement, r))
                         {
                             into.Add(new RedactionSurvivor(pageIndex, RedactionSurvivorKind.Image, Bounds(quad), null));
                             break;
@@ -213,6 +218,168 @@ public static class RedactionVerifier
                     break;
             }
         }
+    }
+
+    // A partly redacted image keeps its pixels outside the region; it is
+    // clean when every pixel whose cell reaches into the region is blank:
+    // all colour samples zero (raw samples only), or fully transparent in
+    // its soft mask or stencil over colour samples that are one value across
+    // the whole image (a stencil's fill colour), so no picture hides under
+    // zero alpha.
+    private static bool IsImageBlankWithin(ImageOp img, AffineMatrix placement, RectangleF r)
+    {
+        double det = (placement.A * placement.D) - (placement.B * placement.C);
+        if (Math.Abs(det) < 1e-12 || img.Format != ImageFormat.Raw || img.Width <= 0 || img.Height <= 0)
+        {
+            return false;
+        }
+
+        AffineMatrix inverse = new AffineMatrix(
+            placement.D / det,
+            -placement.B / det,
+            -placement.C / det,
+            placement.A / det,
+            ((placement.C * placement.F) - (placement.D * placement.E)) / det,
+            ((placement.B * placement.E) - (placement.A * placement.F)) / det);
+        List<(double X, double Y)> unitRegion = Quad(inverse, r.X, r.Y, r.Right, r.Top);
+        double minU = double.PositiveInfinity, minV = double.PositiveInfinity;
+        double maxU = double.NegativeInfinity, maxV = double.NegativeInfinity;
+        foreach ((double u, double v) in unitRegion)
+        {
+            minU = Math.Min(minU, u);
+            minV = Math.Min(minV, v);
+            maxU = Math.Max(maxU, u);
+            maxV = Math.Max(maxV, v);
+        }
+
+        int pixelBits = RawPixelBits(img);
+        if (pixelBits <= 0)
+        {
+            return false;
+        }
+
+        long rowBytes = (((long)img.Width * pixelBits) + 7) / 8;
+        byte[] data = img.PixelData;
+
+        // Every colour sample in the region zero.
+        bool coloursZero = CellsBlank(placement, r, img.Width, img.Height, minU, minV, maxU, maxV,
+            (col, row) => PixelEquals(data, rowBytes, pixelBits, col, row));
+        if (coloursZero)
+        {
+            return true;
+        }
+
+        if (img.SoftMaskAlpha is not byte[] alpha || img.SoftMaskWidth <= 0 || img.SoftMaskHeight <= 0
+            || alpha.LongLength < (long)img.SoftMaskWidth * img.SoftMaskHeight)
+        {
+            return false;
+        }
+
+        // Transparent in the region, over colour samples that are one value
+        // across the whole image (a stencil mask painted in the fill colour):
+        // no picture hides under the zero alpha.
+        for (int row = 0; row < img.Height; row++)
+        {
+            for (int col = 0; col < img.Width; col++)
+            {
+                if (!PixelEquals(data, rowBytes, pixelBits, col, row, 0, 0))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return CellsBlank(placement, r, img.SoftMaskWidth, img.SoftMaskHeight, minU, minV, maxU, maxV,
+            (col, row) => alpha[(row * img.SoftMaskWidth) + col] == 0);
+    }
+
+    // Bits per pixel of a raw image op, from its data length; 0 when no
+    // component count, or more than one, fits the data exactly.
+    private static int RawPixelBits(ImageOp img)
+    {
+        int bpc = img.BitsPerComponent;
+        if (bpc <= 0)
+        {
+            return 0;
+        }
+
+        long Expected(int components) => ((((long)img.Width * components * bpc) + 7) / 8) * img.Height;
+
+        // The colour-space enum cannot name every space (an ICC profile with
+        // four channels reads as RGB), so the data length must single out
+        // one component count; when several fit, the layout is unknown.
+        int fit = 0;
+        int fits = 0;
+        for (int components = 1; components <= 32; components++)
+        {
+            if (Expected(components) == img.PixelData.LongLength)
+            {
+                fit = components;
+                fits++;
+            }
+        }
+
+        if (fits == 1)
+        {
+            return fit * bpc;
+        }
+
+        return 0;
+    }
+
+    // Compares one pixel's bits with zero (no reference pixel) or with the
+    // pixel at (refCol, refRow).
+    private static bool PixelEquals(
+        byte[] data, long rowBytes, int pixelBits, int col, int row, int refCol = -1, int refRow = -1)
+    {
+        long first = (row * rowBytes * 8) + ((long)col * pixelBits);
+        long other = refCol < 0 ? -1 : (refRow * rowBytes * 8) + ((long)refCol * pixelBits);
+        for (int b = 0; b < pixelBits; b++)
+        {
+            long bit = first + b;
+            int value = (data[bit >> 3] >> (7 - (int)(bit & 7))) & 1;
+            int expected = 0;
+            if (other >= 0)
+            {
+                long ob = other + b;
+                expected = (data[ob >> 3] >> (7 - (int)(ob & 7))) & 1;
+            }
+
+            if (value != expected)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Visits the pixel cells (of a width x height grid stretched over the
+    // unit square, row 0 at the top) whose page-space quad reaches into the
+    // open region, returning false at the first cell that is not blank.
+    private static bool CellsBlank(
+        AffineMatrix placement, RectangleF r, int width, int height,
+        double minU, double minV, double maxU, double maxV, Func<int, int, bool> isBlank)
+    {
+        int c0 = Math.Clamp((int)Math.Floor(minU * width) - 1, 0, width);
+        int c1 = Math.Clamp((int)Math.Ceiling(maxU * width) + 1, 0, width);
+        int r0 = Math.Clamp((int)Math.Floor((1.0 - maxV) * height) - 1, 0, height);
+        int r1 = Math.Clamp((int)Math.Ceiling((1.0 - minV) * height) + 1, 0, height);
+        for (int row = r0; row < r1; row++)
+        {
+            double v0 = 1.0 - ((double)(row + 1) / height);
+            double v1 = 1.0 - ((double)row / height);
+            for (int col = c0; col < c1; col++)
+            {
+                List<(double X, double Y)> cell = Quad(placement, (double)col / width, v0, (double)(col + 1) / width, v1);
+                if (PolygonMeetsRect(cell, r) && !isBlank(col, row))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static void InspectText(

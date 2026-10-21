@@ -21,6 +21,12 @@ Structure:
 - Compute the digest of `CmsAttributeTable.DerEncodedForVerification` (or the eContent when no signed attrs) under `DigestAlgorithm`. 
 - Verify `Signature` over that digest using `SignatureAlgorithm` and the signer's public key.
 
+## Constructors
+
+### `SignerInfo(int version, SignerIdentifier signerId, AlgorithmIdentifier digestAlgorithm, CmsAttributeTable? signedAttributes, AlgorithmIdentifier signatureAlgorithm, byte[] signature, CmsAttributeTable? unsignedAttributes)`
+
+Initialises a new SignerInfo.
+
 ## Properties
 
 ### `Version`

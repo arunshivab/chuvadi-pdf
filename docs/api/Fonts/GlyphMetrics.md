@@ -12,6 +12,12 @@ public sealed class GlyphMetrics
 
 All values are in the font's internal coordinate system (font design units). To convert to PDF points at a given point size: value_in_points = (value_in_font_units / unitsPerEm) × pointSize OpenType spec §hmtx — Horizontal Metrics table.
 
+## Constructors
+
+### `GlyphMetrics(int advanceWidth, int leftSideBearing, int unitsPerEm, RectangleF bounds)`
+
+Initialises a `GlyphMetrics` instance.
+
 ## Properties
 
 ### `AdvanceWidth`

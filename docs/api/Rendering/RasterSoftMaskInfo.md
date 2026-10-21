@@ -8,6 +8,19 @@ An active soft mask (ExtGState `/SMask`): the masking transparency group plus ho
 public sealed class RasterSoftMaskInfo
 ```
 
+## Constructors
+
+### `RasterSoftMaskInfo(PageDisplayList group, Transform composition, bool isLuminosity, double backdrop)`
+
+Initialises a `RasterSoftMaskInfo`.
+
+**Parameters**
+
+- `group` — The masking group's display list, in group-local space.
+- `composition` — Group-local → page-space transform (the CTM in effect when the mask was set).
+- `isLuminosity` — True for a luminosity mask; false for an alpha mask.
+- `backdrop` — Backdrop luminosity for areas the group does not paint, in [0, 1].
+
 ## Properties
 
 ### `Group`

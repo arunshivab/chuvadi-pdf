@@ -15,6 +15,12 @@ RFC 6960 §4.2.1:
  BasicOCSPResponse ::= SEQUENCE { tbsResponseData       ResponseData, signatureAlgorithm    AlgorithmIdentifier, signature             BIT STRING, certs                 [0] EXPLICIT SEQUENCE OF Certificate OPTIONAL } ResponseData ::= SEQUENCE { version               [0] EXPLICIT INTEGER DEFAULT v1, responderID           ResponderID, producedAt            GeneralizedTime, responses             SEQUENCE OF SingleResponse, responseExtensions    [1] EXPLICIT Extensions OPTIONAL } 
 ```
 
+## Constructors
+
+### `BasicOcspResponse(int version, ResponderID responderId, DateTimeOffset producedAt, IList<SingleResponse> responses, byte[] tbsRawEncoding, AlgorithmIdentifier signatureAlgorithm, BitStringValue signatureValue, IList<X509Certificate> certs)`
+
+Initialises a new BasicOCSPResponse.
+
 ## Properties
 
 ### `Version`

@@ -41,4 +41,10 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Redaction reuses the sample-level image editor (ImageSampleCropper)
+         to blank only the covered pixels of a partly redacted image. -->
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Redaction" />
+  </ItemGroup>
+
 </Project>

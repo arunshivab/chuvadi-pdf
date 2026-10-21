@@ -18,6 +18,19 @@ ASN.1 structure (RFC 3161 §2.4.1):
 
  Built via `ForData` or `ForDigest`. The MIME type when POSTing is `application/timestamp-query`; the response comes back as `application/timestamp-reply`.
 
+## Constructors
+
+### `TimeStampRequest(MessageImprint messageImprint, BigInteger? nonce = null, bool certReq = true, ObjectIdentifier? reqPolicy = null)`
+
+Initialises a new request.
+
+**Parameters**
+
+- `messageImprint` — Hash algorithm + hash of the data being stamped.
+- `nonce` — Optional 64-bit nonce; must equal the response's nonce.
+- `certReq` — When true, asks the TSA to embed its certificate in the response.
+- `reqPolicy` — Optional requested TSA policy OID.
+
 ## Properties
 
 ### `MessageImprint`
@@ -53,6 +66,26 @@ ObjectIdentifier? ReqPolicy
 Optional requested policy OID; null when accepting the TSA's default.
 
 ## Methods
+
+### `ForData`
+
+__static__
+
+```csharp
+static TimeStampRequest ForData(ReadOnlySpan<byte> data, ChuvadiHashAlgorithmName hashAlgorithm, bool certReq = true, ObjectIdentifier? reqPolicy = null)
+```
+
+Builds a request that time-stamps `data` with the given hash. A 64-bit random nonce is generated automatically.
+
+### `ForDigest`
+
+__static__
+
+```csharp
+static TimeStampRequest ForDigest(ReadOnlySpan<byte> digest, ChuvadiHashAlgorithmName hashAlgorithm, bool certReq = true, ObjectIdentifier? reqPolicy = null)
+```
+
+Builds a request from a pre-computed digest. A 64-bit random nonce is generated automatically.
 
 ### `Encode`
 

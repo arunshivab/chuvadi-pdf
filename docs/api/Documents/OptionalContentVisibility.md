@@ -34,6 +34,23 @@ Gets whether this visibility shows every layer regardless of state.
 
 ## Methods
 
+### `FromDocument`
+
+__static__
+
+```csharp
+static OptionalContentVisibility FromDocument(PdfDocument document, IReadOnlyDictionary<string, bool>? layerVisibility = null)
+```
+
+Builds the visibility of `document`'s default configuration, optionally overriding layers by name.
+
+**Parameters**
+
+- `document` — The document.
+- `layerVisibility` — Layer name → visible. Applies to every group with that name; layers not listed keep their default-configuration state. May be null.
+
+**Returns:** The visibility. <exception cref="ArgumentNullException">Thrown when `document` is null.</exception>
+
 ### `WithOverrides`
 
 ```csharp

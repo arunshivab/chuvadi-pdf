@@ -8,6 +8,12 @@ The result of running the path-validation algorithm against one or more candidat
 public sealed class CertificatePathValidationResult
 ```
 
+## Constructors
+
+### `CertificatePathValidationResult(CertificatePathValidationStatus status, string message, CertificatePath? validatedPath)`
+
+Initialises a new result.
+
 ## Properties
 
 ### `Status`

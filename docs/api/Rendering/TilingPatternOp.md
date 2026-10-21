@@ -23,6 +23,20 @@ Initialises a tiling-pattern op with explicit tile placements.
 - `cell` — The pattern cell's display list, in cell space.
 - `tiles` — One cell-to-page transform per placed tile.
 
+### `TilingPatternOp(PageDisplayList cell, AffineMatrix patternMatrix, double xStep, double yStep, double cellOriginX, double cellOriginY, Rect region)`
+
+Initialises a repeating tiling-pattern op (no explicit tile list).
+
+**Parameters**
+
+- `cell` — The pattern cell's display list, in cell space.
+- `patternMatrix` — Maps pattern space to page space.
+- `xStep` — Horizontal repeat step, in pattern space.
+- `yStep` — Vertical repeat step, in pattern space.
+- `cellOriginX` — The cell's /BBox lower-left x, in pattern space.
+- `cellOriginY` — The cell's /BBox lower-left y, in pattern space.
+- `region` — The page-space bounds of the filled region.
+
 ## Properties
 
 ### `Kind`
