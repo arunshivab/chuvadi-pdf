@@ -153,6 +153,11 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.22.1:
+- **Tiling-pattern cells under redaction** — cell content shown inside a
+  box is redacted per tile copy; the verifier inspects pattern cells (was
+  open item 18, remaining edges listed there).
+
 Shipped in v3.22.0 (backlog scope A):
 - **Partial image redaction** — only the covered pixels are blanked (was
   open item 16).
@@ -167,7 +172,7 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.22.0. Items are independent and may be
+Status verified against code at v3.22.1. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -235,12 +240,11 @@ suite; the optimisation *target knob* ("smallest file at visually lossless")
 that would drive the image-recoding stack does not.
 
 ### Redaction follow-ups
-**18. Tiling-pattern cells under redaction.** Redaction removes the painted
-pattern area inside a box, but the cell's own content (for example an image
-in a large single-tile cell) is kept whole when the pattern still paints
-elsewhere on the page, so the part of it that fell under the box remains in
-the file. Needs the Scrub cell treatment (per tile copy) applied against the
-redaction boxes.
+**18. Pattern cells under redaction — remaining edges (after 3.22.1).**
+Cell content is now redacted per tile copy. Left open: a pattern drawn
+by a form that inherits its resources (the cell cannot be replaced there);
+and the "shown whole elsewhere" check can be fooled by a decoy fill that is
+painted over afterwards by opaque content, which then keeps the cell whole.
 
 **19. Verifier on blanked palette images.** `RedactionVerifier` checks a
 partly redacted image's pixels in the region; for a palette (`/Indexed`)

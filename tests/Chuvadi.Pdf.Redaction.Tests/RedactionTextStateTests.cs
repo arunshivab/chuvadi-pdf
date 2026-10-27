@@ -104,8 +104,12 @@ public sealed class RedactionTextStateTests
     [Fact]
     public void TilingPatternStillPaintedOutsideTheBox_IsKept()
     {
+        // The removed fill (y 260..290) shows no copy of the cell's text, so
+        // the cell is kept whole for the second fill. (Since 3.22.1 cell
+        // content that a removed fill did show inside the box is redacted:
+        // see RedactionPatternCellTests.)
         byte[] output = Redact(PatternPage(
-            "q /Pattern cs /P0 scn 260 260 100 50 re f Q q /Pattern cs /P0 scn 10 10 50 50 re f Q"));
+            "q /Pattern cs /P0 scn 260 260 100 30 re f Q q /Pattern cs /P0 scn 10 10 50 50 re f Q"));
 
         Leaks(output, "CELLSECRET").Should().BeTrue("the second fill still shows the pattern");
     }

@@ -198,9 +198,11 @@ public static class Redactor
         // Partly redacted images: each page's blanked copies, added to the
         // page's resources in phase 3.
         List<BlankedImage>[] blankedImages = new List<BlankedImage>[work.Count];
+        PatternUses[] patternUses = new PatternUses[work.Count];
         for (int i = 0; i < work.Count; i++)
         {
             blankedImages[i] = new List<BlankedImage>();
+            patternUses[i] = new PatternUses();
         }
 
         if (options.MaxDegreeOfParallelism == 1)
@@ -210,7 +212,7 @@ public static class Redactor
                 (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
                     RewriteContent(
                         originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns, blankedImages[i]);
+                        work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i]);
                 redactedBytes[i] = rewritten.Bytes;
                 redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
@@ -231,7 +233,7 @@ public static class Redactor
                 (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
                     RewriteContent(
                         originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns, blankedImages[i]);
+                        work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i]);
                 redactedBytes[i] = rewritten.Bytes;
                 redactedMcids[i] = rewritten.RedactedMcids;
                 overlayBytes[i] = BuildOverlayWithPatterns(
@@ -274,7 +276,7 @@ public static class Redactor
             rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
         }
 
-        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> rewrittenForms =
+        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewrittenForms =
             RewriteCollectedForms(run, allObjects, removedContentStreamNums);
 
         // An image whose Do was removed must leave the file, not just the
@@ -285,15 +287,31 @@ public static class Redactor
         {
             PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
             AddBlankedImages(modifiedPages[i], work[i].Page.Resources, blankedImages[i], run, allObjects, ref nextObjectNum);
+            // The visible page: the MediaBox clipped by the CropBox.
+            PdfRectangle media = work[i].Page.MediaBox;
+            PdfRectangle crop = work[i].Page.CropBox;
+            RectangleF visible = Intersect(
+                new RectangleF(Math.Min(media.X1, media.X2), Math.Min(media.Y1, media.Y2), media.Width, media.Height),
+                new RectangleF(Math.Min(crop.X1, crop.X2), Math.Min(crop.Y1, crop.Y2), crop.Width, crop.Height));
+            RedactPatternCells(
+                modifiedPages[i], work[i].Page.Resources, PageContexts(work[i].Rects, work[i].Replacements),
+                patternUses[i], run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, visible);
         }
 
-        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> form in rewrittenForms)
+        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> form in rewrittenForms)
         {
             PdfDictionary? formResources = form.Value.Dict.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
                 ? run.Store.Resolve(fr) as PdfDictionary
                 : null;
             PruneUnusedImages(form.Value.Dict, formResources, form.Value.Content, run, orphanImageCandidates);
             AddBlankedImages(form.Value.Dict, formResources, form.Value.Images, run, allObjects, ref nextObjectNum);
+            if (form.Value.Dict.ContainsKey(PdfName.Resources))
+            {
+                RedactPatternCells(
+                    form.Value.Dict, formResources, run.FormInvocations[form.Key], form.Value.Uses,
+                    run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, null);
+            }
+
             StripPrivateEntries(form.Value.Dict, orphanImageCandidates);
         }
 
@@ -489,9 +507,12 @@ public static class Redactor
     // blankedImages receives the blanked copies of partly redacted images;
     // null when new images cannot be added to the content's resources (a
     // form that inherits its resources), and such images are then removed.
+    // patternUses (optional) receives the tiling-pattern names the content
+    // paints with, and the local-space rectangles where a pattern fill is
+    // known to show (see PatternUses).
     private static (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) RewriteContent(
         byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources,
-        IReadOnlyList<PatternRule> patterns, List<BlankedImage>? blankedImages)
+        IReadOnlyList<PatternRule> patterns, List<BlankedImage>? blankedImages, PatternUses? patternUses = null)
     {
         using (MemoryStream input = new MemoryStream(content))
         using (MemoryStream output = new MemoryStream())
@@ -578,6 +599,11 @@ public static class Redactor
                 // redaction from the CTM (it paints the unit square, like Do).
                 if (token.RawText == "BI")
                 {
+                    if (patternUses is not null)
+                    {
+                        AddPainted(patternUses, state.FillPattern, anywhere: true);
+                    }
+
                     if (HandleInlineImage(tok, content, Sink(), state, contexts, token.ByteOffset, run, resources))
                     {
                         NoteDropped();
@@ -588,6 +614,7 @@ public static class Redactor
                 }
 
                 string op = token.RawText;
+                TrackPatternPaint(op, pendingOperands, state, path, patternUses);
 
                 // Path construction: buffer the operator instead of emitting it,
                 // accumulating the path's bounding box, so the whole path can be
@@ -1495,6 +1522,378 @@ public static class Redactor
     // removed whole, which is always safe (B15).
     private const int MaxBlankedImagesPerStream = 256;
 
+    // Tile copies examined per pattern before a cell is treated as
+    // covering everything (its content is then removed, B15).
+    private const int MaxPatternTileCopies = 4096;
+
+    // Nested patterns (a pattern painted inside a pattern cell) are followed
+    // to this depth; deeper cells are emptied.
+    private const int MaxPatternDepth = 4;
+
+    /// <summary>
+    /// Redacts the content of tiling-pattern cells (PDF 8.7.3.1) a content
+    /// stream paints with. The painted pattern area inside a box is already
+    /// removed with the path that painted it, but the cell's own content
+    /// (an image, text) stays in the file. For each tile copy that reaches a
+    /// box, the cell is rewritten as if placed there, so whatever that copy
+    /// would show inside the box leaves the cell; the rewritten cell
+    /// replaces the pattern in the container's resources (the original
+    /// leaves the file unless something else uses it). A cell is left whole
+    /// when some tile copy that shows the entire cell — inside a known
+    /// pattern-filled rectangle and clear of every box — proves its content
+    /// is visible on the page anyway; removing it would only change the
+    /// page elsewhere.
+    /// </summary>
+    private static void RedactPatternCells(
+        PdfDictionary container, PdfDictionary? baseResources, IReadOnlyList<RedactContext> contexts,
+        PatternUses uses, RedactRun run, List<PdfIndirectObject> allObjects, ref int nextObjectNum,
+        HashSet<int> candidates, int depth, RectangleF? pageBox)
+    {
+        if (uses.Painted.Count == 0)
+        {
+            return;
+        }
+
+        PdfDictionary? current = container.TryGetValue(PdfName.Resources, out PdfPrimitive? rv)
+            ? run.Store.Resolve(rv) as PdfDictionary
+            : baseResources;
+        if (current is null
+            || !current.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv)
+            || run.Store.Resolve(pv) is not PdfDictionary patterns)
+        {
+            return;
+        }
+
+        PdfDictionary? newPatterns = null;
+        foreach (string name in uses.Painted)
+        {
+            PdfName key = PdfName.Intern(name);
+            if (!patterns.TryGetValue(key, out PdfPrimitive? entry)
+                || run.Store.Resolve(entry) is not PdfStream cell
+                || NumberOf(run, cell.Dictionary, "PatternType") != 1)
+            {
+                continue;
+            }
+
+            List<RectangleF>? painted = uses.PaintedAnywhere.Contains(name)
+                ? null
+                : uses.PaintedBounds.TryGetValue(name, out List<RectangleF>? bounds) ? bounds : new List<RectangleF>();
+            PdfStream? redacted = RedactPatternCell(
+                cell, contexts, painted,
+                pageBox is not null && uses.Shown.TryGetValue(name, out List<RectangleF>? shown) ? shown : null,
+                pageBox ?? default, run, allObjects, ref nextObjectNum, candidates, depth);
+            if (redacted is null)
+            {
+                continue;
+            }
+
+            PdfObjectId id = new PdfObjectId(nextObjectNum++, 0);
+            allObjects.Add(new PdfIndirectObject(id, redacted));
+            newPatterns ??= CopyDictionary(patterns);
+            newPatterns.Set(key, new PdfReference(id));
+            if (entry is PdfReference original)
+            {
+                candidates.Add(original.ObjectId.ObjectNumber);
+            }
+        }
+
+        if (newPatterns is not null)
+        {
+            PdfDictionary resources = CopyDictionary(current);
+            resources.Set(PdfName.Intern("Pattern"), newPatterns);
+            container.Set(PdfName.Resources, resources);
+        }
+    }
+
+    // Rewrites one tiling-pattern cell against the boxes, or returns null
+    // when no tile copy reaches a box or the cell is provably shown whole
+    // elsewhere.
+    private static PdfStream? RedactPatternCell(
+        PdfStream cell, IReadOnlyList<RedactContext> contexts, List<RectangleF>? painted, List<RectangleF>? shown,
+        RectangleF pageBox, RedactRun run,
+        List<PdfIndirectObject> allObjects, ref int nextObjectNum, HashSet<int> candidates, int depth)
+    {
+        PdfDictionary dict = cell.Dictionary;
+        if (run.Store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Intern("BBox")) ?? PdfNull.Value) is not PdfArray bbox
+            || bbox.Count < 4)
+        {
+            return null;
+        }
+
+        double cx0 = Math.Min(NumberAt(run, bbox, 0), NumberAt(run, bbox, 2));
+        double cx1 = Math.Max(NumberAt(run, bbox, 0), NumberAt(run, bbox, 2));
+        double cy0 = Math.Min(NumberAt(run, bbox, 1), NumberAt(run, bbox, 3));
+        double cy1 = Math.Max(NumberAt(run, bbox, 1), NumberAt(run, bbox, 3));
+        double xs = Math.Abs(NumberOf(run, dict, "XStep"));
+        double ys = Math.Abs(NumberOf(run, dict, "YStep"));
+        if (xs < 1e-9)
+        {
+            xs = cx1 - cx0;
+        }
+
+        if (ys < 1e-9)
+        {
+            ys = cy1 - cy0;
+        }
+
+        if (xs < 1e-9 || ys < 1e-9)
+        {
+            return null;
+        }
+
+        Transform matrix = Transform.Identity;
+        if (run.Store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Intern("Matrix")) ?? PdfNull.Value) is PdfArray m
+            && m.Count >= 6)
+        {
+            matrix = new Transform(
+                NumberAt(run, m, 0), NumberAt(run, m, 1), NumberAt(run, m, 2),
+                NumberAt(run, m, 3), NumberAt(run, m, 4), NumberAt(run, m, 5));
+        }
+
+        // Tile copies reaching a box, as redaction contexts in cell space.
+        List<RedactContext> cellContexts = new List<RedactContext>();
+        bool tooMany = false;
+        foreach (RedactContext context in contexts)
+        {
+            if (context.Rects.Count == 0)
+            {
+                continue;
+            }
+
+            Transform toPage = matrix.Multiply(context.BaseCtm);
+            Transform toCell;
+            try
+            {
+                toCell = toPage.Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                tooMany = true;
+                continue;
+            }
+
+            foreach (RectangleF r in PaintedPartsOfBoxes(context, painted))
+            {
+                (double bx0, double by0, double bx1, double by1) = MappedBounds(toCell, r.X, r.Y, r.X + r.Width, r.Y + r.Height);
+                double iMin = Math.Floor((bx0 - cx1) / xs);
+                double iMax = Math.Ceiling((bx1 - cx0) / xs);
+                double jMin = Math.Floor((by0 - cy1) / ys);
+                double jMax = Math.Ceiling((by1 - cy0) / ys);
+                if ((iMax - iMin + 1) * (jMax - jMin + 1) > MaxPatternTileCopies)
+                {
+                    tooMany = true;
+                    continue;
+                }
+
+                for (long i = (long)iMin; i <= (long)iMax; i++)
+                {
+                    for (long j = (long)jMin; j <= (long)jMax; j++)
+                    {
+                        Transform copy = Transform.CreateTranslation(i * xs, j * ys).Multiply(toPage);
+                        (double qx0, double qy0, double qx1, double qy1) = MappedBounds(copy, cx0, cy0, cx1, cy1);
+                        if (qx0 < r.X + r.Width && qx1 > r.X && qy0 < r.Y + r.Height && qy1 > r.Y)
+                        {
+                            cellContexts.Add(new RedactContext(copy, new List<RectangleF> { r }, new List<string?>()));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (cellContexts.Count == 0 && !tooMany)
+        {
+            return null;
+        }
+
+        if (!tooMany && ShownWholeElsewhere(contexts, shown, pageBox, matrix, cx0, cy0, cx1, cy1, xs, ys))
+        {
+            return null;
+        }
+
+        byte[] content = Array.Empty<byte>();
+        PdfDictionary? cellResources = run.Store.Resolve(dict.GetAs<PdfPrimitive>(PdfName.Resources) ?? PdfNull.Value) as PdfDictionary;
+        List<BlankedImage> images = new List<BlankedImage>();
+        PatternUses nested = new PatternUses();
+        if (!tooMany && depth < MaxPatternDepth)
+        {
+            byte[] original;
+            try
+            {
+                original = DecodeStream(cell, run.Pipeline);
+            }
+            catch (Exception)
+            {
+                original = Array.Empty<byte>(); // undecodable cell: emptied (B15)
+            }
+
+            content = RewriteContent(
+                original, cellContexts, run, cellResources, Array.Empty<PatternRule>(),
+                cellResources is not null ? images : null, nested).Bytes;
+        }
+
+        PdfDictionary newDict = new PdfDictionary();
+        foreach (PdfName key in dict.Keys)
+        {
+            if (key.Value is not ("Filter" or "DecodeParms" or "Length" or "PieceInfo"))
+            {
+                newDict.Set(key, dict[key]);
+            }
+        }
+
+        newDict.Set(PdfName.Length, content.Length);
+        PruneUnusedImages(newDict, cellResources, content, run, candidates);
+        AddBlankedImages(newDict, cellResources, images, run, allObjects, ref nextObjectNum);
+        RedactPatternCells(newDict, cellResources, cellContexts, nested, run, allObjects, ref nextObjectNum, candidates, depth + 1, null);
+        return new PdfStream(newDict, content);
+    }
+
+    // The parts of a context's boxes (page space) where the pattern was
+    // painted: each box clipped to each painted fill's bounds, or the boxes
+    // themselves when the painted extent is not modelled (null).
+    private static List<RectangleF> PaintedPartsOfBoxes(RedactContext context, List<RectangleF>? painted)
+    {
+        if (painted is null)
+        {
+            return context.Rects;
+        }
+
+        List<RectangleF> parts = new List<RectangleF>();
+        foreach (RectangleF local in painted)
+        {
+            (double px0, double py0, double px1, double py1) = MappedBounds(
+                context.BaseCtm, local.X, local.Y, local.X + local.Width, local.Y + local.Height);
+            RectangleF paintedOnPage = new RectangleF(px0, py0, px1 - px0, py1 - py0);
+            foreach (RectangleF r in context.Rects)
+            {
+                RectangleF part = Intersect(r, paintedOnPage);
+                if (part.Width > 0 && part.Height > 0)
+                {
+                    parts.Add(part);
+                }
+            }
+        }
+
+        return parts;
+    }
+
+    // True when some tile copy lies wholly inside a rectangle where the
+    // pattern fill is known to show (on the page, with no graphics state,
+    // layer or text clip that could hide it) and clear of every box: the
+    // whole cell is then visible on the page, so its content holds nothing
+    // the boxes hide that is not shown elsewhere. Page content only.
+    private static bool ShownWholeElsewhere(
+        IReadOnlyList<RedactContext> contexts, List<RectangleF>? shown, RectangleF pageBox, Transform matrix,
+        double cx0, double cy0, double cx1, double cy1, double xs, double ys)
+    {
+        if (shown is null || shown.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (RedactContext context in contexts)
+        {
+            Transform placement = context.BaseCtm;
+            if (Math.Abs(placement.B) > 1e-9 || Math.Abs(placement.C) > 1e-9)
+            {
+                continue;
+            }
+
+            Transform toPage = matrix.Multiply(placement);
+            Transform toCell;
+            try
+            {
+                toCell = toPage.Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            foreach (RectangleF local in shown)
+            {
+                (double vx0, double vy0, double vx1, double vy1) = MappedBounds(
+                    placement, local.X, local.Y, local.X + local.Width, local.Y + local.Height);
+                (double px0, double py0, double px1, double py1) = MappedBounds(toCell, vx0, vy0, vx1, vy1);
+                double iMin = Math.Floor((px0 - cx0) / xs);
+                double iMax = Math.Ceiling((px1 - cx0) / xs);
+                double jMin = Math.Floor((py0 - cy0) / ys);
+                double jMax = Math.Ceiling((py1 - cy0) / ys);
+                if ((iMax - iMin + 1) * (jMax - jMin + 1) > MaxPatternTileCopies)
+                {
+                    continue;
+                }
+
+                for (long i = (long)iMin; i <= (long)iMax; i++)
+                {
+                    for (long j = (long)jMin; j <= (long)jMax; j++)
+                    {
+                        Transform copy = Transform.CreateTranslation(i * xs, j * ys).Multiply(toPage);
+                        (double qx0, double qy0, double qx1, double qy1) = MappedBounds(copy, cx0, cy0, cx1, cy1);
+                        if (qx0 < vx0 || qy0 < vy0 || qx1 > vx1 || qy1 > vy1
+                            || qx0 < pageBox.X || qy0 < pageBox.Y || qx1 > pageBox.Right || qy1 > pageBox.Top)
+                        {
+                            continue;
+                        }
+
+                        bool clear = true;
+                        foreach (RedactContext other in contexts)
+                        {
+                            foreach (RectangleF r in other.Rects)
+                            {
+                                if (qx0 < r.X + r.Width && qx1 > r.X && qy0 < r.Y + r.Height && qy1 > r.Y)
+                                {
+                                    clear = false;
+                                }
+                            }
+                        }
+
+                        if (clear)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static (double X0, double Y0, double X1, double Y1) MappedBounds(
+        Transform m, double x0, double y0, double x1, double y1)
+    {
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (PointF corner in new[]
+        {
+            new PointF(x0, y0), new PointF(x1, y0), new PointF(x1, y1), new PointF(x0, y1),
+        })
+        {
+            PointF p = m.TransformPoint(corner);
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+
+        return (minX, minY, maxX, maxY);
+    }
+
+    private static double NumberOf(RedactRun run, PdfDictionary dict, string key)
+    {
+        return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v) ? NumberValue(run.Store.Resolve(v)) : 0.0;
+    }
+
+    private static double NumberAt(RedactRun run, PdfArray array, int index) =>
+        NumberValue(run.Store.Resolve(array[index]));
+
+    private static double NumberValue(PdfPrimitive p) => p switch
+    {
+        PdfInteger i => i.Value,
+        PdfReal r => r.Value,
+        _ => 0.0,
+    };
+
     // A resource name for a blanked image that no existing XObject uses.
     private static string NewBlankedImageName(
         List<BlankedImage> taken, PdfDictionary? resources, RedactRun run)
@@ -1770,6 +2169,208 @@ public static class Redactor
     {
         return op == "m" || op == "l" || op == "c" || op == "v"
             || op == "y" || op == "re" || op == "h";
+    }
+
+    // Tracks the current fill/stroke pattern names and an axis-aligned clip
+    // rectangle (q/Q saved), and records into uses which patterns are
+    // painted and where a pattern fill certainly shows: a rectangle fill
+    // under an axis-aligned CTM, intersected with a rectangular clip (an
+    // unknown clip shape records nothing). Runs before the operator itself
+    // is handled, while the path being painted is still buffered.
+    private static void TrackPatternPaint(
+        string op, List<PdfToken> operands, RedactState state, PathAccumulator path, PatternUses? uses)
+    {
+        if (uses is null)
+        {
+            return;
+        }
+
+        string? lastName = operands.Count > 0 && operands[^1].Type == PdfTokenType.Name
+            ? DecodeNameText(operands[^1].RawText)
+            : null;
+        // A transform (cm, or q/Q restoring another CTM) inside a path
+        // object (invalid, but viewers apply the CTM in force at the paint
+        // operator) makes the buffered bounds unreliable.
+        if ((op == "cm" || op == "q" || op == "Q") && path.Active)
+        {
+            state.PathCtmChanged = true;
+        }
+
+        switch (op)
+        {
+            case "q":
+                state.PatternStack.Push((state.FillPattern, state.StrokePattern, state.ClipRect, state.ClipUnknown, state.MayHidePaint));
+                return;
+            case "Q":
+                if (state.PatternStack.Count > 0)
+                {
+                    (state.FillPattern, state.StrokePattern, state.ClipRect, state.ClipUnknown, state.MayHidePaint) = state.PatternStack.Pop();
+                }
+
+                return;
+            case "gs":
+                // Opacity, soft masks and blend modes can hide a fill.
+                state.MayHidePaint = true;
+                return;
+            case "Tr":
+                if (operands.Count > 0 && ParseDouble(operands[^1]) >= 4)
+                {
+                    state.ClipUnknown = true; // text clipping
+                }
+
+                return;
+            case "BDC" or "BMC":
+                state.MarkedScopes.Push(op == "BDC" && operands.Count > 0 && operands[0].RawText.TrimStart('/') == "OC");
+                return;
+            case "EMC":
+                if (state.MarkedScopes.Count > 0)
+                {
+                    state.MarkedScopes.Pop();
+                }
+
+                return;
+            case "scn":
+                state.FillPattern = lastName;
+                return;
+            case "SCN":
+                state.StrokePattern = lastName;
+                return;
+            case "cs" or "sc" or "g" or "rg" or "k":
+                state.FillPattern = null;
+                return;
+            case "CS" or "SC" or "G" or "RG" or "K":
+                state.StrokePattern = null;
+                return;
+            case "Tj" or "TJ" or "'" or "\"" or "Do" or "BI":
+                AddPainted(uses, state.FillPattern, anywhere: true);
+                AddPainted(uses, state.StrokePattern, anywhere: true);
+                return;
+        }
+
+        if (!IsPathPaintOp(op))
+        {
+            return;
+        }
+
+        bool fills = op is "f" or "F" or "f*" or "B" or "B*" or "b" or "b*";
+        bool strokes = op is "S" or "s" or "B" or "B*" or "b" or "b*";
+        if (strokes)
+        {
+            AddPainted(uses, state.StrokePattern, anywhere: true);
+        }
+
+        bool movedPath = state.PathCtmChanged;
+        state.PathCtmChanged = false;
+        if (fills && state.FillPattern is string fillName)
+        {
+            if (path.Active && !movedPath)
+            {
+                AddPainted(uses, fillName, anywhere: false);
+                if (!uses.PaintedBounds.TryGetValue(fillName, out List<RectangleF>? bounds))
+                {
+                    bounds = new List<RectangleF>();
+                    uses.PaintedBounds[fillName] = bounds;
+                }
+
+                bounds.Add(new RectangleF(path.MinX, path.MinY, path.MaxX - path.MinX, path.MaxY - path.MinY));
+            }
+            else
+            {
+                AddPainted(uses, fillName, anywhere: true);
+            }
+
+            if (!movedPath && !path.HasClip && !state.ClipUnknown && !state.MayHidePaint
+                && !state.MarkedScopes.Contains(true) && SingleRectangle(path, state) is RectangleF filled)
+            {
+                RectangleF shown = filled;
+                if (state.ClipRect is RectangleF clip)
+                {
+                    shown = Intersect(shown, clip);
+                }
+
+                if (shown.Width > 0 && shown.Height > 0)
+                {
+                    if (!uses.Shown.TryGetValue(fillName, out List<RectangleF>? list))
+                    {
+                        list = new List<RectangleF>();
+                        uses.Shown[fillName] = list;
+                    }
+
+                    list.Add(shown);
+                }
+            }
+        }
+
+        // A clip set with this path takes effect after it is painted.
+        if (path.HasClip)
+        {
+            if (SingleRectangle(path, state) is RectangleF clipRect)
+            {
+                state.ClipRect = state.ClipRect is RectangleF current ? Intersect(current, clipRect) : clipRect;
+            }
+            else
+            {
+                state.ClipUnknown = true;
+            }
+        }
+    }
+
+    private static void AddPainted(PatternUses uses, string? name, bool anywhere)
+    {
+        if (name is not null)
+        {
+            uses.Painted.Add(name);
+            if (anywhere)
+            {
+                uses.PaintedAnywhere.Add(name);
+            }
+        }
+    }
+
+    private static RectangleF Intersect(RectangleF a, RectangleF b)
+    {
+        double x0 = Math.Max(a.X, b.X);
+        double y0 = Math.Max(a.Y, b.Y);
+        double x1 = Math.Min(a.X + a.Width, b.X + b.Width);
+        double y1 = Math.Min(a.Y + a.Height, b.Y + b.Height);
+        return x1 > x0 && y1 > y0 ? new RectangleF(x0, y0, x1 - x0, y1 - y0) : new RectangleF(x0, y0, 0, 0);
+    }
+
+    // The buffered path's single "re" rectangle in local (CTM-mapped) space
+    // when the CTM keeps it axis-aligned; null for any other path.
+    private static RectangleF? SingleRectangle(PathAccumulator path, RedactState state)
+    {
+        List<PdfToken>? rect = null;
+        foreach ((List<PdfToken> operands, string op) in path.Buffer)
+        {
+            if (op is "W" or "W*")
+            {
+                continue;
+            }
+
+            if (op != "re" || rect is not null || operands.Count < 4)
+            {
+                return null;
+            }
+
+            rect = operands;
+        }
+
+        Transform ctm = state.Ctm;
+        if (rect is null || Math.Abs(ctm.B) > 1e-9 || Math.Abs(ctm.C) > 1e-9)
+        {
+            return null;
+        }
+
+        double x = ParseDouble(rect[^4]);
+        double y = ParseDouble(rect[^3]);
+        double w = ParseDouble(rect[^2]);
+        double h = ParseDouble(rect[^1]);
+        PointF a = ctm.TransformPoint(new PointF(x, y));
+        PointF b = ctm.TransformPoint(new PointF(x + w, y + h));
+        double minX = Math.Min(a.X, b.X);
+        double minY = Math.Min(a.Y, b.Y);
+        return new RectangleF(minX, minY, Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y));
     }
 
     private static bool IsPathPaintOp(string op)
@@ -3261,11 +3862,11 @@ public static class Redactor
     // Rewrites every collected form XObject's content stream in place (same
     // object id), removing in-rect text under any of its placements, and marks
     // the original for exclusion so no unredacted copy survives in the output.
-    private static Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> RewriteCollectedForms(
+    private static Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> RewriteCollectedForms(
         RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
     {
-        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)> rewritten =
-            new Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images)>();
+        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewritten =
+            new Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)>();
         foreach (KeyValuePair<int, List<RedactContext>> kvp in run.FormInvocations)
         {
             int objNum = kvp.Key;
@@ -3281,9 +3882,10 @@ public static class Redactor
             // covered image in it is removed instead.
             List<BlankedImage> images = new List<BlankedImage>();
             bool ownResources = form.Dictionary.ContainsKey(PdfName.Resources) && formResources is not null;
+            PatternUses uses = new PatternUses();
             byte[] redacted = RewriteContent(
                 formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>(),
-                ownResources ? images : null).Bytes;
+                ownResources ? images : null, uses).Bytes;
 
             PdfDictionary newDict = CopyDictionary(form.Dictionary);
             newDict.Remove(PdfName.Intern("Filter"));
@@ -3292,7 +3894,7 @@ public static class Redactor
 
             allObjects.Add(new PdfIndirectObject(new PdfObjectId(objNum, 0), new PdfStream(newDict, redacted)));
             excluded.Add(objNum);
-            rewritten[objNum] = (newDict, redacted, images);
+            rewritten[objNum] = (newDict, redacted, images, uses);
             run.RewrittenForms[objNum] = redacted;
         }
 
@@ -4818,6 +5420,29 @@ internal sealed class RedactState
     // placement so a repeated Do reuses one copy.
     internal List<BlankedImage>? BlankedImages { get; set; }
 
+    // Pattern tracking for tiling-pattern cell redaction (see
+    // TrackPatternPaint): current fill/stroke pattern names and the
+    // axis-aligned clip rectangle (or an unknown clip), saved by q.
+    internal string? FillPattern { get; set; }
+
+    internal string? StrokePattern { get; set; }
+
+    internal RectangleF? ClipRect { get; set; }
+
+    internal bool ClipUnknown { get; set; }
+
+    // An ExtGState is in effect (opacity, soft mask or blend mode may hide
+    // paint); a cm arrived inside the buffered path; open marked-content
+    // scopes (true for an optional-content /OC scope).
+    internal bool MayHidePaint { get; set; }
+
+    internal bool PathCtmChanged { get; set; }
+
+    internal Stack<bool> MarkedScopes { get; } = new Stack<bool>();
+
+    internal Stack<(string? Fill, string? Stroke, RectangleF? Clip, bool Unknown, bool MayHide)> PatternStack { get; } =
+        new Stack<(string? Fill, string? Stroke, RectangleF? Clip, bool Unknown, bool MayHide)>();
+
     internal Dictionary<(int, Transform), (ImageBlankOutcome Outcome, string? Name)> BlankedImageCache { get; } =
         new Dictionary<(int, Transform), (ImageBlankOutcome Outcome, string? Name)>();
 
@@ -4928,6 +5553,26 @@ internal sealed class RedactState
         TextX = 0;
         TextY = 0;
     }
+}
+
+/// <summary>
+/// Tiling patterns a content stream paints with, and where a pattern fill is
+/// known to show (local-space rectangles), for redacting pattern cells.
+/// </summary>
+internal sealed class PatternUses
+{
+    public HashSet<string> Painted { get; } = new HashSet<string>(StringComparer.Ordinal);
+
+    public Dictionary<string, List<RectangleF>> Shown { get; } =
+        new Dictionary<string, List<RectangleF>>(StringComparer.Ordinal);
+
+    // Local-space bounds of the fills painted with each pattern; a pattern
+    // in PaintedAnywhere was also painted where its extent is not modelled
+    // (strokes, text, images, forms), so the whole box counts.
+    public Dictionary<string, List<RectangleF>> PaintedBounds { get; } =
+        new Dictionary<string, List<RectangleF>>(StringComparer.Ordinal);
+
+    public HashSet<string> PaintedAnywhere { get; } = new HashSet<string>(StringComparer.Ordinal);
 }
 
 /// <summary>

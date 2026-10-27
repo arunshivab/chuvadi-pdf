@@ -10,6 +10,34 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.22.1] - 2026-10-22
+
+Backlog 18: the content of tiling-pattern cells under a redaction box.
+
+### Fixed
+- **Pattern cells kept redacted content (backlog 18).** Redaction removed
+  the painted pattern area inside a box, but a tiling pattern's cell (an
+  image, text) stayed whole in the file when the pattern still painted
+  elsewhere — so a large single-tile pattern kept the part under the box.
+  Each tile copy that reaches the part of a box where the pattern was
+  painted now rewrites the cell as if placed there: text and paths it
+  would show there are removed and images are blanked pixel by pixel (as
+  in 3.22.0), in a new pattern object; the original leaves the file unless
+  something else uses it. Nested patterns are followed; patterns in forms
+  with their own resources are handled. A cell is left whole when a tile
+  copy elsewhere on the visible page provably shows the entire cell (a
+  plain rectangle fill, no ExtGState, layer or text clip in effect), so
+  repeating hatches are not stripped from the whole page.
+- **`RedactionVerifier` looks inside tiling patterns.** Cell content
+  painted inside a region (through the pattern's clip) is reported like
+  any other content; pattern cells were previously skipped.
+
+### Changed
+- `RedactionTextStateTests.TilingPatternStillPaintedOutsideTheBox_IsKept`
+  now uses a removed fill that shows none of the cell's text (the old
+  geometry touched the text's glyph box, which 3.22.1 rightly redacts).
+
+---
 ## [3.22.0] - 2026-10-19
 
 Backlog scope A: pixel-level partial image redaction, Scrub residuals
