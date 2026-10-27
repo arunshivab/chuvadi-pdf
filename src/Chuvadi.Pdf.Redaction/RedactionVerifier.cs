@@ -106,7 +106,7 @@ public sealed class RedactionVerification
 /// Text is matched per glyph on an approximate ink box (the middle 80% of the
 /// glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph
 /// that merely abuts a rectangle is not reported. Invisible text (render mode
-/// 3 or clip-only), fully transparent paint, shadings and pattern cells are
+/// 3 or clip-only), fully transparent paint and shadings are
 /// not reported.
 /// </remarks>
 public static class RedactionVerifier
@@ -190,10 +190,26 @@ public static class RedactionVerifier
         PageDisplayList list, AffineMatrix outer, int pageIndex, List<RectangleF> regions,
         bool ignoreOverlays, List<RedactionSurvivor> into, int depth)
     {
+        // The latest clip in each transform scope: a tiling pattern paints
+        // only inside the clip that precedes it (its filled path).
+        Stack<ClipOp?> clips = new Stack<ClipOp?>();
+        ClipOp? clip = null;
         foreach (RenderOp op in list)
         {
             switch (op)
             {
+                case TransformOp t when t.Push:
+                    clips.Push(clip);
+                    break;
+                case TransformOp:
+                    clip = clips.Count > 0 ? clips.Pop() : null;
+                    break;
+                case ClipOp c:
+                    clip = c;
+                    break;
+                case TilingPatternOp tp when depth < 8 && (clip is null || ClipMeetsRegions(clip, outer, regions)):
+                    InspectTiles(tp, outer, pageIndex, regions, ignoreOverlays, into, depth);
+                    break;
                 case TextOp t:
                     InspectText(t, outer, pageIndex, regions, into);
                     break;
@@ -380,6 +396,91 @@ public static class RedactionVerifier
         }
 
         return true;
+    }
+
+    // Most tile copies inspected per tiling-pattern op.
+    private const int MaxInspectedTiles = 4096;
+
+    // Inspects a tiling pattern's cell at every tile copy that can reach a
+    // region (listed tiles, or the copies of a repeating pattern near each
+    // region).
+    private static void InspectTiles(
+        TilingPatternOp tp, AffineMatrix outer, int pageIndex, List<RectangleF> regions,
+        bool ignoreOverlays, List<RedactionSurvivor> into, int depth)
+    {
+        if (!tp.IsRepeating)
+        {
+            int count = 0;
+            foreach (AffineMatrix tile in tp.Tiles)
+            {
+                if (++count > MaxInspectedTiles)
+                {
+                    break;
+                }
+
+                InspectList(tp.Cell, tile.Multiply(outer), pageIndex, regions, ignoreOverlays, into, depth + 1);
+            }
+
+            return;
+        }
+
+        AffineMatrix toPage = tp.PatternMatrix.Multiply(outer);
+        double det = (toPage.A * toPage.D) - (toPage.B * toPage.C);
+        if (Math.Abs(det) < 1e-12 || tp.XStep <= 0 || tp.YStep <= 0)
+        {
+            return;
+        }
+
+        AffineMatrix inverse = new AffineMatrix(
+            toPage.D / det, -toPage.B / det, -toPage.C / det, toPage.A / det,
+            ((toPage.C * toPage.F) - (toPage.D * toPage.E)) / det,
+            ((toPage.B * toPage.E) - (toPage.A * toPage.F)) / det);
+        foreach (RectangleF r in regions)
+        {
+            RectangleF b = Bounds(Quad(inverse, r.X, r.Y, r.Right, r.Top));
+
+            // A cell may draw past one period: look a few copies further.
+            double i0 = Math.Floor((b.X - tp.CellOriginX) / tp.XStep) - 2;
+            double i1 = Math.Ceiling((b.Right - tp.CellOriginX) / tp.XStep) + 2;
+            double j0 = Math.Floor((b.Y - tp.CellOriginY) / tp.YStep) - 2;
+            double j1 = Math.Ceiling((b.Top - tp.CellOriginY) / tp.YStep) + 2;
+            if ((i1 - i0 + 1) * (j1 - j0 + 1) > MaxInspectedTiles)
+            {
+                continue;
+            }
+
+            for (long i = (long)i0; i <= (long)i1; i++)
+            {
+                for (long j = (long)j0; j <= (long)j1; j++)
+                {
+                    AffineMatrix copy = new AffineMatrix(1, 0, 0, 1, i * tp.XStep, j * tp.YStep).Multiply(toPage);
+                    InspectList(tp.Cell, copy, pageIndex, new List<RectangleF> { r }, ignoreOverlays, into, depth + 1);
+                }
+            }
+        }
+    }
+
+    // Whether a clip region reaches into any region: its fill area for a
+    // path clip, its outline's reach for a stroke-outline clip.
+    private static bool ClipMeetsRegions(ClipOp clip, AffineMatrix outer, List<RectangleF> regions)
+    {
+        List<List<(double X, double Y)>> subpaths = Flatten(clip.Geometry, outer);
+        double reach = clip.Stroke is null ? 0 : ClipOp.StrokeReach(clip.Stroke);
+        foreach (RectangleF r in regions)
+        {
+            RectangleF grown = reach > 0
+                ? new RectangleF(r.X - reach, r.Y - reach, r.Width + (2 * reach), r.Height + (2 * reach))
+                : r;
+            foreach (List<(double X, double Y)> subpath in subpaths)
+            {
+                if (subpath.Count >= 2 && PolygonMeetsRect(subpath, grown))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void InspectText(

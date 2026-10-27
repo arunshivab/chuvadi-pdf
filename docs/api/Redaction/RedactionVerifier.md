@@ -10,7 +10,7 @@ public static class RedactionVerifier
 
 ## Remarks
 
-Text is matched per glyph on an approximate ink box (the middle 80% of the glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph that merely abuts a rectangle is not reported. Invisible text (render mode 3 or clip-only), fully transparent paint, shadings and pattern cells are not reported.
+Text is matched per glyph on an approximate ink box (the middle 80% of the glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph that merely abuts a rectangle is not reported. Invisible text (render mode 3 or clip-only), fully transparent paint and shadings are not reported.
 
 ## Methods
 
