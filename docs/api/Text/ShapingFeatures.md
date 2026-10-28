@@ -18,7 +18,7 @@ __static__
 static ShapingFeatures Default
 ```
 
-Gets the default feature set: ccmp, locl, calt, liga, kern, mark, mkmk enabled; all optional features off.
+Gets the default feature set: HarfBuzz's defaults (ccmp, locl, calt, liga, kern, mark, mkmk and the script features) with all optional features off.
 
 ### `Ccmp`
 
@@ -58,7 +58,7 @@ Gets or inits whether standard ligatures (liga) are enabled. Default: true.
 bool Cpsp
 ```
 
-Gets or inits whether capital spacing (cpsp) is enabled. Default: true.
+Gets or inits whether capital spacing (cpsp) is enabled. Default: false (since 3.26, matching HarfBuzz; cpsp is meant for all-capital text).
 
 ### `Kern`
 

@@ -8,6 +8,10 @@ Shapes a run of text using the OpenType GSUB and GPOS tables embedded in a TrueT
 public static class TextShaper
 ```
 
+## Remarks
+
+Since 3.26 the shaper is a port of HarfBuzz's OpenType shaper: the Indic shaper for Tamil, Devanagari, Bengali, Gurmukhi, Gujarati, Odia, Telugu, Kannada and Malayalam, and the default shaper for `LipiScript.Latin` runs. Glyphs, clusters, advances and offsets match HarfBuzz 15 on the conformance corpora in `tools/shaping-data`. Not ported: the Arabic, Khmer, Myanmar, Thai, Hangul and USE shapers (no LiPi script needs them), variation sequences (cmap format 14), the legacy 'kern' table, vertical text and variable-font instances other than the default.
+
 ## Methods
 
 ### `Shape`

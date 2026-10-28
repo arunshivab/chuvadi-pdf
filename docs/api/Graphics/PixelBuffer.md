@@ -89,7 +89,7 @@ Sets a pixel at (x, y) from packed BGRA bytes. Out-of-range coordinates are sile
 void BlendPixel(int x, int y, ColorF color)
 ```
 
-Blends a colour over the existing pixel using standard alpha compositing (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing. PDF 32000-1:2008 -11.3 - Basic compositing formula.
+Blends a colour over the existing pixel using standard alpha compositing (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing, which suits anti-aliased edge coverage. For transparency (a colour's own alpha) use `BlendPixel(int, int, ColorF, bool)` with `gammaCorrect: false`, which mixes in sRGB as PDF viewers do. PDF 32000-1:2008 -11.3 - Basic compositing formula.
 
 ### `BlendPixel`
 

@@ -25,6 +25,18 @@ Initialises a new `TextFragment`.
 - `y` — The Y position in user space (baseline of the text).
 - `fontSize` — The font size in points at the time of rendering.
 
+### `TextFragment(string text, double x, double y, double fontSize, double width)`
+
+Initialises a new `TextFragment` with its advance width.
+
+**Parameters**
+
+- `text` — The Unicode text content of this fragment.
+- `x` — The X position in user space (left edge of first glyph).
+- `y` — The Y position in user space (baseline of the text).
+- `fontSize` — The font size in points at the time of rendering.
+- `width` — The horizontal advance of the shown glyphs in the same space as `x`, or `double.NaN` when the font's widths are not known.
+
 ## Properties
 
 ### `Text`
@@ -58,6 +70,14 @@ double FontSize
 ```
 
 Gets the font size in points.
+
+### `Width`
+
+```csharp
+double Width
+```
+
+Gets the advance width of the fragment's glyphs (from the font's widths), or `double.NaN` when it is not known.
 
 ---
 

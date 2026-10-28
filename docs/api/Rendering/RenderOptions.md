@@ -72,7 +72,7 @@ Gets or initialises whether the scanline fill computes fractional pixel coverage
 bool GammaCorrect
 ```
 
-Gets or initialises whether anti-aliased fills blend colour channels in linear light (gamma-correct). When false, channels are blended directly in sRGB space (the legacy behaviour, which renders edges slightly lighter). Has no effect when `AntiAlias` is false. Default: true.
+Gets or initialises whether the anti-aliased edge coverage of opaque fills blends in linear light (gamma-correct). When false, edges blend directly in sRGB space (the legacy behaviour, which renders edges slightly lighter). Transparency (/ca, /CA, soft masks, image alpha) always composites in sRGB, the blending colour space Acrobat uses, so 50% black over white is 128. Has no effect when `AntiAlias` is false. Default: true.
 
 ### `Hinting`
 

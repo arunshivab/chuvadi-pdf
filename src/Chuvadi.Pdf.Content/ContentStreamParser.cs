@@ -387,12 +387,7 @@ public sealed class ContentStreamParser
                         if (inTextObject && operands.Count >= 1)
                         {
                             byte[] textBytes = GetBytes(operands, 0);
-                            string text = state.Font.Decode(textBytes);
-                            double x = state.TextMatrix.TranslationX;
-                            double y = state.TextMatrix.TranslationY;
-                            fragments.Add(new TextFragment(text, x, y, state.FontSize));
-                            state.TextMatrix = AdvanceTextMatrix(
-                                state.TextMatrix, text, state);
+                            ShowString(textBytes, state, fragments);
                         }
                         break;
 
@@ -407,12 +402,7 @@ public sealed class ContentStreamParser
                             if (operands.Count >= 1)
                             {
                                 byte[] textBytes = GetBytes(operands, 0);
-                                string text = state.Font.Decode(textBytes);
-                                double x = state.TextMatrix.TranslationX;
-                                double y = state.TextMatrix.TranslationY;
-                                fragments.Add(new TextFragment(text, x, y, state.FontSize));
-                                state.TextMatrix = AdvanceTextMatrix(
-                                    state.TextMatrix, text, state);
+                                ShowString(textBytes, state, fragments);
                             }
                         }
                         break;
@@ -426,12 +416,7 @@ public sealed class ContentStreamParser
                                 state.TextLineMatrix.Translate(0, -state.TextLeading);
                             state.TextMatrix = state.TextLineMatrix;
                             byte[] textBytes = GetBytes(operands, 2);
-                            string text = state.Font.Decode(textBytes);
-                            double x = state.TextMatrix.TranslationX;
-                            double y = state.TextMatrix.TranslationY;
-                            fragments.Add(new TextFragment(text, x, y, state.FontSize));
-                            state.TextMatrix = AdvanceTextMatrix(
-                                state.TextMatrix, text, state);
+                            ShowString(textBytes, state, fragments);
                         }
                         break;
 
@@ -486,6 +471,7 @@ public sealed class ContentStreamParser
         StringBuilder sb = new StringBuilder();
         double startX = state.TextMatrix.TranslationX;
         double startY = state.TextMatrix.TranslationY;
+        bool widthKnown = true;
 
         for (int i = 0; i < array.Count; i++)
         {
@@ -495,7 +481,8 @@ public sealed class ContentStreamParser
             {
                 string decoded = state.Font.Decode(str.Bytes);
                 sb.Append(decoded);
-                state.TextMatrix = AdvanceTextMatrix(state.TextMatrix, decoded, state);
+                state.TextMatrix = AdvanceTextMatrix(state.TextMatrix, str.Bytes, decoded, state, out bool measured);
+                widthKnown &= measured;
             }
             else if (item is PdfInteger intItem)
             {
@@ -526,22 +513,47 @@ public sealed class ContentStreamParser
 
         if (sb.Length > 0)
         {
-            fragments.Add(new TextFragment(sb.ToString(), startX, startY, state.FontSize));
+            double width = widthKnown ? state.TextMatrix.TranslationX - startX : double.NaN;
+            fragments.Add(new TextFragment(sb.ToString(), startX, startY, state.FontSize, width));
         }
+    }
+
+    // Shows one string (Tj, ', "): adds its fragment with its measured width
+    // and advances the text matrix.
+    private static void ShowString(byte[] textBytes, GraphicsState state, List<TextFragment> fragments)
+    {
+        string text = state.Font.Decode(textBytes);
+        double x = state.TextMatrix.TranslationX;
+        double y = state.TextMatrix.TranslationY;
+        state.TextMatrix = AdvanceTextMatrix(state.TextMatrix, textBytes, text, state, out bool measured);
+        double width = measured ? state.TextMatrix.TranslationX - x : double.NaN;
+        fragments.Add(new TextFragment(text, x, y, state.FontSize, width));
     }
 
     // ── Text matrix advance ───────────────────────────────────────────────
 
     private static Matrix3x3 AdvanceTextMatrix(
         Matrix3x3 matrix,
+        byte[] bytes,
         string text,
-        GraphicsState state)
+        GraphicsState state,
+        out bool measured)
     {
-        // Approximate advance: FontSize * HorizontalScaling/100 per character.
-        // A proper implementation would look up glyph widths from the font.
-        // For Phase 1, average advance gives good results for most fonts.
+        // With the font's widths (§9.4.4): tx = ((w0 × Tfs) + Tc + Tw) × Th,
+        // Tw applying to single-byte code 32 only.
+        if (state.Font.TryMeasure(bytes, out double width, out int codes, out int spaces))
+        {
+            measured = true;
+            double tx = ((width / 1000.0 * state.FontSize) + (state.CharacterSpacing * codes) + (state.WordSpacing * spaces))
+                * (state.HorizontalScaling / 100.0);
+            return matrix.Translate(tx, 0);
+        }
+
+        // Approximate advance: FontSize * HorizontalScaling/100 per character,
+        // for fonts whose widths are not known (standard 14 without /Widths).
+        measured = false;
         double advance = text.Length * state.FontSize * (state.HorizontalScaling / 100.0) * 0.6;
-        return matrix.Translate(advance + state.CharacterSpacing * text.Length, 0);
+        return matrix.Translate(advance + (state.CharacterSpacing * text.Length), 0);
     }
 
     // ── Font resolution ───────────────────────────────────────────────────
@@ -661,10 +673,21 @@ public sealed class ContentStreamParser
         }
 
         TextFragment first = fragments[firstFragment];
+
+        // The span covers its glyphs from the first one's left edge to the
+        // right edge of the one that ends furthest right, so the text after
+        // it is judged against the real extent and gets no false word gap.
+        double right = double.NegativeInfinity;
+        for (int i = firstFragment; i < fragments.Count; i++)
+        {
+            TextFragment f = fragments[i];
+            right = double.IsNaN(f.Width) || double.IsNaN(right) ? double.NaN : Math.Max(right, f.X + f.Width);
+        }
+
         fragments.RemoveRange(firstFragment, fragments.Count - firstFragment);
         if (actualText.Length > 0)
         {
-            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize));
+            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize, right - first.X));
         }
     }
 

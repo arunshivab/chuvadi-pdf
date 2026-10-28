@@ -53,6 +53,7 @@ public sealed class PdfFont
     private readonly IReadOnlyDictionary<int, string>? _toUnicodeMap;
     private readonly PdfFontEncoding? _encoding;
     private readonly int _maxByteCount;
+    private FontWidths? _widths;
 
     // PDF codes are conventionally up to 4 bytes; longer windows would
     // overflow a signed 32-bit code anyway. The fallback (when neither a
@@ -120,7 +121,10 @@ public sealed class PdfFont
             toUnicode?.Mapping,
             toUnicode?.CodespaceRanges,
             encoding,
-            isComposite);
+            isComposite)
+        {
+            _widths = FontWidths.FromDictionary(fontDict, resolver),
+        };
     }
 
     /// <summary>
@@ -184,6 +188,31 @@ public sealed class PdfFont
     /// remap path in <c>FontEmbedder</c>.
     /// </remarks>
     public IReadOnlyDictionary<int, string>? ToUnicodeMap => _toUnicodeMap;
+
+    /// <summary>
+    /// Measures a shown string with the font's glyph widths (/Widths for a
+    /// simple font, /W and /DW for a Type0 font with the Identity-H encoding).
+    /// </summary>
+    /// <param name="bytes">The raw bytes of a Tj, TJ or similar operand.</param>
+    /// <param name="width">The summed glyph width, in thousandths of text space.</param>
+    /// <param name="codeCount">The number of character codes (for character spacing).</param>
+    /// <param name="spaceCount">The number of single-byte code 32s (for word spacing).</param>
+    /// <returns><see langword="true"/> when the font's widths are known.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="bytes"/> is null.</exception>
+    public bool TryMeasure(byte[] bytes, out double width, out int codeCount, out int spaceCount)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (_widths is null)
+        {
+            width = 0;
+            codeCount = 0;
+            spaceCount = 0;
+            return false;
+        }
+
+        _widths.Measure(bytes, out width, out codeCount, out spaceCount);
+        return true;
+    }
 
     /// <summary>
     /// Converts a sequence of bytes from a PDF text string operator to Unicode text.

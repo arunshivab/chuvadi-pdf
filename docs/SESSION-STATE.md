@@ -9,22 +9,21 @@
 
 ## Last Updated
 
-2026-10-28 — v3.25.0 (stacked on 3.24.0 and 3.23.0, all pending on Arun's
-machine): fonts and drawing for Chuvadi.Layout — `FontFace` metrics,
-`TextShaper.Shape(FontFace)`, CFF/.otf and .ttc embedding (CID-keyed CFF
-subsetter), searchable `DrawShapedRun` (ToUnicode + `/ActualText`, which
-`TextExtractor` now honours), `GlyphRunStyle`, `PushClip`/`PushOpacity`
-scopes, `AddLink` (URI/GoTo), `LineStyle` dashes, image crops; renderer
-fixes (CTM line width/dashes, dashes, CID→GID, triangle clips, sRGB
-opacity). 3.24.0: embedding API for Anjal Mail. Last released version:
-v3.22.1. Open: BACKLOG 17, 20, 21 (Indic shaping — 3.26), 22–24.
-
+2026-10-28 — v3.26.0 (stacked on 3.25.0, 3.24.0 and 3.23.0, all pending on
+Arun's machine): `TextShaper` is a port of HarfBuzz's OpenType shaper (Indic +
+default shapers); glyphs, UTF-16 clusters, advances and offsets match HarfBuzz
+15.0.0 on all 29,493 lines of the two conformance corpora (19,641 syllables +
+9,852 words/stress/Latin), every LiPi script at 100% (3.25: 33% glyph ids).
+Also: no word gap after `/ActualText` in extraction (font widths in the
+content parser, `TextFragment.Width`, `PdfFont.TryMeasure`), transparency in
+sRGB on aliased fills and images. 3.25.0: fonts and drawing for
+Chuvadi.Layout. Last released version: v3.22.1. Open: BACKLOG 17, 20, 22–26.
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,878 tests across 30 in-solution test projects,
-0 failures (v3.25.0 sandbox gate; 3.24.0: 2,784).** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,916 tests across 30 in-solution test projects,
+0 failures (v3.26.0 sandbox gate; 3.25.0: 2,878).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -56,7 +55,7 @@ All modules are Complete and shipping. Grouped by role:
 | Chuvadi.Pdf.Fonts.Rendering     | Complete (TrueType bytecode hinting) |
 | Chuvadi.Pdf.Fonts.Woff2         | Complete |
 | Chuvadi.Pdf.Text                | Complete |
-| Chuvadi.Pdf.Text.Shaping        | Complete (OpenType GSUB/GPOS) |
+| Chuvadi.Pdf.Text.Shaping        | Complete (HarfBuzz port: Indic + default shapers, 3.26) |
 
 ### Rendering
 | Module                            | Status   |
@@ -140,7 +139,7 @@ flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuge
 — the library's job ends there; the Chuvadi Reader picks packages up from that
 feed on its own side. Never `dotnet nuget push` (it creates a mismatched
 hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
-**3.22.1** (3.23.0, 3.24.0 and 3.25.0 pending merge + pack on Arun's machine, in that order).
+**3.22.1** (3.23.0, 3.24.0, 3.25.0 and 3.26.0 pending merge + pack on Arun's machine, in that order).
 
 Releases publish to local folder feeds only, never to nuget.org.
 

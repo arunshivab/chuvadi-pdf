@@ -69,13 +69,25 @@ between threads.
 
 `TextShaper.Shape(face, text, script)` gives the same glyphs as
 `TextShaper.Shape(bytes, text, script)` but parses nothing per call: the
-face's GSUB/GPOS feature lookups are cached with it. Use it inside a
-line-fitting loop. Benchmark (`benchmarks/Chuvadi.Benchmarks`,
-`--filter *Shaping*`): a Latin line 418 µs from bytes, 173 µs from a face;
-Tamil 35 µs and 7.5 µs.
+face's tables are parsed once and the shaping plan for each script and
+feature set is cached with it. Use it inside a line-fitting loop; the byte
+overload loads the face and builds the plan on every call. Benchmark
+(`benchmarks/Chuvadi.Benchmarks`, `--filter *Shaping*`, 3.26): one line from
+a face — Latin 32 µs, Tamil 19 µs, Devanagari 47 µs.
 
-Known gap: Indic shaping does not yet match HarfBuzz for many conjuncts and
-reph/matra positions (see BACKLOG). Latin shaping does.
+Since 3.26 the shaper is a port of HarfBuzz's OpenType shaper (Indic shaper
+for the nine LiPi Indic scripts, default shaper for Latin). On the
+conformance corpora in `tools/shaping-data` (29,493 lines) it gives
+HarfBuzz 15's glyphs, clusters, advances and offsets exactly; see the
+per-script table in CHANGELOG [3.26.0]. Not ported: the Arabic, Hebrew, Thai,
+Hangul, Khmer, Myanmar and USE shapers, cmap format 14 variation sequences,
+the legacy `kern` table and vertical text.
+
+`ShapedGlyph.Cluster` is the UTF-16 index in the source text where the
+glyph's cluster starts (HarfBuzz cluster values), so it is the cluster start
+`DrawShapedRun` asks for: a split vowel, a reordered pre-base matra and a
+ligature share one cluster. For "கொடு" the glyphs are e-sign, ka, aa-sign,
+du with clusters 0, 0, 0, 2.
 
 ## Drawing shaped text that stays searchable
 
@@ -84,7 +96,7 @@ searches and extracts as written:
 
 ```csharp
 IReadOnlyList<ShapedGlyph> glyphs = TextShaper.Shape(face, text, LipiScript.Latin);
-int[] clusterStarts = ...; // for each glyph, the UTF-16 index in text where its cluster starts
+int[] clusterStarts = glyphs.Select(g => g.Cluster).ToArray(); // UTF-16 cluster starts
 page.DrawShapedRun(glyphs, text, clusterStarts, x, y, "Inter", 12, Colors.Black);
 ```
 
