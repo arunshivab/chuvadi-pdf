@@ -80,7 +80,20 @@ internal sealed class Type2Interpreter
         while (i < cs.Length)
         {
             byte b = cs[i];
-            if (b <= 31)
+
+            // 28 is a 16-bit operand (shortint), not an operator, although it
+            // falls in the operator range 0–31: test it first.
+            if (b == 28)
+            {
+                if (i + 2 >= cs.Length)
+                {
+                    throw new FontRenderingException("A CFF charstring ends inside a number.");
+                }
+
+                short v = (short)((cs[i + 1] << 8) | cs[i + 2]);
+                _stack.Add(v); i += 3;
+            }
+            else if (b <= 31)
             {
                 int op = b == 12 ? (12 << 8) | cs[i + 1] : b;
                 i += b == 12 ? 2 : 1;
@@ -95,11 +108,6 @@ internal sealed class Type2Interpreter
                     int maskBytes = (_hintCount + 7) / 8;
                     i += maskBytes;
                 }
-            }
-            else if (b == 28)
-            {
-                short v = (short)((cs[i + 1] << 8) | cs[i + 2]);
-                _stack.Add(v); i += 3;
             }
             else if (b >= 32 && b <= 246)
             {

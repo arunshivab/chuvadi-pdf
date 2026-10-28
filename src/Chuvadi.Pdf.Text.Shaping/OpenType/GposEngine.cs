@@ -29,8 +29,20 @@ internal static class GposEngine
             return;
         }
 
-        Dictionary<string, List<int>> featureMap =
-            OtReader.ReadFeatureMap(sfnt, gpos, scriptTag, langTag);
+        Apply(sfnt, gpos, OtReader.ReadFeatureMap(sfnt, gpos, scriptTag, langTag), buffer, features);
+    }
+
+    /// <summary>
+    /// Applies the enabled lookups given the table offset and the feature map
+    /// already read for the script and language (cached per font face).
+    /// </summary>
+    internal static void Apply(
+        byte[] sfnt,
+        int gpos,
+        Dictionary<string, List<int>> featureMap,
+        GlyphBuffer buffer,
+        ShapingFeatures features)
+    {
 
         int lookupListOff = gpos + OtReader.U16(sfnt, gpos + 8);
         int lookupCount = OtReader.U16(sfnt, lookupListOff);

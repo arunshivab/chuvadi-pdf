@@ -72,14 +72,30 @@ Registers a page footer callback. Same shape as `SetHeader`.
 PdfDocumentBuilder AddTrueTypeFont(string name, byte[] fontData)
 ```
 
-Registers a TrueType font program so pages can draw text in it. The font is embedded (as a Type0 / CIDFontType2 composite font) only if used, and only the glyphs actually drawn get width and ToUnicode entries.
+Registers a font program so pages can draw text in it. The font is embedded (as a Type0 composite font) only if used, subset to the glyphs drawn, and only those glyphs get width and ToUnicode entries. Accepts a TrueType font, a CFF-based OpenType font (.otf) or a collection (.ttc/.otc, whose first face is used — see `AddFont(string, byte[], int)` for another face).
 
 **Parameters**
 
 - `name` — The font name to pass to `PageBuilder.DrawText`; also recorded as the PostScript base-font name.
-- `fontData` — The complete static TrueType (glyf) font program.
+- `fontData` — The complete font program.
 
-**Remarks:** The font must be a static TrueType font (convert variable fonts to a static instance first). Text is emitted in logical order without complex-script shaping, so Latin renders correctly and Indic renders correctly only for isolated or already-ordered glyphs.
+**Remarks:** The font must be static (convert variable fonts to a static instance first; CFF2 is not supported). `PageBuilder.DrawText` emits glyphs in logical order without complex-script shaping; shape with `TextShaper` and draw with `PageBuilder.DrawShapedRun(IReadOnlyList{Chuvadi.Pdf.Text.Shaping.ShapedGlyph}, string, IReadOnlyList{int}, double, double, string, double, Color)` for complex scripts. <exception cref="Chuvadi.Pdf.Fonts.Rendering.FontRenderingException">The font data is invalid or unsupported.</exception>
+
+### `AddFont`
+
+```csharp
+PdfDocumentBuilder AddFont(string name, byte[] fontData, int faceIndex = 0)
+```
+
+Registers one face of a font program — TrueType (.ttf), CFF-based OpenType (.otf) or a collection (.ttc/.otc) — so pages can draw text in it. TrueType outlines embed as `CIDFontType2`, CFF outlines as `CIDFontType0` (`/FontFile3 /CIDFontType0C`); either way the program is subset to the glyphs drawn.
+
+**Parameters**
+
+- `name` — The font name to draw with; also the PostScript base-font name.
+- `fontData` — The complete font file.
+- `faceIndex` — The face of a collection (0 for a single font).
+
+**Returns:** This builder. <exception cref="ArgumentNullException">`name` or `fontData` is null.</exception> <exception cref="ArgumentOutOfRangeException">`faceIndex` is not a face of the file.</exception> <exception cref="Chuvadi.Pdf.Fonts.Rendering.FontRenderingException">The font data is invalid or unsupported.</exception>
 
 ### `UseLipiFonts`
 
@@ -87,7 +103,7 @@ Registers a TrueType font program so pages can draw text in it. The font is embe
 PdfDocumentBuilder UseLipiFonts()
 ```
 
-Enables the automatic LiPi Sans font. After calling this, drawing text with the font name "Lipi" selects the matching LiPi face per script and embeds each used face. Glyphs are emitted in logical order (no complex shaping); Latin renders correctly, and Indic text is embedded but not yet reordered.
+Enables the automatic LiPi Sans font. After calling this, drawing text with the font name "Lipi" selects the matching LiPi face per script and embeds each used face. Indic runs are shaped with `TextShaper` and carry their source text as `/ActualText`, so they extract and search as written.
 
 **Returns:** This builder.
 

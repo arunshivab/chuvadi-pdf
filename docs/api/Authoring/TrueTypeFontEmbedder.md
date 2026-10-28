@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Authoring` (Authoring)
 
-Builds the PDF object graph that embeds a TrueType (`glyf`) font as a composite Type0 font with Identity-H encoding, so authored content can draw text in a custom font. The whole font program is embedded (no subsetting in this version); the `/W` width array and `/ToUnicode` CMap cover only the glyphs actually used.
+Builds the PDF object graph that embeds a TrueType (`glyf`) font as a composite Type0 font with Identity-H encoding, so authored content can draw text in a custom font. The font program is subset to the glyphs used (glyph numbering kept); the `/W` width array and `/ToUnicode` CMap cover only those glyphs. For CFF-based OpenType fonts and faces of collections, use `FontEmbedder`.
 
 ```csharp
 public static class TrueTypeFontEmbedder

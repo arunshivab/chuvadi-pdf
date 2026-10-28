@@ -102,6 +102,23 @@ public static class LineSegmentExtraction
         return segments;
     }
 
+    private static double[]? UserSpaceDash(double[]? pageDash, AffineMatrix ctm)
+    {
+        double scale = Math.Sqrt(Math.Abs((ctm.A * ctm.D) - (ctm.B * ctm.C)));
+        if (pageDash is null || pageDash.Length == 0 || scale == 1.0 || !double.IsFinite(scale) || scale <= 0)
+        {
+            return pageDash;
+        }
+
+        double[] user = new double[pageDash.Length];
+        for (int i = 0; i < pageDash.Length; i++)
+        {
+            user[i] = pageDash[i] / scale;
+        }
+
+        return user;
+    }
+
     // Flattens one path and appends its segments. When raw geometry is retained
     // the path is flattened in user space and each point mapped through the CTM
     // for the page-space endpoint (Ctm.Apply(raw) == baked); otherwise only the
@@ -115,7 +132,9 @@ public static class LineSegmentExtraction
         bool stroked = path.Mode != PaintMode.Fill;
         double width = stroked && path.Stroke is not null ? path.Stroke.LineWidth : 0.0;
         PdfColor color = stroked ? path.StrokeColor : path.FillColor;
-        double[]? dash = path.Stroke?.DashArray;
+        // PathOp dash lengths are in page space (scaled with the CTM, like the
+        // width); the segment reports them in user space, as documented.
+        double[]? dash = UserSpaceDash(path.Stroke?.DashArray, ctm);
         IReadOnlyList<string> layers = path.Layers;
         PaintMode mode = path.Mode;
 

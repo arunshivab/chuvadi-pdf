@@ -121,6 +121,24 @@ public sealed class FontRenderer
         return Loader.GetGlyphIndexForCode(code, symbolic);
     }
 
+    /// <summary>
+    /// Maps a CID of a composite (Type0) font to a glyph index. For a
+    /// CID-keyed CFF program the CFF charset maps CIDs to glyphs (a CID the
+    /// font does not have is .notdef); for every other program the CID is the
+    /// glyph index, as with an Identity <c>/CIDToGIDMap</c>.
+    /// </summary>
+    /// <param name="cid">The CID decoded from the content stream.</param>
+    /// <returns>The glyph index.</returns>
+    public int GetGlyphIndexForCid(int cid)
+    {
+        if (_cff is not null && _cff.IsCidFont)
+        {
+            return _cff.CidToGid.GetValueOrDefault(cid, 0);
+        }
+
+        return cid;
+    }
+
     /// <summary>Maps a Unicode code point to a glyph index via the Unicode cmap (TrueType) or charset map (CFF).</summary>
     public int GetGlyphIndexUnicode(int codePoint)
     {

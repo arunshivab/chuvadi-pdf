@@ -39,6 +39,8 @@
 *.pdb       binary
 *.ttf       binary
 *.otf       binary
+*.ttc       binary
+*.otc       binary
 *.woff      binary
 *.woff2     binary
 *.snk       binary

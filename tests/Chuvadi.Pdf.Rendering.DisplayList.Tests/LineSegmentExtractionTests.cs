@@ -52,6 +52,19 @@ public sealed class LineSegmentExtractionTests
     }
 
     [Fact]
+    public void Dash_IsReportedInUserSpace_UnderAScalingCtm()
+    {
+        // 3.25 scales path dashes to page space for drawing; the segment keeps
+        // reporting the authored (user-space) pattern, as documented.
+        using PdfDocument doc = BuildPage("0.5 0 0 0.5 0 0 cm\n4 w [6 2] 0 d\n0 0 m\n100 0 l\nS");
+
+        LineSegment seg = Extract(doc).Should().ContainSingle().Subject;
+
+        seg.Dash.Should().Equal(6, 2);
+        seg.Width.Should().BeApproximately(2.0, 1e-9, "4 user units at half scale");
+    }
+
+    [Fact]
     public void ClosedRectangle_YieldsClosingSegment()
     {
         using PdfDocument doc = BuildPage("10 10 20 20 re\nf");

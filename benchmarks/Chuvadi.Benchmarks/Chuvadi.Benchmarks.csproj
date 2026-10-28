@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Svg\Chuvadi.Pdf.Svg.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Text.Shaping\Chuvadi.Pdf.Text.Shaping.csproj" />
     <ProjectReference Include="..\Chuvadi.Benchmarks.Compression\Chuvadi.Benchmarks.Compression.csproj" />
   </ItemGroup>
 

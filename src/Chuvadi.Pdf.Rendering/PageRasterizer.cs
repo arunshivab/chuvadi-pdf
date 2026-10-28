@@ -1008,6 +1008,19 @@ public sealed class PageRasterizer
         _scanline.SoftMask = null;
     }
 
+    // Dash lengths are in user-space points, like the line width; scale them
+    // to device pixels the same way.
+    private double[] ScaleDash(double[] pattern)
+    {
+        double[] scaled = new double[pattern.Length];
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            scaled[i] = pattern[i] * _options.Scale;
+        }
+
+        return scaled;
+    }
+
     private void PaintStrokeOp(
         StrokePathOp op, PixelBuffer buffer,
         double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
@@ -1037,8 +1050,8 @@ public sealed class PageRasterizer
             Cap = op.Style.Cap,
             Join = op.Style.Join,
             MiterLimit = op.Style.MiterLimit,
-            DashPattern = op.Style.DashPattern,
-            DashOffset = op.Style.DashOffset,
+            DashPattern = ScaleDash(op.Style.DashPattern),
+            DashOffset = op.Style.DashOffset * _options.Scale,
             Color = op.Style.Color,
         };
 
@@ -1518,8 +1531,8 @@ public sealed class PageRasterizer
                     Cap = stroke.Cap,
                     Join = stroke.Join,
                     MiterLimit = stroke.MiterLimit,
-                    DashPattern = stroke.DashPattern,
-                    DashOffset = stroke.DashOffset,
+                    DashPattern = ScaleDash(stroke.DashPattern),
+                    DashOffset = stroke.DashOffset * _options.Scale,
                     Color = stroke.Color,
                 };
                 flattened = _stroke.Expand(flattened, deviceStyle);

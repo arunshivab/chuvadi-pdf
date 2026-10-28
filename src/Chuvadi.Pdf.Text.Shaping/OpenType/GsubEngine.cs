@@ -30,8 +30,20 @@ internal static class GsubEngine
             return;
         }
 
-        Dictionary<string, List<int>> featureMap =
-            OtReader.ReadFeatureMap(sfnt, gsub, scriptTag, langTag);
+        Apply(sfnt, gsub, OtReader.ReadFeatureMap(sfnt, gsub, scriptTag, langTag), buffer, features);
+    }
+
+    /// <summary>
+    /// Applies the enabled lookups given the table offset and the feature map
+    /// already read for the script and language (cached per font face).
+    /// </summary>
+    internal static void Apply(
+        byte[] sfnt,
+        int gsub,
+        Dictionary<string, List<int>> featureMap,
+        GlyphBuffer buffer,
+        ShapingFeatures features)
+    {
 
         int lookupListOff = gsub + OtReader.U16(sfnt, gsub + 8);
         int lookupCount = OtReader.U16(sfnt, lookupListOff);
@@ -463,6 +475,16 @@ internal static class GsubEngine
 
     private static bool ApplyType6Fmt3(byte[] sfnt, int gsub, GlyphBuffer buf, int i, int subOff, bool[] apply)
     {
+        // Cheap rejection first: the current glyph must be in the first input
+        // coverage. Checking the backtrack sequence before it walked backwards
+        // for every glyph of every run.
+        int firstInput = subOff + 4 + (OtReader.U16(sfnt, subOff + 2) * 2);
+        if (OtReader.U16(sfnt, firstInput) == 0
+            || new CoverageTable(sfnt, subOff + OtReader.U16(sfnt, firstInput + 2)).IndexOf(buf[i].GlyphId) < 0)
+        {
+            return false;
+        }
+
         int off = subOff + 2;
 
         // BacktrackCoverage[]
