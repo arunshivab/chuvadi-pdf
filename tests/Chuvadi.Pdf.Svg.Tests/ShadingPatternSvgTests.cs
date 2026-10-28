@@ -32,6 +32,38 @@ public sealed class ShadingPatternSvgTests
             "the gradient is confined to the filled path");
     }
 
+    [Theory]
+    [InlineData("2 0 0 0.5 0 0", true)]
+    [InlineData("1 0.5 0 1 0 0", true)]
+    [InlineData("0 2 -2 0 300 0", false)]
+    public void RenderPage_RadialShadingUnderUnequalScaling_UsesAGradientTransform(string cm, bool expected)
+    {
+        // Unequal scaling or skew turns the circles into ellipses: the SVG
+        // gradient keeps shading-space circles under a gradientTransform.
+        byte[] content = Encoding.Latin1.GetBytes("q " + cm + " cm /Sh0 sh Q\n");
+        List<byte[]> bodies = new List<byte[]>
+        {
+            Encoding.Latin1.GetBytes("<</Type/Catalog/Pages 2 0 R>>"),
+            Encoding.Latin1.GetBytes("<</Type/Pages/Kids[3 0 R]/Count 1>>"),
+            Encoding.Latin1.GetBytes(
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+                + "/Resources<</Shading<</Sh0 5 0 R>>>>/Contents 4 0 R>>"),
+            Concat(
+                Encoding.Latin1.GetBytes("<</Length " + content.Length + ">>\nstream\n"),
+                content,
+                Encoding.Latin1.GetBytes("\nendstream")),
+            Encoding.Latin1.GetBytes(
+                "<</ShadingType 3/ColorSpace/DeviceRGB/Coords[0 0 0 0 0 100]/Extend[true true]"
+                + "/Function<</FunctionType 2/Domain[0 1]/C0[1 0 0]/C1[0 0 1]/N 1>>>>"),
+        };
+        using PdfDocument doc = PdfDocument.Open(new MemoryStream(Assemble(bodies)), leaveOpen: false);
+
+        string svg = new SvgRenderer().RenderPage(doc, 0);
+
+        svg.Should().Contain("radialGradient");
+        svg.Contains("gradientTransform", System.StringComparison.Ordinal).Should().Be(expected);
+    }
+
     private static byte[] BuildShadingPatternPdf()
     {
         byte[] content = Encoding.Latin1.GetBytes(

@@ -268,6 +268,13 @@ public sealed class ImageOp : RenderOp
     /// <summary>Pixel data (interpretation depends on <see cref="Format"/> and <see cref="ColorSpace"/>).</summary>
     public required byte[] PixelData { get; init; }
 
+    /// <summary>
+    /// For a palette (<c>/Indexed</c>) image whose samples were expanded to
+    /// colour in <see cref="PixelData"/>: the original palette indices, one
+    /// byte per pixel, row by row; otherwise null.
+    /// </summary>
+    public byte[]? IndexSamples { get; init; }
+
     /// <summary>Encoding format of <see cref="PixelData"/>.</summary>
     public required ImageFormat Format { get; init; }
 
@@ -483,6 +490,15 @@ public sealed class ShadingOp : RenderOp
 
     /// <summary>The sampled gradient stops, in increasing offset order.</summary>
     public IReadOnlyList<ShadingStop> Stops { get; init; } = System.Array.Empty<ShadingStop>();
+
+    /// <summary>
+    /// When set, the centres and radii are in shading space and this maps
+    /// shading space to page space. Used for a radial shading under a
+    /// transform that does not keep circles circular (unequal scaling or
+    /// skew), where the circles become ellipses on the page. Null when the
+    /// geometry is already in page space.
+    /// </summary>
+    public AffineMatrix? ShadingToPage { get; init; }
 }
 
 /// <summary>

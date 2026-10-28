@@ -26,6 +26,14 @@ required byte[] PixelData
 
 Pixel data (interpretation depends on `Format` and `ColorSpace`).
 
+### `IndexSamples`
+
+```csharp
+byte[]? IndexSamples
+```
+
+For a palette (`/Indexed`) image whose samples were expanded to colour in `PixelData`: the original palette indices, one byte per pixel, row by row; otherwise null.
+
 ### `Format`
 
 ```csharp

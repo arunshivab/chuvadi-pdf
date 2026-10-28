@@ -268,6 +268,15 @@ public static class RedactionVerifier
             maxV = Math.Max(maxV, v);
         }
 
+        // A palette image expanded to colour: its blanked pixels are index
+        // zero, whatever colour the palette gives that index.
+        if (img.IndexSamples is byte[] indices && indices.LongLength >= (long)img.Width * img.Height
+            && CellsBlank(placement, r, img.Width, img.Height, minU, minV, maxU, maxV,
+                (col, row) => indices[(row * img.Width) + col] == 0))
+        {
+            return true;
+        }
+
         int pixelBits = RawPixelBits(img);
         if (pixelBits <= 0)
         {

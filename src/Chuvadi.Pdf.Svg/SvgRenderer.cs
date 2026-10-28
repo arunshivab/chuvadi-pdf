@@ -591,6 +591,11 @@ public sealed class SvgRenderer
         {
             def.Append("<radialGradient id=\"").Append(id)
                .Append("\" gradientUnits=\"userSpaceOnUse\" spreadMethod=\"pad\"");
+            if (s.ShadingToPage is AffineMatrix shadingToPage)
+            {
+                def.Append(" gradientTransform=\"").Append(shadingToPage.ToSvgMatrix()).Append('"');
+            }
+
             def.AppendFormat(CultureInfo.InvariantCulture,
                 " cx=\"{0}\" cy=\"{1}\" r=\"{2}\" fx=\"{3}\" fy=\"{4}\" fr=\"{5}\">",
                 Num(s.X1), Num(s.Y1), Num(s.R1), Num(s.X0), Num(s.Y0), Num(s.R0));

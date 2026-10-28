@@ -204,6 +204,117 @@ public sealed class RedactionPatternCellTests
             "QZXP", "the tile at 0..100 is outside the crop box and never shows");
     }
 
+    [Theory]
+    [InlineData("1 g 0 0 100 100 re f")]
+    [InlineData("BT /F1 30 Tf 10 40 Td (WWW) Tj ET")]
+    [InlineData("q 100 0 0 100 0 0 cm /Im1 Do Q")]
+    public void ADecoyTilePaintedOverLater_DoesNotKeepTheCellWhole(string overpaint)
+    {
+        // The tile at 0..100 would show the whole cell, but opaque content
+        // painted over it afterwards hides (some of) it.
+        byte[] input = Page(
+            "q /Pattern cs /P0 scn 0 0 100 100 re f Q q " + overpaint + " Q /Pattern cs /P0 scn 200 200 100 100 re f",
+            "/Pattern<</P0 5 0 R>>/Font<</F1 6 0 R>>/XObject<</Im1 7 0 R>>",
+            Stream("/PatternType 1/PaintType 1/TilingType 1/BBox[0 0 100 100]/XStep 100/YStep 100"
+                + "/Resources<</Font<</F1 6 0 R>>>>", "BT /F1 10 Tf 10 50 Td (QZXP) Tj ET"),
+            Helvetica(),
+            Stream("/Type/XObject/Subtype/Image/Width 1/Height 1/ColorSpace/DeviceGray/BitsPerComponent 8", "\u00ff"));
+
+        Latin1(Redact(input, new RectangleF(200, 200, 100, 100))).Should().NotContain("QZXP");
+    }
+
+    [Fact]
+    public void ADecoyTileUnderAnAnnotation_DoesNotKeepTheCellWhole()
+    {
+        byte[] input = Build(new List<byte[]>
+        {
+            Obj("<</Type/Catalog/Pages 2 0 R>>"),
+            Obj("<</Type/Pages/Kids[3 0 R]/Count 1>>"),
+            Obj("<</Type/Page/Parent 2 0 R" + Media + "/Annots[7 0 R]"
+                + "/Resources<</Pattern<</P0 5 0 R>>>>/Contents 4 0 R>>"),
+            Stream(string.Empty,
+                "q /Pattern cs /P0 scn 0 0 100 100 re f Q /Pattern cs /P0 scn 200 200 100 100 re f"),
+            Stream("/PatternType 1/PaintType 1/TilingType 1/BBox[0 0 100 100]/XStep 100/YStep 100"
+                + "/Resources<</Font<</F1 6 0 R>>>>", "BT /F1 10 Tf 10 50 Td (QZXP) Tj ET"),
+            Helvetica(),
+            Obj("<</Type/Annot/Subtype/Square/Rect[0 0 100 100]/AP<</N 8 0 R>>>>"),
+            Stream("/Type/XObject/Subtype/Form/BBox[0 0 100 100]", "1 g 0 0 100 100 re f"),
+        });
+
+        Latin1(Redact(input, new RectangleF(200, 200, 100, 100))).Should().NotContain("QZXP");
+    }
+
+    [Theory]
+    [InlineData("BT /T3 1 Tf -50 -50 Td (a) Tj ET")]
+    [InlineData("/GD gs /Pattern cs /P0 scn 0 0 100 100 re f")]
+    public void ADecoyTileCoveredByType3TextOrABlendedRepaint_DoesNotKeepTheCellWhole(string overpaint)
+    {
+        byte[] input = Page(
+            "q /Pattern cs /P0 scn 0 0 100 100 re f Q q " + overpaint + " Q /Pattern cs /P0 scn 200 200 100 100 re f",
+            "/Pattern<</P0 5 0 R>>/Font<</T3 7 0 R>>/ExtGState<</GD<</BM/Difference>>>>",
+            Stream("/PatternType 1/PaintType 1/TilingType 1/BBox[0 0 100 100]/XStep 100/YStep 100"
+                + "/Resources<</Font<</F1 6 0 R>>>>", "BT /F1 10 Tf 10 50 Td (QZXP) Tj ET"),
+            Helvetica(),
+            Obj("<</Type/Font/Subtype/Type3/FontBBox[0 0 100 100]/FontMatrix[1 0 0 1 0 0]/CharProcs<</a 8 0 R>>"
+                + "/Encoding<</Type/Encoding/Differences[97/a]>>/FirstChar 97/LastChar 97/Widths[100]>>"),
+            Stream(string.Empty, "100 0 0 0 100 100 d1 50 50 100 100 re f"));
+
+        Latin1(Redact(input, new RectangleF(200, 200, 100, 100))).Should().NotContain("QZXP");
+    }
+
+    [Fact]
+    public void PatternDrawnByAResourceInheritingForm_IsRedacted()
+    {
+        byte[] input = Build(new List<byte[]>
+        {
+            Obj("<</Type/Catalog/Pages 2 0 R>>"),
+            Obj("<</Type/Pages/Kids[3 0 R]/Count 1>>"),
+            Obj("<</Type/Page/Parent 2 0 R" + Media
+                + "/Resources<</XObject<</Fm0 5 0 R>>/Pattern<</P0 6 0 R>>>>/Contents 4 0 R>>"),
+            Stream(string.Empty, "/Fm0 Do"),
+            Stream("/Type/XObject/Subtype/Form/BBox[0 0 400 400]", "/Pattern cs /P0 scn 0 0 400 400 re f"),
+            Stream(BigCell + "/Resources<</Font<</F1 7 0 R>>>>",
+                "BT /F1 12 Tf 20 20 Td (KEEPTEXT) Tj ET BT /F1 12 Tf 260 300 Td (CELLSECRET) Tj ET"),
+            Helvetica(),
+        });
+
+        string output = Latin1(Redact(input, new RectangleF(250, 290, 140, 40)));
+
+        output.Should().NotContain("CELLSECRET");
+        output.Should().Contain("KEEPTEXT");
+    }
+
+    [Theory]
+    [InlineData("/Fm0 Do")]
+    [InlineData("/Fm0 Do /Pattern cs /P0 scn 380 320 20 20 re f")]
+    public void PatternDrawnByAFormSharedByPagesWithDifferentResources_IsRedacted(string pageContent)
+    {
+        // Fm0 inherits its resources, and the two pages give it different
+        // ones, so it cannot be given a copy of its own.
+        byte[] input = Build(new List<byte[]>
+        {
+            Obj("<</Type/Catalog/Pages 2 0 R>>"),
+            Obj("<</Type/Pages/Kids[3 0 R 8 0 R]/Count 2>>"),
+            Obj("<</Type/Page/Parent 2 0 R" + Media
+                + "/Resources<</XObject<</Fm0 5 0 R>>/Pattern<</P0 6 0 R>>>>/Contents 4 0 R>>"),
+            Stream(string.Empty, pageContent),
+            Stream("/Type/XObject/Subtype/Form/BBox[0 0 400 400]", "/Pattern cs /P0 scn 0 0 400 400 re f"),
+            Stream(BigCell + "/Resources<</Font<</F1 7 0 R>>>>",
+                "BT /F1 12 Tf 20 20 Td (KEEPTEXT) Tj ET BT /F1 12 Tf 260 300 Td (CELLSECRET) Tj ET"),
+            Helvetica(),
+            Obj("<</Type/Page/Parent 2 0 R" + Media
+                + "/Resources<</XObject<</Fm0 5 0 R>>/Pattern<</P0 10 0 R>>/Font<</F1 7 0 R>>>>/Contents 9 0 R>>"),
+            Stream(string.Empty, "/Fm0 Do"),
+            Stream(BigCell + "/Resources<</Font<</F1 7 0 R>>>>", "BT /F1 12 Tf 260 300 Td (OTHERCELL) Tj ET"),
+        });
+
+        string output = Latin1(Redact(input, new RectangleF(250, 290, 140, 40)));
+
+        output.Should().NotContain("CELLSECRET");
+        output.Should().Contain("KEEPTEXT");
+        output.Should().Contain("OTHERCELL", "page 2 is not redacted and draws its own pattern");
+    }
+
     [Fact]
     public void Verifier_FindsTextInAPatternCell()
     {

@@ -185,10 +185,11 @@ public sealed class RedactionPartialImageTests
     }
 
     [Fact]
-    public void ImageInAResourceInheritingForm_IsRemoved()
+    public void ImageInAResourceInheritingForm_IsBlanked()
     {
-        // The form draws the page's /Im0 without resources of its own, so no
-        // new image name can be added to it: the image is removed whole.
+        // The form draws the page's /Im0 without resources of its own; it is
+        // drawn from one page only, so it is given its own copy of those
+        // resources (3.23) and the image is blanked, not removed whole.
         byte[] output = Redact(
             Build(new List<byte[]>
             {
@@ -204,6 +205,32 @@ public sealed class RedactionPartialImageTests
 
         Latin1(output).Should().NotContain("QZX");
         Latin1(output).Should().NotContain("/Im0 Do");
+        Latin1(output).Should().Contain("/CvRedIm0 Do", "the form draws the blanked copy");
+    }
+
+    [Fact]
+    public void FormInheritingDifferentResources_StillRemovesTheImage()
+    {
+        // Drawn from two pages with different resources: the form cannot be
+        // given one copy, so a partly covered image is removed whole.
+        byte[] output = Redact(
+            Build(new List<byte[]>
+            {
+                Obj("<</Type/Catalog/Pages 2 0 R>>"),
+                Obj("<</Type/Pages/Kids[3 0 R 7 0 R]/Count 2>>"),
+                Obj("<</Type/Page/Parent 2 0 R" + Media
+                    + "/Resources<</XObject<</Fm0 5 0 R/Im0 6 0 R>>>>/Contents 4 0 R>>"),
+                Stream(string.Empty, "/Fm0 Do"),
+                Stream("/Type/XObject/Subtype/Form/BBox[0 0 400 400]", "q 100 0 0 100 100 100 cm /Im0 Do Q"),
+                MarkerImage(),
+                Obj("<</Type/Page/Parent 2 0 R" + Media
+                    + "/Resources<</XObject<</Fm0 5 0 R/Im0 9 0 R>>>>/Contents 8 0 R>>"),
+                Stream(string.Empty, "/Fm0 Do"),
+                MarkerImage(),
+            }),
+            LeftHalf);
+
+        Latin1(output).Should().NotContain("CvRedIm");
     }
 
     [Fact]
@@ -483,6 +510,38 @@ public sealed class RedactionPartialImageTests
             LeftHalf);
 
         Latin1(output).Should().NotContain("PRIVATEFORMDATA");
+    }
+
+    [Fact]
+    public void PartlyRedactedPaletteImage_VerifiesClean()
+    {
+        // 10x10 palette image; index 0 is white, so a blanked pixel is not
+        // black after expansion — the verifier reads the indices instead.
+        byte[] indices = new byte[100];
+        for (int i = 0; i < 100; i++)
+        {
+            indices[i] = 1;
+        }
+
+        byte[] input = Build(new List<byte[]>
+        {
+            Obj("<</Type/Catalog/Pages 2 0 R>>"),
+            Obj("<</Type/Pages/Kids[3 0 R]/Count 1>>"),
+            Obj("<</Type/Page/Parent 2 0 R" + Media + "/Resources<</XObject<</Im0 5 0 R>>>>/Contents 4 0 R>>"),
+            Stream(string.Empty, "q 100 0 0 100 100 100 cm /Im0 Do Q"),
+            Stream("/Type/XObject/Subtype/Image/Width 10/Height 10/ColorSpace[/Indexed/DeviceRGB 1 <FFFFFF336699>]"
+                + "/BitsPerComponent 8", indices),
+        });
+        List<RedactionRect> rects = new List<RedactionRect> { new RedactionRect(0, LeftHalf) };
+
+        using (PdfDocument original = Open(input))
+        {
+            RedactionVerifier.Verify(original, rects).Survivors
+                .Should().Contain(s => s.Kind == RedactionSurvivorKind.Image);
+        }
+
+        using PdfDocument redacted = Open(Redact(input, LeftHalf));
+        RedactionVerifier.Verify(redacted, rects).IsClean.Should().BeTrue();
     }
 
     [Fact]
