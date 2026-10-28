@@ -144,8 +144,10 @@ public sealed class TextShaperTests
     [Fact]
     public void Shape_NullTtf_Throws()
     {
+        // A bare null must keep compiling and bind to the byte[] overload, as
+        // it did before Shape(FontFace, ...) existed (D-38).
         Action act = () => TextShaper.Shape(null!, "a", LipiScript.Latin);
-        act.Should().Throw<ArgumentNullException>();
+        act.Should().Throw<ArgumentNullException>().WithParameterName("ttf");
     }
 
     [Fact]

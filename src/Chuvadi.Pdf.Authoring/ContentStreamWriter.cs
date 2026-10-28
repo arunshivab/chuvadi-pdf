@@ -4,6 +4,7 @@
 // PHASE: Phase 1.3 — Authoring module
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
@@ -46,6 +47,54 @@ internal sealed class ContentStreamWriter
 
     internal void SetLineWidth(double w)
         => _sb.AppendLine($"{F(w)} w");
+
+    /// <summary>Sets the dash pattern (an empty array is a solid line).</summary>
+    internal void SetDash(IReadOnlyList<double> pattern, double phase)
+    {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < pattern.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(' ');
+            }
+
+            sb.Append(F(pattern[i]));
+        }
+
+        sb.Append("] ").Append(F(phase)).Append(" d");
+        _sb.AppendLine(sb.ToString());
+    }
+
+    /// <summary>Sets the line cap style (0 butt, 1 round, 2 square).</summary>
+    internal void SetLineCap(int cap) => _sb.AppendLine($"{cap} J");
+
+    /// <summary>Sets the line join style (0 miter, 1 round, 2 bevel).</summary>
+    internal void SetLineJoin(int join) => _sb.AppendLine($"{join} j");
+
+    /// <summary>Sets the miter limit.</summary>
+    internal void SetMiterLimit(double limit) => _sb.AppendLine($"{F(limit)} M");
+
+    /// <summary>Applies a named /ExtGState resource.</summary>
+    internal void SetExtGState(string key) => _sb.AppendLine($"/{key} gs");
+
+    /// <summary>Intersects the clip with the current path and ends the path.</summary>
+    internal void ClipAndEndPath(bool evenOdd) => _sb.AppendLine(evenOdd ? "W* n" : "W n");
+
+    /// <summary>Opens a /Span marked-content sequence carrying /ActualText.</summary>
+    internal void BeginActualText(string text)
+    {
+        StringBuilder hex = new StringBuilder("FEFF", 4 + (text.Length * 4));
+        foreach (char ch in text)
+        {
+            hex.Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+        }
+
+        _sb.AppendLine($"/Span <</ActualText <{hex}>>> BDC");
+    }
+
+    /// <summary>Closes a marked-content sequence.</summary>
+    internal void EndMarkedContent() => _sb.AppendLine("EMC");
 
     // ── Path construction ─────────────────────────────────────────────────
 
@@ -119,6 +168,31 @@ internal sealed class ContentStreamWriter
         _sb.AppendLine("BT");
         _sb.AppendLine($"/{fontKey} {F(size)} Tf");
         _sb.AppendLine($"1 0 0 1 {F(x)} {F(baselineY)} Tm");
+        _sb.AppendLine($"<{hexGlyphs}> Tj");
+        _sb.AppendLine("ET");
+    }
+
+    /// <summary>
+    /// Emits two-byte glyph ids with a full text matrix: horizontal scale
+    /// <paramref name="scaleX"/>, shear <paramref name="skew"/>, and — when
+    /// <paramref name="strokeWidth"/> is positive — fill-then-stroke render
+    /// mode 2 with that line width. The baseline lands <paramref name="size"/>
+    /// below <paramref name="yFromTop"/>, as in <see cref="ShowGlyphsAt"/>.
+    /// </summary>
+    internal void ShowGlyphsStyled(
+        string fontKey, double size, double x, double yFromTop, string hexGlyphs,
+        double scaleX, double skew, double strokeWidth)
+    {
+        double baselineY = FlipY(yFromTop + size);
+        _sb.AppendLine("BT");
+        _sb.AppendLine($"/{fontKey} {F(size)} Tf");
+        if (strokeWidth > 0)
+        {
+            _sb.AppendLine($"{F(strokeWidth)} w");
+            _sb.AppendLine("2 Tr");
+        }
+
+        _sb.AppendLine($"{F(scaleX)} 0 {F(skew)} 1 {F(x)} {F(baselineY)} Tm");
         _sb.AppendLine($"<{hexGlyphs}> Tj");
         _sb.AppendLine("ET");
     }

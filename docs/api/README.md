@@ -43,10 +43,14 @@ python tools/gen_api_docs.py
 | [Colors](Authoring/Colors.md) | class | Common named colors. |
 | [ColumnWidthMode](Authoring/ColumnWidthMode.md) | enum | How a column's width is specified. |
 | [EmbeddedFontObjects](Authoring/EmbeddedFontObjects.md) | class | The result of embedding a TrueType font: the top-level Type0 font object id to reference from a page's `/Font` resource, and every object that must be added to the document. |
+| [FontEmbedder](Authoring/FontEmbedder.md) | class | Builds the PDF objects that embed a loaded `FontFace` as a composite Type0 font with Identity-H encoding (glyph ids are the codes). |
+| [GlyphRunStyle](Authoring/GlyphRunStyle.md) | class | Text-matrix and render-mode options for a shaped glyph run: character scaling, a synthetic italic slant and a synthetic bold stroke. |
 | [HeaderFooterStyle](Authoring/HeaderFooterStyle.md) | class | Header / footer band styling. |
+| [ImageCrop](Authoring/ImageCrop.md) | record struct | The part of an image to show, in source pixels measured from the image's top-left corner. |
 | [ImagePageSizing](Authoring/ImagePageSizing.md) | enum | How `ImagePdfConverter` sizes each PDF page relative to its image. |
 | [ImagePdfConverter](Authoring/ImagePdfConverter.md) | class | Converts images (JPEG, PNG, TIFF, BMP) into PDF documents — one page per image (and, optionally, one page per TIFF frame). |
 | [ImagePdfOptions](Authoring/ImagePdfOptions.md) | class | Options for `ImagePdfConverter`. |
+| [LineStyle](Authoring/LineStyle.md) | class | How a line or outline is stroked: width, dash pattern, caps and joins. |
 | [ListStyle](Authoring/ListStyle.md) | class | List styling for bulleted and numbered lists. |
 | [NumberingFormat](Authoring/NumberingFormat.md) | enum | The numbering scheme of an ordered list or a page number. |
 | [PageBuilder](Authoring/PageBuilder.md) | class | Per-page drawing API. |
@@ -280,7 +284,9 @@ python tools/gen_api_docs.py
 | [CMapParser](Fonts/CMapParser.md) | class | Parses a PDF ToUnicode CMap stream and builds a character code to Unicode string mapping. |
 | [CffLoader](Fonts/CffLoader.md) | class | Loads a Compact Font Format (CFF) / Type 1C font program and produces glyph outlines. |
 | [CodespaceRange](Fonts/CodespaceRange.md) | record struct | A declared codespace range from a CMap's `begincodespacerange ... endcodespacerange` block. |
+| [FontBox](Fonts/FontBox.md) | record struct | A glyph or font bounding box in font design units. |
 | [FontException](Fonts/FontException.md) | class | Thrown when a font dictionary cannot be parsed or a character code cannot be mapped to a Unicode codepoint. |
+| [FontFace](Fonts/FontFace.md) | class | One loaded font face — a TrueType (`glyf`) or CFF-based OpenType font, or one face of a collection (`.ttc`/`.otc`) — with its font-wide metrics and per-glyph measurements, for layout. |
 | [FontRenderer](Fonts/FontRenderer.md) | class | High-level API for extracting glyph outlines from a TrueType, OpenType, or CFF (Type 1C) font. |
 | [FontRenderingException](Fonts/FontRenderingException.md) | class | Thrown when a font file cannot be parsed or a glyph outline cannot be extracted due to an invalid or unsupported font structure. |
 | [GlyphMetrics](Fonts/GlyphMetrics.md) | class | Typographic metrics for a single glyph, in font units (unscaled). |

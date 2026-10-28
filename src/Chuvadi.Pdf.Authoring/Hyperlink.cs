@@ -6,15 +6,20 @@
 namespace Chuvadi.Pdf.Authoring;
 
 /// <summary>
-/// Internal record of a hyperlink rectangle on a page. The authoring
-/// pipeline emits a <c>/Link</c> annotation per record at document save time.
+/// Internal record of a link rectangle on a page. The authoring pipeline
+/// emits a <c>/Link</c> annotation per record at document save time: a URI
+/// action when <see cref="LinkUri"/> is set, otherwise a go-to destination
+/// on page <see cref="TargetPage"/> with <see cref="TargetTop"/> (top-left
+/// coordinates of that page) at the top of the window.
 /// </summary>
 internal sealed record HyperlinkRect(
     double XFromLeft,
     double YFromBottom,
     double Width,
     double Height,
-    string LinkUri);
+    string? LinkUri,
+    int TargetPage = -1,
+    double TargetTop = 0);
 
 /// <summary>
 /// Result of a <see cref="PageBuilder.DrawTextBlock"/> call.

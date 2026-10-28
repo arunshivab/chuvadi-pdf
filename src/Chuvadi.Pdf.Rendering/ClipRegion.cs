@@ -334,14 +334,40 @@ public sealed class ClipRegion
                 if (pts[i].Y > maxY) { maxY = pts[i].Y; }
             }
 
-            // Every vertex must sit on a corner of the bounding box for the
-            // shape to be an axis-aligned rectangle.
+            // Every vertex must sit on a corner of the bounding box, and the
+            // four vertices must be the four different corners: a closed
+            // right triangle (three corners plus its closing point) also has
+            // every vertex on a corner, but is not a rectangle.
+            int corners = 0;
             for (int i = 0; i < 4; i++)
             {
-                bool onX = NearlyEqual(pts[i].X, minX) || NearlyEqual(pts[i].X, maxX);
-                bool onY = NearlyEqual(pts[i].Y, minY) || NearlyEqual(pts[i].Y, maxY);
+                bool atMinX = NearlyEqual(pts[i].X, minX);
+                bool atMinY = NearlyEqual(pts[i].Y, minY);
+                bool onX = atMinX || NearlyEqual(pts[i].X, maxX);
+                bool onY = atMinY || NearlyEqual(pts[i].Y, maxY);
 
                 if (!onX || !onY)
+                {
+                    return false;
+                }
+
+                corners |= 1 << ((atMinX ? 0 : 1) + (atMinY ? 0 : 2));
+            }
+
+            // A box with no width or height encloses nothing either way.
+            bool flat = maxX - minX <= Epsilon || maxY - minY <= Epsilon;
+            if (corners != 0b1111 && !flat)
+            {
+                return false;
+            }
+
+            // The corners must be visited round the box, each side axis-
+            // aligned; in "Z" order the four corners make a bow-tie.
+            for (int i = 0; i < 4 && !flat; i++)
+            {
+                PointF a = pts[i];
+                PointF b = pts[(i + 1) % 4];
+                if (!NearlyEqual(a.X, b.X) && !NearlyEqual(a.Y, b.Y))
                 {
                     return false;
                 }

@@ -10,6 +10,119 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.25.0] - 2026-10-28
+
+Fonts and drawing for Chuvadi.Layout: a reusable font-face measuring API, a
+shaping overload that takes the loaded face, embedding of CFF-based OpenType
+fonts and collection faces, searchable shaped text, and clipping, opacity,
+links, dashes and image crops on `PageBuilder`. Additive only.
+
+### Added
+- **`FontFace`** (Fonts.Rendering): `FontFace.Load(bytes, faceIndex)` parses
+  a TrueType, CFF-based OpenType or collection face once; thread-safe.
+  `UnitsPerEm`; hhea, OS/2 typo and OS/2 win ascender/descender/line gap and
+  the resolved `Ascender`/`Descender`/`LineGap` (USE_TYPO_METRICS);
+  `CapHeight`, `XHeight` (measured from H and x before OS/2 v2); underline
+  and strikeout position and thickness; `ItalicAngle`; names, weight, bold,
+  italic, fixed pitch; `GetAdvanceWidth`, `GetLeftSideBearing`,
+  `GetGlyphBounds` (`FontBox`), `GetGlyphIndex`, `CharacterMap`,
+  `MeasureText`, `Scale`; `GetFaceCount` for collections.
+- **`TextShaper.Shape(FontFace, text, script, features)`**: same output as the
+  byte overload; the face's GSUB/GPOS feature lookups are cached with it.
+  BenchmarkDotNet `ShapingBench` (`--filter *Shaping*`): Latin line 418 →
+  173 µs, Tamil 35 → 7.5 µs, Devanagari 42 → 16 µs, 65–89% less allocation.
+- **CFF and collection embedding.** `PdfDocumentBuilder.AddFont(name, data,
+  faceIndex)`; `AddTrueTypeFont` also accepts .otf and .ttc. CFF outlines
+  embed as `CIDFontType0` with `/FontFile3 /CIDFontType0C`: the CFF is
+  rewritten as CID-keyed (Adobe-Identity-0) holding only the drawn glyphs,
+  each with its original glyph id as CID, unused subroutines emptied, and
+  Flate-compressed (a page of CJK from a 16 MB collection: ~100 KB). Public
+  `FontEmbedder.Build(FontFace, …)` with an overload taking glyph text for
+  ToUnicode. Checked with MuPDF and fontTools on Inter, Latin Modern and two
+  Noto CJK collection faces (CID-keyed, 18 font dictionaries).
+- **Searchable shaped runs.** `PageBuilder.DrawShapedRun(glyphs, text,
+  clusterStarts, x, y, font, size, color)`: one-glyph clusters get ToUnicode
+  entries (a ligature maps to its text); several-glyph clusters, and glyphs
+  already standing for other text, are wrapped in `/Span <</ActualText>>`.
+  `DrawText` with the LiPi font now does the same for shaped Indic runs
+  (they extracted as glyph ids before).
+- **`GlyphRunStyle`** for shaped runs: `HorizontalScale` (advances scale
+  too), `Skew` (synthetic italic), `StrokeWidth` (synthetic bold, render
+  mode 2).
+- **Clipping and opacity scopes**: `PushClip(x, y, w, h)`, `PushClip(Path,
+  FillRule)`, `PopClip()`, `PushOpacity(opacity)`, `PushOpacity(fill,
+  stroke)`, `PopOpacity()` (nested opacities and an image's own opacity
+  multiply). Pops must match; scopes left open are closed at save, before
+  the header and footer.
+- **Links over a rectangle**: `AddLink(x, y, w, h, Uri)` and `AddLink(x, y,
+  w, h, targetPageIndex, targetTop)` (a `/GoTo` to `/XYZ`; the target is
+  checked at save).
+- **`LineStyle`** (width, dash pattern and phase, cap, join, miter limit) with
+  new `DrawLine`, `DrawRectangle` and `DrawPath` overloads.
+- **Image crops**: `DrawImage(bytes | frame, x, y, w, h, ImageCrop)` in source
+  pixels, by clipping (lossless; the hidden pixels stay in the file).
+- **Text extraction honours `/ActualText`** (inline or named property lists;
+  an outer span wins; an empty one removes its text).
+- `FontRenderer.GetGlyphIndexForCid`.
+- Synthetic font fixtures (tests/Fixtures/Fonts, made by
+  tools/make_font_fixtures.py): CFF, CID-keyed CFF with two font
+  dictionaries, TrueType, and a collection of both.
+- A test that every packable project's package id starts with `Chuvadi.` and
+  sets no version of its own.
+
+### Fixed
+- **CFF charstrings: the shortint operand (byte 28) was read as an
+  operator**, so glyphs using it failed or drew wrongly (16% of Inter, 25% of
+  a Noto CJK face).
+- **CID-keyed CFF fonts used the top dictionary's subroutines and widths**
+  instead of each glyph's font dictionary (FDArray/FDSelect).
+- **CFF glyph bounds always had xMin ≤ 0** (unused control points counted).
+- **Raster: a composite font's CIDs were used as glyph ids**, ignoring a
+  CIDFontType2's `/CIDToGIDMap` stream and a CID-keyed CFF's charset.
+- **Raster: line widths and dash lengths ignored the CTM scale.** A page
+  drawn under a scaling `cm` (Ghostscript writes `0.1 0 0 0.1 0 0 cm`; CAD
+  exports do similar) drew every line many times too thick — an engineering
+  floor plan was black with lines. Both now scale with the CTM (sqrt of its
+  determinant). On 157 sample PDFs every page whose rendering changed moved
+  closer to MuPDF's.
+- **Raster: dash patterns were ignored** — dashed lines drew solid. Zero-length
+  dashes with round or square caps draw dots (Office's dotted borders).
+- **Raster: round line caps were drawn as butt caps, and a square cap
+  shortened the start of the line** instead of extending it. Both now match
+  MuPDF pixel for pixel on test lines.
+- **SVG: dash lengths ignored the CTM scale**, and a rotated CTM (a = d = 0)
+  gave stroke width 0. Width and dashes now scale by sqrt of the CTM's
+  determinant (a non-uniform scale gives the geometric mean of the two
+  scales instead of the larger one). `PathOp.Stroke` dash lengths are now in
+  page space like its width; `LineSegment.Dash` stays in user space as
+  documented, and `LineSegment.Width` changes only under a non-uniform CTM.
+- **Raster: a closed right triangle, or four box corners in "Z" order (a
+  bow-tie), used as a clip clipped to the bounding box** (taken for a
+  rectangle).
+- **Text extraction read inline-image data as content**: bytes such as
+  `<<` or `Tj` inside `BI … ID … EI` could swallow or invent text. The data
+  is now skipped. An array or dictionary missing its `]` / `>>` ends at the
+  next operator instead of swallowing the rest of the stream.
+- **Raster: constant opacity (`/ca`, `/CA`) and soft masks composited in
+  linear light**, so 50% red over white was (255, 188, 188); now sRGB
+  (255, 128, 128) like other viewers. Anti-aliased edges of opaque fills are
+  still blended in linear light.
+- Chained-context GSUB (format 3) checks the current glyph's coverage before
+  the backtrack (no change in output; Latin shaping 2× faster).
+
+### Changed
+- No source break: the byte-array `TextShaper.Shape` overload carries
+  `[OverloadResolutionPriority(1)]`, so a call with a bare `null` font still
+  binds to it (C# 13 or later; .NET 10 projects use C# 14), checked by a
+  compile test.
+- `TrueTypeFontEmbedder` delegates to the shared embedder (same output).
+
+### Known gaps
+- Indic shaping matches HarfBuzz for about a third of syllables (Tamil 17%,
+  Devanagari 35% on a 19,641-syllable comparison): the Indic features are not
+  applied and reph/pre-base handling is incomplete. Planned for 3.26.
+
+---
 ## [3.24.0] - 2026-10-28
 
 Embedding API for untrusted documents (the Anjal Mail asks A1–A5): a

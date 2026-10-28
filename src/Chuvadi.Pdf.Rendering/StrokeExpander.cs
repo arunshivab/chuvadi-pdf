@@ -16,8 +16,10 @@ namespace Chuvadi.Pdf.Rendering;
 /// by half the stroke width on each side.
 /// </summary>
 /// <remarks>
-/// Phase 2 implements butt caps and bevel/miter joins.
-/// Round caps and round joins are approximated with bevels.
+/// Butt, round and square caps; miter and bevel joins (round joins are
+/// approximated with bevels).
+/// A dash pattern splits each sub-path into its dashes, each stroked as an
+/// open sub-path with caps (3.25).
 /// The output is a list of sub-paths suitable for
 /// <see cref="ScanlineRasterizer"/> with the non-zero winding fill rule.
 ///
@@ -54,6 +56,8 @@ public sealed class StrokeExpander
             return result;
         }
 
+        bool dashed = IsDashed(style.DashPattern);
+        int dashBudget = MaxDashes;
         foreach (List<PointF> subPath in subPaths)
         {
             if (subPath.Count < 2)
@@ -61,11 +65,148 @@ public sealed class StrokeExpander
                 continue;
             }
 
-            List<List<PointF>> expanded = ExpandSubPath(subPath, halfWidth, style);
-            result.AddRange(expanded);
+            if (!dashed || dashBudget <= 0)
+            {
+                result.AddRange(ExpandSubPath(subPath, halfWidth, style));
+                continue;
+            }
+
+            List<List<PointF>> dashes = SplitIntoDashes(subPath, style.DashPattern, style.DashOffset, dashBudget);
+            dashBudget -= dashes.Count;
+            foreach (List<PointF> dash in dashes)
+            {
+                result.AddRange(ExpandSubPath(dash, halfWidth, style));
+            }
         }
 
         return result;
+    }
+
+    // ── Dashes (PDF 32000-1:2008 §8.4.3.6) ───────────────────────────────
+
+    // Upper bound on dashes produced for one stroke (all its sub-paths), so a
+    // tiny dash on long paths cannot explode the output; past it the rest is
+    // drawn solid.
+    private const int MaxDashes = 100_000;
+
+    // Length given to a zero-length dash so it keeps its direction: with
+    // round or square caps it draws a dot (§8.4.3.6), with butt caps nothing.
+    private const double DotLength = 1e-6;
+
+    private static bool IsDashed(double[] pattern)
+    {
+        if (pattern.Length == 0)
+        {
+            return false;
+        }
+
+        double total = 0;
+        foreach (double d in pattern)
+        {
+            if (!double.IsFinite(d) || d < 0)
+            {
+                return false;
+            }
+
+            total += d;
+        }
+
+        return total > 0;
+    }
+
+    /// <summary>
+    /// Splits a flattened sub-path into its "on" pieces. The pattern
+    /// alternates dash and gap lengths and repeats (an odd-length pattern
+    /// alternates across repetitions); the phase is how far into the pattern
+    /// the sub-path starts. Every sub-path starts the pattern afresh.
+    /// </summary>
+    internal static List<List<PointF>> SplitIntoDashes(List<PointF> points, double[] pattern, double phase, int maxDashes = MaxDashes)
+    {
+        List<List<PointF>> dashes = new List<List<PointF>>();
+        double cycle = 0;
+        foreach (double d in pattern)
+        {
+            cycle += d;
+        }
+
+        // Advance into the pattern by the phase (an odd-length pattern only
+        // repeats exactly after two passes).
+        int index = 0;
+        double fullCycle = pattern.Length % 2 == 0 ? cycle : 2 * cycle;
+        double offset = fullCycle > 0 ? phase % fullCycle : 0;
+        if (offset < 0)
+        {
+            offset += fullCycle;
+        }
+
+        while (offset > 0 && pattern[index % pattern.Length] <= offset)
+        {
+            offset -= pattern[index % pattern.Length];
+            index++;
+        }
+
+        double remaining = pattern[index % pattern.Length] - offset;
+        bool on = index % 2 == 0;
+        List<PointF>? current = on ? new List<PointF> { points[0] } : null;
+
+        for (int i = 0; i < points.Count - 1; i++)
+        {
+            PointF a = points[i];
+            PointF b = points[i + 1];
+            double dx = b.X - a.X;
+            double dy = b.Y - a.Y;
+            double length = Math.Sqrt((dx * dx) + (dy * dy));
+            double travelled = 0;
+
+            while (length - travelled > remaining)
+            {
+                travelled += remaining;
+                double t = travelled / length;
+                PointF cut = new PointF(a.X + (dx * t), a.Y + (dy * t));
+                if (on)
+                {
+                    if (current!.Count == 1 && current[0].X == cut.X && current[0].Y == cut.Y)
+                    {
+                        // A zero-length dash: keep its direction for the caps.
+                        cut = new PointF(cut.X + (dx / length * DotLength), cut.Y + (dy / length * DotLength));
+                    }
+
+                    current.Add(cut);
+                    if (current.Count >= 2)
+                    {
+                        dashes.Add(current);
+                    }
+
+                    current = null;
+                }
+                else
+                {
+                    current = new List<PointF> { cut };
+                }
+
+                on = !on;
+                index++;
+                remaining = pattern[index % pattern.Length];
+                if (dashes.Count >= maxDashes)
+                {
+                    // Draw the rest of the sub-path solid.
+                    List<PointF> rest = new List<PointF> { cut };
+                    rest.AddRange(points.GetRange(i + 1, points.Count - i - 1));
+                    dashes.Add(rest);
+                    return dashes;
+                }
+            }
+
+            remaining -= length - travelled;
+            current?.Add(b);
+        }
+
+        if (current is not null && current.Count >= 2)
+        {
+            dashes.Add(current);
+        }
+
+        return dashes;
     }
 
     // ── Sub-path expansion ────────────────────────────────────────────────
@@ -233,10 +374,11 @@ public sealed class StrokeExpander
             double ex = dx / len * halfWidth;
             double ey = dy / len * halfWidth;
 
+            // (endPt - prevPt) already points out of the line at either end.
             if (start)
             {
-                left[0] = new PointF(left[0].X - ex, left[0].Y - ey);
-                right[0] = new PointF(right[0].X - ex, right[0].Y - ey);
+                left[0] = new PointF(left[0].X + ex, left[0].Y + ey);
+                right[0] = new PointF(right[0].X + ex, right[0].Y + ey);
             }
             else
             {
@@ -245,6 +387,47 @@ public sealed class StrokeExpander
                 right[last] = new PointF(right[last].X + ex, right[last].Y + ey);
             }
         }
-        // Butt and Round caps: butt needs no adjustment; round approximated as bevel in Phase 2
+        else if (cap == LineCap.Round)
+        {
+            double dx = endPt.X - prevPt.X;
+            double dy = endPt.Y - prevPt.Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+
+            if (len < 1e-12)
+            {
+                return;
+            }
+
+            // u points out of the line at this end and n is u's left normal.
+            // At either end the arc runs from the offset side at +n, round
+            // the outside (+u), to -n — the two offset corners of that end.
+            double ux = dx / len;
+            double uy = dy / len;
+            double nx = -uy;
+            double ny = ux;
+            int steps = Math.Clamp((int)Math.Ceiling(halfWidth * 1.5), 4, 64);
+            List<PointF> arc = new List<PointF>(steps - 1);
+            for (int k = 1; k < steps; k++)
+            {
+                double t = Math.PI * k / steps;
+                double c = Math.Cos(t);
+                double sn = Math.Sin(t);
+                arc.Add(new PointF(endPt.X + (halfWidth * ((nx * c) + (ux * sn))), endPt.Y + (halfWidth * ((ny * c) + (uy * sn)))));
+            }
+
+            // The outline is the left side forward then the right side back:
+            // the end cap goes after the last left point, the start cap
+            // before the first one (from the right side round to the left).
+            if (start)
+            {
+                left.InsertRange(0, arc);
+            }
+            else
+            {
+                left.AddRange(arc);
+            }
+        }
+
+        // Butt caps need no adjustment.
     }
 }

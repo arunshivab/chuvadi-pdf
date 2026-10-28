@@ -44,6 +44,12 @@ public sealed class CffLoader
     private readonly int _nominalWidthX;
     private readonly int _unitsPerEm;
 
+    // CID-keyed fonts (§19 of Adobe TN 5176): each glyph's Font DICT, chosen
+    // by FDSelect, carries its own Private DICT (local subroutines, width
+    // defaults) and optionally a FontMatrix. Empty for name-keyed fonts.
+    private readonly List<FontDictData> _fontDicts = new List<FontDictData>();
+    private byte[]? _fdSelect;
+
     /// <summary>Parses a CFF font program.</summary>
     public CffLoader(byte[] fontData)
     {
@@ -124,10 +130,121 @@ public sealed class CffLoader
             }
         }
 
+        if (_isCidFont)
+        {
+            LoadFontDicts(topDict);
+        }
+
         // Build the charset maps. For CID-keyed fonts this yields CID -> GID
         // (CidToGid); for simple fonts it yields glyph-name -> GID
         // (GlyphNameToGid). The charstrings are addressed directly by GID.
         BuildCharsetMap(charsetOffset, stringIndex);
+    }
+
+    // Reads the FDArray (12 36) and FDSelect (12 37) of a CID-keyed font.
+    private void LoadFontDicts(Dictionary<int, double[]> topDict)
+    {
+        if (!topDict.TryGetValue(0x0C24, out double[]? fdArrayOff) || fdArrayOff.Length == 0)
+        {
+            return;
+        }
+
+        bool topMatrixIsDefault = !topDict.TryGetValue(0x0C07, out double[]? topMatrix)
+            || topMatrix.Length < 4 || Math.Abs(topMatrix[0] - 0.001) < 1e-9;
+        foreach (byte[] fdBytes in ReadIndex((int)fdArrayOff[0], out _))
+        {
+            Dictionary<int, double[]> fd = ParseDict(fdBytes);
+            List<byte[]> subrs = new List<byte[]>();
+            int defaultWidth = 0, nominalWidth = 0;
+            if (fd.TryGetValue(18, out double[]? priv) && priv.Length >= 2)
+            {
+                int size = (int)priv[0], offset = (int)priv[1];
+                if (size > 0 && offset > 0 && offset + size <= _data.Length)
+                {
+                    byte[] privBytes = new byte[size];
+                    Array.Copy(_data, offset, privBytes, 0, size);
+                    Dictionary<int, double[]> privDict = ParseDict(privBytes);
+                    defaultWidth = (int)privDict.GetValueOrDefault(20, new double[] { 0 })[0];
+                    nominalWidth = (int)privDict.GetValueOrDefault(21, new double[] { 0 })[0];
+                    if (privDict.TryGetValue(19, out double[]? subrsOff) && subrsOff.Length > 0)
+                    {
+                        subrs = ReadIndex(offset + (int)subrsOff[0], out _);
+                    }
+                }
+            }
+
+            // An FD FontMatrix replaces the default Top DICT matrix (the
+            // common convention, as FreeType reads it).
+            int unitsPerEm = _unitsPerEm;
+            if (topMatrixIsDefault && fd.TryGetValue(0x0C07, out double[]? fdMatrix) && fdMatrix.Length >= 4 && fdMatrix[0] != 0)
+            {
+                unitsPerEm = (int)Math.Round(1.0 / fdMatrix[0]);
+            }
+
+            _fontDicts.Add(new FontDictData(subrs, defaultWidth, nominalWidth, unitsPerEm));
+        }
+
+        if (topDict.TryGetValue(0x0C25, out double[]? fdSelectOff) && fdSelectOff.Length > 0)
+        {
+            _fdSelect = ReadFdSelect((int)fdSelectOff[0], _charStrings.Count);
+        }
+    }
+
+    // FDSelect formats 0 (one byte per glyph) and 3 (ranges).
+    private byte[]? ReadFdSelect(int offset, int numGlyphs)
+    {
+        if (offset <= 0 || offset >= _data.Length)
+        {
+            return null;
+        }
+
+        byte[] map = new byte[numGlyphs];
+        int format = _data[offset];
+        if (format == 0)
+        {
+            int n = Math.Min(numGlyphs, _data.Length - offset - 1);
+            Array.Copy(_data, offset + 1, map, 0, Math.Max(0, n));
+            return map;
+        }
+
+        if (format == 3 && offset + 3 <= _data.Length)
+        {
+            int ranges = (_data[offset + 1] << 8) | _data[offset + 2];
+            int p = offset + 3;
+            for (int r = 0; r < ranges && p + 5 <= _data.Length; r++, p += 3)
+            {
+                int first = (_data[p] << 8) | _data[p + 1];
+                byte fd = _data[p + 2];
+                int next = (_data[p + 3] << 8) | _data[p + 4];
+                for (int g = Math.Max(0, first); g < Math.Min(next, numGlyphs); g++)
+                {
+                    map[g] = fd;
+                }
+            }
+
+            return map;
+        }
+
+        return null;
+    }
+
+    private sealed class FontDictData
+    {
+        internal FontDictData(List<byte[]> subrs, int defaultWidthX, int nominalWidthX, int unitsPerEm)
+        {
+            Subrs = subrs;
+            DefaultWidthX = defaultWidthX;
+            NominalWidthX = nominalWidthX;
+            UnitsPerEm = unitsPerEm;
+        }
+
+        internal List<byte[]> Subrs { get; }
+
+        internal int DefaultWidthX { get; }
+
+        internal int NominalWidthX { get; }
+
+        internal int UnitsPerEm { get; }
     }
 
     /// <summary>Font units per em (typically 1000 for CFF).</summary>
@@ -166,11 +283,23 @@ public sealed class CffLoader
         {
             return new GlyphOutline(new Path(), new GlyphMetrics(0, 0, _unitsPerEm, new RectangleF(0, 0, 0, 0)));
         }
-        Type2Interpreter interp = new(_globalSubrs, _localSubrs, _defaultWidthX, _nominalWidthX);
+        List<byte[]> subrs = _localSubrs;
+        int defaultWidth = _defaultWidthX, nominalWidth = _nominalWidthX, unitsPerEm = _unitsPerEm;
+        if (_fontDicts.Count > 0)
+        {
+            int fd = _fdSelect is not null && glyphId < _fdSelect.Length ? _fdSelect[glyphId] : 0;
+            FontDictData dict = _fontDicts[fd < _fontDicts.Count ? fd : 0];
+            subrs = dict.Subrs;
+            defaultWidth = dict.DefaultWidthX;
+            nominalWidth = dict.NominalWidthX;
+            unitsPerEm = dict.UnitsPerEm;
+        }
+
+        Type2Interpreter interp = new(_globalSubrs, subrs, defaultWidth, nominalWidth);
         Path outline = interp.Run(_charStrings[glyphId]);
         int adv = interp.AdvanceWidth;
         return new GlyphOutline(outline,
-            new GlyphMetrics(adv, 0, _unitsPerEm, BoundsOf(outline)));
+            new GlyphMetrics(adv, 0, unitsPerEm, BoundsOf(outline)));
     }
 
     /// <summary>Returns metrics-only data for the glyph with the given GID.</summary>
@@ -439,10 +568,29 @@ public sealed class CffLoader
         double maxX = double.MinValue, maxY = double.MinValue;
         foreach (PathSegment seg in p.Segments)
         {
-            UpdateBounds(seg.P0, ref minX, ref minY, ref maxX, ref maxY);
-            UpdateBounds(seg.P1, ref minX, ref minY, ref maxX, ref maxY);
-            UpdateBounds(seg.P2, ref minX, ref minY, ref maxX, ref maxY);
+            // Only the points a segment uses: move and line segments leave
+            // P1/P2 at (0,0), which would pull every box to the origin.
+            switch (seg.Kind)
+            {
+                case PathSegmentKind.MoveTo:
+                case PathSegmentKind.LineTo:
+                    UpdateBounds(seg.P0, ref minX, ref minY, ref maxX, ref maxY);
+                    break;
+                case PathSegmentKind.CubicBezierTo:
+                    UpdateBounds(seg.P0, ref minX, ref minY, ref maxX, ref maxY);
+                    UpdateBounds(seg.P1, ref minX, ref minY, ref maxX, ref maxY);
+                    UpdateBounds(seg.P2, ref minX, ref minY, ref maxX, ref maxY);
+                    break;
+                default:
+                    break;
+            }
         }
+
+        if (minX > maxX)
+        {
+            return new RectangleF(0, 0, 0, 0);
+        }
+
         return new RectangleF((float)minX, (float)minY, (float)(maxX - minX), (float)(maxY - minY));
     }
 

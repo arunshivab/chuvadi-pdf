@@ -153,6 +153,20 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.25.0 (fonts and drawing for Chuvadi.Layout):
+- **`FontFace`** metrics API, **`TextShaper.Shape(FontFace, …)`** with lookup
+  caching and a BenchmarkDotNet `ShapingBench`, **CFF (.otf) and collection
+  (.ttc) embedding** with CID-keyed CFF subsetting, **searchable shaped runs**
+  (ToUnicode / `/ActualText`, honoured by `TextExtractor`), `GlyphRunStyle`,
+  clip and opacity scopes, rectangle links (URI and GoTo), `LineStyle`
+  dashes, image crops.
+- Fixed on the way: CFF shortint operand, CID-keyed CFF font dictionaries,
+  CFF glyph bounds, raster CID→GID (`/CIDToGIDMap`, CFF charset), raster
+  dashes and dots, round and square caps, raster line width/dash under a
+  scaling CTM, triangle and bow-tie clips taken for rectangles, constant
+  opacity composited in linear light, SVG dash scale and rotated stroke
+  width, inline-image data read as text-extraction content.
+
 Shipped in v3.24.0 (embedding API, Anjal Mail asks A1–A5):
 - **Password-required signal**, **viewing guarantees + `PdfSanitizer`**,
   **cancellation**, **resource limits**, **no-disk guarantee** and an
@@ -187,8 +201,35 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.24.0. Items are independent and may be
+Status verified against code at v3.25.0. Items are independent and may be
 re-ordered.
+
+### Text shaping
+**21. Indic shaping conformance (planned for 3.26).** `TextShaper` matches
+HarfBuzz on Latin but on about a third of Indic syllables (19,641 generated
+syllables over the nine LiPi Indic fonts: Tamil 17%, Kannada 11%, Devanagari
+35%). Gaps: `ShapingFeatures.IsEnabled` returns false for every Indic
+feature (akhn, rphf, half, blwf, pres, abvs, psts, haln, abvm, blwm, ...);
+turning them on globally reaches 63% but breaks word-final halants (half
+forms need per-glyph masks). Needed: syllable grammar and base-consonant
+search, per-glyph feature masks, final reordering of reph and pre-base
+matras, Unicode split-vowel decomposition (instead of the LiPi glyph-id
+table), GSUB/GPOS lookup flags (ignore marks, mark filtering sets), and the
+version-2 script tags (`tml2`, `dev2`, ...). `ShapedGlyph.Cluster` for Indic
+is a code point, not a text index; fix with the shaper. Gate: the HarfBuzz
+comparison harness.
+
+### Rendering follow-ups (3.25 findings)
+**22. Round joins** are drawn as bevel joins in the raster stroker (round
+and square caps and dotted lines are done, 3.25).
+**23. Line width under a non-uniform CTM** uses sqrt(|det|) (one width for
+the whole stroke); a true elliptical pen needs stroking in user space.
+
+### Reading
+**24. Damaged cross-reference recovery.** A file whose `startxref` is
+missing or wrong fails to open (`PdfParseException`); MuPDF rebuilds the
+table by scanning for `obj` keywords. A scan-and-rebuild fallback would
+open many truncated or hand-edited files.
 
 ### Image codecs (rendering)
 **1. JPXDecode (JPEG 2000).** Recognised but not decoded; JPX image bytes fall

@@ -164,6 +164,7 @@ public static class DisplayListBuilder
         private readonly bool _lightHinting;
         private readonly bool _autohintFallback;
         private readonly Dictionary<string, FontRenderer?> _fontCache;
+        private readonly Dictionary<string, int[]?> _cidToGidCache;
         private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?> _pdfFontCache;
         private readonly Dictionary<string, RenderableFont?> _std14FontCache;
         private readonly Dictionary<string, bool> _symbolicCache;
@@ -214,6 +215,7 @@ public static class DisplayListBuilder
             _lightHinting = lightHinting;
             _autohintFallback = autohintFallback;
             _fontCache = new Dictionary<string, FontRenderer?>();
+            _cidToGidCache = new Dictionary<string, int[]?>(StringComparer.Ordinal);
             _pdfFontCache = new Dictionary<string, Chuvadi.Pdf.Fonts.PdfFont?>();
             _std14FontCache = new Dictionary<string, RenderableFont?>();
             _symbolicCache = new Dictionary<string, bool>();
@@ -1405,16 +1407,41 @@ public static class DisplayListBuilder
             _clipPending = false;
         }
 
+        // The stroke style in page space. The path is transformed by the CTM
+        // before it is emitted, so the line width and dash lengths (user-space
+        // values) are scaled by the CTM's linear scale too — sqrt(|det|), exact
+        // for uniform scales and rotations, the area-preserving average for a
+        // non-uniform scale. Without it a "0.1 0 0 0.1 0 0 cm 40 w" line (as
+        // Ghostscript writes) drew 40 pt wide instead of 4.
         private StrokeStyle BuildStrokeStyle()
         {
+            Transform ctm = _state.Ctm;
+            double scale = Math.Sqrt(Math.Abs((ctm.A * ctm.D) - (ctm.B * ctm.C)));
+            if (!double.IsFinite(scale))
+            {
+                scale = 1.0;
+            }
+
+            double[] dashes = _state.DashPattern;
+            if (dashes.Length > 0 && scale != 1.0)
+            {
+                double[] scaled = new double[dashes.Length];
+                for (int i = 0; i < dashes.Length; i++)
+                {
+                    scaled[i] = dashes[i] * scale;
+                }
+
+                dashes = scaled;
+            }
+
             return new StrokeStyle
             {
-                Width = _state.LineWidth,
+                Width = _state.LineWidth * scale,
                 Cap = _state.LineCap,
                 Join = _state.LineJoin,
                 MiterLimit = _state.MiterLimit,
-                DashPattern = _state.DashPattern,
-                DashOffset = _state.DashOffset,
+                DashPattern = dashes,
+                DashOffset = _state.DashOffset * scale,
                 Color = EffectiveStroke,
             };
         }
@@ -2131,8 +2158,9 @@ public static class DisplayListBuilder
         }
 
         // Renders a composite (Type0) text string. Codes are two bytes
-        // (Identity-H); with an Identity CIDToGIDMap the code is the GID,
-        // so the outline is resolved directly by glyph index.
+        // (Identity-H) and are CIDs. A CID selects its glyph through the
+        // descendant's /CIDToGIDMap stream (CIDFontType2) or the CFF charset
+        // of a CID-keyed program (CIDFontType0); otherwise the CID is the GID.
         private void ShowTextComposite(byte[] raw)
         {
             if (raw.Length < 2 || _state.FontSize <= 0)
@@ -2142,11 +2170,15 @@ public static class DisplayListBuilder
 
             bool emit = _state.TextRenderingMode != 3;
             FontRenderer? renderer = GetFontRenderer();
+            int[]? cidToGid = renderer is null ? null : GetCidToGidMap();
 
             for (int i = 0; i + 1 < raw.Length; i += 2)
             {
                 PdfWorkScope.CountOperators();
-                int code = (raw[i] << 8) | raw[i + 1];
+                int cid = (raw[i] << 8) | raw[i + 1];
+                int code = cidToGid is not null
+                    ? (cid < cidToGid.Length ? cidToGid[cid] : 0)
+                    : renderer?.GetGlyphIndexForCid(cid) ?? cid;
                 double advance;
 
                 if (renderer is null)
@@ -2243,6 +2275,40 @@ public static class DisplayListBuilder
             Transform toUserSpace = Transform.CreateScale(1.0 / _hintingScale);
             Path userSpace = TransformPath(hinted.Outline, toUserSpace);
             return new GlyphOutline(userSpace, hinted.Metrics);
+        }
+
+        // The current composite font's /CIDToGIDMap stream as CID → GID, or
+        // null when it has none (or it is /Identity).
+        private int[]? GetCidToGidMap()
+        {
+            if (string.IsNullOrEmpty(_state.FontName))
+            {
+                return null;
+            }
+
+            if (_cidToGidCache.TryGetValue(_state.FontName, out int[]? cached))
+            {
+                return cached;
+            }
+
+            int[]? map = null;
+            PdfDictionary? font = ResolveFontDict();
+            if (font is not null
+                && font.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? dfRef)
+                && _objects.ResolveAs<PdfArray>(dfRef ?? PdfNull.Value) is PdfArray descendants
+                && descendants.Count > 0
+                && _objects.ResolveAs<PdfDictionary>(descendants[0]) is PdfDictionary cidFont
+                && ExtractStreamBytes(cidFont, "CIDToGIDMap") is byte[] bytes)
+            {
+                map = new int[bytes.Length / 2];
+                for (int k = 0; k < map.Length; k++)
+                {
+                    map[k] = (bytes[2 * k] << 8) | bytes[(2 * k) + 1];
+                }
+            }
+
+            _cidToGidCache[_state.FontName] = map;
+            return map;
         }
 
         private FontRenderer? GetFontRenderer()

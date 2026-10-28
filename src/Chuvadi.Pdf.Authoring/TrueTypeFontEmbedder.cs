@@ -9,7 +9,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using Chuvadi.Pdf.Fonts.Rendering;
-using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -17,9 +16,10 @@ namespace Chuvadi.Pdf.Authoring;
 /// <summary>
 /// Builds the PDF object graph that embeds a TrueType (<c>glyf</c>) font as a
 /// composite Type0 font with Identity-H encoding, so authored content can draw
-/// text in a custom font. The whole font program is embedded (no subsetting in
-/// this version); the <c>/W</c> width array and <c>/ToUnicode</c> CMap cover
-/// only the glyphs actually used.
+/// text in a custom font. The font program is subset to the glyphs used (glyph
+/// numbering kept); the <c>/W</c> width array and <c>/ToUnicode</c> CMap cover
+/// only those glyphs. For CFF-based OpenType fonts and faces of collections,
+/// use <see cref="FontEmbedder"/>.
 /// </summary>
 /// <remarks>
 /// The font is referenced from a page's <c>/Font</c> resource by the returned
@@ -57,126 +57,20 @@ public static class TrueTypeFontEmbedder
         ArgumentNullException.ThrowIfNull(baseFont);
         ArgumentNullException.ThrowIfNull(allocateId);
 
-        double scale = 1000.0 / loader.UnitsPerEm;
-
-        // Gather used glyphs: gid -> scaled width, and gid -> code point (for ToUnicode).
-        SortedDictionary<int, int> widthByGid = new SortedDictionary<int, int>();
-        SortedDictionary<int, int> codepointByGid = new SortedDictionary<int, int>();
-        foreach (int codepoint in usedCodepoints)
-        {
-            int gid = loader.GetGlyphIndex(codepoint);
-            if (gid <= 0)
-            {
-                continue;
-            }
-
-            if (!widthByGid.ContainsKey(gid))
-            {
-                int advance = loader.GetGlyphOutline(gid).Metrics.AdvanceWidth;
-                widthByGid[gid] = (int)Math.Round(advance * scale);
-                codepointByGid[gid] = codepoint;
-            }
-        }
-
-        // Pre-shaped glyphs supplied as raw ids (e.g. ligatures not reachable via
-        // cmap). They get a width and join the subset, but no ToUnicode entry.
-        if (extraGlyphs is not null)
-        {
-            foreach (int gid in extraGlyphs)
-            {
-                if (gid <= 0 || widthByGid.ContainsKey(gid))
-                {
-                    continue;
-                }
-
-                int advance = loader.GetGlyphOutline(gid).Metrics.AdvanceWidth;
-                widthByGid[gid] = (int)Math.Round(advance * scale);
-            }
-        }
-
-        SfntMetrics metrics = SfntMetrics.Read(ttf, scale);
-
-        // Subset the font program to the used glyphs (numbering preserved, so the
-        // Identity CID-to-GID map and per-CID widths below stay valid). Read
-        // descriptor metrics from the original above, since the subset drops
-        // OS/2 and other non-rendering tables.
-        HashSet<int> usedGlyphs = new HashSet<int> { 0 };
-        foreach (int gid in widthByGid.Keys)
-        {
-            usedGlyphs.Add(gid);
-        }
-
-        byte[] fontProgram = TrueTypeSubsetter.Subset(ttf, usedGlyphs);
-
-        List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
-
-        // FontFile2 — the (subsetted) TrueType program, uncompressed.
-        PdfObjectId fontFileId = allocateId();
-        PdfDictionary fontFileDict = new PdfDictionary();
-        fontFileDict.Set(PdfName.Intern("Length1"), fontProgram.Length);
-        objects.Add(new PdfIndirectObject(fontFileId, new PdfStream(fontFileDict, fontProgram)));
-
-        // FontDescriptor.
-        PdfObjectId descriptorId = allocateId();
-        PdfDictionary descriptor = new PdfDictionary();
-        descriptor.Set(PdfName.Type, PdfName.Intern("FontDescriptor"));
-        descriptor.Set(PdfName.Intern("FontName"), PdfName.Intern(baseFont));
-        descriptor.Set(PdfName.Intern("Flags"), metrics.Flags);
-        descriptor.Set(PdfName.Intern("FontBBox"), new PdfArray(new PdfPrimitive[]
-        {
-            new PdfInteger(metrics.BBoxXMin),
-            new PdfInteger(metrics.BBoxYMin),
-            new PdfInteger(metrics.BBoxXMax),
-            new PdfInteger(metrics.BBoxYMax),
-        }));
-        descriptor.Set(PdfName.Intern("ItalicAngle"), new PdfReal(metrics.ItalicAngle));
-        descriptor.Set(PdfName.Intern("Ascent"), metrics.Ascent);
-        descriptor.Set(PdfName.Intern("Descent"), metrics.Descent);
-        descriptor.Set(PdfName.Intern("CapHeight"), metrics.CapHeight);
-        descriptor.Set(PdfName.Intern("StemV"), 80);
-        descriptor.Set(PdfName.Intern("FontFile2"), new PdfReference(fontFileId));
-        objects.Add(new PdfIndirectObject(descriptorId, descriptor));
-
-        // Descendant CIDFontType2.
-        PdfObjectId cidFontId = allocateId();
-        PdfDictionary cidFont = new PdfDictionary();
-        cidFont.Set(PdfName.Type, PdfName.Intern("Font"));
-        cidFont.Set(PdfName.Intern("Subtype"), PdfName.Intern("CIDFontType2"));
-        cidFont.Set(PdfName.Intern("BaseFont"), PdfName.Intern(baseFont));
-        PdfDictionary cidSystemInfo = new PdfDictionary();
-        cidSystemInfo.Set(PdfName.Intern("Registry"), new PdfString("Adobe"));
-        cidSystemInfo.Set(PdfName.Intern("Ordering"), new PdfString("Identity"));
-        cidSystemInfo.Set(PdfName.Intern("Supplement"), 0);
-        cidFont.Set(PdfName.Intern("CIDSystemInfo"), cidSystemInfo);
-        cidFont.Set(PdfName.Intern("FontDescriptor"), new PdfReference(descriptorId));
-        cidFont.Set(PdfName.Intern("CIDToGIDMap"), PdfName.Intern("Identity"));
-        cidFont.Set(PdfName.Intern("DW"), 1000);
-        cidFont.Set(PdfName.Intern("W"), BuildWidthArray(widthByGid));
-        objects.Add(new PdfIndirectObject(cidFontId, cidFont));
-
-        // ToUnicode CMap.
-        PdfObjectId toUnicodeId = allocateId();
-        byte[] cmap = Encoding.ASCII.GetBytes(BuildToUnicodeCMap(codepointByGid));
-        PdfDictionary toUnicodeDict = new PdfDictionary();
-        toUnicodeDict.Set(PdfName.Length, cmap.Length);
-        objects.Add(new PdfIndirectObject(toUnicodeId, new PdfStream(toUnicodeDict, cmap)));
-
-        // Top-level Type0 font.
-        PdfObjectId type0Id = allocateId();
-        PdfDictionary type0 = new PdfDictionary();
-        type0.Set(PdfName.Type, PdfName.Intern("Font"));
-        type0.Set(PdfName.Intern("Subtype"), PdfName.Intern("Type0"));
-        type0.Set(PdfName.Intern("BaseFont"), PdfName.Intern(baseFont));
-        type0.Set(PdfName.Intern("Encoding"), PdfName.Intern("Identity-H"));
-        type0.Set(PdfName.Intern("DescendantFonts"),
-            new PdfArray(new PdfPrimitive[] { new PdfReference(cidFontId) }));
-        type0.Set(PdfName.Intern("ToUnicode"), new PdfReference(toUnicodeId));
-        objects.Add(new PdfIndirectObject(type0Id, type0));
-
-        return new EmbeddedFontObjects(type0Id, objects);
+        return FontEmbedder.BuildCore(
+            ttf,
+            isCff: false,
+            loader.GetGlyphIndex,
+            gid => loader.GetGlyphOutline(gid).Metrics.AdvanceWidth,
+            loader.UnitsPerEm,
+            usedCodepoints,
+            glyphText: null,
+            baseFont,
+            allocateId,
+            extraGlyphs);
     }
 
-    private static PdfArray BuildWidthArray(SortedDictionary<int, int> widthByGid)
+    internal static PdfArray BuildWidthArray(SortedDictionary<int, int> widthByGid)
     {
         // Emit each glyph as "gid [width]" — simple and unambiguous.
         List<PdfPrimitive> entries = new List<PdfPrimitive>();
@@ -189,7 +83,7 @@ public static class TrueTypeFontEmbedder
         return new PdfArray(entries);
     }
 
-    private static string BuildToUnicodeCMap(SortedDictionary<int, int> codepointByGid)
+    internal static string BuildToUnicodeCMap(SortedDictionary<int, string> textByGid)
     {
         StringBuilder sb = new StringBuilder();
         sb.Append("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n");
@@ -197,7 +91,7 @@ public static class TrueTypeFontEmbedder
         sb.Append("/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n");
         sb.Append("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
 
-        List<KeyValuePair<int, int>> pairs = new List<KeyValuePair<int, int>>(codepointByGid);
+        List<KeyValuePair<int, string>> pairs = new List<KeyValuePair<int, string>>(textByGid);
         for (int start = 0; start < pairs.Count; start += 100)
         {
             int count = Math.Min(100, pairs.Count - start);
@@ -215,22 +109,20 @@ public static class TrueTypeFontEmbedder
         return sb.ToString();
     }
 
-    private static string Utf16BeHex(int codepoint)
+    // The text as big-endian UTF-16 hex digits (surrogate pairs kept).
+    internal static string Utf16BeHex(string text)
     {
-        if (codepoint <= 0xFFFF)
+        StringBuilder sb = new StringBuilder(text.Length * 4);
+        foreach (char ch in text)
         {
-            return codepoint.ToString("X4", CultureInfo.InvariantCulture);
+            sb.Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
         }
 
-        int v = codepoint - 0x10000;
-        int high = 0xD800 + (v >> 10);
-        int low = 0xDC00 + (v & 0x3FF);
-        return high.ToString("X4", CultureInfo.InvariantCulture) +
-            low.ToString("X4", CultureInfo.InvariantCulture);
+        return sb.ToString();
     }
 
     /// <summary>Font-wide metrics read from the sfnt tables, scaled to 1000/em.</summary>
-    private readonly struct SfntMetrics
+    internal readonly struct SfntMetrics
     {
         private SfntMetrics(int flags, int xMin, int yMin, int xMax, int yMax,
             double italicAngle, int ascent, int descent, int capHeight)

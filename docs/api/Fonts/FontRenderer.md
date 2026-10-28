@@ -64,6 +64,20 @@ Resolves a raw character code (from a content-stream string) to a glyph index, h
 
 **Remarks:** CFF programs carry no cmap; their glyphs are selected by name (and hence by Unicode via the charset), so this method returns 0 for CFF fonts and callers resolve the glyph through `GetGlyphIndexUnicode`.
 
+### `GetGlyphIndexForCid`
+
+```csharp
+int GetGlyphIndexForCid(int cid)
+```
+
+Maps a CID of a composite (Type0) font to a glyph index. For a CID-keyed CFF program the CFF charset maps CIDs to glyphs (a CID the font does not have is .notdef); for every other program the CID is the glyph index, as with an Identity `/CIDToGIDMap`.
+
+**Parameters**
+
+- `cid` — The CID decoded from the content stream.
+
+**Returns:** The glyph index.
+
 ### `GetGlyphIndexUnicode`
 
 ```csharp

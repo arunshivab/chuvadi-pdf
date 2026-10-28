@@ -119,6 +119,10 @@ public sealed class TrueTypeLoader
         return 0;
     }
 
+    /// <summary>Gets the Unicode cmap (code point to glyph id) used by <see cref="GetGlyphIndex"/>.</summary>
+    internal IReadOnlyDictionary<int, int> CharacterMap =>
+        (IReadOnlyDictionary<int, int>?)_cmapF4 ?? new Dictionary<int, int>();
+
     /// <summary>
     /// Extracts the outline and metrics for a glyph by glyph index.
     /// Returns an empty outline for whitespace or missing glyphs.

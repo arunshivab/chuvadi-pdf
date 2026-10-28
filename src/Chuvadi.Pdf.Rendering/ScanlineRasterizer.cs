@@ -196,6 +196,12 @@ public sealed class ScanlineRasterizer
             return;
         }
 
+        // Linear-light blending is for anti-aliased edge coverage only. A
+        // constant opacity (/ca) or a soft mask composites in the blending
+        // colour space, sRGB (PDF 32000-1:2008 §11.3), as other viewers do:
+        // half-opaque red over white is (255, 128, 128).
+        gammaCorrect = gammaCorrect && baseAlpha >= 1f && smask is null;
+
         int width = buffer.Width;
         float[] coverage = new float[width];
         float weight = 1f / AaSubSamples;

@@ -69,21 +69,26 @@ public sealed class PdfDocumentBuilder
     }
 
     /// <summary>
-    /// Registers a TrueType font program so pages can draw text in it. The font
-    /// is embedded (as a Type0 / CIDFontType2 composite font) only if used, and
-    /// only the glyphs actually drawn get width and ToUnicode entries.
+    /// Registers a font program so pages can draw text in it. The font is
+    /// embedded (as a Type0 composite font) only if used, subset to the glyphs
+    /// drawn, and only those glyphs get width and ToUnicode entries. Accepts a
+    /// TrueType font, a CFF-based OpenType font (.otf) or a collection
+    /// (.ttc/.otc, whose first face is used — see
+    /// <see cref="AddFont(string, byte[], int)"/> for another face).
     /// </summary>
     /// <param name="name">
     /// The font name to pass to <see cref="PageBuilder.DrawText"/>; also recorded
     /// as the PostScript base-font name.
     /// </param>
-    /// <param name="fontData">The complete static TrueType (glyf) font program.</param>
+    /// <param name="fontData">The complete font program.</param>
     /// <remarks>
-    /// The font must be a static TrueType font (convert variable fonts to a
-    /// static instance first). Text is emitted in logical order without
-    /// complex-script shaping, so Latin renders correctly and Indic renders
-    /// correctly only for isolated or already-ordered glyphs.
+    /// The font must be static (convert variable fonts to a static instance
+    /// first; CFF2 is not supported). <see cref="PageBuilder.DrawText"/> emits
+    /// glyphs in logical order without complex-script shaping; shape with
+    /// <c>TextShaper</c> and draw with <see cref="PageBuilder.DrawShapedRun(IReadOnlyList{Chuvadi.Pdf.Text.Shaping.ShapedGlyph}, string, IReadOnlyList{int}, double, double, string, double, Color)"/>
+    /// for complex scripts.
     /// </remarks>
+    /// <exception cref="Chuvadi.Pdf.Fonts.Rendering.FontRenderingException">The font data is invalid or unsupported.</exception>
     public PdfDocumentBuilder AddTrueTypeFont(string name, byte[] fontData)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -93,11 +98,33 @@ public sealed class PdfDocumentBuilder
     }
 
     /// <summary>
+    /// Registers one face of a font program — TrueType (.ttf), CFF-based
+    /// OpenType (.otf) or a collection (.ttc/.otc) — so pages can draw text in
+    /// it. TrueType outlines embed as <c>CIDFontType2</c>, CFF outlines as
+    /// <c>CIDFontType0</c> (<c>/FontFile3 /CIDFontType0C</c>); either way the
+    /// program is subset to the glyphs drawn.
+    /// </summary>
+    /// <param name="name">The font name to draw with; also the PostScript base-font name.</param>
+    /// <param name="fontData">The complete font file.</param>
+    /// <param name="faceIndex">The face of a collection (0 for a single font).</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> or <paramref name="fontData"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="faceIndex"/> is not a face of the file.</exception>
+    /// <exception cref="Chuvadi.Pdf.Fonts.Rendering.FontRenderingException">The font data is invalid or unsupported.</exception>
+    public PdfDocumentBuilder AddFont(string name, byte[] fontData, int faceIndex = 0)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(fontData);
+        _customFonts.Register(name, fontData, faceIndex);
+        return this;
+    }
+
+    /// <summary>
     /// Enables the automatic LiPi Sans font. After calling this, drawing text
     /// with the font name "Lipi" selects the matching LiPi face per script and
-    /// embeds each used face. Glyphs are emitted in logical order (no complex
-    /// shaping); Latin renders correctly, and Indic text is embedded but not yet
-    /// reordered.
+    /// embeds each used face. Indic runs are shaped with <c>TextShaper</c> and
+    /// carry their source text as <c>/ActualText</c>, so they extract and
+    /// search as written.
     /// </summary>
     /// <returns>This builder.</returns>
     public PdfDocumentBuilder UseLipiFonts()
@@ -149,10 +176,13 @@ public sealed class PdfDocumentBuilder
             throw new InvalidOperationException("Document has no pages.");
         }
 
-        // Apply header/footer to each page so total-page-count is known.
+        // Apply header/footer to each page so total-page-count is known. Clips
+        // and opacity scopes left open by the page are closed first, so the
+        // header and footer are never clipped.
         int total = _pages.Count;
         for (int i = 0; i < total; i++)
         {
+            _pages[i].CloseOpenScopes();
             _header?.Invoke(_pages[i], i + 1, total);
             _footer?.Invoke(_pages[i], i + 1, total);
         }
@@ -185,10 +215,10 @@ public sealed class PdfDocumentBuilder
                 continue;
             }
 
-            EmbeddedFontObjects embedded = TrueTypeFontEmbedder.Build(
-                entry.Value.FontData,
-                entry.Value.Loader,
+            EmbeddedFontObjects embedded = FontEmbedder.Build(
+                entry.Value.Face,
                 entry.Value.UsedCodepoints,
+                entry.Value.GlyphText,
                 entry.Key.Replace(" ", string.Empty),
                 () => new PdfObjectId(nextId++, 0),
                 entry.Value.UsedGlyphs);
@@ -201,7 +231,8 @@ public sealed class PdfDocumentBuilder
         {
             PageBuilder p = _pages[i];
 
-            // Content stream
+            // Content stream (closing any scope a header or footer left open)
+            p.CloseOpenScopes();
             PdfObjectId contentId = new(nextId++, 0);
             byte[] content = p.ContentStream();
             PdfDictionary contentDict = new();
@@ -234,9 +265,10 @@ public sealed class PdfDocumentBuilder
             PdfDictionary xobjectDict = new();
             foreach (ImageRef img in p.Images)
             {
-                EmbeddedImage built = img.Frame is not null
-                    ? ImageEmbedder.BuildFromFrame(img.Frame)
-                    : ImageEmbedder.Build(img.Bytes!);
+                EmbeddedImage built = img.Built
+                    ?? (img.Frame is not null
+                        ? ImageEmbedder.BuildFromFrame(img.Frame)
+                        : ImageEmbedder.Build(img.Bytes!));
                 PdfObjectId imgId = new(nextId++, 0);
                 if (built.MaskDictionary is not null)
                 {
@@ -252,12 +284,12 @@ public sealed class PdfDocumentBuilder
 
             // ExtGState dictionary for image-overlay constant alpha (/ca, /CA).
             PdfDictionary extGStateDict = new();
-            foreach (KeyValuePair<string, double> gs in p.ExtGStateAlphas)
+            foreach (KeyValuePair<string, (double Fill, double Stroke)> gs in p.ExtGStateAlphas)
             {
                 PdfDictionary gsDict = new();
                 gsDict.Set(PdfName.Type, PdfName.Intern("ExtGState"));
-                gsDict.Set(PdfName.Intern("ca"), new PdfReal(gs.Value));
-                gsDict.Set(PdfName.Intern("CA"), new PdfReal(gs.Value));
+                gsDict.Set(PdfName.Intern("ca"), new PdfReal(gs.Value.Fill));
+                gsDict.Set(PdfName.Intern("CA"), new PdfReal(gs.Value.Stroke));
                 extGStateDict.Set(PdfName.Intern(gs.Key), gsDict);
             }
 
@@ -298,8 +330,29 @@ public sealed class PdfDocumentBuilder
                 annot.Set(PdfName.Intern("Border"), border);
                 PdfDictionary action = new();
                 action.Set(PdfName.Type, PdfName.Intern("Action"));
-                action.Set(PdfName.Intern("S"), PdfName.Intern("URI"));
-                action.Set(PdfName.Intern("URI"), new PdfString(h.LinkUri));
+                if (h.LinkUri is not null)
+                {
+                    action.Set(PdfName.Intern("S"), PdfName.Intern("URI"));
+                    action.Set(PdfName.Intern("URI"), new PdfString(h.LinkUri));
+                }
+                else
+                {
+                    if (h.TargetPage >= _pages.Count)
+                    {
+                        throw new InvalidOperationException(
+                            $"A link on page {i + 1} targets page index {h.TargetPage}, but the document has {_pages.Count} pages.");
+                    }
+
+                    PdfArray dest = new();
+                    dest.Add(new PdfReference(pageIds[h.TargetPage]));
+                    dest.Add(PdfName.Intern("XYZ"));
+                    dest.Add(PdfNull.Value);
+                    dest.Add(new PdfReal(_pages[h.TargetPage].Height - h.TargetTop));
+                    dest.Add(PdfNull.Value);
+                    action.Set(PdfName.Intern("S"), PdfName.Intern("GoTo"));
+                    action.Set(PdfName.Intern("D"), dest);
+                }
+
                 annot.Set(PdfName.Intern("A"), action);
                 objects.Add(new PdfIndirectObject(annotId, annot));
                 annots.Add(new PdfReference(annotId));

@@ -1728,14 +1728,37 @@ public static class DisplayListBuilder
             maxY = Math.Max(maxY, y);
         }
 
-        // The stroke style a path is painted with, its width in page space.
-        private static StrokeStyle StrokeStyleOf(BuilderState s) => new StrokeStyle(
-            LineWidth: s.LineWidth * Math.Max(Math.Abs(s.Ctm.A), Math.Abs(s.Ctm.D)),
-            Cap: s.LineCap,
-            Join: s.LineJoin,
-            MiterLimit: s.MiterLimit,
-            DashArray: s.DashArray,
-            DashPhase: s.DashPhase);
+        // The stroke style a path is painted with, its width and dash lengths
+        // in page space: scaled by the CTM's linear scale, sqrt(|det|) (exact
+        // for uniform scales and rotations; a 90° rotation used to give width 0).
+        private static StrokeStyle StrokeStyleOf(BuilderState s)
+        {
+            double scale = Math.Sqrt(Math.Abs((s.Ctm.A * s.Ctm.D) - (s.Ctm.B * s.Ctm.C)));
+            if (!double.IsFinite(scale))
+            {
+                scale = 1.0;
+            }
+
+            double[]? dashes = s.DashArray;
+            if (dashes is { Length: > 0 } && scale != 1.0)
+            {
+                double[] scaled = new double[dashes.Length];
+                for (int i = 0; i < dashes.Length; i++)
+                {
+                    scaled[i] = dashes[i] * scale;
+                }
+
+                dashes = scaled;
+            }
+
+            return new StrokeStyle(
+                LineWidth: s.LineWidth * scale,
+                Cap: s.LineCap,
+                Join: s.LineJoin,
+                MiterLimit: s.MiterLimit,
+                DashArray: dashes,
+                DashPhase: s.DashPhase * scale);
+        }
 
         private void EmitPathCore(BuilderState s, PaintMode mode, FillRule rule)
         {

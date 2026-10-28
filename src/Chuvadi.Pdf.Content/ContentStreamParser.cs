@@ -112,6 +112,11 @@ public sealed class ContentStreamParser
         List<bool> hiddenStack = new List<bool>();
         int hiddenDepth = 0;
 
+        // Parallel to hiddenStack: the /ActualText of each open sequence and
+        // the fragment count when it began (null when it has none).
+        List<(string Text, int FirstFragment)?> actualTextStack = new List<(string, int)?>();
+        int actualTextDepth = 0;
+
         int tokensSinceCheck = 0;
         using (MemoryStream ms = new MemoryStream(streams))
         using (PdfTokenizer tokenizer = new PdfTokenizer(ms, leaveOpen: false))
@@ -161,15 +166,31 @@ public sealed class ContentStreamParser
                             PdfWorkScope.CountOperators();
                         }
 
+                        // An operator inside an array means the "]" is
+                        // missing: end the array there and run the operator.
+                        if (inner.Type == PdfTokenType.Keyword)
+                        {
+                            tokenizer.Unread(inner);
+                            break;
+                        }
+
                         // An inline array longer than this is not real
                         // content; the rest is skipped.
-                        if (inner.Type != PdfTokenType.Keyword && arrayItems.Count < MaxOperands)
+                        if (arrayItems.Count < MaxOperands)
                         {
                             arrayItems.Add(TokenToPrimitive(inner));
                         }
                     }
 
                     operands.Add(new PdfArray(arrayItems));
+                    continue;
+                }
+
+                // Inline dictionaries (BDC property lists) are assembled so
+                // marked content can read /ActualText.
+                if (token.Type == PdfTokenType.DictionaryStart)
+                {
+                    operands.Add(ReadInlineDictionary(tokenizer, 0));
                     continue;
                 }
 
@@ -187,8 +208,15 @@ public sealed class ContentStreamParser
                 {
                     // ── Marked content (optional content) ─────────────────
 
+                    // ── Inline images: skip the binary data ─────────────
+
+                    case "ID":
+                        SkipInlineImageData(streams, token, tokenizer);
+                        break;
+
                     case "BMC":
                         hiddenStack.Add(false);
+                        actualTextStack.Add(null);
                         break;
 
                     case "BDC":
@@ -201,6 +229,15 @@ public sealed class ContentStreamParser
                             if (hidden)
                             {
                                 hiddenDepth++;
+                            }
+
+                            // /ActualText replaces the text of the glyphs it
+                            // spans (§14.9.4); an outer span wins over inner ones.
+                            string? actual = actualTextDepth == 0 ? ActualTextOf(operands, resources) : null;
+                            actualTextStack.Add(actual is null ? null : (actual, fragments.Count));
+                            if (actual is not null)
+                            {
+                                actualTextDepth++;
                             }
                         }
 
@@ -215,6 +252,17 @@ public sealed class ContentStreamParser
                             }
 
                             hiddenStack.RemoveAt(hiddenStack.Count - 1);
+                        }
+
+                        if (actualTextStack.Count > 0)
+                        {
+                            if (actualTextStack[^1] is (string actualText, int firstFragment))
+                            {
+                                actualTextDepth--;
+                                ReplaceWithActualText(fragments, firstFragment, actualText);
+                            }
+
+                            actualTextStack.RemoveAt(actualTextStack.Count - 1);
                         }
 
                         break;
@@ -578,6 +626,157 @@ public sealed class ContentStreamParser
             ResolveDictionary(stream.Dictionary, PdfName.Resources) ?? resources;
 
         fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1));
+    }
+
+    // The /ActualText of a BDC property list (inline or a named /Properties
+    // entry), or null.
+    private string? ActualTextOf(List<PdfPrimitive> operands, PdfDictionary? resources)
+    {
+        if (operands.Count < 2)
+        {
+            return null;
+        }
+
+        PdfDictionary? props = operands[1] switch
+        {
+            PdfDictionary inline => inline,
+            PdfName name => ResolveProperty(resources, name) is PdfPrimitive entry ? _resolver.Resolve(entry) as PdfDictionary : null,
+            _ => null,
+        };
+        return props is not null
+            && props.TryGetValue(PdfName.Intern("ActualText"), out PdfPrimitive? value)
+            && _resolver.Resolve(value) is PdfString text
+            ? text.ToTextString()
+            : null;
+    }
+
+    // Replaces the fragments shown since firstFragment with one fragment
+    // holding the actual text, placed where the first of them was. A span
+    // that showed nothing adds nothing.
+    private static void ReplaceWithActualText(List<TextFragment> fragments, int firstFragment, string actualText)
+    {
+        if (firstFragment >= fragments.Count)
+        {
+            return;
+        }
+
+        TextFragment first = fragments[firstFragment];
+        fragments.RemoveRange(firstFragment, fragments.Count - firstFragment);
+        if (actualText.Length > 0)
+        {
+            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize));
+        }
+    }
+
+    // Skips an inline image's data after its ID operator (§8.9.7): the data
+    // starts after the single white-space byte that follows ID and ends at
+    // the first "EI" with white space before it and white space (or the end)
+    // after it. Without this, bytes of the image were read as operators.
+    private static void SkipInlineImageData(byte[] streams, PdfToken id, PdfTokenizer tokenizer)
+    {
+        long start = id.ByteOffset + 3;
+        for (long i = Math.Max(start, 1); i + 1 < streams.Length; i++)
+        {
+            if (streams[i] == (byte)'E' && streams[i + 1] == (byte)'I'
+                && IsWhiteSpace(streams[i - 1])
+                && (i + 2 == streams.Length || IsWhiteSpace(streams[i + 2])))
+            {
+                tokenizer.Seek(i + 2);
+                return;
+            }
+        }
+
+        tokenizer.Seek(streams.Length);
+    }
+
+    private static bool IsWhiteSpace(byte b) => b is 0 or 9 or 10 or 12 or 13 or 32;
+
+    // Reads an inline dictionary after its "<<" (nested dictionaries and
+    // arrays included). Malformed input ends it at the stream's end.
+    private static PdfDictionary ReadInlineDictionary(PdfTokenizer tokenizer, int depth)
+    {
+        PdfDictionary dict = new PdfDictionary();
+        PdfName? key = null;
+        int items = 0;
+        while (true)
+        {
+            PdfToken token = tokenizer.Read();
+            if (token.IsEndOfStream || token.Type == PdfTokenType.DictionaryEnd)
+            {
+                return dict;
+            }
+
+            // An operator means the ">>" is missing: end here and let the
+            // caller run it.
+            if (token.Type == PdfTokenType.Keyword)
+            {
+                tokenizer.Unread(token);
+                return dict;
+            }
+
+            if (++items % TokensPerCheck == 0)
+            {
+                PdfWorkScope.CountOperators();
+            }
+
+            PdfPrimitive value = token.Type switch
+            {
+                PdfTokenType.DictionaryStart when depth < 32 => ReadInlineDictionary(tokenizer, depth + 1),
+                PdfTokenType.ArrayStart when depth < 32 => ReadInlineArray(tokenizer, depth + 1),
+                _ => TokenToPrimitive(token),
+            };
+
+            if (key is null)
+            {
+                key = value as PdfName;
+            }
+            else
+            {
+                if (dict.Count < MaxOperands)
+                {
+                    dict.Set(key, value);
+                }
+
+                key = null;
+            }
+        }
+    }
+
+    private static PdfArray ReadInlineArray(PdfTokenizer tokenizer, int depth)
+    {
+        List<PdfPrimitive> items = new List<PdfPrimitive>();
+        int read = 0;
+        while (true)
+        {
+            PdfToken token = tokenizer.Read();
+            if (token.IsEndOfStream || token.Type == PdfTokenType.ArrayEnd)
+            {
+                return new PdfArray(items);
+            }
+
+            if (token.Type == PdfTokenType.Keyword)
+            {
+                tokenizer.Unread(token);
+                return new PdfArray(items);
+            }
+
+            if (++read % TokensPerCheck == 0)
+            {
+                PdfWorkScope.CountOperators();
+            }
+
+            PdfPrimitive value = token.Type switch
+            {
+                PdfTokenType.DictionaryStart when depth < 32 => ReadInlineDictionary(tokenizer, depth + 1),
+                PdfTokenType.ArrayStart when depth < 32 => ReadInlineArray(tokenizer, depth + 1),
+                _ => TokenToPrimitive(token),
+            };
+
+            if (items.Count < MaxOperands)
+            {
+                items.Add(value);
+            }
+        }
     }
 
     // The raw /Properties entry for a BDC property name (reference kept so
