@@ -39,6 +39,11 @@ REQUIRED_USINGS = {
     "PdfEncryptionException": "using Chuvadi.Pdf.Primitives;",
     "PdfPermissionException": "using Chuvadi.Pdf.Primitives;",
     "PdfPermissions":         "using Chuvadi.Pdf.Primitives;",
+    # 3.24 — embedding API
+    "PdfPasswordRequiredException": "using Chuvadi.Pdf.Primitives;",
+    "PdfLimitExceededException":    "using Chuvadi.Pdf.Primitives;",
+    "PdfLimits":                    "using Chuvadi.Pdf.Primitives;",
+    "PdfWorkScope":                 "using Chuvadi.Pdf.Primitives;",
     # Chuvadi.Pdf.Filters types
     "IStreamFilter":    "using Chuvadi.Pdf.Filters;",
     "FilterException":  "using Chuvadi.Pdf.Filters;",

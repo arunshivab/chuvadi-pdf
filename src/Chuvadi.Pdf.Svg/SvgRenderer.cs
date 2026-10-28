@@ -676,7 +676,7 @@ public sealed class SvgRenderer
 
             PdfFont? pdfFont = null;
             try { pdfFont = PdfFont.FromDictionary(kv.Value, resolver); }
-            catch (Exception) { /* leave pdfFont null; embed without cmap remap */ }
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { /* leave pdfFont null; embed without cmap remap */ }
 
             string? family = FontEmbedder.TryEmbed(
                 kv.Value, baseFont, w, resolver, emittedFamilies, pdfFont);

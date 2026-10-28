@@ -528,6 +528,8 @@ internal sealed class DeflateInflater
     private int _bytePos;
     private int _bitBuf;
     private int _bitsInBuf;
+    private int _nextGuardCheck = 1 << 20;
+    private int _guardCharged;
 
     internal DeflateInflater(byte[] data, int start, int length)
     {
@@ -653,6 +655,16 @@ internal sealed class DeflateInflater
 
                 int distance = DistanceBase[distSymbol] + ReadBits(DistanceExtraBits[distSymbol]);
                 int copyFrom = output.Count - distance;
+                if (output.Count >= _nextGuardCheck)
+                {
+                    // Back-references expand without bound: check the
+                    // ambient work scope (cancellation, decoded-size limit)
+                    // every mebibyte of output.
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.CheckDecodedSize(output.Count);
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory(output.Count - _guardCharged);
+                    _guardCharged = output.Count;
+                    _nextGuardCheck = output.Count + (1 << 20);
+                }
 
                 if (copyFrom < 0)
                 {
@@ -915,7 +927,7 @@ internal sealed class DeflateDeflater
 
             return output.ToArray();
         }
-        catch (System.Exception)
+        catch (System.Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
             return null;
         }

@@ -411,8 +411,32 @@ internal sealed class PdfObjectParser
 
     // ── Public parsing API ────────────────────────────────────────────────
 
+    // Arrays and dictionaries nested deeper than this are rejected: real
+    // files nest a handful of levels, and unbounded nesting would exhaust the
+    // stack here and in every recursive walk over the parsed objects.
+    private const int MaxNesting = 512;
+    private int _depth;
+
     /// <summary>Reads one complete PDF value from the current position.</summary>
     internal PdfPrimitive ReadValue()
+    {
+        if (_depth >= MaxNesting)
+        {
+            throw new PdfParseException($"Objects are nested more than {MaxNesting} levels deep.");
+        }
+
+        _depth++;
+        try
+        {
+            return ReadValueCore();
+        }
+        finally
+        {
+            _depth--;
+        }
+    }
+
+    private PdfPrimitive ReadValueCore()
     {
         PdfToken token = NextToken();
 

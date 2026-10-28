@@ -5,7 +5,7 @@
 Thrown when the bytes of a PDF cannot be parsed because they violate the PDF syntax: malformed tokens, structural errors in dictionaries or arrays, invalid integer or real literals, missing required keywords.
 
 ```csharp
-public sealed class PdfParseException : PdfException
+public class PdfParseException : PdfException
 ```
 
 ## Remarks

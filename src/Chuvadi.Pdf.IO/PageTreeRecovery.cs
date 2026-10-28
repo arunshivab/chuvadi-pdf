@@ -198,7 +198,7 @@ internal static class PageTreeRecovery
             PdfIndirectObject obj = parser.ReadIndirectObject();
             return obj.Value as PdfDictionary;
         }
-        catch (Exception)
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
             // A malformed candidate is simply skipped; another definition may
             // parse cleanly. Recovery never throws on a bad candidate.

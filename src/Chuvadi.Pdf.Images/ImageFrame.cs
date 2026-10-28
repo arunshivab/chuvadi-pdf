@@ -71,6 +71,7 @@ public sealed class ImageFrame
     /// </summary>
     public static ImageFrame Create(int width, int height, ImageColorFormat format)
     {
+        Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)Math.Max(0, width) * Math.Max(0, height) * 4);
         PixelBuffer buffer = new PixelBuffer(width, height);
         buffer.ClearWhite();
         return new ImageFrame(buffer, format);

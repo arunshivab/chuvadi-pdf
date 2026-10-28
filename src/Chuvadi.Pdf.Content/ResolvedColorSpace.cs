@@ -13,6 +13,7 @@
 // model usable by every renderer sink (raster and SVG alike).
 
 using System;
+using System.Runtime.CompilerServices;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -179,6 +180,13 @@ public sealed class ResolvedColorSpace
     {
         ArgumentNullException.ThrowIfNull(colorSpace);
         ArgumentNullException.ThrowIfNull(objects);
+
+        // A colour space whose base (or alternate) is itself would recurse
+        // without end; treat it as unresolvable instead.
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        {
+            return null;
+        }
 
         PdfPrimitive resolved = objects.Resolve(colorSpace);
 

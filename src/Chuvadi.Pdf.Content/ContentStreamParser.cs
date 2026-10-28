@@ -41,6 +41,9 @@ namespace Chuvadi.Pdf.Content;
 /// </remarks>
 public sealed class ContentStreamParser
 {
+    private const int TokensPerCheck = 4096;
+    private const int MaxOperands = 65536;
+
     private readonly IPdfObjectResolver _resolver;
     private readonly PdfDictionary? _resources;
     private readonly FilterPipeline _pipeline = FilterRegistry.CreateDefaultPipeline();
@@ -109,6 +112,7 @@ public sealed class ContentStreamParser
         List<bool> hiddenStack = new List<bool>();
         int hiddenDepth = 0;
 
+        int tokensSinceCheck = 0;
         using (MemoryStream ms = new MemoryStream(streams))
         using (PdfTokenizer tokenizer = new PdfTokenizer(ms, leaveOpen: false))
         {
@@ -118,7 +122,22 @@ public sealed class ContentStreamParser
 
                 if (token.IsEndOfStream)
                 {
+                    PdfWorkScope.ThrowIfCancellationRequested();
                     break;
+                }
+
+                // Operands with no operator are malformed: every 4096 tokens
+                // count as one operator against the page-complexity limit
+                // (which also checks cancellation), and a run longer than any
+                // real operator takes is dropped rather than held in memory.
+                if (++tokensSinceCheck >= TokensPerCheck)
+                {
+                    tokensSinceCheck = 0;
+                    PdfWorkScope.CountOperators();
+                    if (operands.Count > MaxOperands)
+                    {
+                        operands.Clear();
+                    }
                 }
 
                 // Operands accumulate until we hit a keyword/operator.
@@ -136,7 +155,15 @@ public sealed class ContentStreamParser
                             break;
                         }
 
-                        if (inner.Type != PdfTokenType.Keyword)
+                        if (++tokensSinceCheck >= TokensPerCheck)
+                        {
+                            tokensSinceCheck = 0;
+                            PdfWorkScope.CountOperators();
+                        }
+
+                        // An inline array longer than this is not real
+                        // content; the rest is skipped.
+                        if (inner.Type != PdfTokenType.Keyword && arrayItems.Count < MaxOperands)
                         {
                             arrayItems.Add(TokenToPrimitive(inner));
                         }
@@ -152,6 +179,7 @@ public sealed class ContentStreamParser
                     continue;
                 }
 
+                PdfWorkScope.CountOperators();
                 string op = token.RawText;
                 int fragmentsBefore = fragments.Count;
 

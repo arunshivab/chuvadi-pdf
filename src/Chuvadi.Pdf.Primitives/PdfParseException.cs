@@ -23,7 +23,7 @@ namespace Chuvadi.Pdf.Primitives;
 /// <c>PdfTokenizerException</c>, and the structural-shape subset of
 /// <c>PdfObjectException</c>.
 /// </remarks>
-public sealed class PdfParseException : PdfException
+public class PdfParseException : PdfException
 {
     /// <summary>Initialises a new instance with no message.</summary>
     public PdfParseException()

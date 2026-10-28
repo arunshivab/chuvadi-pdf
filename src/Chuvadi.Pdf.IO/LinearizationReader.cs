@@ -48,7 +48,7 @@ public static class LinearizationReader
             {
                 resolved = store.ResolveById(new PdfObjectId(objNum, 0));
             }
-            catch
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 continue;
             }

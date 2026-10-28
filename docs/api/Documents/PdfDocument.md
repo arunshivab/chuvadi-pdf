@@ -102,6 +102,14 @@ PdfReader Reader => _reader
 
 Gets the underlying `PdfReader` for low-level access such as reading raw file bytes for signature byte-range extraction.
 
+### `Limits`
+
+```csharp
+PdfLimits? Limits => _reader.Objects.Limits
+```
+
+Gets the resource limits the document was opened with (applied by `PageRasterizer` and `TextExtractor`), or null for none.
+
 ### `Warnings`
 
 ```csharp
@@ -183,6 +191,72 @@ Opens a PDF document from a file path.
 
 **Remarks:** Synchronous blocking I/O against the file system. Use `OpenAsync(string, CancellationToken)` for cross-platform code.
 
+### `Open`
+
+__static__
+
+```csharp
+static PdfDocument Open(Stream stream, PdfOpenOptions options)
+```
+
+Opens a PDF document from the given stream with a password and/or resource limits.
+
+**Parameters**
+
+- `stream` — A readable, seekable PDF stream.
+- `options` — The password, limits and stream ownership.
+
+**Returns:** The opened document. <exception cref="ArgumentNullException">An argument is null.</exception> <exception cref="PdfPasswordRequiredException"> The file is encrypted and no password, or a wrong one, was given. </exception> <exception cref="PdfLimitExceededException"> The input is larger than `PdfLimits.MaxInputBytes` or has more pages than `PdfLimits.MaxPageCount`. </exception> <exception cref="PdfParseException"> The file cannot be parsed (any failure outside this list is reported as a `PdfParseException` with the original as the inner exception). </exception> <exception cref="PdfCorruptionException">The file parses but its structure is inconsistent.</exception> <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
+
+### `Open`
+
+__static__
+
+```csharp
+static PdfDocument Open(string path, PdfOpenOptions options)
+```
+
+Opens a PDF document from a file path with a password and/or resource limits. See `Open(Stream, PdfOpenOptions)`.
+
+**Parameters**
+
+- `path` — The path to the PDF file.
+- `options` — The password and limits.
+
+**Returns:** The opened document.
+
+### `RequiresPassword`
+
+__static__
+
+```csharp
+static bool RequiresPassword(Stream stream)
+```
+
+Returns whether the PDF in `stream` needs a password to open (it is encrypted and the empty user password does not open it). Reads only the cross-reference data and the encryption dictionary; the stream position is restored.
+
+**Parameters**
+
+- `stream` — A readable, seekable PDF stream.
+
+**Returns:** True when a password is needed. <exception cref="ArgumentNullException">`stream` is null.</exception> <exception cref="PdfParseException">The file structure cannot be read.</exception> <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
+
+### `RequiresPassword`
+
+__static__
+
+```csharp
+static bool RequiresPassword(string path)
+```
+
+Returns whether the PDF file at `path` needs a password to open.
+
+**Parameters**
+
+- `path` — The path to the PDF file.
+
+**Returns:** True when a password is needed.
+
 ### `OpenAsync`
 
 __static__
@@ -217,6 +291,24 @@ Asynchronously opens an encrypted PDF document with the given password.
 - `cancellationToken` — A token that cancels the buffer fill.
 
 **Remarks:** See `OpenAsync(Stream, CancellationToken)` for the buffering and cancellation semantics. For unencrypted PDFs the password is ignored.
+
+### `OpenAsync`
+
+__static__
+
+```csharp
+static async Task<PdfDocument> OpenAsync(Stream stream, PdfOpenOptions options, CancellationToken cancellationToken = default)
+```
+
+Asynchronously opens a PDF document with a password and/or resource limits. The stream is buffered into memory (stopping early, with `PdfLimitExceededException`, past `PdfLimits.MaxInputBytes`); the caller keeps ownership of it.
+
+**Parameters**
+
+- `stream` — A readable PDF stream. Need not be seekable.
+- `options` — The password and limits.
+- `cancellationToken` — A token that cancels the buffer fill.
+
+**Returns:** The opened document.
 
 ### `OpenAsync`
 

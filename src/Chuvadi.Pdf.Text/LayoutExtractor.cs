@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Chuvadi.Pdf.Content;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Text;
 
@@ -113,6 +114,8 @@ public sealed class LayoutExtractor
 
         foreach (TextFragment fragment in fragments)
         {
+            // Grouping is quadratic in the worst case: stay cancellable.
+            PdfWorkScope.ThrowIfCancellationRequested();
             bool placed = false;
 
             foreach (List<TextFragment> line in lines)

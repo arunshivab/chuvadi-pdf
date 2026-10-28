@@ -153,6 +153,11 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.24.0 (embedding API, Anjal Mail asks A1–A5):
+- **Password-required signal**, **viewing guarantees + `PdfSanitizer`**,
+  **cancellation**, **resource limits**, **no-disk guarantee** and an
+  **enumerated exception set** — see docs/EMBEDDING.md.
+
 Shipped in v3.23.0:
 - **Pattern-cell redaction edges** — patterns drawn by resource-inheriting
   forms, and decoy "shown elsewhere" tiles painted over later (was open
@@ -182,7 +187,7 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.23.0. Items are independent and may be
+Status verified against code at v3.24.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -228,6 +233,11 @@ Rasterizer note (not a Scrub defect): pattern fills are not anti-aliased,
 so an edge passing exactly through pixel centres can flip one row of
 pixels when Scrub splits the path at the box (seen with a rotated radial
 pattern; shifting the geometry by a fraction of a point removes it).
+
+### Embedding follow-ups
+**20. Interrupting single JBIG2 / CCITT image decodes.** Cancellation and
+the decoded-size limit are checked when such an image finishes decoding, not
+part-way (JPEG, Flate, LZW and the other filters are checked as they go).
 
 ### Rendering (major-version switch)
 **9. /UserUnit in the default renderers.** `PdfPage.UserUnit` is exposed

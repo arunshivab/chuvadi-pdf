@@ -28,6 +28,14 @@ Creates a `PdfObjectStore` with a loader delegate. When an object is not in the 
 
 ## Properties
 
+### `Limits`
+
+```csharp
+PdfLimits? Limits
+```
+
+Gets or sets the resource limits for work on this document's objects (set from `PdfOpenOptions.Limits` when the document is opened). `PageRasterizer` and `TextExtractor` apply them to every call. Null: no limits.
+
 ### `Count`
 
 ```csharp

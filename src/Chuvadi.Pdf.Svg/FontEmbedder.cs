@@ -152,7 +152,7 @@ internal static class FontEmbedder
 
         byte[] fontBytes;
         try { fontBytes = StreamDecoder.Decode(fontProgram); }
-        catch (Exception) { return null; }
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { return null; }
         if (fontBytes.Length == 0) { return null; }
 
         // v2.1.5 — cmap remap for Type0 TrueType fonts.
@@ -313,7 +313,7 @@ internal static class FontEmbedder
 
         byte[] bytes;
         try { bytes = StreamDecoder.Decode(mapStream); }
-        catch (Exception) { return null; }
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { return null; }
 
         if (bytes.Length < 2) { return null; }
 

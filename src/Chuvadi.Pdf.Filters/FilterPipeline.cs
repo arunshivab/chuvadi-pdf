@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters;
 
@@ -104,9 +105,11 @@ public sealed class FilterPipeline
 
         using (MemoryStream input = new MemoryStream(encoded))
         {
-            using (MemoryStream output = new MemoryStream())
+            using (GuardedOutputStream output = new GuardedOutputStream())
             {
                 filter.Decode(input, output, parms);
+                PdfWorkScope.CheckDecodedSize(output.Length);
+                PdfWorkScope.ChargeMemory(output.Length - output.Charged);
                 return output.ToArray();
             }
         }

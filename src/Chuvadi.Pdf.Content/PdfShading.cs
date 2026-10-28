@@ -76,6 +76,13 @@ public sealed class PdfShading
     /// <summary>True for a radial shading.</summary>
     public bool IsRadial => ShadingType == 3;
 
+    // A number entry; anything else makes the shading unusable (skipped by
+    // the renderers) rather than an invalid-cast failure of the whole page.
+    private static double Number(PdfPrimitive value) =>
+        value is PdfInteger or PdfReal
+            ? PdfReal.ToDouble(value)
+            : throw new ContentException("Shading entry is not a number.");
+
     /// <summary>
     /// Parses an axial or radial shading dictionary (or shading stream, whose
     /// dictionary is used).
@@ -120,7 +127,7 @@ public sealed class PdfShading
         double[] coords = new double[expected];
         for (int i = 0; i < expected; i++)
         {
-            coords[i] = PdfReal.ToDouble(objects.Resolve(coordsArray[i]));
+            coords[i] = Number(objects.Resolve(coordsArray[i]));
         }
 
         double domainStart = 0.0;
@@ -128,8 +135,8 @@ public sealed class PdfShading
         if (dict.TryGetValue(PdfName.Intern("Domain"), out PdfPrimitive? domainValue) &&
             objects.Resolve(domainValue) is PdfArray domain && domain.Count >= 2)
         {
-            domainStart = PdfReal.ToDouble(objects.Resolve(domain[0]));
-            domainEnd = PdfReal.ToDouble(objects.Resolve(domain[1]));
+            domainStart = Number(objects.Resolve(domain[0]));
+            domainEnd = Number(objects.Resolve(domain[1]));
         }
 
         bool extendStart = false;

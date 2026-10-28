@@ -480,62 +480,66 @@ public static partial class PdfCompressor
 
     // ── Reachability ──────────────────────────────────────────────────────
 
-    private static void Collect(
+    // Iterative (an explicit stack): reference chains such as a long
+    // outline linked by /Next can be tens of thousands of objects deep.
+    internal static void Collect(
         PdfPrimitive primitive,
         PdfObjectStore resolver,
         Dictionary<int, PdfPrimitive> reachable)
     {
-        switch (primitive)
+        Stack<PdfPrimitive> work = new Stack<PdfPrimitive>();
+        work.Push(primitive);
+        while (work.Count > 0)
         {
-            case PdfReference reference:
-                {
-                    int number = reference.ObjectId.ObjectNumber;
-                    if (reachable.ContainsKey(number))
+            switch (work.Pop())
+            {
+                case PdfReference reference:
                     {
-                        return;
+                        int number = reference.ObjectId.ObjectNumber;
+                        if (reachable.ContainsKey(number))
+                        {
+                            break;
+                        }
+
+                        PdfPrimitive resolved = resolver.Resolve(reference);
+                        reachable[number] = resolved;
+                        work.Push(resolved);
+                        break;
                     }
 
-                    PdfPrimitive resolved = resolver.Resolve(reference);
-                    reachable[number] = resolved;
-                    Collect(resolved, resolver, reachable);
+                case PdfDictionary dict:
+                    PushReversed(work, new List<PdfPrimitive>(dict.Values));
                     break;
-                }
 
-            case PdfDictionary dict:
-                {
-                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                case PdfArray array:
+                    for (int i = array.Count - 1; i >= 0; i--)
                     {
-                        Collect(entry.Value, resolver, reachable);
+                        work.Push(array[i]);
                     }
-                    break;
-                }
 
-            case PdfArray array:
-                {
-                    for (int i = 0; i < array.Count; i++)
-                    {
-                        Collect(array[i], resolver, reachable);
-                    }
                     break;
-                }
 
-            case PdfStream stream:
-                {
-                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
-                    {
-                        Collect(entry.Value, resolver, reachable);
-                    }
+                case PdfStream stream:
+                    PushReversed(work, new List<PdfPrimitive>(stream.Dictionary.Values));
                     break;
-                }
 
-            default:
-                break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    private static void PushReversed(Stack<PdfPrimitive> work, List<PdfPrimitive> values)
+    {
+        for (int i = values.Count - 1; i >= 0; i--)
+        {
+            work.Push(values[i]);
         }
     }
 
     // ── Copying with reference remapping ──────────────────────────────────
 
-    private static PdfPrimitive DeepCopy(PdfPrimitive primitive, Dictionary<int, int> remap)
+    internal static PdfPrimitive DeepCopy(PdfPrimitive primitive, Dictionary<int, int> remap)
     {
         switch (primitive)
         {
@@ -952,7 +956,7 @@ public static partial class PdfCompressor
 
     // Drops objects no longer reachable from the trailer (e.g. a stripped
     // /Metadata stream and anything only it referenced).
-    private static void GarbageCollect(List<PdfIndirectObject> objects, PdfDictionary trailer)
+    internal static void GarbageCollect(List<PdfIndirectObject> objects, PdfDictionary trailer)
     {
         Dictionary<int, PdfPrimitive> byNumber = new(objects.Count);
         foreach (PdfIndirectObject obj in objects)
@@ -969,41 +973,51 @@ public static partial class PdfCompressor
         objects.RemoveAll(obj => !reached.Contains(obj.Id.ObjectNumber));
     }
 
+    // Iterative for the same reason as Collect.
     private static void Mark(PdfPrimitive primitive, Dictionary<int, PdfPrimitive> byNumber, HashSet<int> reached)
     {
-        switch (primitive)
+        Stack<PdfPrimitive> work = new Stack<PdfPrimitive>();
+        work.Push(primitive);
+        while (work.Count > 0)
         {
-            case PdfReference reference:
-                if (reached.Add(reference.ObjectNumber) &&
-                    byNumber.TryGetValue(reference.ObjectNumber, out PdfPrimitive? target))
-                {
-                    Mark(target, byNumber, reached);
-                }
-                break;
+            switch (work.Pop())
+            {
+                case PdfReference reference:
+                    if (reached.Add(reference.ObjectNumber) &&
+                        byNumber.TryGetValue(reference.ObjectNumber, out PdfPrimitive? target))
+                    {
+                        work.Push(target);
+                    }
 
-            case PdfDictionary dict:
-                foreach (PdfPrimitive value in dict.Values)
-                {
-                    Mark(value, byNumber, reached);
-                }
-                break;
+                    break;
 
-            case PdfArray array:
-                for (int i = 0; i < array.Count; i++)
-                {
-                    Mark(array[i], byNumber, reached);
-                }
-                break;
+                case PdfDictionary dict:
+                    foreach (PdfPrimitive value in dict.Values)
+                    {
+                        work.Push(value);
+                    }
 
-            case PdfStream stream:
-                foreach (PdfPrimitive value in stream.Dictionary.Values)
-                {
-                    Mark(value, byNumber, reached);
-                }
-                break;
+                    break;
 
-            default:
-                break;
+                case PdfArray array:
+                    for (int i = 0; i < array.Count; i++)
+                    {
+                        work.Push(array[i]);
+                    }
+
+                    break;
+
+                case PdfStream stream:
+                    foreach (PdfPrimitive value in stream.Dictionary.Values)
+                    {
+                        work.Push(value);
+                    }
+
+                    break;
+
+                default:
+                    break;
+            }
         }
     }
 

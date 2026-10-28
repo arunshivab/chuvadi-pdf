@@ -155,6 +155,7 @@ public sealed class ScanlineRasterizer
         // Scanline fill (binary, original behaviour)
         for (int y = yMin; y <= yMax; y++)
         {
+            Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
             double scanY = y + 0.5; // Sample at pixel centre
 
             List<Crossing> crossings = ScanCrossings(edges, scanY);
@@ -201,6 +202,7 @@ public sealed class ScanlineRasterizer
 
         for (int y = yMin; y <= yMax; y++)
         {
+            Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
             Array.Clear(coverage, 0, width);
             bool any = false;
 

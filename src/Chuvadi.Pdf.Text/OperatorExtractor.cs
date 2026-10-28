@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Chuvadi.Pdf.Content;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Text;
 
@@ -61,6 +62,11 @@ public sealed class OperatorExtractor
 
         for (int i = 1; i < fragments.Count; i++)
         {
+            if ((i & 4095) == 0)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+            }
+
             TextFragment current = fragments[i];
 
             double xGap = current.X - (prev.X + EstimateWidth(prev));

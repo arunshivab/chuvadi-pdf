@@ -62,6 +62,12 @@ public static class PdfEncryption
         }
         else if (meta.R >= 2 && meta.R <= 4)
         {
+            // /Length is 40 to 128 bits (5 to 16 bytes) for these revisions.
+            if (meta.KeyBytes < 5 || meta.KeyBytes > 16)
+            {
+                throw new PdfEncryptionException($"Invalid encryption key /Length {meta.KeyBits} bits for /R {meta.R}.");
+            }
+
             // R=2/3/4 path
             byte[] derived = StandardSecurityHandler.DeriveKeyR4(
                 password,
@@ -74,6 +80,15 @@ public static class PdfEncryption
 
             bool ok = StandardSecurityHandler.ValidateUserPasswordR4(
                 derived, meta.U, firstFileId, meta.R);
+
+            if (!ok && !string.IsNullOrEmpty(password))
+            {
+                // Not the user password: try it as the owner password.
+                string user = StandardSecurityHandler.RecoverUserPasswordR4(password, meta.O, meta.R, meta.KeyBytes);
+                derived = StandardSecurityHandler.DeriveKeyR4(
+                    user, meta.O, meta.Permissions, firstFileId, meta.R, meta.KeyBytes, meta.EncryptMetadata);
+                ok = StandardSecurityHandler.ValidateUserPasswordR4(derived, meta.U, firstFileId, meta.R);
+            }
 
             if (!ok)
             {
