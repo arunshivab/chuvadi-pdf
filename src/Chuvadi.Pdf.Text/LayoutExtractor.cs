@@ -166,6 +166,8 @@ public sealed class LayoutExtractor
 
     private static double EstimateWidth(TextFragment fragment)
     {
-        return fragment.Text.Length * fragment.FontSize * 0.6;
+        // The font's advance when the parser measured it; otherwise
+        // approximately 0.6 of the font size per character.
+        return double.IsNaN(fragment.Width) ? fragment.Text.Length * fragment.FontSize * 0.6 : fragment.Width;
     }
 }

@@ -10,8 +10,8 @@ namespace Chuvadi.Pdf.Text.Shaping;
 public sealed class ShapingFeatures
 {
     /// <summary>
-    /// Gets the default feature set: ccmp, locl, calt, liga, kern, mark, mkmk enabled;
-    /// all optional features off.
+    /// Gets the default feature set: HarfBuzz's defaults (ccmp, locl, calt,
+    /// liga, kern, mark, mkmk and the script features) with all optional features off.
     /// </summary>
     public static ShapingFeatures Default { get; } = new ShapingFeatures();
 
@@ -31,8 +31,11 @@ public sealed class ShapingFeatures
 
     // ── Positioning ─────────────────────────────────────────────────────────
 
-    /// <summary>Gets or inits whether capital spacing (cpsp) is enabled. Default: true.</summary>
-    public bool Cpsp { get; init; } = true;
+    /// <summary>
+    /// Gets or inits whether capital spacing (cpsp) is enabled. Default: false
+    /// (since 3.26, matching HarfBuzz; cpsp is meant for all-capital text).
+    /// </summary>
+    public bool Cpsp { get; init; }
 
     /// <summary>Gets or inits whether kerning (kern) is enabled. Default: true.</summary>
     public bool Kern { get; init; } = true;
@@ -152,6 +155,34 @@ public sealed class ShapingFeatures
 
     /// <summary>Gets or inits character variant 14 (cv14). Default: false.</summary>
     public bool Cv14 { get; init; }
+
+    // Features HarfBuzz enables by default that this class can switch off.
+    private static readonly string[] DefaultOn = { "ccmp", "locl", "calt", "liga", "kern", "mark", "mkmk" };
+
+    /// <summary>
+    /// Returns the features whose setting differs from HarfBuzz's defaults:
+    /// default features switched off, and optional features switched on.
+    /// </summary>
+    internal System.Collections.Generic.IEnumerable<(string Tag, bool On)> Toggles()
+    {
+        foreach (string tag in AllTags)
+        {
+            bool on = IsEnabled(tag);
+            bool defaultOn = System.Array.IndexOf(DefaultOn, tag) >= 0;
+            if (on != defaultOn)
+            {
+                yield return (tag, on);
+            }
+        }
+    }
+
+    private static readonly string[] AllTags =
+    {
+        "ccmp", "locl", "calt", "liga", "cpsp", "kern", "mark", "mkmk", "ordn", "frac", "numr", "dnom",
+        "sups", "subs", "sinf", "case", "zero", "dlig", "pnum", "tnum", "salt", "aalt",
+        "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08",
+        "cv01", "cv02", "cv03", "cv04", "cv05", "cv06", "cv07", "cv08", "cv09", "cv10", "cv11", "cv12", "cv13", "cv14",
+    };
 
     /// <summary>
     /// Returns whether a four-character OpenType feature tag is enabled by this

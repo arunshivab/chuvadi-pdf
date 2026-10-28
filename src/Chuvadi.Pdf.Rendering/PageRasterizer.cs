@@ -1431,7 +1431,7 @@ public sealed class PageRasterizer
 
         if (mode == PdfBlendMode.Normal)
         {
-            buffer.BlendPixel(x, y, ColorF.FromRgb(s.R, s.G, s.B, alpha));
+            buffer.BlendPixel(x, y, ColorF.FromRgb(s.R, s.G, s.B, alpha), gammaCorrect: false);
             return;
         }
 
@@ -1441,7 +1441,7 @@ public sealed class PageRasterizer
         double crG = ((1.0 - ab) * s.G) + (ab * BlendModes.Blend(mode, dg / 255.0, s.G));
         double crB = ((1.0 - ab) * s.B) + (ab * BlendModes.Blend(mode, db / 255.0, s.B));
         buffer.BlendPixel(
-            x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha));
+            x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha), gammaCorrect: false);
     }
 
     // Returns the device-space coverage (0..1 per pixel) for a soft mask,
@@ -1659,7 +1659,7 @@ public sealed class PageRasterizer
                 }
                 else
                 {
-                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA));
+                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA), gammaCorrect: false);
                 }
             }
         }

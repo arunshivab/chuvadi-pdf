@@ -475,7 +475,7 @@ public sealed class ScanlineRasterizer
 
                 for (int x = xStart; x <= xEnd; x++)
                 {
-                    WritePixel(buffer, x, y, color, true, mode, smask, smW);
+                    WritePixel(buffer, x, y, color, false, mode, smask, smW);
                 }
             }
             else
@@ -508,7 +508,7 @@ public sealed class ScanlineRasterizer
 
                     for (int x = xStart; x <= xEnd; x++)
                     {
-                        WritePixel(buffer, x, y, color, true, mode, smask, smW);
+                        WritePixel(buffer, x, y, color, false, mode, smask, smW);
                     }
                 }
                 else
@@ -548,7 +548,7 @@ public sealed class ScanlineRasterizer
 
                 for (int x = xStart; x <= xEnd; x++)
                 {
-                    WritePixel(buffer, x, y, color, true, mode, smask, smW);
+                    WritePixel(buffer, x, y, color, false, mode, smask, smW);
                 }
             }
         }

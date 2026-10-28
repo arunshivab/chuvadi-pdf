@@ -81,16 +81,17 @@ public sealed class TextShaperTests
     }
 
     [Fact]
-    public void Shape_CombiningAcute_NoFusionWhenUnmapped()
+    public void Shape_CombiningAcute_ComposesToThePrecomposedGlyph()
     {
-        // U+0301 (combining acute) has no cmap entry in Carlito, so it maps to gid 0 and
-        // ccmp cannot fuse it. The run stays as two slots (base + .notdef).
-        // This test documents the behaviour; full combining support requires a post-table
-        // name lookup which is outside Phase 1 scope.
+        // e + U+0301: Carlito has no glyph for the combining acute but has é, so
+        // the normalizer composes the pair (HarfBuzz gives the same: gid 2007,
+        // one cluster at 0).
         IReadOnlyList<ShapedGlyph> glyphs =
             TextShaper.Shape(Carlito(), "e\u0301", LipiScript.Latin);
 
-        glyphs[0].GlyphId.Should().Be(59, "e should map to gid 59");
+        glyphs.Should().ContainSingle();
+        glyphs[0].GlyphId.Should().Be(2007);
+        glyphs[0].Cluster.Should().Be(0);
     }
 
     // ── Advances ─────────────────────────────────────────────────────────────

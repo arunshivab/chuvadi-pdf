@@ -28,11 +28,29 @@ public sealed class TextFragment
     /// <param name="y">The Y position in user space (baseline of the text).</param>
     /// <param name="fontSize">The font size in points at the time of rendering.</param>
     public TextFragment(string text, double x, double y, double fontSize)
+        : this(text, x, y, fontSize, double.NaN)
+    {
+    }
+
+    /// <summary>
+    /// Initialises a new <see cref="TextFragment"/> with its advance width.
+    /// </summary>
+    /// <param name="text">The Unicode text content of this fragment.</param>
+    /// <param name="x">The X position in user space (left edge of first glyph).</param>
+    /// <param name="y">The Y position in user space (baseline of the text).</param>
+    /// <param name="fontSize">The font size in points at the time of rendering.</param>
+    /// <param name="width">
+    /// The horizontal advance of the shown glyphs in the same space as
+    /// <paramref name="x"/>, or <see cref="double.NaN"/> when the font's
+    /// widths are not known.
+    /// </param>
+    public TextFragment(string text, double x, double y, double fontSize, double width)
     {
         Text = text ?? string.Empty;
         X = x;
         Y = y;
         FontSize = fontSize;
+        Width = width;
     }
 
     /// <summary>Gets the Unicode text content of this fragment.</summary>
@@ -46,6 +64,12 @@ public sealed class TextFragment
 
     /// <summary>Gets the font size in points.</summary>
     public double FontSize { get; }
+
+    /// <summary>
+    /// Gets the advance width of the fragment's glyphs (from the font's
+    /// widths), or <see cref="double.NaN"/> when it is not known.
+    /// </summary>
+    public double Width { get; }
 
     /// <inheritdoc/>
     public override string ToString() =>

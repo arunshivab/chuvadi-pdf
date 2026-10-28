@@ -153,6 +153,15 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.26.0 (HarfBuzz-conformant shaping):
+- **Indic shaping conformance** (was open item 21): `TextShaper` is a port
+  of HarfBuzz's OpenType shaper; glyphs, UTF-16 clusters, advances and
+  offsets match HarfBuzz 15 on 29,493 lines (the 19,641-syllable corpus and
+  a 9,852-line word/stress corpus) for all nine LiPi Indic scripts and Latin.
+- Fixed on the way: no word gap after `/ActualText` in text extraction (real
+  glyph widths in the content parser), sRGB transparency on the aliased-fill
+  and image raster paths.
+
 Shipped in v3.25.0 (fonts and drawing for Chuvadi.Layout):
 - **`FontFace`** metrics API, **`TextShaper.Shape(FontFace, …)`** with lookup
   caching and a BenchmarkDotNet `ShapingBench`, **CFF (.otf) and collection
@@ -201,23 +210,28 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.25.0. Items are independent and may be
+Status verified against code at v3.26.0. Items are independent and may be
 re-ordered.
 
 ### Text shaping
-**21. Indic shaping conformance (planned for 3.26).** `TextShaper` matches
-HarfBuzz on Latin but on about a third of Indic syllables (19,641 generated
-syllables over the nine LiPi Indic fonts: Tamil 17%, Kannada 11%, Devanagari
-35%). Gaps: `ShapingFeatures.IsEnabled` returns false for every Indic
-feature (akhn, rphf, half, blwf, pres, abvs, psts, haln, abvm, blwm, ...);
-turning them on globally reaches 63% but breaks word-final halants (half
-forms need per-glyph masks). Needed: syllable grammar and base-consonant
-search, per-glyph feature masks, final reordering of reph and pre-base
-matras, Unicode split-vowel decomposition (instead of the LiPi glyph-id
-table), GSUB/GPOS lookup flags (ignore marks, mark filtering sets), and the
-version-2 script tags (`tml2`, `dev2`, ...). `ShapedGlyph.Cluster` for Indic
-is a code point, not a text index; fix with the shaper. Gate: the HarfBuzz
-comparison harness.
+**25. Shapers not ported (3.26 scope note).** `TextShaper` ports HarfBuzz's
+Indic and default shapers only. Not ported: Arabic, Hebrew, Thai/Lao,
+Hangul, Khmer, Myanmar and USE (a font with only `dev3`-style tags is shaped
+with the Indic shaper, not USE), variation sequences (cmap format 14), the
+legacy `kern` table, vertical text, and variable-font instances other than
+the default. None is needed by a LiPi script; take up when a consumer needs
+one.
+
+### Text extraction
+**26. Text positions in user space.** The content parser places fragments by
+the text matrix alone and moves it as Tm × T rather than T × Tm (§9.4.4); the
+CTM is tracked but not applied, and `TextFragment.FontSize` is the `Tf` size.
+Files that scale text through Tm or `cm` ("1 Tf" with "12 0 0 12 … Tm") get
+positions, widths and gap thresholds in unscaled units. Fixing it changes
+line and word breaks (tried in 3.26: a certificate PDF drawn with one `cm`
+per line lost its line breaks because the heuristics compare positions
+across coordinate systems), so it needs page-space positions and its own
+corpus check.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round

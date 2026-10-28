@@ -70,6 +70,23 @@ Constructs a font directly from explicit mappings, bypassing PDF dictionary pars
 - `encoding` — Optional single-byte encoding for fallback when no `toUnicodeMap` entry matches a position.
 - `isComposite` — Whether this represents a Type0/composite font. Affects the default byte-window width when neither codespace ranges nor mapping keys suggest a wider window.
 
+### `TryMeasure`
+
+```csharp
+bool TryMeasure(byte[] bytes, out double width, out int codeCount, out int spaceCount)
+```
+
+Measures a shown string with the font's glyph widths (/Widths for a simple font, /W and /DW for a Type0 font with the Identity-H encoding).
+
+**Parameters**
+
+- `bytes` — The raw bytes of a Tj, TJ or similar operand.
+- `width` — The summed glyph width, in thousandths of text space.
+- `codeCount` — The number of character codes (for character spacing).
+- `spaceCount` — The number of single-byte code 32s (for word spacing).
+
+**Returns:** `true` when the font's widths are known. <exception cref="ArgumentNullException">`bytes` is null.</exception>
+
 ### `Decode`
 
 ```csharp

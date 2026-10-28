@@ -15,6 +15,8 @@
 using System.IO;
 using System.Collections.Generic;
 using FluentAssertions;
+using Chuvadi.Pdf.Text.Shaping.Indic;
+using Chuvadi.Pdf.Text.Shaping.Unicode;
 using Xunit;
 
 namespace Chuvadi.Pdf.Text.Shaping.Tests;
@@ -91,49 +93,27 @@ public sealed class IndicReorderingTests
         g[2].GlyphId.Should().Be(54);
     }
 
-    // ── IndicData category lookups ────────────────────────────────────────────
+    // ── Indic categories (HarfBuzz's table: category | position << 8) ─────────
 
-    [Fact]
-    public void IndicData_Tamil_CorrectPositionalCategories()
+    [Theory]
+    [InlineData(0x0BC6, IndicShaper.CatM, IndicShaper.PosPreM)]
+    [InlineData(0x0BBE, IndicShaper.CatM, IndicShaper.PosAfterPost)]
+    [InlineData(0x0BC0, IndicShaper.CatM, IndicShaper.PosAfterSub)]
+    [InlineData(0x0B95, IndicShaper.CatC, IndicShaper.PosBaseC)]
+    [InlineData(0x0BCD, IndicShaper.CatH, IndicShaper.PosAboveC)]
+    [InlineData(0x0B85, IndicShaper.CatV, IndicShaper.PosBaseC)]
+    [InlineData(0x0B82, IndicShaper.CatSM, IndicShaper.PosSmvd)]
+    [InlineData(0x0041, IndicShaper.CatX, IndicShaper.PosEnd)]
+    [InlineData(0x093F, IndicShaper.CatM, IndicShaper.PosPreM)]
+    [InlineData(0x0930, IndicShaper.CatRa, IndicShaper.PosBaseC)]
+    [InlineData(0x0D4E, IndicShaper.CatRepha, IndicShaper.PosEnd)]
+    [InlineData(0x25CC, IndicShaper.CatDottedCircle, IndicShaper.PosBaseC)]
+    [InlineData(0x200D, IndicShaper.CatZwj, IndicShaper.PosEnd)]
+    public void IndicCategories_MatchHarfBuzz(int codepoint, int category, int position)
     {
-        Indic.IndicData.GetPositionalCategory(0x0BC6).Should().Be(
-            Indic.IndicPositionalCategory.Left, "e-sign is Left");
-        Indic.IndicData.GetPositionalCategory(0x0BBE).Should().Be(
-            Indic.IndicPositionalCategory.Right, "aa-sign is Right");
-        Indic.IndicData.GetPositionalCategory(0x0BCB).Should().Be(
-            Indic.IndicPositionalCategory.LeftAndRight, "o-sign is LeftAndRight");
-        Indic.IndicData.GetPositionalCategory(0x0BC0).Should().Be(
-            Indic.IndicPositionalCategory.Top, "ii-sign is Top");
-    }
+        int value = UnicodeData.IndicCategories(codepoint);
 
-    [Fact]
-    public void IndicData_Tamil_CorrectSyllabicCategories()
-    {
-        Indic.IndicData.GetSyllabicCategory(0x0B95).Should().Be(
-            Indic.IndicSyllabicCategory.Consonant, "ka is Consonant");
-        Indic.IndicData.GetSyllabicCategory(0x0BCD).Should().Be(
-            Indic.IndicSyllabicCategory.Virama, "virama is Virama");
-        Indic.IndicData.GetSyllabicCategory(0x0B85).Should().Be(
-            Indic.IndicSyllabicCategory.VowelIndependent, "a is VowelIndependent");
-        Indic.IndicData.GetSyllabicCategory(0x0B82).Should().Be(
-            Indic.IndicSyllabicCategory.Bindu, "anusvara is Bindu");
-        Indic.IndicData.GetSyllabicCategory(0x0041).Should().Be(
-            Indic.IndicSyllabicCategory.Other, "Latin A is Other");
-    }
-
-    [Fact]
-    public void IndicData_Devanagari_LeftVowelIdentified()
-    {
-        // Devanagari i-sign (U+093F) is Left
-        Indic.IndicData.GetPositionalCategory(0x093F).Should().Be(
-            Indic.IndicPositionalCategory.Left);
-    }
-
-    [Fact]
-    public void IndicData_Bengali_LeftAndRight_Identified()
-    {
-        // Bengali o-sign (U+09CB) is LeftAndRight
-        Indic.IndicData.GetPositionalCategory(0x09CB).Should().Be(
-            Indic.IndicPositionalCategory.LeftAndRight);
+        (value & 0xFF).Should().Be(category);
+        (value >> 8).Should().Be(position);
     }
 }

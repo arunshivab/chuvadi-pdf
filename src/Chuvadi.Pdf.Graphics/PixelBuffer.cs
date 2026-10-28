@@ -117,7 +117,10 @@ public sealed class PixelBuffer
 
     /// <summary>
     /// Blends a colour over the existing pixel using standard alpha compositing
-    /// (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing.
+    /// (Porter-Duff "over" operation) with gamma-correct (linear-light) mixing,
+    /// which suits anti-aliased edge coverage. For transparency (a colour's
+    /// own alpha) use <see cref="BlendPixel(int, int, ColorF, bool)"/> with
+    /// <c>gammaCorrect: false</c>, which mixes in sRGB as PDF viewers do.
     /// PDF 32000-1:2008 -11.3 - Basic compositing formula.
     /// </summary>
     public void BlendPixel(int x, int y, ColorF color)

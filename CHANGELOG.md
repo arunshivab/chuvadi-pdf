@@ -10,6 +10,110 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.26.0] - 2026-10-28
+
+HarfBuzz-conformant shaping. `TextShaper` is now a port of HarfBuzz's
+OpenType shaper (the Indic shaper for the nine LiPi Indic scripts, the
+default shaper for Latin runs), checked glyph for glyph against HarfBuzz
+15.0.0. Also two fixes from Chuvadi.Layout: no word gap after an
+`/ActualText` span in text extraction, and transparency blended in sRGB on
+every rasterizer path. No public API is removed or changed; the additions are
+listed below.
+
+### HarfBuzz conformance (per script)
+
+Corpus 1 is the 19,641-syllable comparison (single syllables: consonant,
+consonant + virama, every consonant + matra, conjuncts, reph forms, signs).
+Corpus 2 is 9,852 lines of words and stress strings (multi-syllable words,
+ZWJ/ZWNJ, broken clusters, random character strings, and Latin text on four
+fonts, one without GPOS). Fonts: the shipped LiPi Sans faces, Carlito,
+Liberation Serif and the synthetic CFF fixture. "Match" means the same glyph
+ids, the same clusters and the same advances and offsets as HarfBuzz, line
+for line.
+
+| Script     | Corpus 1 lines | 3.25.0 glyph ids | 3.26.0 full match | Corpus 2 lines | 3.26.0 full match |
+|------------|---------------:|-----------------:|------------------:|---------------:|------------------:|
+| Tamil      | 1,817 | 17.2% | 100% | 1,000 | 100% |
+| Devanagari | 2,428 | 35.2% | 100% | 1,000 | 100% |
+| Bengali    | 2,102 | 40.4% | 100% | 1,000 | 100% |
+| Gurmukhi   | 2,039 | 80.0% | 100% | 1,000 | 100% |
+| Gujarati   | 2,250 | 22.2% | 100% | 1,000 | 100% |
+| Odia       | 2,158 | 13.8% | 100% | 1,000 | 100% |
+| Telugu     | 2,268 | 11.4% | 100% | 1,000 | 100% |
+| Kannada    | 2,264 | 11.0% | 100% | 1,000 | 100% |
+| Malayalam  | 2,315 | 68.3% | 100% | 1,000 | 100% |
+| Latin      | –     | –     | –    |   852 | 100% |
+| **All**    | **19,641** | **33.3%** | **100%** | **9,852** | **100%** |
+
+(3.25.0 was measured on glyph ids only; its clusters and positions were not
+comparable.) `tools/shaping-data/hb_conformance.py full` regenerates both
+corpora with HarfBuzz; `CHUVADI_HB_CORPUS=<file> dotnet test
+tests/Chuvadi.Pdf.Text.Shaping.Tests` checks every line. A 2,162-line sample
+runs in the normal test suite.
+
+### Changed
+- **`TextShaper` engine** (Text.Shaping): a C# port of HarfBuzz's OpenType
+  layout engine (all GSUB lookup types including multiple, alternate and
+  reverse chaining; all GPOS lookup types with mark, ligature and cursive
+  attachment; lookup flags, mark filtering sets, GDEF classes; the feature
+  map with stages, masks and per-syllable matching; FeatureVariations at
+  the default instance), its normalizer, and its Indic shaper (syllable
+  grammar, initial and final reordering, reph/pref/half/below forms, old
+  and new script tags, dotted circles for broken clusters, vowel
+  constraints). Fonts without GPOS get HarfBuzz's fallback mark
+  positioning. HarfBuzz's operation budget bounds the work a hostile font
+  can cause, reads outside a font's tables read as empty instead of
+  throwing, and an Indic run in a font without a usable GSUB is still
+  reordered. Notices: `THIRD-PARTY-NOTICES.md` (packed with
+  Chuvadi.Pdf.Text.Shaping).
+- **`ShapedGlyph.Cluster` is the UTF-16 index of the cluster's first
+  character, for every script**, with HarfBuzz's cluster merging (a split
+  vowel, a reordered matra and a ligature share their cluster). Indic runs
+  stored a code point here before. This is what
+  `DrawShapedRun(…, text, clusterStarts, …)` needs.
+- **Advances and offsets are exact**: font units × 1000 / unitsPerEm, no
+  longer rounded to whole thousandths per glyph.
+- **`ShapingFeatures.Cpsp` defaults to false** (HarfBuzz does not apply
+  capital spacing by default; it is meant for all-capital text). The other
+  defaults are unchanged. Features switched off or on in `ShapingFeatures`
+  are passed to the shaper as HarfBuzz user features.
+- Latin runs follow HarfBuzz too: e + U+0301 composes to é when the font has
+  é; ZWJ, ZWNJ and other default-ignorable characters become the space glyph
+  with zero advance.
+- `ShapingBench` (Shape(FontFace), short job): Latin line 173 → 32 µs,
+  Tamil 19 µs, Devanagari 47 µs (the full Indic pipeline; 3.25 did much less
+  work), allocation 26 → 11 KB. `Shape(bytes)` loads the face and builds
+  the shaping plan on every call (about 0.3–0.4 ms; Tamil was 35 µs), so
+  loops should use the `FontFace` overload.
+
+### Fixed
+- **Text extraction put a space inside a word after an `/ActualText` span**
+  (Layout: Tamil "கொடு" drawn one glyph per Tj extracted as "கொ டு"). The
+  content parser now advances by the font's glyph widths (`/Widths`, or `/W`
+  and `/DW` of a Type0 font with the Identity-H encoding) instead of 0.6 em
+  per character, gives each fragment its width, and an `/ActualText`
+  fragment spans the glyphs it replaces; both extractors measure gaps from
+  the real widths. Fonts without widths (standard 14) keep the old estimate.
+- **Transparency blended in linear light on two rasterizer paths**: aliased
+  fills (`AntiAlias = false`) and images (an image's `/ca` or alpha, and
+  blend-mode/soft-mask composites) mixed 50% black over white to 187. They
+  now composite in sRGB like the anti-aliased fills already did and like
+  Acrobat and pdf.js: 128. Linear light is kept for anti-aliased edge
+  coverage only (`RenderOptions.GammaCorrect`).
+
+### Added
+- `TextFragment.Width` and a constructor taking it (Content);
+  `PdfFont.TryMeasure(bytes, out width, out codeCount, out spaceCount)`
+  (Fonts).
+- Tests: per-script HarfBuzz conformance, Indic behaviours (split-vowel
+  clusters, dotted circle, reph, pre-base matra, ZWNJ, FeatureVariations,
+  chillu), shaper robustness (self-recursive lookup, corrupted tables, no
+  GSUB), extraction of shaped Tamil runs and with font widths,
+  sRGB transparency on every path.
+- `tools/shaping-data`: the HarfBuzz Unicode/Indic table dump and generator,
+  and the conformance corpus builder.
+
+---
 ## [3.25.0] - 2026-10-28
 
 Fonts and drawing for Chuvadi.Layout: a reusable font-face measuring API, a
