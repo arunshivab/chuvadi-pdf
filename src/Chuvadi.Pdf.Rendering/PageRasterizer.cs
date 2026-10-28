@@ -6,10 +6,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.Objects;
+using Chuvadi.Pdf.Primitives;
 using Chuvadi.Pdf.Rendering.Raster;
 using GraphicsPath = Chuvadi.Pdf.Graphics.Path;
 using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
@@ -87,10 +89,60 @@ public sealed class PageRasterizer
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="page"/> is null.
     /// </exception>
-    public PixelBuffer Rasterize(PdfPage page)
+    public PixelBuffer Rasterize(PdfPage page) => Rasterize(page, CancellationToken.None);
+
+    /// <summary>
+    /// Rasterizes a PDF page to a <see cref="PixelBuffer"/>, stopping when
+    /// <paramref name="cancellationToken"/> is cancelled.
+    /// </summary>
+    /// <remarks>
+    /// The work runs in a <see cref="PdfWorkScope"/> with the limits the
+    /// document was opened with (<see cref="PdfObjectStore.Limits"/>): content
+    /// operators, decoded streams and buffers are checked as they are
+    /// processed, and cancellation is noticed well within a second.
+    /// </remarks>
+    /// <param name="page">The page to rasterize.</param>
+    /// <param name="cancellationToken">A token that cancels the render.</param>
+    /// <returns>A pixel buffer in BGRA format containing the rendered page.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="page"/> is null.</exception>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    /// <exception cref="PdfLimitExceededException">A limit was exceeded.</exception>
+    /// <exception cref="PdfException">
+    /// The page could not be read or rendered. Failures the code did not
+    /// anticipate are reported as <see cref="PdfCorruptionException"/> with
+    /// the original as the inner exception.
+    /// </exception>
+    public PixelBuffer Rasterize(PdfPage page, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(page);
+        return Guard(() => RasterizeCore(page), cancellationToken);
+    }
 
+    // Runs work in a scope with the document's limits and the caller's token,
+    // reporting failures outside the documented set as PdfCorruptionException.
+    private T Guard<T>(Func<T> work, CancellationToken cancellationToken)
+    {
+        using PdfWorkScope scope = PdfWorkScope.Enter(_objects.Limits, cancellationToken);
+        try
+        {
+            return work();
+        }
+        catch (Exception ex) when (ex is not (PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException)
+            && (ex is not IOException || ex is EndOfStreamException))
+        {
+            throw new PdfCorruptionException("The page could not be rendered: " + ex.Message, ex);
+        }
+    }
+
+    private PixelBuffer RasterizeCore(PdfPage page)
+    {
+        if (!(page.Width > 0) || !(page.Height > 0))
+        {
+            throw new PdfCorruptionException("The page has an empty or invalid MediaBox.");
+        }
+
+        (int finalW, int finalH) = _options.PixelSize(page.Width, page.Height);
+        PdfWorkScope.CheckOutputPixels(finalW, finalH);
         int rotation = _options.Rotation;
         if (_options.ApplyPageRotation)
         {
@@ -139,6 +191,7 @@ public sealed class PageRasterizer
         double pageH = page.Height;
 
         (int pixW, int pixH) = options.PixelSize(pageW, pageH);
+        PdfWorkScope.ChargeMemory((long)pixW * pixH * 4);
         PixelBuffer buffer = new PixelBuffer(pixW, pixH);
         buffer.Clear(options.Background);
 
@@ -168,6 +221,7 @@ public sealed class PageRasterizer
         int w = src.Width;
         int h = src.Height;
         bool swap = rotation == 90 || rotation == 270;
+        PdfWorkScope.ChargeMemory((long)w * h * 4);
         PixelBuffer dst = new PixelBuffer(swap ? h : w, swap ? w : h);
 
         for (int y = 0; y < h; y++)
@@ -190,6 +244,7 @@ public sealed class PageRasterizer
 
     private static PixelBuffer Downsample(PixelBuffer src, int dstW, int dstH, int s)
     {
+        PdfWorkScope.ChargeMemory((long)dstW * dstH * 4);
         PixelBuffer dst = new PixelBuffer(dstW, dstH);
 
         for (int y = 0; y < dstH; y++)
@@ -249,11 +304,24 @@ public sealed class PageRasterizer
     /// <summary>
     /// Rasterizes a page and encodes the result as PNG bytes.
     /// </summary>
-    public byte[] RasterizeToPng(PdfPage page)
+    public byte[] RasterizeToPng(PdfPage page) => RasterizeToPng(page, CancellationToken.None);
+
+    /// <summary>
+    /// Rasterizes a page and encodes the result as PNG bytes, stopping when
+    /// <paramref name="cancellationToken"/> is cancelled. See
+    /// <see cref="Rasterize(PdfPage, CancellationToken)"/> for limits and exceptions.
+    /// </summary>
+    /// <param name="page">The page to rasterize.</param>
+    /// <param name="cancellationToken">A token that cancels the render.</param>
+    /// <returns>The PNG bytes.</returns>
+    public byte[] RasterizeToPng(PdfPage page, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(page);
+        return Guard(() => EncodePng(RasterizeCore(page)), cancellationToken);
+    }
 
-        PixelBuffer buffer = Rasterize(page);
+    private static byte[] EncodePng(PixelBuffer buffer)
+    {
         ImageFrame frame = new ImageFrame(buffer, ImageColorFormat.Rgb24);
 
         using (MemoryStream ms = new MemoryStream())
@@ -315,7 +383,21 @@ public sealed class PageRasterizer
     /// <paramref name="dpi"/> is not positive, or <paramref name="region"/> has
     /// a non-positive dimension.
     /// </exception>
-    public PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi)
+    public PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi) =>
+        RenderRegion(page, region, dpi, CancellationToken.None);
+
+    /// <summary>
+    /// Renders a rectangular sub-region of a page (see
+    /// <see cref="RenderRegion(PdfPage, Rect, double)"/>), stopping when
+    /// <paramref name="cancellationToken"/> is cancelled. See
+    /// <see cref="Rasterize(PdfPage, CancellationToken)"/> for limits and exceptions.
+    /// </summary>
+    /// <param name="page">The page to render.</param>
+    /// <param name="region">The sub-region in page space (PDF points).</param>
+    /// <param name="dpi">Output resolution in dots per inch. Must be positive.</param>
+    /// <param name="cancellationToken">A token that cancels the render.</param>
+    /// <returns>The rendered region. Never null.</returns>
+    public PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(page);
         if (dpi <= 0)
@@ -328,15 +410,21 @@ public sealed class PageRasterizer
                 nameof(region), "Region must have positive width and height.");
         }
 
-        RenderOptions options = WithDpi(dpi);
-        double scale = dpi / 72.0;
-        int width = Math.Max(1, (int)Math.Round(region.Width * scale));
-        int height = Math.Max(1, (int)Math.Round(region.Height * scale));
+        return Guard(
+            () =>
+            {
+                RenderOptions options = WithDpi(dpi);
+                double scale = dpi / 72.0;
+                int width = Math.Max(1, (int)Math.Round(region.Width * scale));
+                int height = Math.Max(1, (int)Math.Round(region.Height * scale));
 
-        PixelBuffer buffer = new PixelBuffer(width, height);
-        buffer.Clear(options.Background);
-        PaintRegion(page, options, region, buffer);
-        return buffer;
+                PdfWorkScope.ChargeRaster(width, height);
+                PixelBuffer buffer = new PixelBuffer(width, height);
+                buffer.Clear(options.Background);
+                PaintRegion(page, options, region, buffer);
+                return buffer;
+            },
+            cancellationToken);
     }
 
     /// <summary>
@@ -379,6 +467,7 @@ public sealed class PageRasterizer
         int width = Math.Max(1, (int)Math.Round(bounds.Width * scale));
         int height = Math.Max(1, (int)Math.Round(bounds.Height * scale));
 
+        PdfWorkScope.ChargeRaster(width, height);
         PixelBuffer buffer = new PixelBuffer(width, height);
         buffer.Clear(options.Background);
         PaintRegion(page, options, bounds, buffer);
@@ -387,7 +476,7 @@ public sealed class PageRasterizer
     }
 
     /// <summary>
-    /// Renders a sub-region (see <see cref="RenderRegion"/>) and encodes it as
+    /// Renders a sub-region (see <see cref="RenderRegion(PdfPage, Rect, double)"/>) and encodes it as
     /// 24-bit RGB PNG bytes.
     /// </summary>
     public byte[] RenderRegionToPng(PdfPage page, Rect region, double dpi)
@@ -538,6 +627,7 @@ public sealed class PageRasterizer
     {
         foreach (RenderOp op in list.Ops)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             switch (op)
             {
                 case FillPathOp fp:
@@ -689,6 +779,7 @@ public sealed class PageRasterizer
     // a step wraps into the window as overlapping tiles would paint it.
     private PixelBuffer RenderPatternPeriod(TilingFillOp op, int tileW, int tileH)
     {
+        PdfWorkScope.ChargeMemory((long)tileW * tileH * 4);
         PixelBuffer tile = new PixelBuffer(tileW, tileH);
         PageRasterizer painter = new PageRasterizer(_objects, new RenderOptions
         {
@@ -1108,6 +1199,7 @@ public sealed class PageRasterizer
 
         for (int py = 0; py < buffer.Height; py++)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             List<(double Start, double End)>? allowed = clip?.AllowedIntervals(py + 0.5);
             if (allowed is not null && allowed.Count == 0)
             {
@@ -1361,6 +1453,7 @@ public sealed class PageRasterizer
     {
         int w = buffer.Width;
         int h = buffer.Height;
+        PdfWorkScope.ChargeMemory((long)w * h * 4);
         PixelBuffer maskBuffer = new PixelBuffer(w, h);
 
         if (mask.IsLuminosity)
@@ -1509,6 +1602,7 @@ public sealed class PageRasterizer
 
         for (int py = dstY0; py <= dstY1; py++)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             // Allowed x-intervals from the clip region for this row (null = all).
             List<(double Start, double End)>? allowed =
                 clip?.AllowedIntervals(py + 0.5);

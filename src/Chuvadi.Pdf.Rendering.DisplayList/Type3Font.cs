@@ -94,7 +94,7 @@ public sealed class Type3Font
             {
                 content = ContentStreamLoader.Decode(proc);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 continue;
             }

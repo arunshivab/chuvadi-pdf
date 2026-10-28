@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -75,7 +76,8 @@ public abstract class PdfFunction
 
         if (_range is not null)
         {
-            for (int j = 0; j < OutputCount; j++)
+            // A /Range shorter than the outputs clips only what it covers.
+            for (int j = 0; j < OutputCount && (2 * j) + 1 < _range.Length; j++)
             {
                 output[j] = Clip(output[j], _range[2 * j], _range[(2 * j) + 1]);
             }
@@ -100,6 +102,14 @@ public abstract class PdfFunction
     {
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(objects);
+
+        // A function that (directly or through stitching) contains itself
+        // recurses without end: fail with a catchable exception instead of
+        // overflowing the stack.
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        {
+            throw new ContentException("Function nesting is too deep (a function may contain itself).");
+        }
 
         PdfPrimitive resolved = objects.Resolve(function);
 
@@ -203,7 +213,10 @@ public abstract class PdfFunction
         double[] numbers = new double[array.Count];
         for (int i = 0; i < array.Count; i++)
         {
-            numbers[i] = PdfReal.ToDouble(objects.Resolve(array[i]));
+            PdfPrimitive item = objects.Resolve(array[i]);
+            numbers[i] = item is PdfInteger or PdfReal
+                ? PdfReal.ToDouble(item)
+                : throw new ContentException($"Function /{key} entry {i} is not a number.");
         }
         return numbers;
     }
@@ -448,11 +461,16 @@ internal sealed class ExponentialFunction : PdfFunction
     /// <inheritdoc/>
     protected override void EvaluateCore(double[] input, double[] output)
     {
-        double x = input[0];
+        // A /Domain with no input pair gives no input: treat it as 0.
+        double x = input.Length > 0 ? input[0] : 0.0;
         double xn = _n == 1.0 ? x : Math.Pow(x, _n);
         for (int j = 0; j < output.Length; j++)
         {
-            output[j] = _c0[j] + (xn * (_c1[j] - _c0[j]));
+            // /C0 and /C1 of different lengths: missing values take their
+            // defaults (0 and 1) instead of indexing past the shorter one.
+            double c0 = j < _c0.Length ? _c0[j] : 0.0;
+            double c1 = j < _c1.Length ? _c1[j] : 1.0;
+            output[j] = c0 + (xn * (c1 - c0));
         }
     }
 }
@@ -501,7 +519,8 @@ internal sealed class StitchingFunction : PdfFunction
     /// <inheritdoc/>
     protected override void EvaluateCore(double[] input, double[] output)
     {
-        double x = input[0];
+        // A /Domain with no input pair gives no input: treat it as 0.
+        double x = input.Length > 0 ? input[0] : 0.0;
         int k = _functions.Length;
 
         int index = 0;
@@ -909,6 +928,11 @@ internal sealed class PostScriptFunction : PdfFunction
 
     private static Block ParseInner(List<string> tokens, ref int pos)
     {
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        {
+            throw new ContentException("Type 4 function procedures are nested too deeply.");
+        }
+
         Block block = new();
         while (pos < tokens.Count)
         {

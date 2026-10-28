@@ -1243,7 +1243,7 @@ public static class DisplayListBuilder
             {
                 content = ContentStreamLoader.Decode(groupStream);
             }
-            catch
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 return new PageDisplayList(sub._ops, 0, 0, 0);
             }
@@ -1627,7 +1627,7 @@ public static class DisplayListBuilder
             {
                 content = ContentStreamLoader.Decode(cell);
             }
-            catch
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }
@@ -2299,7 +2299,7 @@ public static class DisplayListBuilder
                 PdfFont pf = GetOrBuildPdfFont(fontKey, font);
                 return pf.Decode(bytes);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(ex))
             {
                 AddDiagnostic(DiagnosticKind.DecodeFallback,
                     $"Font '{fontKey}' could not be resolved: PdfFont.FromDictionary threw {ex.GetType().Name}: {ex.Message}. Falling back to Latin-1 decoding.");
@@ -2358,7 +2358,7 @@ public static class DisplayListBuilder
             {
                 formContent = ContentStreamLoader.Decode(formStream);
             }
-            catch
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }
@@ -2457,7 +2457,7 @@ public static class DisplayListBuilder
             {
                 format = ImageFormat.Raw;
                 try { pixelData = ContentStreamLoader.Decode(stream, _doc.Objects); }
-                catch { return; }
+                catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { return; }
             }
 
             // Indexed (palette) images decode to one index byte per pixel; the
@@ -2525,7 +2525,7 @@ public static class DisplayListBuilder
                             }
                         }
                     }
-                    catch
+                    catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
                     {
                         softMaskAlpha = null;
                     }
@@ -2637,7 +2637,7 @@ public static class DisplayListBuilder
             {
                 bits = ContentStreamLoader.Decode(stream, _doc.Objects);
             }
-            catch
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }

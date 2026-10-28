@@ -44,6 +44,25 @@ Verifies a user password by comparing the computed U value against /U.
 
 **Returns:** true if the password is the user password.
 
+### `RecoverUserPasswordR4`
+
+__static__
+
+```csharp
+static string RecoverUserPasswordR4(string ownerPassword, byte[] oValue, int revision, int keyLength)
+```
+
+Recovers the (padded) user password from an owner password for R≤4 (PDF 32000-1:2008 §7.6.4.4, Algorithm 7): the owner password's key decrypts /O. Validate the result as a user password; it opens the document only when the owner password was right.
+
+**Parameters**
+
+- `ownerPassword` — The candidate owner password.
+- `oValue` — /O entry from /Encrypt (32 bytes).
+- `revision` — /R entry: 2, 3, or 4.
+- `keyLength` — /Length entry in bytes (5 for R=2, 16 for R≥3).
+
+**Returns:** The 32-byte padded user password, as Latin-1 text.
+
 ### `ValidatePasswordR6`
 
 __static__

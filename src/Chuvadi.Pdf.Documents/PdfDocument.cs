@@ -140,6 +140,140 @@ public sealed class PdfDocument : IDisposable
         return new PdfDocument(reader);
     }
 
+    /// <summary>
+    /// Opens a PDF document from the given stream with a password and/or
+    /// resource limits.
+    /// </summary>
+    /// <param name="stream">A readable, seekable PDF stream.</param>
+    /// <param name="options">The password, limits and stream ownership.</param>
+    /// <returns>The opened document.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="PdfPasswordRequiredException">
+    /// The file is encrypted and no password, or a wrong one, was given.
+    /// </exception>
+    /// <exception cref="PdfLimitExceededException">
+    /// The input is larger than <see cref="PdfLimits.MaxInputBytes"/> or has
+    /// more pages than <see cref="PdfLimits.MaxPageCount"/>.
+    /// </exception>
+    /// <exception cref="PdfParseException">
+    /// The file cannot be parsed (any failure outside this list is reported as
+    /// a <see cref="PdfParseException"/> with the original as the inner exception).
+    /// </exception>
+    /// <exception cref="PdfCorruptionException">The file parses but its structure is inconsistent.</exception>
+    /// <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
+    public static PdfDocument Open(Stream stream, PdfOpenOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.Limits?.MaxInputBytes is long maxBytes && stream.CanSeek && stream.Length - stream.Position > maxBytes)
+        {
+            throw new PdfLimitExceededException(nameof(PdfLimits.MaxInputBytes), maxBytes, stream.Length - stream.Position);
+        }
+
+        // Open-time work (cross-reference streams, object streams, the page
+        // tree) runs under the limits too.
+        using PdfWorkScope? scope = options.Limits is null ? null : PdfWorkScope.Enter(options.Limits);
+        try
+        {
+            PdfReader reader = string.IsNullOrEmpty(options.Password)
+                ? PdfReader.Open(stream, options.LeaveOpen)
+                : PdfReader.Open(stream, options.Password, options.LeaveOpen);
+            return WithLimits(new PdfDocument(reader), options.Limits);
+        }
+        catch (Exception ex) when (ex is not (PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException)
+            && (ex is not IOException || ex is EndOfStreamException))
+        {
+            // Malformed input the parser did not anticipate: report it inside
+            // the documented exception set.
+            throw new PdfParseException("The file could not be read: " + ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Opens a PDF document from a file path with a password and/or resource
+    /// limits. See <see cref="Open(Stream, PdfOpenOptions)"/>.
+    /// </summary>
+    /// <param name="path">The path to the PDF file.</param>
+    /// <param name="options">The password and limits.</param>
+    /// <returns>The opened document.</returns>
+    public static PdfDocument Open(string path, PdfOpenOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(options);
+
+        FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            return Open(stream, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false });
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Returns whether the PDF in <paramref name="stream"/> needs a password to
+    /// open (it is encrypted and the empty user password does not open it).
+    /// Reads only the cross-reference data and the encryption dictionary; the
+    /// stream position is restored.
+    /// </summary>
+    /// <param name="stream">A readable, seekable PDF stream.</param>
+    /// <returns>True when a password is needed.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="PdfParseException">The file structure cannot be read.</exception>
+    /// <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
+    public static bool RequiresPassword(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return PdfReader.RequiresPassword(stream);
+    }
+
+    /// <summary>Returns whether the PDF file at <paramref name="path"/> needs a password to open.</summary>
+    /// <param name="path">The path to the PDF file.</param>
+    /// <returns>True when a password is needed.</returns>
+    public static bool RequiresPassword(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return PdfReader.RequiresPassword(stream);
+    }
+
+    // Applies the open-time limits (page count) and keeps the rest for
+    // rendering and extraction.
+    private static PdfDocument WithLimits(PdfDocument document, PdfLimits? limits)
+    {
+        if (limits is null)
+        {
+            return document;
+        }
+
+        document._reader.Objects.Limits = limits;
+        if (limits.MaxPageCount is int maxPages)
+        {
+            int count;
+            try
+            {
+                count = document.Pages.Count;
+            }
+            catch
+            {
+                document.Dispose();
+                throw;
+            }
+
+            if (count > maxPages)
+            {
+                document.Dispose();
+                throw new PdfLimitExceededException(nameof(PdfLimits.MaxPageCount), maxPages, count);
+            }
+        }
+
+        return document;
+    }
+
     // ── Factory: asynchronous (WASM-friendly) ─────────────────────────────
 
     /// <summary>
@@ -182,6 +316,50 @@ public sealed class PdfDocument : IDisposable
         PdfReader reader = await PdfReader.OpenAsync(stream, password, cancellationToken)
             .ConfigureAwait(false);
         return new PdfDocument(reader);
+    }
+
+    /// <summary>
+    /// Asynchronously opens a PDF document with a password and/or resource
+    /// limits. The stream is buffered into memory (stopping early, with
+    /// <see cref="PdfLimitExceededException"/>, past
+    /// <see cref="PdfLimits.MaxInputBytes"/>); the caller keeps ownership of it.
+    /// </summary>
+    /// <param name="stream">A readable PDF stream. Need not be seekable.</param>
+    /// <param name="options">The password and limits.</param>
+    /// <param name="cancellationToken">A token that cancels the buffer fill.</param>
+    /// <returns>The opened document.</returns>
+    public static async Task<PdfDocument> OpenAsync(
+        Stream stream,
+        PdfOpenOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(options);
+
+        MemoryStream buffer = new MemoryStream();
+        try
+        {
+            byte[] chunk = new byte[81920];
+            long max = options.Limits?.MaxInputBytes ?? long.MaxValue;
+            int read;
+            while ((read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (buffer.Length + read > max)
+                {
+                    throw new PdfLimitExceededException(nameof(PdfLimits.MaxInputBytes), max, buffer.Length + read);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            buffer.Position = 0;
+            return Open(buffer, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false });
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -279,7 +457,7 @@ public sealed class PdfDocument : IDisposable
             {
                 built = OptionalContentVisibility.FromCatalog(Catalog, _reader.Objects);
             }
-            catch (PdfException)
+            catch (PdfException abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 // Unreadable /OCProperties: show everything rather than fail.
                 built = OptionalContentVisibility.AllVisible;
@@ -598,6 +776,12 @@ public sealed class PdfDocument : IDisposable
     /// reading raw file bytes for signature byte-range extraction.
     /// </summary>
     public PdfReader Reader => _reader;
+
+    /// <summary>
+    /// Gets the resource limits the document was opened with (applied by
+    /// <c>PageRasterizer</c> and <c>TextExtractor</c>), or null for none.
+    /// </summary>
+    public PdfLimits? Limits => _reader.Objects.Limits;
 
     /// <summary>
     /// Gets the structural repairs made to the document. A non-empty list means

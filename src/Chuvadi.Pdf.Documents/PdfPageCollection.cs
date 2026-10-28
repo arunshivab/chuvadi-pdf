@@ -38,7 +38,8 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
 
     private readonly PdfDictionary _pagesRoot;
     private readonly IPdfObjectResolver _resolver;
-    private readonly PdfPage?[] _cache;
+    private readonly Dictionary<int, PdfPage> _cache = new Dictionary<int, PdfPage>();
+    private readonly int _count;
     private readonly Func<OptionalContentVisibility>? _optionalContent;
 
     internal PdfPageCollection(
@@ -49,12 +50,13 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _optionalContent = optionalContent;
 
-        int count = _pagesRoot.GetInteger(PdfName.Count, 0);
-        _cache = new PdfPage?[count];
+        // /Count is untrusted input: a negative value counts as no pages, and
+        // nothing is allocated per page until it is accessed.
+        _count = Math.Max(0, _pagesRoot.GetInteger(PdfName.Count, 0));
     }
 
     /// <summary>Gets the total number of pages in the document.</summary>
-    public int Count => _cache.Length;
+    public int Count => _count;
 
     /// <summary>
     /// Gets the page at the given zero-based index.
@@ -73,12 +75,13 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                     $"Page index {index} is out of range [0, {Count}).");
             }
 
-            if (_cache[index] is null)
+            if (!_cache.TryGetValue(index, out PdfPage? page))
             {
-                _cache[index] = FindPage(_pagesRoot, index, 0, 0);
+                page = FindPage(_pagesRoot, index, 0, 0);
+                _cache[index] = page;
             }
 
-            return _cache[index]!;
+            return page;
         }
     }
 

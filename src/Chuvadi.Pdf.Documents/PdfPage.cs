@@ -312,8 +312,10 @@ public sealed class PdfPage
             return _resolver.Resolve(direct);
         }
 
-        // Walk up the /Parent chain.
+        // Walk up the /Parent chain, stopping at a cycle (a node that is its
+        // own ancestor) instead of looping forever.
         PdfDictionary? current = _dict;
+        HashSet<PdfDictionary> visited = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance) { _dict };
 
         while (true)
         {
@@ -324,7 +326,7 @@ public sealed class PdfPage
 
             PdfPrimitive resolvedParent = _resolver.Resolve(parentRef);
 
-            if (resolvedParent is not PdfDictionary parent)
+            if (resolvedParent is not PdfDictionary parent || !visited.Add(parent))
             {
                 return null;
             }
@@ -346,18 +348,34 @@ public sealed class PdfPage
         ]));
     }
 
-    private static PdfRectangle RectangleFromArray(PdfArray arr)
+    private PdfRectangle RectangleFromArray(PdfArray arr)
     {
         if (arr.Count < 4)
         {
             return new PdfRectangle(0, 0, 0, 0);
         }
 
-        double x1 = arr.GetNumber(0);
-        double y1 = arr.GetNumber(1);
-        double x2 = arr.GetNumber(2);
-        double y2 = arr.GetNumber(3);
-        return new PdfRectangle(x1, y1, x2, y2);
+        // Entries may be indirect; a non-number makes the box unusable, which
+        // is treated like a short array (an empty box) rather than failing.
+        double[] v = new double[4];
+        for (int i = 0; i < 4; i++)
+        {
+            PdfPrimitive entry = arr[i] is PdfReference reference ? _resolver.Resolve(reference) : arr[i];
+            if (entry is PdfInteger integer)
+            {
+                v[i] = integer.Value;
+            }
+            else if (entry is PdfReal real)
+            {
+                v[i] = real.Value;
+            }
+            else
+            {
+                return new PdfRectangle(0, 0, 0, 0);
+            }
+        }
+
+        return new PdfRectangle(v[0], v[1], v[2], v[3]);
     }
 }
 

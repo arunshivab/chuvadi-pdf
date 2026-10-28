@@ -161,6 +161,58 @@ public static class StandardSecurityHandler
         return padded;
     }
 
+    /// <summary>
+    /// Recovers the (padded) user password from an owner password for R≤4
+    /// (PDF 32000-1:2008 §7.6.4.4, Algorithm 7): the owner password's key
+    /// decrypts /O. Validate the result as a user password; it opens the
+    /// document only when the owner password was right.
+    /// </summary>
+    /// <param name="ownerPassword">The candidate owner password.</param>
+    /// <param name="oValue">/O entry from /Encrypt (32 bytes).</param>
+    /// <param name="revision">/R entry: 2, 3, or 4.</param>
+    /// <param name="keyLength">/Length entry in bytes (5 for R=2, 16 for R≥3).</param>
+    /// <returns>The 32-byte padded user password, as Latin-1 text.</returns>
+    public static string RecoverUserPasswordR4(string ownerPassword, byte[] oValue, int revision, int keyLength)
+    {
+        ArgumentNullException.ThrowIfNull(oValue);
+
+        // Algorithm 3, steps a–d: the RC4 key from the padded owner password.
+        byte[] hash = MD5.HashData(PadPassword(ownerPassword));
+        if (revision >= 3)
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                hash = MD5.HashData(hash);
+            }
+        }
+
+        int n = revision == 2 ? 5 : Math.Clamp(keyLength, 5, 16);
+        byte[] key = new byte[n];
+        Array.Copy(hash, key, n);
+
+        byte[] user = new byte[32];
+        Array.Copy(oValue, user, Math.Min(32, oValue.Length));
+        if (revision == 2)
+        {
+            user = Rc4.Process(key, user);
+        }
+        else
+        {
+            for (int i = 19; i >= 0; i--)
+            {
+                byte[] iterKey = new byte[n];
+                for (int k = 0; k < n; k++)
+                {
+                    iterKey[k] = (byte)(key[k] ^ i);
+                }
+
+                user = Rc4.Process(iterKey, user);
+            }
+        }
+
+        return Encoding.Latin1.GetString(user);
+    }
+
     private static byte[] PadPassword(string password)
     {
         byte[] result = new byte[32];

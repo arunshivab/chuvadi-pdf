@@ -78,7 +78,7 @@ public sealed class PdfReader : IDisposable
 
             return PageTreeRecovery.Recover(this, objects, pagesRoot);
         }
-        catch (Exception)
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
             return Array.Empty<string>();
         }
@@ -97,9 +97,9 @@ public sealed class PdfReader : IDisposable
     /// network resources). Use <see cref="OpenAsync(Stream, CancellationToken)"/>
     /// for cross-platform code.
     /// </remarks>
-    /// <exception cref="PdfParseException">
-    /// Thrown when the file is encrypted. Use the password overload to open
-    /// encrypted PDFs.
+    /// <exception cref="PdfPasswordRequiredException">
+    /// Thrown when the file is encrypted and the empty user password does not
+    /// open it (a <see cref="PdfParseException"/>). Use the password overload.
     /// </exception>
     public static PdfReader Open(Stream stream, bool leaveOpen = false)
     {
@@ -118,7 +118,9 @@ public sealed class PdfReader : IDisposable
     /// <param name="stream">Readable, seekable stream containing the PDF.</param>
     /// <param name="password">User or owner password. Empty string for default.</param>
     /// <param name="leaveOpen">Whether to leave the stream open on dispose.</param>
-    /// <exception cref="PdfParseException">Thrown when the password is incorrect.</exception>
+    /// <exception cref="PdfPasswordRequiredException">
+    /// Thrown when the password is incorrect (a <see cref="PdfParseException"/>).
+    /// </exception>
     public static PdfReader Open(Stream stream, string password, bool leaveOpen = false)
     {
         ArgumentNullException.ThrowIfNull(password);
@@ -163,7 +165,9 @@ public sealed class PdfReader : IDisposable
     /// <param name="stream">A readable stream containing the PDF. Need not be seekable.</param>
     /// <param name="password">User or owner password. Empty string for default.</param>
     /// <param name="cancellationToken">A token that cancels the buffer fill.</param>
-    /// <exception cref="PdfParseException">Thrown when the password is incorrect.</exception>
+    /// <exception cref="PdfPasswordRequiredException">
+    /// Thrown when the password is incorrect (a <see cref="PdfParseException"/>).
+    /// </exception>
     public static Task<PdfReader> OpenAsync(
         Stream stream,
         string password,
@@ -317,6 +321,61 @@ public sealed class PdfReader : IDisposable
         return new PdfReader(stream, leaveOpen, trailer, objects, recoveryLog);
     }
 
+    /// <summary>
+    /// Returns whether the PDF in <paramref name="stream"/> is encrypted with a
+    /// password that must be supplied to open it (the empty user password does
+    /// not open it). Reads only the cross-reference data and the encryption
+    /// dictionary; the stream position is restored.
+    /// </summary>
+    /// <param name="stream">A readable, seekable PDF stream.</param>
+    /// <returns>True when a password is needed; false when the file is not encrypted or opens without one.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is not readable and seekable.</exception>
+    /// <exception cref="PdfParseException">The file structure cannot be read.</exception>
+    /// <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
+    public static bool RequiresPassword(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead || !stream.CanSeek)
+        {
+            throw new ArgumentException("Stream must be readable and seekable.", nameof(stream));
+        }
+
+        long position = stream.Position;
+        try
+        {
+            long startXrefOffset = FindStartXref(stream);
+            PdfDictionary trailer = new PdfDictionary();
+            XrefTable xref = new XrefTable();
+            LoadXrefChain(stream, startXrefOffset, xref, trailer);
+            if (!trailer.TryGetValue(PdfName.Intern("Encrypt"), out PdfPrimitive? encryptPrim))
+            {
+                return false;
+            }
+
+            PdfObjectParser parser = new PdfObjectParser(stream);
+            try
+            {
+                _ = BuildDecryptor(parser, xref, trailer, encryptPrim, null, new RecoveryLog());
+                return false;
+            }
+            catch (PdfPasswordRequiredException)
+            {
+                return true;
+            }
+        }
+        catch (Exception ex) when (ex is not (PdfException or OperationCanceledException or OutOfMemoryException)
+            && (ex is not IOException || ex is EndOfStreamException))
+        {
+            // Malformed input the parser did not anticipate.
+            throw new PdfParseException("The file could not be read: " + ex.Message, ex);
+        }
+        finally
+        {
+            stream.Position = position;
+        }
+    }
+
     private static (Decryptor decryptor, int encryptObjectNumber, bool encryptMetadata)
         BuildDecryptor(
             PdfObjectParser parser,
@@ -360,8 +419,7 @@ public sealed class PdfReader : IDisposable
         }
 
         Decryptor decryptor = PdfEncryption.TryOpen(encryptDict, firstFileId, password ?? string.Empty)
-            ?? throw new PdfParseException(
-                "PDF is encrypted; provide the correct user or owner password.");
+            ?? throw new PdfPasswordRequiredException(passwordSupplied: !string.IsNullOrEmpty(password));
 
         bool encryptMetadata = true;
         if (encryptDict.TryGetValue(PdfName.Intern("EncryptMetadata"), out PdfPrimitive? emPrim) &&
@@ -856,6 +914,14 @@ public sealed class PdfReader : IDisposable
 
         if (entry.IsCompressed)
         {
+            // An object stream may not itself be stored in an object stream
+            // (§7.5.7); a file that claims so (possibly in a loop) would
+            // recurse without end, so such an entry is treated as missing.
+            if (xref.TryGet(entry.StreamObjectNumber, out XrefEntry containerEntry) && containerEntry.IsCompressed)
+            {
+                return null;
+            }
+
             // PDF 32000-1:2008 §7.5.7: the entry names the containing object
             // stream (StreamObjectNumber) and the zero-based index of this
             // object within it (IndexInStream). We resolve the container via
@@ -962,7 +1028,7 @@ public sealed class PdfReader : IDisposable
 
             throw;
         }
-        catch (Exception ex) when (ex is not PdfParseException)
+        catch (Exception ex) when (ex is not PdfParseException && !PdfWorkScope.IsAbort(ex))
         {
             PdfIndirectObject? recovered = parser.ScanForObject(id);
             if (recovered is not null)

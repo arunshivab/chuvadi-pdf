@@ -17,7 +17,7 @@ The PDF page tree is a balanced tree of /Pages nodes with /Page leaves. `PdfPage
 ### `Count`
 
 ```csharp
-int Count => _cache.Length
+int Count => _count
 ```
 
 Gets the total number of pages in the document.

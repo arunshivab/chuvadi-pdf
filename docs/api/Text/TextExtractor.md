@@ -44,7 +44,7 @@ Gets or initialises which optional-content layers are extracted. Default (null):
 ### `ExtractText`
 
 ```csharp
-string ExtractText(PdfPage page)
+string ExtractText(PdfPage page) => ExtractText(page, CancellationToken.None)
 ```
 
 Extracts all text from the given page as a plain Unicode string.
@@ -55,10 +55,27 @@ Extracts all text from the given page as a plain Unicode string.
 
 **Returns:** The extracted text, or an empty string when the page has no text.
 
+### `ExtractText`
+
+```csharp
+string ExtractText(PdfPage page, CancellationToken cancellationToken)
+```
+
+Extracts all text from the given page as a plain Unicode string, stopping when `cancellationToken` is cancelled.
+
+**Parameters**
+
+- `page` — The page to extract text from.
+- `cancellationToken` — A token that cancels the extraction.
+
+**Returns:** The extracted text, or an empty string when the page has no text. <exception cref="ArgumentNullException">`page` is null.</exception> <exception cref="OperationCanceledException">The token was cancelled.</exception> <exception cref="PdfLimitExceededException">A limit was exceeded.</exception> <exception cref="PdfException"> The page could not be read. Failures the code did not anticipate are reported as `PdfCorruptionException` with the original as the inner exception. </exception>
+
+**Remarks:** The work runs in a `PdfWorkScope` with the limits the document was opened with (`PdfObjectStore.Limits`); cancellation is noticed well within a second.
+
 ### `ExtractFragments`
 
 ```csharp
-List<TextFragment> ExtractFragments(PdfPage page)
+List<TextFragment> ExtractFragments(PdfPage page) => ExtractFragments(page, CancellationToken.None)
 ```
 
 Extracts positioned text fragments from the given page.
@@ -70,6 +87,21 @@ Extracts positioned text fragments from the given page.
 **Returns:** A list of fragments, or an empty list when the page has no text.
 
 **Remarks:** Each fragment is a piece of text shown by a single Tj or TJ entry with the X, Y position (PDF user space) and font size at the time of rendering. Returned in operator order, not reading order — callers wanting reading order should apply layout reconstruction.
+
+### `ExtractFragments`
+
+```csharp
+List<TextFragment> ExtractFragments(PdfPage page, CancellationToken cancellationToken)
+```
+
+Extracts positioned text fragments from the given page, stopping when `cancellationToken` is cancelled. See `ExtractText(PdfPage, CancellationToken)` for limits and exceptions.
+
+**Parameters**
+
+- `page` — The page to extract fragments from.
+- `cancellationToken` — A token that cancels the extraction.
+
+**Returns:** A list of fragments, or an empty list when the page has no text.
 
 ---
 

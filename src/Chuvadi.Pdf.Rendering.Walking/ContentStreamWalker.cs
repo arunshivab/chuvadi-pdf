@@ -39,6 +39,9 @@ internal static class ContentStreamWalker
     /// Walks decoded content-stream bytes, dispatching each operator to the
     /// sink. Empty content dispatches nothing.
     /// </summary>
+    private const int TokensPerCheck = 4096;
+    private const int MaxOperands = 65536;
+
     internal static void Walk(byte[] content, IContentOperatorSink sink)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -52,13 +55,29 @@ internal static class ContentStreamWalker
         using MemoryStream ms = new(content);
         using PdfTokenizer tokenizer = new(ms);
         List<PdfToken> operands = new();
+        int tokensSinceCheck = 0;
 
         while (true)
         {
             PdfToken token = tokenizer.Read();
             if (token.IsEndOfStream)
             {
+                PdfWorkScope.ThrowIfCancellationRequested();
                 break;
+            }
+
+            // Operands with no operator are malformed: every 4096 tokens count
+            // as one operator against the page-complexity limit (which also
+            // checks cancellation), and a run longer than any real operator
+            // takes is dropped rather than held in memory.
+            if (++tokensSinceCheck >= TokensPerCheck)
+            {
+                tokensSinceCheck = 0;
+                PdfWorkScope.CountOperators();
+                if (operands.Count > MaxOperands)
+                {
+                    operands.Clear();
+                }
             }
 
             if (token.Type == PdfTokenType.ArrayStart)
@@ -66,6 +85,7 @@ internal static class ContentStreamWalker
                 // Capture the array inline (TJ text arrays, d dash arrays),
                 // bracketed by start/end marker tokens.
                 operands.Add(new PdfToken(PdfTokenType.ArrayStart, Array.Empty<byte>(), 0));
+                int elements = 0;
                 while (true)
                 {
                     PdfToken inner = tokenizer.Read();
@@ -73,7 +93,19 @@ internal static class ContentStreamWalker
                     {
                         break;
                     }
-                    operands.Add(inner);
+
+                    if (++tokensSinceCheck >= TokensPerCheck)
+                    {
+                        tokensSinceCheck = 0;
+                        PdfWorkScope.CountOperators();
+                    }
+
+                    // An inline array longer than this is not real content
+                    // (a TJ array or dash pattern); the rest is skipped.
+                    if (++elements <= MaxOperands)
+                    {
+                        operands.Add(inner);
+                    }
                 }
                 operands.Add(new PdfToken(PdfTokenType.ArrayEnd, Array.Empty<byte>(), 0));
                 continue;
@@ -85,6 +117,7 @@ internal static class ContentStreamWalker
                 continue;
             }
 
+            PdfWorkScope.CountOperators();
             Dispatch(token.RawText, operands, sink);
             operands.Clear();
         }

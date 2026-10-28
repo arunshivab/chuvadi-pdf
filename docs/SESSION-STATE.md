@@ -9,25 +9,22 @@
 
 ## Last Updated
 
-2026-10-28 — v3.23.0: backlog 17, 18, 19. Redaction: pattern cells drawn by
-resource-inheriting forms are redacted (own copy of the resources when the
-form is always drawn with the same ones, otherwise the pattern is rewritten
-in place); decoy "shown elsewhere" tiles painted over later no longer keep
-a cell whole; `TL`, font and size are saved/restored by `q`/`Q`; the
-verifier reads palette images' raw indices (`ImageOp.IndexSamples`).
-Scrub: colour-function shadings (types 1–3) trimmed to the sampled data
-the box shows; single-placement soft-mask groups scrubbed; a fill enclosing
-the box is kept. Rendering: radial shadings under unequal scaling or skew
-paint the right ellipses (raster and SVG; `ShadingToPage`). Released: v3.22.1 (2026-10-22: pattern cells under
-redaction) and v3.22.0. Last released version: v3.22.1. Open: BACKLOG 17
-(remaining Scrub residuals only).
+2026-10-28 — v3.24.0 (stacked on 3.23.0, both pending on Arun's machine):
+embedding API for Anjal Mail — `PdfPasswordRequiredException` +
+`RequiresPassword`; viewing guarantees (docs/EMBEDDING.md, checked by
+`EmbeddingGuaranteeTests`) + `PdfSanitizer`; `CancellationToken` overloads
+on `PageRasterizer` / `TextExtractor` and the ambient `PdfWorkScope`;
+`PdfLimits` via `PdfOpenOptions`; no-disk guarantee; enumerated exception
+set (mutation-fuzzed). 3.23.0: backlog 17/18/19 + radial-shading rendering
+fix. Last released version: v3.22.1. Open: BACKLOG 17 (Scrub residuals), 20
+(JBIG2/CCITT mid-image cancellation).
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,736 tests across 30 in-solution test projects,
-0 failures (v3.23.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,784 tests across 30 in-solution test projects,
+0 failures (v3.24.0 sandbox gate; 3.23.0 alone: 2,736).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -143,7 +140,7 @@ flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuge
 — the library's job ends there; the Chuvadi Reader picks packages up from that
 feed on its own side. Never `dotnet nuget push` (it creates a mismatched
 hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
-**3.22.1** (3.23.0 pending merge + pack on Arun's machine).
+**3.22.1** (3.23.0 and 3.24.0 pending merge + pack on Arun's machine, in that order).
 
 Releases publish to local folder feeds only, never to nuget.org.
 

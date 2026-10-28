@@ -282,6 +282,16 @@ public static class DisplayListBuilder
         {
             if (_hiddenDepth == 0)
             {
+                // The display list itself can grow large (millions of glyphs
+                // or path segments): charge it against the memory limit.
+                int segments = op switch
+                {
+                    FillPathOp fill => fill.Path.Count,
+                    StrokePathOp stroke => stroke.Path.Count,
+                    DrawGlyphOp glyph => glyph.Path.Count,
+                    _ => 0,
+                };
+                PdfWorkScope.ChargeMemory(256 + (segments * 96L));
                 _ops.Add(op);
             }
         }
@@ -849,7 +859,7 @@ public static class DisplayListBuilder
             {
                 content = ContentStreamLoader.Decode(groupStream);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return new PageDisplayList(sub._ops, 0, 0);
             }
@@ -1191,7 +1201,7 @@ public static class DisplayListBuilder
             {
                 content = ContentStreamLoader.Decode(cell, _objects);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }
@@ -1722,13 +1732,16 @@ public static class DisplayListBuilder
             // Simple fonts use single-byte codes: one byte = one code = one glyph.
             foreach (byte b in raw)
             {
+                // Each glyph shown counts toward page complexity (and checks
+                // cancellation): one Tj can carry millions of them.
+                PdfWorkScope.CountOperators();
                 int code = b;
                 double advance;
 
                 if (renderer is not null)
                 {
                     int gid = ResolveEmbeddedGid(renderer, pdfFont, code, symbolic);
-                    GlyphOutline glyph = renderer.GetGlyphOutline(gid);
+                    GlyphOutline glyph = SafeOutline(renderer, gid);
                     GlyphOutline? hintedGlyph = TryHint(renderer, gid);
                     GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
@@ -1829,6 +1842,7 @@ public static class DisplayListBuilder
 
             foreach (byte b in raw)
             {
+                PdfWorkScope.CountOperators();
                 int code = b;
                 double advance = 0.0;
 
@@ -2131,6 +2145,7 @@ public static class DisplayListBuilder
 
             for (int i = 0; i + 1 < raw.Length; i += 2)
             {
+                PdfWorkScope.CountOperators();
                 int code = (raw[i] << 8) | raw[i + 1];
                 double advance;
 
@@ -2140,7 +2155,7 @@ public static class DisplayListBuilder
                 }
                 else
                 {
-                    GlyphOutline glyph = renderer.GetGlyphOutline(code);
+                    GlyphOutline glyph = SafeOutline(renderer, code);
                     GlyphOutline? hintedGlyph = TryHint(renderer, code);
                     GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
@@ -2180,6 +2195,20 @@ public static class DisplayListBuilder
         // space by dividing by the device scale. The painter re-applies the
         // same scale, exactly reconstructing the grid-fitted pixel positions.
         // Returns null when hinting is off or the glyph cannot be hinted.
+        // A glyph whose outline data is damaged draws nothing (and advances by
+        // the font's /Widths) instead of failing the whole page.
+        private static GlyphOutline SafeOutline(FontRenderer renderer, int glyphId)
+        {
+            try
+            {
+                return renderer.GetGlyphOutline(glyphId);
+            }
+            catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
+            {
+                return new GlyphOutline(new Path(), new GlyphMetrics(0, 0, 1000, default));
+            }
+        }
+
         private GlyphOutline? TryHint(FontRenderer renderer, int glyphId)
         {
             if (_hintingScale <= 0.0)
@@ -2194,7 +2223,15 @@ public static class DisplayListBuilder
                 return null;
             }
 
-            GlyphOutline? hinted = renderer.GetHintedGlyphOutline(glyphId, ppem, _lightHinting, _autohintFallback);
+            GlyphOutline? hinted;
+            try
+            {
+                hinted = renderer.GetHintedGlyphOutline(glyphId, ppem, _lightHinting, _autohintFallback);
+            }
+            catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
+            {
+                return null;
+            }
 
             if (hinted is null)
             {
@@ -2280,7 +2317,7 @@ public static class DisplayListBuilder
                 RenderableFont font = RenderableFont.FromDictionary(fd, _objects);
                 return font.IsStandard14 ? font : null;
             }
-            catch (System.Exception)
+            catch (System.Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }
@@ -2334,7 +2371,7 @@ public static class DisplayListBuilder
             {
                 return Type1FontRenderer.Create(fontFile, fd, _objects);
             }
-            catch (System.Exception)
+            catch (System.Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }
@@ -2394,7 +2431,7 @@ public static class DisplayListBuilder
             {
                 return Chuvadi.Pdf.Fonts.PdfFont.FromDictionary(fd, _objects);
             }
-            catch (System.Exception)
+            catch (System.Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }
@@ -2437,8 +2474,9 @@ public static class DisplayListBuilder
             {
                 return new FontRenderer(fontBytes);
             }
-            catch (FontRenderingException)
+            catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
             {
+                // A damaged font program falls back like a missing one.
                 return null;
             }
         }
@@ -2612,7 +2650,7 @@ public static class DisplayListBuilder
             {
                 imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream, _objects);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }
@@ -2711,6 +2749,7 @@ public static class DisplayListBuilder
                 ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Gray8);
                 for (int y = 0; y < height; y++)
                 {
+                    PdfWorkScope.ThrowIfCancellationRequested();
                     for (int x = 0; x < width; x++)
                     {
                         int bit = (samples[(y * stride) + (x >> 3)] >> (7 - (x & 7))) & 1;
@@ -2732,6 +2771,7 @@ public static class DisplayListBuilder
                 ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Gray8);
                 for (int y = 0; y < height; y++)
                 {
+                    PdfWorkScope.ThrowIfCancellationRequested();
                     for (int x = 0; x < width; x++)
                     {
                         byte v = samples[(y * width) + x];
@@ -2755,6 +2795,7 @@ public static class DisplayListBuilder
                 ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
                 for (int y = 0; y < height; y++)
                 {
+                    PdfWorkScope.ThrowIfCancellationRequested();
                     for (int x = 0; x < width; x++)
                     {
                         int si = ((y * width) + x) * 3;
@@ -2778,6 +2819,7 @@ public static class DisplayListBuilder
                 ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
                 for (int y = 0; y < height; y++)
                 {
+                    PdfWorkScope.ThrowIfCancellationRequested();
                     for (int x = 0; x < width; x++)
                     {
                         int si = ((y * width) + x) * 4;
@@ -2839,7 +2881,7 @@ public static class DisplayListBuilder
             {
                 smSamples = ContentStreamLoader.Decode(smStream, _objects);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }
@@ -2986,9 +3028,11 @@ public static class DisplayListBuilder
             byte g = (byte)Math.Round(Math.Clamp(fill.G, 0f, 1f) * 255f);
             byte b = (byte)Math.Round(Math.Clamp(fill.B, 0f, 1f) * 255f);
 
+            PdfWorkScope.ChargeMemory((long)width * height * 4);
             PixelBuffer buffer = new PixelBuffer(width, height);
             for (int y = 0; y < height; y++)
             {
+                PdfWorkScope.ThrowIfCancellationRequested();
                 int rowStart = y * stride;
                 for (int x = 0; x < width; x++)
                 {
@@ -3098,7 +3142,7 @@ public static class DisplayListBuilder
             {
                 formContent = ContentStreamLoader.Decode(xobjStream);
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return;
             }

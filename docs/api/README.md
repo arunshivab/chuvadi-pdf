@@ -226,6 +226,7 @@ python tools/gen_api_docs.py
 | [PdfMeasure](Documents/PdfMeasure.md) | class | A measure dictionary (`/Measure`): how distances and areas in a region of a page map to real-world units — for example a 1:100 floor plan. |
 | [PdfMeasurement](Documents/PdfMeasurement.md) | struct | A measured value in a drawing's real-world units. |
 | [PdfNumberFormat](Documents/PdfNumberFormat.md) | class | One step of a measurement unit chain (a `/NumberFormat` dictionary): its label and the factor converting the previous unit into it — the first format converts default user-space units into the first display unit. |
+| [PdfOpenOptions](Documents/PdfOpenOptions.md) | class | Options for opening a PDF with `PdfDocument.Open(System.IO.Stream, PdfOpenOptions)`. |
 | [PdfPage](Documents/PdfPage.md) | class | Represents a single page in a PDF document. |
 | [PdfPageCollection](Documents/PdfPageCollection.md) | class | Provides lazy, random-access to the pages of a PDF document. |
 | [PdfRectangle](Documents/PdfRectangle.md) | struct | An immutable rectangle in PDF user space (points, 1/72 inch). |
@@ -419,8 +420,11 @@ python tools/gen_api_docs.py
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
 | [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | Rewrites a PDF document to a smaller equivalent. |
 | [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | — |
+| [PdfSanitizer](Operations/PdfSanitizer.md) | class | Writes a disarmed copy of a document: no JavaScript, no actions that run on open or on any event, no launch, import, submit or remote actions, no embedded files, no XFA scripts and no multimedia — only what is needed to show the pages. |
 | [PlacePageOptions](Operations/PlacePageOptions.md) | class | Optional per-placement controls for `PageComposer.PlacePage(Chuvadi.Pdf.Documents.PdfDocument, int, Transform, PlacePageOptions)`. |
 | [Placement](Operations/Placement.md) | class | Builds the affine transforms most often needed when placing a page: scale a source box to fit a destination, centre it, or rotate it by an arbitrary angle. |
+| [SanitizeOptions](Operations/SanitizeOptions.md) | class | Options for `PdfSanitizer`. |
+| [SanitizeReport](Operations/SanitizeReport.md) | class | What `PdfSanitizer` found (and, when sanitizing, removed). |
 | [StampAnchor](Operations/StampAnchor.md) | enum | The twelve positions a text stamp can be anchored to on a page: the three top and three bottom positions (horizontal text), plus three on each vertical edge (text rotated 90° to read up the left edge or down the right edge). |
 | [StampContext](Operations/StampContext.md) | class | Substitutes tokens in a stamp template into final text for one page. |
 | [StampFirstPageMode](Operations/StampFirstPageMode.md) | enum | Controls how the document's first page (page index 0) participates in a `StampNumbering` running sequence. |
@@ -451,11 +455,14 @@ python tools/gen_api_docs.py
 | [PdfEncryptionException](Primitives/PdfEncryptionException.md) | class | Thrown when an encryption or decryption operation fails: wrong password, unsupported security handler revision, malformed encryption dictionary, missing required encryption metadata, or a cryptographic primitive that could not produce the expected output. |
 | [PdfException](Primitives/PdfException.md) | class | Abstract base class for every exception raised by the Chuvadi library. |
 | [PdfInteger](Primitives/PdfInteger.md) | class | Represents a PDF integer object. |
+| [PdfLimitExceededException](Primitives/PdfLimitExceededException.md) | class | Thrown when an operation would go past one of the `PdfLimits` in effect (input size, page count, memory, decoded stream size, page complexity or output pixels). |
+| [PdfLimits](Primitives/PdfLimits.md) | class | Resource limits for opening, rendering and extracting untrusted PDFs. |
 | [PdfName](Primitives/PdfName.md) | class | Represents a PDF name object (e.g. `/Type`, `/Page`). |
 | [PdfNull](Primitives/PdfNull.md) | class | Represents the PDF null object. |
 | [PdfObjectId](Primitives/PdfObjectId.md) | record struct | Uniquely identifies an indirect object in a PDF file. |
 | [PdfPaddedInteger](Primitives/PdfPaddedInteger.md) | class | A PDF integer that serialises to exactly `PaddedWidth` ASCII characters, left-padded with leading zeros. |
 | [PdfParseException](Primitives/PdfParseException.md) | class | Thrown when the bytes of a PDF cannot be parsed because they violate the PDF syntax: malformed tokens, structural errors in dictionaries or arrays, invalid integer or real literals, missing required keywords. |
+| [PdfPasswordRequiredException](Primitives/PdfPasswordRequiredException.md) | class | Thrown when an encrypted PDF cannot be opened without a password: none was given and the empty user password does not open it, or the password given is neither the user nor the owner password. |
 | [PdfPermissionException](Primitives/PdfPermissionException.md) | class | Thrown when an operation is blocked because the document's permission flags forbid it: extracting text from a copy-restricted document, modifying a write-protected document, assembling a no-assembly document. |
 | [PdfPermissions](Primitives/PdfPermissions.md) | enum | — |
 | [PdfPrimitive](Primitives/PdfPrimitive.md) | class | Abstract base class for all PDF primitive object types. |
@@ -467,6 +474,7 @@ python tools/gen_api_docs.py
 | [PdfToken](Primitives/PdfToken.md) | struct | A lightweight token produced by `PdfTokenizer`. |
 | [PdfTokenType](Primitives/PdfTokenType.md) | enum | Identifies the type of a token produced by `PdfTokenizer`. |
 | [PdfTokenizer](Primitives/PdfTokenizer.md) | class | A forward-only, byte-level tokenizer for PDF streams. |
+| [PdfWorkScope](Primitives/PdfWorkScope.md) | class | An ambient cancellation token and set of `PdfLimits` for the Chuvadi work done on the current asynchronous flow until it is disposed. |
 
 ## Chuvadi.Pdf.Reader
 

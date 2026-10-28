@@ -114,7 +114,7 @@ internal sealed class ObjectStreamReader
         {
             decoded = Decode(dict, stream.RawBytes);
         }
-        catch (Exception)
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
             return null;
         }
@@ -249,7 +249,7 @@ internal sealed class ObjectStreamReader
                 PdfObjectParser parser = new(ms);
                 return parser.ReadValue();
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }

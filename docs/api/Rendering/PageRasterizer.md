@@ -35,7 +35,7 @@ Initialises a `PageRasterizer` for a document's object store.
 ### `Rasterize`
 
 ```csharp
-PixelBuffer Rasterize(PdfPage page)
+PixelBuffer Rasterize(PdfPage page) => Rasterize(page, CancellationToken.None)
 ```
 
 Rasterizes a PDF page to a `PixelBuffer`.
@@ -46,13 +46,45 @@ Rasterizes a PDF page to a `PixelBuffer`.
 
 **Returns:** A pixel buffer in BGRA format containing the rendered page. <exception cref="ArgumentNullException"> Thrown when `page` is null. </exception>
 
+### `Rasterize`
+
+```csharp
+PixelBuffer Rasterize(PdfPage page, CancellationToken cancellationToken)
+```
+
+Rasterizes a PDF page to a `PixelBuffer`, stopping when `cancellationToken` is cancelled.
+
+**Parameters**
+
+- `page` — The page to rasterize.
+- `cancellationToken` — A token that cancels the render.
+
+**Returns:** A pixel buffer in BGRA format containing the rendered page. <exception cref="ArgumentNullException">`page` is null.</exception> <exception cref="OperationCanceledException">The token was cancelled.</exception> <exception cref="PdfLimitExceededException">A limit was exceeded.</exception> <exception cref="PdfException"> The page could not be read or rendered. Failures the code did not anticipate are reported as `PdfCorruptionException` with the original as the inner exception. </exception>
+
+**Remarks:** The work runs in a `PdfWorkScope` with the limits the document was opened with (`PdfObjectStore.Limits`): content operators, decoded streams and buffers are checked as they are processed, and cancellation is noticed well within a second.
+
 ### `RasterizeToPng`
 
 ```csharp
-byte[] RasterizeToPng(PdfPage page)
+byte[] RasterizeToPng(PdfPage page) => RasterizeToPng(page, CancellationToken.None)
 ```
 
 Rasterizes a page and encodes the result as PNG bytes.
+
+### `RasterizeToPng`
+
+```csharp
+byte[] RasterizeToPng(PdfPage page, CancellationToken cancellationToken)
+```
+
+Rasterizes a page and encodes the result as PNG bytes, stopping when `cancellationToken` is cancelled. See `Rasterize(PdfPage, CancellationToken)` for limits and exceptions.
+
+**Parameters**
+
+- `page` — The page to rasterize.
+- `cancellationToken` — A token that cancels the render.
+
+**Returns:** The PNG bytes.
 
 ### `RasterizeToCmykTiff`
 
@@ -77,18 +109,19 @@ Rasterizes a page and returns the result as a `CmykImage`.
 ### `RenderRegion`
 
 ```csharp
-PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi)
+PixelBuffer RenderRegion(PdfPage page, Rect region, double dpi, CancellationToken cancellationToken)
 ```
 
-Renders a rectangular sub-region of a page to a `PixelBuffer` at the given resolution. The region is given in page (PDF user) space; the result is sized `region.Width * dpi/72` by `region.Height * dpi/72` pixels, with the region's top-left corner at the buffer origin. Lighter than rasterizing the whole page and cropping.
+Renders a rectangular sub-region of a page (see `RenderRegion(PdfPage, Rect, double)`), stopping when `cancellationToken` is cancelled. See `Rasterize(PdfPage, CancellationToken)` for limits and exceptions.
 
 **Parameters**
 
 - `page` — The page to render.
 - `region` — The sub-region in page space (PDF points).
 - `dpi` — Output resolution in dots per inch. Must be positive.
+- `cancellationToken` — A token that cancels the render.
 
-**Returns:** The rendered region. Never null. <exception cref="ArgumentNullException">`page` is null.</exception> <exception cref="ArgumentOutOfRangeException"> `dpi` is not positive, or `region` has a non-positive dimension. </exception>
+**Returns:** The rendered region. Never null.
 
 ### `RenderClipped`
 
@@ -112,7 +145,7 @@ Renders the content inside a clip path to a `PixelBuffer` at the given resolutio
 byte[] RenderRegionToPng(PdfPage page, Rect region, double dpi)
 ```
 
-Renders a sub-region (see `RenderRegion`) and encodes it as 24-bit RGB PNG bytes.
+Renders a sub-region (see `RenderRegion(PdfPage, Rect, double)`) and encodes it as 24-bit RGB PNG bytes.
 
 ### `RenderClippedToPng`
 

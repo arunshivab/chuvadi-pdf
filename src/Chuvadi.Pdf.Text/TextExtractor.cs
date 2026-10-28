@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
@@ -87,13 +88,52 @@ public sealed class TextExtractor
     /// </summary>
     /// <param name="page">The page to extract text from.</param>
     /// <returns>The extracted text, or an empty string when the page has no text.</returns>
-    public string ExtractText(PdfPage page)
-    {
-        if (page is null)
-        {
-            throw new ArgumentNullException(nameof(page));
-        }
+    public string ExtractText(PdfPage page) => ExtractText(page, CancellationToken.None);
 
+    /// <summary>
+    /// Extracts all text from the given page as a plain Unicode string,
+    /// stopping when <paramref name="cancellationToken"/> is cancelled.
+    /// </summary>
+    /// <remarks>
+    /// The work runs in a <see cref="PdfWorkScope"/> with the limits the
+    /// document was opened with (<see cref="PdfObjectStore.Limits"/>);
+    /// cancellation is noticed well within a second.
+    /// </remarks>
+    /// <param name="page">The page to extract text from.</param>
+    /// <param name="cancellationToken">A token that cancels the extraction.</param>
+    /// <returns>The extracted text, or an empty string when the page has no text.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="page"/> is null.</exception>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    /// <exception cref="PdfLimitExceededException">A limit was exceeded.</exception>
+    /// <exception cref="PdfException">
+    /// The page could not be read. Failures the code did not anticipate are
+    /// reported as <see cref="PdfCorruptionException"/> with the original as
+    /// the inner exception.
+    /// </exception>
+    public string ExtractText(PdfPage page, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        return Guard(() => ExtractTextCore(page), cancellationToken);
+    }
+
+    // Runs work in a scope with the document's limits and the caller's token,
+    // reporting failures outside the documented set as PdfCorruptionException.
+    private T Guard<T>(Func<T> work, CancellationToken cancellationToken)
+    {
+        using PdfWorkScope scope = PdfWorkScope.Enter(_objects.Limits, cancellationToken);
+        try
+        {
+            return work();
+        }
+        catch (Exception ex) when (ex is not (PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException)
+            && (ex is not IOException || ex is EndOfStreamException))
+        {
+            throw new PdfCorruptionException("The page text could not be extracted: " + ex.Message, ex);
+        }
+    }
+
+    private string ExtractTextCore(PdfPage page)
+    {
         byte[] contentBytes = ReadContentBytes(page);
 
         ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
@@ -127,13 +167,24 @@ public sealed class TextExtractor
     /// </remarks>
     /// <param name="page">The page to extract fragments from.</param>
     /// <returns>A list of fragments, or an empty list when the page has no text.</returns>
-    public List<TextFragment> ExtractFragments(PdfPage page)
-    {
-        if (page is null)
-        {
-            throw new ArgumentNullException(nameof(page));
-        }
+    public List<TextFragment> ExtractFragments(PdfPage page) => ExtractFragments(page, CancellationToken.None);
 
+    /// <summary>
+    /// Extracts positioned text fragments from the given page, stopping when
+    /// <paramref name="cancellationToken"/> is cancelled. See
+    /// <see cref="ExtractText(PdfPage, CancellationToken)"/> for limits and exceptions.
+    /// </summary>
+    /// <param name="page">The page to extract fragments from.</param>
+    /// <param name="cancellationToken">A token that cancels the extraction.</param>
+    /// <returns>A list of fragments, or an empty list when the page has no text.</returns>
+    public List<TextFragment> ExtractFragments(PdfPage page, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        return Guard(() => ExtractFragmentsCore(page), cancellationToken);
+    }
+
+    private List<TextFragment> ExtractFragmentsCore(PdfPage page)
+    {
         byte[] contentBytes = ReadContentBytes(page);
 
         ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
@@ -179,7 +230,7 @@ public sealed class TextExtractor
             {
                 apBytes = DecodeStream(ap.Appearance);
             }
-            catch (PdfException)
+            catch (PdfException abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 continue;
             }

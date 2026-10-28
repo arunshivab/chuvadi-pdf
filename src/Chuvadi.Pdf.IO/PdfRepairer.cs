@@ -86,7 +86,7 @@ public static class PdfRepairer
                     objects[number] = obj;
                 }
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 // Stay permissive: one bad object must not abort the whole repair.
             }
@@ -458,7 +458,7 @@ public static class PdfRepairer
                     CaptureRootInfo(dict, ref root, ref info);
                 }
             }
-            catch (Exception)
+            catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
             {
                 // Damaged trailer dictionary: ignore and keep scanning.
             }
@@ -573,13 +573,13 @@ public static class PdfRepairer
                     PdfPrimitive value = valueParser.ReadValue();
                     output.Add(new PdfIndirectObject(new PdfObjectId(numbers[i], 0), value));
                 }
-                catch (Exception)
+                catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
                 {
                     // Skip an unreadable compressed object; recover the rest.
                 }
             }
         }
-        catch (Exception)
+        catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
             warnings.Add("An object stream (/ObjStm) could not be decoded; its objects were not recovered.");
         }

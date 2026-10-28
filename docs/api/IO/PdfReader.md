@@ -38,7 +38,7 @@ static PdfReader Open(Stream stream, bool leaveOpen = false)
 
 Opens a PDF file from the given readable, seekable stream.
 
-**Remarks:** Performs synchronous blocking I/O against `stream`. The reader holds a reference to the stream for the lifetime of the document and reads objects lazily on demand. Memory-efficient for large files because only xref tables and accessed objects are materialised. Not supported on WebAssembly (browser blocks on synchronous I/O against network resources). Use `OpenAsync(Stream, CancellationToken)` for cross-platform code. <exception cref="PdfParseException"> Thrown when the file is encrypted. Use the password overload to open encrypted PDFs. </exception>
+**Remarks:** Performs synchronous blocking I/O against `stream`. The reader holds a reference to the stream for the lifetime of the document and reads objects lazily on demand. Memory-efficient for large files because only xref tables and accessed objects are materialised. Not supported on WebAssembly (browser blocks on synchronous I/O against network resources). Use `OpenAsync(Stream, CancellationToken)` for cross-platform code. <exception cref="PdfPasswordRequiredException"> Thrown when the file is encrypted and the empty user password does not open it (a `PdfParseException`). Use the password overload. </exception>
 
 ### `Open`
 
@@ -54,7 +54,7 @@ Opens a PDF file with the given password. For unencrypted PDFs the password is i
 
 - `stream` — Readable, seekable stream containing the PDF.
 - `password` — User or owner password. Empty string for default.
-- `leaveOpen` — Whether to leave the stream open on dispose. <exception cref="PdfParseException">Thrown when the password is incorrect.</exception>
+- `leaveOpen` — Whether to leave the stream open on dispose. <exception cref="PdfPasswordRequiredException"> Thrown when the password is incorrect (a `PdfParseException`). </exception>
 
 **Remarks:** Synchronous blocking I/O. Not supported on WebAssembly; use `OpenAsync(Stream, string, CancellationToken)` for cross-platform code.
 
@@ -89,9 +89,25 @@ Asynchronously opens an encrypted PDF file with the given password.
 
 - `stream` — A readable stream containing the PDF. Need not be seekable.
 - `password` — User or owner password. Empty string for default.
-- `cancellationToken` — A token that cancels the buffer fill. <exception cref="PdfParseException">Thrown when the password is incorrect.</exception>
+- `cancellationToken` — A token that cancels the buffer fill. <exception cref="PdfPasswordRequiredException"> Thrown when the password is incorrect (a `PdfParseException`). </exception>
 
 **Remarks:** See `OpenAsync(Stream, CancellationToken)` for the buffering and cancellation semantics. For unencrypted PDFs the password is ignored.
+
+### `RequiresPassword`
+
+__static__
+
+```csharp
+static bool RequiresPassword(Stream stream)
+```
+
+Returns whether the PDF in `stream` is encrypted with a password that must be supplied to open it (the empty user password does not open it). Reads only the cross-reference data and the encryption dictionary; the stream position is restored.
+
+**Parameters**
+
+- `stream` — A readable, seekable PDF stream.
+
+**Returns:** True when a password is needed; false when the file is not encrypted or opens without one. <exception cref="ArgumentNullException">`stream` is null.</exception> <exception cref="ArgumentException">`stream` is not readable and seekable.</exception> <exception cref="PdfParseException">The file structure cannot be read.</exception> <exception cref="PdfEncryptionException">The file uses an unsupported security handler.</exception>
 
 ### `ReadFileBytes`
 

@@ -230,6 +230,7 @@ public static class JpegDecoder
                 c.BlocksPerColumn = (int)Math.Ceiling(Math.Ceiling(_height / 8.0) * c.V / _maxV);
                 c.BlocksPerLineForMcu = _mcusPerLine * c.H;
                 c.BlocksPerColumnForMcu = _mcusPerColumn * c.V;
+                Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)c.BlocksPerColumnForMcu * c.BlocksPerLineForMcu * 64 * 4);
                 c.BlockData = new int[c.BlocksPerColumnForMcu * c.BlocksPerLineForMcu * 64];
             }
         }
@@ -368,6 +369,11 @@ public static class JpegDecoder
                 for (int n = 0; n < total; n++)
                 {
                     HandleRestart(ref restarts, scanComps);
+                    if (n % c.BlocksPerLine == 0)
+                    {
+                        Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
+                    }
+
                     int row = n / c.BlocksPerLine;
                     int col = n % c.BlocksPerLine;
                     int offset = (row * c.BlocksPerLineForMcu + col) * 64;
@@ -381,6 +387,11 @@ public static class JpegDecoder
                 for (int mcu = 0; mcu < totalMcus; mcu++)
                 {
                     HandleRestart(ref restarts, scanComps);
+                    if (mcu % _mcusPerLine == 0)
+                    {
+                        Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
+                    }
+
                     int mcuRow = mcu / _mcusPerLine;
                     int mcuCol = mcu % _mcusPerLine;
                     foreach (Component c in scanComps)
@@ -717,11 +728,13 @@ public static class JpegDecoder
                 int[]? qt = _quant[c.QuantId < 4 ? c.QuantId : 0];
                 int strideBlocks = c.BlocksPerLineForMcu;
                 c.SampleStride = strideBlocks * 8;
+                Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)c.SampleStride * c.BlocksPerColumnForMcu * 8);
                 c.Samples = new byte[c.SampleStride * c.BlocksPerColumnForMcu * 8];
 
                 int[] block = new int[64];
                 for (int by = 0; by < c.BlocksPerColumn; by++)
                 {
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
                     for (int bx = 0; bx < c.BlocksPerLine; bx++)
                     {
                         int off = (by * strideBlocks + bx) * 64;
@@ -747,6 +760,7 @@ public static class JpegDecoder
                 }
             }
 
+            Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)_width * _height * 4);
             PixelBuffer buffer = new PixelBuffer(_width, _height);
             int nc = _components.Length;
 
@@ -755,6 +769,7 @@ public static class JpegDecoder
                 Component y = _components[0];
                 for (int j = 0; j < _height; j++)
                 {
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
                     for (int i = 0; i < _width; i++)
                     {
                         byte g = Sample(y, i, j);
@@ -770,6 +785,7 @@ public static class JpegDecoder
                 Component c0 = _components[0], c1 = _components[1], c2 = _components[2];
                 for (int j = 0; j < _height; j++)
                 {
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
                     for (int i = 0; i < _width; i++)
                     {
                         int a = Sample(c0, i, j);
@@ -790,6 +806,7 @@ public static class JpegDecoder
                 Component c0 = _components[0], c1 = _components[1], c2 = _components[2], c3 = _components[3];
                 for (int j = 0; j < _height; j++)
                 {
+                    Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
                     for (int i = 0; i < _width; i++)
                     {
                         int s0 = Sample(c0, i, j);

@@ -259,6 +259,20 @@ public sealed class PdfTokenizer : IDisposable
 
     // ── Whitespace and comments ───────────────────────────────────────────
 
+    private const int SkipCheckInterval = 1 << 20;
+    private int _skippedSinceCheck;
+
+    // Counts skipped bytes across calls (one comment line at a time would
+    // never reach the interval otherwise) and checks cancellation every MiB.
+    private void CountSkipped()
+    {
+        if (++_skippedSinceCheck >= SkipCheckInterval)
+        {
+            _skippedSinceCheck = 0;
+            PdfWorkScope.ThrowIfCancellationRequested();
+        }
+    }
+
     private void SkipWhitespaceAndComments()
     {
         while (true)
@@ -269,6 +283,10 @@ public sealed class PdfTokenizer : IDisposable
             {
                 break;
             }
+
+            // Megabytes of blank space or comments (a decompression bomb)
+            // hold no token to check cancellation at: check here as well.
+            CountSkipped();
 
             if (IsWhitespace((byte)b))
             {
@@ -292,6 +310,7 @@ public sealed class PdfTokenizer : IDisposable
     {
         while (true)
         {
+            CountSkipped();
             int b = PeekByte();
 
             if (b == -1 || b == '\r' || b == '\n')

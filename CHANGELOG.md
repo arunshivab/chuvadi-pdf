@@ -10,6 +10,99 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.24.0] - 2026-10-28
+
+Embedding API for untrusted documents (the Anjal Mail asks A1–A5): a
+password-required signal, documented "viewing never runs anything"
+guarantees with a sanitizer for output, cancellation, resource limits, a
+no-disk guarantee and an enumerated exception set. Additive only — see
+docs/EMBEDDING.md.
+
+### Added
+- **A1 — passwords.** `PdfPasswordRequiredException` (derives from
+  `PdfParseException`, which open used to throw, so existing handlers still
+  catch it) with `PasswordSupplied`; `PdfDocument.RequiresPassword(Stream)` /
+  `(string)` and `PdfReader.RequiresPassword` check before opening.
+  `PdfParseException` is no longer sealed.
+- **A2 — guarantees and disarming.** docs/EMBEDDING.md states that opening,
+  rendering and text extraction never run scripts, follow actions, open
+  embedded files, touch the network, start processes or write to disk;
+  `EmbeddingGuaranteeTests` checks the compiled viewing assemblies for any
+  network, process, temp-file or file-system API. New `PdfSanitizer.Sanitize`
+  / `Inspect` (Operations) with `SanitizeOptions` / `SanitizeReport`: writes
+  a copy without `/OpenAction`, `/AA`, JavaScript, non-navigation actions
+  (`/A` and a link's `/PA`, including chained `/Next`), embedded files (and
+  the data of any embedded-file stream left reachable), XFA and multimedia
+  annotations; `Inspect` reports exactly what `Sanitize` removes.
+- **A3 — cancellation.** `CancellationToken` overloads of
+  `PageRasterizer.Rasterize`, `RasterizeToPng`, `RenderRegion` and
+  `TextExtractor.ExtractText`, `ExtractFragments`, honoured within a second
+  (checked per content operator, scanline, image row, MiB of decoded output
+  and JPEG MCU row). `PdfWorkScope` (Primitives) carries a token and limits
+  for any other work (`using (PdfWorkScope.Enter(limits, token)) { ... }`).
+- **A4 — limits.** `PdfLimits` (`MaxInputBytes`, `MaxPageCount`,
+  `MaxMemoryBytes`, `MaxDecodedStreamBytes`, `MaxContentOperators`,
+  `MaxOutputPixels`), passed with `PdfOpenOptions` (`PdfDocument.Open(Stream,
+  PdfOpenOptions)`, `Open(string, PdfOpenOptions)`, `OpenAsync(Stream,
+  PdfOpenOptions)`), kept on `PdfDocument.Limits` / `PdfObjectStore.Limits`
+  and applied by every `PageRasterizer` and `TextExtractor` call;
+  `PdfLimitExceededException` names the limit. Decompression bombs stop at
+  the decoded-size limit while decoding; memory is charged as buffers grow;
+  each glyph shown (and every 4,096 stray operands) counts toward page
+  complexity; open-time work runs under the limits.
+- **A5 — no disk.** Nothing is spilled to temporary files anywhere in the
+  library; the only file access on the viewing path is opening the path a
+  caller passes.
+- **Exception set.** Through the `PdfOpenOptions` open overloads and the
+  rasterizer/extractor methods, bad input yields only `PdfException` subtypes
+  or `OperationCanceledException`; failures the code did not anticipate are
+  reported as `PdfParseException` (open) or `PdfCorruptionException`
+  (render/extract) with the original as the inner exception. Mutation
+  fuzzing (8,000 damaged variants per run) found nothing outside the set.
+
+### Fixed
+- **Code that skips damaged objects no longer swallows cancellation or a
+  limit** (31 broad `catch` blocks across rendering, SVG, text and the reader
+  now let `OperationCanceledException` and `PdfLimitExceededException` through).
+- **A damaged font program no longer fails the page.** A font whose program
+  cannot be loaded falls back like a missing one, and a glyph whose outline
+  data is damaged draws nothing (raster).
+- **Page boxes with indirect or non-numeric entries** are read (indirect
+  numbers resolved) or treated as empty instead of throwing
+  `InvalidCastException`.
+- **Text layout grouping and operator-order assembly** are cancellable (the
+  layout grouping is quadratic on pathological pages).
+- **Process-killing input.** Objects nested more than 512 levels deep are
+  refused at parse (a 100 KB file of nested arrays overflowed the stack);
+  self-referential stitching functions, Indexed colour spaces whose base is
+  themselves and deeply nested Type 4 programs fail cleanly instead of
+  overflowing the stack.
+- **A `/Parent` cycle hung page access forever** (inherited-attribute
+  lookup); the walk now stops at a cycle.
+- **A huge or negative page-tree `/Count`** allocated a per-page array up
+  front (out of memory, or `OverflowException`); pages are now cached as they
+  are accessed.
+- **The owner password did not open RC4 (R2/R3) and AES-128 (R4) files**; it
+  now does (PDF 32000-1 Algorithm 7). R6 already worked.
+- **Object streams listed as stored inside each other** (found by mutation
+  fuzzing) made object loading recurse until the process died; an object
+  stream claimed to be inside another is now treated as missing (§7.5.7
+  forbids it).
+- **Long reference chains** (an outline of tens of thousands of items
+  linked by `/Next`) overflowed the stack in the reachability walks shared
+  by `PdfCompressor` and `PdfSanitizer`; those walks are now iterative.
+- **An impossible encryption key `/Length`** for R2–R4 threw
+  `ArgumentException`; it is now a `PdfEncryptionException`.
+- **Comment-only content** is cancellable (skipped comments and blank space
+  are counted across lines), and cancellation is checked when a content
+  stream ends.
+- **Malformed shadings and functions** (a non-number in `/Coords`, `/Domain`
+  or a function's number arrays, `/C0` and `/C1` of different lengths, an
+  empty `/Domain`, a short `/Range`) skip the shading instead of failing the
+  page; a page with an empty MediaBox reports `PdfCorruptionException` with a
+  plain message.
+
+---
 ## [3.23.0] - 2026-10-28
 
 Backlog 17, 18 and 19: the remaining Scrub residuals (colour-function

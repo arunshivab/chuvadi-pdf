@@ -62,6 +62,14 @@ public sealed class PdfObjectStore : IPdfObjectResolver
         _loader = loader ?? throw new ArgumentNullException(nameof(loader));
     }
 
+    /// <summary>
+    /// Gets or sets the resource limits for work on this document's objects
+    /// (set from <c>PdfOpenOptions.Limits</c> when the document is opened).
+    /// <c>PageRasterizer</c> and <c>TextExtractor</c> apply them to every call.
+    /// Null: no limits.
+    /// </summary>
+    public PdfLimits? Limits { get; set; }
+
     // ── Object management ─────────────────────────────────────────────────
 
     /// <summary>Gets the number of objects currently loaded in the store.</summary>
