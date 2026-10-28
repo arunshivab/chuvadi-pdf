@@ -924,6 +924,19 @@ public static class DisplayListBuilder
             TryEmitShadeOp(shadingRef, _state.Ctm, SnapshotClips());
         }
 
+        // True when the transform keeps circles circular (rotation, uniform
+        // scale, reflection and translation only).
+        private static bool IsConformal(Transform m)
+        {
+            PointF u = m.TransformVector(1.0, 0.0);
+            PointF v = m.TransformVector(0.0, 1.0);
+            double l1 = ((double)u.X * u.X) + ((double)u.Y * u.Y);
+            double l2 = ((double)v.X * v.X) + ((double)v.Y * v.Y);
+            double dot = ((double)u.X * v.X) + ((double)u.Y * v.Y);
+            double tol = 1e-6 * Math.Max(l1, l2);
+            return Math.Abs(l1 - l2) <= tol && Math.Abs(dot) <= tol;
+        }
+
         // Emits a ShadeOp for a shading dictionary under the given
         // shading-space-to-page transform and clip set. Returns false when the
         // shading type is unsupported (e.g. mesh shadings 4-7) — the paint is
@@ -958,7 +971,25 @@ public static class DisplayListBuilder
                 stops.Add(new GradientStop(t, ColorF.FromRgb((float)r, (float)g, (float)b)));
             }
 
-            if (shading.IsRadial)
+            if (shading.IsRadial && !IsConformal(ctm))
+            {
+                // Circles become ellipses on the page: keep them in shading
+                // space and carry the transform.
+                EmitOp(new ShadeOp(
+                    isRadial: true,
+                    x0: coords[0],
+                    y0: coords[1],
+                    x1: coords[3],
+                    y1: coords[4],
+                    r0: coords[2],
+                    r1: coords[5],
+                    extendStart: shading.ExtendStart,
+                    extendEnd: shading.ExtendEnd,
+                    stops: stops,
+                    clips: clips)
+                { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask, ShadingToPage = ctm });
+            }
+            else if (shading.IsRadial)
             {
                 PointF p1 = ctm.TransformPoint(new PointF(coords[3], coords[4]));
                 EmitOp(new ShadeOp(

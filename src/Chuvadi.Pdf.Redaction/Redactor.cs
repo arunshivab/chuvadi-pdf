@@ -277,12 +277,13 @@ public static class Redactor
         }
 
         Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewrittenForms =
-            RewriteCollectedForms(run, allObjects, removedContentStreamNums);
+            RewriteCollectedForms(document, run, allObjects, removedContentStreamNums);
 
         // An image whose Do was removed must leave the file, not just the
         // content stream: prune it from the rewritten pages' and forms'
         // /XObject resources, then omit it below if nothing else reaches it.
         HashSet<int> orphanImageCandidates = new HashSet<int>(strippedPageExtras);
+        RedactInheritedFormPatterns(rewrittenForms, run, allObjects, removedContentStreamNums, ref nextObjectNum, orphanImageCandidates);
         for (int i = 0; i < work.Count; i++)
         {
             PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
@@ -293,6 +294,12 @@ public static class Redactor
             RectangleF visible = Intersect(
                 new RectangleF(Math.Min(media.X1, media.X2), Math.Min(media.Y1, media.Y2), media.Width, media.Height),
                 new RectangleF(Math.Min(crop.X1, crop.X2), Math.Min(crop.Y1, crop.Y2), crop.Width, crop.Height));
+            // Annotations are drawn over the page: none may cover a witness.
+            foreach (RectangleF annotRect in AnnotationRects(work[i].Page.Dictionary, run.Store))
+            {
+                WithdrawShown(patternUses[i], annotRect, null);
+            }
+
             RedactPatternCells(
                 modifiedPages[i], work[i].Page.Resources, PageContexts(work[i].Rects, work[i].Replacements),
                 patternUses[i], run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, visible);
@@ -601,6 +608,7 @@ public static class Redactor
                 {
                     if (patternUses is not null)
                     {
+                        NoteOverpaint("BI", pendingOperands, state, path, patternUses, run, resources);
                         AddPainted(patternUses, state.FillPattern, anywhere: true);
                     }
 
@@ -614,7 +622,7 @@ public static class Redactor
                 }
 
                 string op = token.RawText;
-                TrackPatternPaint(op, pendingOperands, state, path, patternUses);
+                TrackPatternPaint(op, pendingOperands, state, path, patternUses, run, resources);
 
                 // Path construction: buffer the operator instead of emitting it,
                 // accumulating the path's bounding box, so the whole path can be
@@ -1306,6 +1314,14 @@ public static class Redactor
             case "TD": ApplyTD(operands, state); return false;
             case "Tm": ApplyTm(operands, state); return false;
             case "T*": state.NextLine(); return false;
+            case "TL":
+                // Text leading (PDF 9.3.5), used by T*, ' and ".
+                if (operands.Count >= 1 && operands[^1].IsNumeric)
+                {
+                    state.Leading = ParseDouble(operands[^1]);
+                }
+
+                return false;
             case "Tc":
                 if (operands.Count >= 1 && operands[^1].IsNumeric)
                 {
@@ -1530,6 +1546,81 @@ public static class Redactor
     // to this depth; deeper cells are emptied.
     private const int MaxPatternDepth = 4;
 
+    // A form that inherits its resources and could not be given its own
+    // copy (it is drawn with different resources in different places) cannot
+    // take a new pattern name, so each tiling pattern it paints is rewritten
+    // in place (same object number), once per pattern object, against the
+    // form's contexts in the invocations that resolve the name to it. Any
+    // other use of that pattern object then sees the redacted cell too (B15:
+    // over-redact rather than keep content a box covered).
+    private static void RedactInheritedFormPatterns(
+        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewrittenForms,
+        RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded, ref int nextObjectNum,
+        HashSet<int> candidates)
+    {
+        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> form in rewrittenForms)
+        {
+            PatternUses uses = form.Value.Uses;
+            if (uses.Painted.Count == 0
+                || form.Value.Dict.ContainsKey(PdfName.Resources)
+                || !run.InheritedInvocations.TryGetValue(form.Key, out List<(PdfDictionary? Resources, List<RedactContext> Contexts)>? invocations))
+            {
+                continue;
+            }
+
+            foreach (string name in uses.Painted)
+            {
+                // The form's contexts, grouped by the pattern object the name
+                // resolves to in each invocation.
+                Dictionary<int, List<RedactContext>> byPattern = new Dictionary<int, List<RedactContext>>();
+                foreach ((PdfDictionary? resources, List<RedactContext> contexts) in invocations)
+                {
+                    if (resources is not null
+                        && resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv)
+                        && run.Store.Resolve(pv) is PdfDictionary patterns
+                        && patterns.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry)
+                        && entry is PdfReference reference)
+                    {
+                        int number = reference.ObjectId.ObjectNumber;
+                        if (!byPattern.TryGetValue(number, out List<RedactContext>? list))
+                        {
+                            list = new List<RedactContext>();
+                            byPattern[number] = list;
+                        }
+
+                        list.AddRange(contexts);
+                    }
+                }
+
+                List<RectangleF>? painted = uses.PaintedAnywhere.Contains(name)
+                    ? null
+                    : uses.PaintedBounds.TryGetValue(name, out List<RectangleF>? bounds) ? bounds : new List<RectangleF>();
+                foreach (KeyValuePair<int, List<RedactContext>> group in byPattern)
+                {
+                    PdfStream? cell = run.ReplacedPatterns.TryGetValue(group.Key, out PdfStream? done)
+                        ? done
+                        : run.Store.ResolveById(new PdfObjectId(group.Key, 0)) as PdfStream;
+                    if (cell is null || NumberOf(run, cell.Dictionary, "PatternType") != 1)
+                    {
+                        continue;
+                    }
+
+                    PdfStream? redacted = RedactPatternCell(
+                        cell, group.Value, painted, null, default, run, allObjects, ref nextObjectNum, candidates, 0);
+                    if (redacted is null)
+                    {
+                        continue;
+                    }
+
+                    allObjects.RemoveAll(o => o.Id.ObjectNumber == group.Key);
+                    allObjects.Add(new PdfIndirectObject(new PdfObjectId(group.Key, 0), redacted));
+                    excluded.Add(group.Key);
+                    run.ReplacedPatterns[group.Key] = redacted;
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Redacts the content of tiling-pattern cells (PDF 8.7.3.1) a content
     /// stream paints with. The painted pattern area inside a box is already
@@ -1573,6 +1664,12 @@ public static class Redactor
                 || NumberOf(run, cell.Dictionary, "PatternType") != 1)
             {
                 continue;
+            }
+
+            if (entry is PdfReference replacedRef
+                && run.ReplacedPatterns.TryGetValue(replacedRef.ObjectId.ObjectNumber, out PdfStream? replaced))
+            {
+                cell = replaced;
             }
 
             List<RectangleF>? painted = uses.PaintedAnywhere.Contains(name)
@@ -2178,12 +2275,17 @@ public static class Redactor
     // unknown clip shape records nothing). Runs before the operator itself
     // is handled, while the path being painted is still buffered.
     private static void TrackPatternPaint(
-        string op, List<PdfToken> operands, RedactState state, PathAccumulator path, PatternUses? uses)
+        string op, List<PdfToken> operands, RedactState state, PathAccumulator path, PatternUses? uses,
+        RedactRun run, PdfDictionary? resources)
     {
         if (uses is null)
         {
             return;
         }
+
+        // Anything painted later over a rectangle where a pattern was seen
+        // to show may hide it: such rectangles stop counting as shown.
+        NoteOverpaint(op, operands, state, path, uses, run, resources);
 
         string? lastName = operands.Count > 0 && operands[^1].Type == PdfTokenType.Name
             ? DecodeNameText(operands[^1].RawText)
@@ -2313,6 +2415,175 @@ public static class Redactor
                 state.ClipUnknown = true;
             }
         }
+    }
+
+    // Withdraws "shown" pattern rectangles that a painting operator may
+    // cover: a fill or stroke over its path bounds (a fill with the same
+    // pattern does not hide that pattern), text over a generous box around
+    // the shown string, an image over its unit square; a form, a shading,
+    // or anything whose extent is unknown withdraws them all.
+    private static void NoteOverpaint(
+        string op, List<PdfToken> operands, RedactState state, PathAccumulator path, PatternUses uses,
+        RedactRun run, PdfDictionary? resources)
+    {
+        if (uses.Shown.Count == 0)
+        {
+            return;
+        }
+
+        switch (op)
+        {
+            case "f" or "F" or "f*" or "B" or "B*" or "b" or "b*" or "S" or "s":
+                if (!path.Active)
+                {
+                    return;
+                }
+
+                bool fills = op is "f" or "F" or "f*" or "B" or "B*" or "b" or "b*";
+                bool strokes = op is "S" or "s" or "B" or "B*" or "b" or "b*";
+                if (state.PathCtmChanged)
+                {
+                    WithdrawShown(uses, null, null);
+                    return;
+                }
+
+                double reach = 0;
+                if (strokes)
+                {
+                    Transform ctm = state.Ctm;
+                    double scale = Math.Max(
+                        Math.Max(Math.Abs(ctm.A), Math.Abs(ctm.B)),
+                        Math.Max(Math.Abs(ctm.C), Math.Abs(ctm.D)));
+                    reach = Math.Max(state.LineWidth, 1.0) * scale * Math.Max(Math.Sqrt(2), state.MiterLimit) / 2;
+                }
+
+                RectangleF painted = new RectangleF(
+                    path.MinX - reach, path.MinY - reach,
+                    path.MaxX - path.MinX + (2 * reach), path.MaxY - path.MinY + (2 * reach));
+                // A fill with the same pattern repaints the same picture —
+                // unless a graphics state (blend mode, opacity) may alter it.
+                bool samePatternFill = fills && !strokes && state.FillPattern is not null && !state.MayHidePaint;
+                WithdrawShown(uses, painted, samePatternFill ? state.FillPattern : null);
+                return;
+            case "Tj" or "TJ":
+                WithdrawShown(uses, state.FontExtentUnknown ? null : TextPaintBounds(operands, state), null);
+                return;
+            case "'" or "\"" or "sh":
+                WithdrawShown(uses, null, null);
+                return;
+            case "BI":
+                WithdrawShown(uses, UnitSquareBounds(state.Ctm), null);
+                return;
+            case "Do":
+                bool image = ResolveXObjectRef(operands, resources, run.Store) is { } placed && IsImage(placed.Stream);
+                WithdrawShown(uses, image ? UnitSquareBounds(state.Ctm) : null, null);
+                return;
+        }
+    }
+
+    // Removes shown rectangles meeting bounds (all of them when bounds is
+    // null), except those of the named pattern.
+    private static void WithdrawShown(PatternUses uses, RectangleF? bounds, string? except)
+    {
+        foreach (KeyValuePair<string, List<RectangleF>> entry in uses.Shown)
+        {
+            if (entry.Key == except)
+            {
+                continue;
+            }
+
+            if (bounds is not RectangleF b)
+            {
+                entry.Value.Clear();
+                continue;
+            }
+
+            entry.Value.RemoveAll(r =>
+                r.X < b.X + b.Width && b.X < r.X + r.Width && r.Y < b.Y + b.Height && b.Y < r.Y + r.Height);
+        }
+    }
+
+    // The /Rect of every annotation on a page (normalised).
+    private static List<RectangleF> AnnotationRects(PdfDictionary page, PdfObjectStore store)
+    {
+        List<RectangleF> rects = new List<RectangleF>();
+        if (!page.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? av) || store.Resolve(av) is not PdfArray annots)
+        {
+            return rects;
+        }
+
+        foreach (PdfPrimitive item in annots)
+        {
+            if (store.Resolve(item) is not PdfDictionary annot
+                || !annot.TryGetValue(PdfName.Intern("Rect"), out PdfPrimitive? rv)
+                || store.Resolve(rv) is not PdfArray r
+                || r.Count < 4)
+            {
+                continue;
+            }
+
+            double ax = PdfReal.ToDouble(store.Resolve(r[0]));
+            double ay = PdfReal.ToDouble(store.Resolve(r[1]));
+            double bx = PdfReal.ToDouble(store.Resolve(r[2]));
+            double by = PdfReal.ToDouble(store.Resolve(r[3]));
+            rects.Add(new RectangleF(Math.Min(ax, bx), Math.Min(ay, by), Math.Abs(bx - ax), Math.Abs(by - ay)));
+        }
+
+        return rects;
+    }
+
+    private static RectangleF UnitSquareBounds(Transform ctm)
+    {
+        PointF a = ctm.TransformPoint(new PointF(0, 0));
+        PointF b = ctm.TransformPoint(new PointF(1, 0));
+        PointF c = ctm.TransformPoint(new PointF(1, 1));
+        PointF d = ctm.TransformPoint(new PointF(0, 1));
+        double minX = Math.Min(Math.Min(a.X, b.X), Math.Min(c.X, d.X));
+        double minY = Math.Min(Math.Min(a.Y, b.Y), Math.Min(c.Y, d.Y));
+        double maxX = Math.Max(Math.Max(a.X, b.X), Math.Max(c.X, d.X));
+        double maxY = Math.Max(Math.Max(a.Y, b.Y), Math.Max(c.Y, d.Y));
+        return new RectangleF(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    // A generous box around a Tj/TJ string: every byte counted as a glyph
+    // up to two ems wide plus character and word spacing, TJ adjustments
+    // added in full, from a font size below the baseline to two above it
+    // (with rise), in text space at the current line position.
+    private static RectangleF TextPaintBounds(List<PdfToken> operands, RedactState state)
+    {
+        double size = Math.Abs(state.FontSize);
+        double perGlyph = (2 * size) + Math.Abs(state.CharSpacing) + Math.Abs(state.WordSpacing);
+        double width = 0;
+        foreach (PdfToken t in operands)
+        {
+            if (t.Type is PdfTokenType.LiteralString or PdfTokenType.HexString)
+            {
+                width += t.RawText.Length * perGlyph;
+            }
+            else if (t.IsNumeric)
+            {
+                width += Math.Abs(ParseDouble(t)) / 1000 * size;
+            }
+        }
+
+        width *= Math.Max(Math.Abs(state.HorizontalScaling), 1.0);
+        double x0 = state.TextX - width;
+        double x1 = state.TextX + width;
+        double y0 = state.TextRise - size - Math.Abs(state.TextRise);
+        double y1 = state.TextRise + (2 * size) + Math.Abs(state.TextRise);
+        Transform m = state.TextMatrix.Multiply(state.Ctm);
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (PointF corner in new[] { new PointF(x0, y0), new PointF(x1, y0), new PointF(x1, y1), new PointF(x0, y1) })
+        {
+            PointF p = m.TransformPoint(corner);
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+
+        return new RectangleF(minX, minY, maxX - minX, maxY - minY);
     }
 
     private static void AddPainted(PatternUses uses, string? name, bool anywhere)
@@ -2616,9 +2887,28 @@ public static class Redactor
         if (operands.Count >= 2)
         {
             state.FontSize = ParseDouble(operands[^1]);
+            state.FontExtentUnknown = !IsKnownExtentFont(operands[^2], resources, store);
             state.GlyphWidths = BuildGlyphWidths(operands[^2], resources, store);
             state.Font = BuildFont(operands[^2], resources, store, state.FontCache);
         }
+    }
+
+    // True when the named font resolves to a font whose glyphs stay within
+    // about an em of the text position (not a Type 3 font, whose glyph
+    // procedures can draw anywhere their /FontMatrix sends them).
+    private static bool IsKnownExtentFont(PdfToken nameToken, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (resources is null
+            || nameToken.Type != PdfTokenType.Name
+            || !resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fv)
+            || store.Resolve(fv) is not PdfDictionary fonts
+            || !fonts.TryGetValue(PdfName.Intern(DecodeNameText(nameToken.RawText)), out PdfPrimitive? entry)
+            || store.Resolve(entry) is not PdfDictionary font)
+        {
+            return false;
+        }
+
+        return !(font.TryGetValue(PdfName.Subtype, out PdfPrimitive? st) && st is PdfName subtype && subtype.Value == "Type3");
     }
 
     // Applies the stroke-relevant entries of a named ExtGState (PDF 8.4.5):
@@ -3838,6 +4128,28 @@ public static class Redactor
                 run.FormInvocations[objNum] = list;
             }
             list.AddRange(formContexts);
+
+            // A form without resources of its own draws with those of the
+            // content that invokes it; remember them (or that they differ
+            // between invocations).
+            if (!stream.Dictionary.ContainsKey(PdfName.Resources))
+            {
+                if (!run.InheritedInvocations.TryGetValue(objNum, out List<(PdfDictionary? Resources, List<RedactContext> Contexts)>? invocations))
+                {
+                    invocations = new List<(PdfDictionary? Resources, List<RedactContext> Contexts)>();
+                    run.InheritedInvocations[objNum] = invocations;
+                }
+
+                invocations.Add((resources, formContexts));
+                if (!run.InheritedFormResources.TryGetValue(objNum, out PdfDictionary? seen))
+                {
+                    run.InheritedFormResources[objNum] = resources;
+                }
+                else if (!ReferenceEquals(seen, resources))
+                {
+                    run.InheritedFormResources[objNum] = null;
+                }
+            }
         }
 
         if (activeStack.Contains(objNum))
@@ -3863,7 +4175,7 @@ public static class Redactor
     // object id), removing in-rect text under any of its placements, and marks
     // the original for exclusion so no unredacted copy survives in the output.
     private static Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> RewriteCollectedForms(
-        RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
+        PdfDocument document, RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
     {
         Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewritten =
             new Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)>();
@@ -3877,11 +4189,28 @@ public static class Redactor
 
             byte[] formBytes = DecodeStream(form, run.Pipeline);
             PdfDictionary? formResources = ResolveFormResources(form, null, run.Store);
-            // Blanked images join the form's own resources; a form that
-            // inherits its resources cannot take new names, so a partly
-            // covered image in it is removed instead.
+
+            // A form that inherits its resources from one and the same
+            // invoking content everywhere is given its own copy of them
+            // (equivalent for painting), so blanked images and redacted
+            // pattern cells can be added to it. One drawn with different
+            // inherited resources in different places cannot take new
+            // names: a partly covered image in it is removed instead.
+            PdfDictionary? materialised = null;
+            if (!form.Dictionary.ContainsKey(PdfName.Resources)
+                && run.InheritedFormResources.TryGetValue(objNum, out PdfDictionary? inherited)
+                && inherited is not null
+                && OnlyInvokerOf(document, run, objNum, inherited))
+            {
+                materialised = CopyDictionary(inherited);
+                formResources = materialised;
+                run.MaterialisedForms.Add(objNum);
+            }
+
+            // Blanked images join the form's own resources.
             List<BlankedImage> images = new List<BlankedImage>();
-            bool ownResources = form.Dictionary.ContainsKey(PdfName.Resources) && formResources is not null;
+            bool ownResources = (form.Dictionary.ContainsKey(PdfName.Resources) || materialised is not null)
+                && formResources is not null;
             PatternUses uses = new PatternUses();
             byte[] redacted = RewriteContent(
                 formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>(),
@@ -3891,6 +4220,10 @@ public static class Redactor
             newDict.Remove(PdfName.Intern("Filter"));
             newDict.Remove(PdfName.Intern("DecodeParms"));
             newDict.Set(PdfName.Length, redacted.Length);
+            if (materialised is not null)
+            {
+                newDict.Set(PdfName.Resources, materialised);
+            }
 
             allObjects.Add(new PdfIndirectObject(new PdfObjectId(objNum, 0), new PdfStream(newDict, redacted)));
             excluded.Add(objNum);
@@ -3899,6 +4232,59 @@ public static class Redactor
         }
 
         return rewritten;
+    }
+
+    // True when every resource dictionary in the document that names the
+    // form (pages' effective resources, and the resources of forms,
+    // patterns, appearances and fonts) is the given one: the form is then
+    // always drawn with those resources.
+    private static bool OnlyInvokerOf(PdfDocument document, RedactRun run, int formNum, PdfDictionary invoker)
+    {
+        bool Names(PdfDictionary? resources)
+        {
+            if (resources is null
+                || !resources.TryGetValue(PdfName.XObject, out PdfPrimitive? xv)
+                || run.Store.Resolve(xv) is not PdfDictionary xobjects)
+            {
+                return false;
+            }
+
+            foreach (PdfName key in xobjects.Keys)
+            {
+                if (xobjects[key] is PdfReference r && r.ObjectId.ObjectNumber == formNum)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        for (int p = 0; p < document.PageCount; p++)
+        {
+            PdfDictionary? resources = document.Pages[p].Resources;
+            if (Names(resources) && !ReferenceEquals(resources, invoker))
+            {
+                return false;
+            }
+        }
+
+        foreach (PdfIndirectObject obj in run.Store.Objects)
+        {
+            PdfDictionary? dict = obj.Value as PdfDictionary ?? (obj.Value as PdfStream)?.Dictionary;
+            if (dict is null || !dict.TryGetValue(PdfName.Resources, out PdfPrimitive? rv))
+            {
+                continue;
+            }
+
+            PdfDictionary? resources = run.Store.Resolve(rv) as PdfDictionary;
+            if (Names(resources) && !ReferenceEquals(resources, invoker))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ── Orphaned-resource removal ─────────────────────────────────────────
@@ -4420,6 +4806,7 @@ public static class Redactor
                     && form.Dictionary.TryGetValue(PdfName.Subtype, out PdfPrimitive? st)
                     && st is PdfName subtype && subtype.Value == "Form"
                     && !form.Dictionary.ContainsKey(PdfName.Resources)
+                    && !run.MaterialisedForms.Contains(formRef.ObjectId.ObjectNumber)
                     && visitedForms.Add(formRef.ObjectId.ObjectNumber))
                 {
                     // A form without its own resources draws with these ones.
@@ -5392,6 +5779,10 @@ internal sealed class RedactState
     internal double TextY { get; set; }
     internal double FontSize { get; set; }
 
+    // The current font's glyphs may draw outside the usual em box (a Type 3
+    // font, or a font that could not be resolved).
+    internal bool FontExtentUnknown { get; set; } = true;
+
     // Per-byte-code glyph widths (1/1000 em) for the active font, or null when
     // the font's widths are unknown (then callers fall back to an estimate).
     internal int[]? GlyphWidths { get; set; }
@@ -5478,8 +5869,14 @@ internal sealed class RedactState
     private readonly Stack<double> _miterLimitStack = new Stack<double>();
     private readonly Stack<bool> _strokeReliableStack = new Stack<bool>();
 
+    // The rest of the text state (PDF 9.3): leading, font and size are part
+    // of the graphics state too, saved by q and restored by Q.
+    private readonly Stack<(double Leading, double FontSize, int[]? Widths, PdfFont? Font, bool ExtentUnknown)> _textStateStack =
+        new Stack<(double Leading, double FontSize, int[]? Widths, PdfFont? Font, bool ExtentUnknown)>();
+
     internal void PushGraphicsState()
     {
+        _textStateStack.Push((Leading, FontSize, GlyphWidths, Font, FontExtentUnknown));
         _ctmStack.Push(Ctm);
         _charSpacingStack.Push(CharSpacing);
         _wordSpacingStack.Push(WordSpacing);
@@ -5492,6 +5889,11 @@ internal sealed class RedactState
 
     internal void PopGraphicsState()
     {
+        if (_textStateStack.Count > 0)
+        {
+            (Leading, FontSize, GlyphWidths, Font, FontExtentUnknown) = _textStateStack.Pop();
+        }
+
         if (_ctmStack.Count > 0)
         {
             Ctm = _ctmStack.Pop();
@@ -5660,6 +6062,33 @@ internal sealed class RedactRun
     /// pruning reads a rewritten form's uses from this, not the original.
     /// </summary>
     public Dictionary<int, byte[]> RewrittenForms { get; } = new();
+
+    /// <summary>
+    /// For a form without its own /Resources: the resources of the content
+    /// invoking it, or null when different invocations use different ones.
+    /// Guarded by <see cref="Sync"/>.
+    /// </summary>
+    public Dictionary<int, PdfDictionary?> InheritedFormResources { get; } = new();
+
+    /// <summary>
+    /// Forms that inherited their resources and were given their own copy:
+    /// they no longer draw with (or keep anything in) the invoker's resources.
+    /// </summary>
+    public HashSet<int> MaterialisedForms { get; } = new();
+
+    /// <summary>
+    /// For a form without its own /Resources: each invocation's inherited
+    /// resources and the form's redaction contexts there. Guarded by
+    /// <see cref="Sync"/>.
+    /// </summary>
+    public Dictionary<int, List<(PdfDictionary? Resources, List<RedactContext> Contexts)>> InheritedInvocations { get; } = new();
+
+    /// <summary>
+    /// Tiling patterns rewritten in place (same object number) for forms that
+    /// draw them through inherited resources; later cell redaction of the
+    /// same pattern starts from the rewritten cell.
+    /// </summary>
+    public Dictionary<int, PdfStream> ReplacedPatterns { get; } = new();
 
     /// <summary>Guards <see cref="FormInvocations"/> during parallel collection.</summary>
     public object Sync { get; } = new();

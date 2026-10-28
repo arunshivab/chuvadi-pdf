@@ -5,6 +5,7 @@
 // show inside the box; unused patterns and shadings, and the page
 // thumbnail, leave the file.
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -12,6 +13,7 @@ using System.Text;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
+using Chuvadi.Pdf.Rendering;
 using FluentAssertions;
 using Xunit;
 
@@ -321,6 +323,174 @@ public sealed class ScrubPatternShadingAnnotationTests
     }
 
     [Fact]
+    public void SoftMaskGroup_KeepsOnlyWhatLiesInTheBox()
+    {
+        byte[] pdf = RawPdf.SinglePage(
+            Media + "/Resources<</ExtGState<</G0<</SMask<</S/Luminosity/G 5 0 R>>>>/G1<</UNUSEDGS true>>>>>>",
+            "q /G0 gs 0 0 1 rg 0 0 400 400 re f Q",
+            RawPdf.Stream(
+                "/Type/XObject/Subtype/Form/BBox[0 0 400 400]/Group<</S/Transparency/CS/DeviceGray>>"
+                    + "/Resources<</Font<</F1 6 0 R>>>>",
+                "1 g BT /F1 12 Tf 20 20 Td (KEEPMASK) Tj ET BT /F1 12 Tf 300 300 Td (SECRETMASK) Tj ET"),
+            Helvetica());
+
+        string output = Scrub(pdf);
+
+        output.Should().NotContain("SECRETMASK", "the mask group's off-box content must leave the file");
+        output.Should().Contain("KEEPMASK");
+        output.Should().NotContain("UNUSEDGS", "an unused graphics state is pruned");
+    }
+
+    [Fact]
+    public void FunctionBasedShading_KeepsOnlyTheSamplesTheBoxShows()
+    {
+        // A 32x32 sampled function over 0..400 x 0..400; each row ends in
+        // the marker bytes "QZX" at x ~ 375..400, far right of the box.
+        byte[] samples = new byte[32 * 32];
+        for (int row = 0; row < 32; row++)
+        {
+            for (int col = 0; col < 32; col++)
+            {
+                samples[(row * 32) + col] = 100;
+            }
+
+            samples[(row * 32) + 29] = (byte)'Q';
+            samples[(row * 32) + 30] = (byte)'Z';
+            samples[(row * 32) + 31] = (byte)'X';
+        }
+
+        byte[] pdf = RawPdf.SinglePage(
+            Media + "/Resources<</Shading<</Sh0 5 0 R>>>>",
+            "/Sh0 sh",
+            RawPdf.Obj("<</ShadingType 1/ColorSpace/DeviceGray/Domain[0 400 0 400]/Function 6 0 R>>"),
+            RawPdf.Stream("/FunctionType 0/Domain[0 400 0 400]/Range[0 1]/Size[32 32]/BitsPerSample 8", samples));
+
+        byte[] output = ScrubBytes(pdf);
+        Encoding.Latin1.GetString(output).Should().NotContain("QZX");
+
+        using PdfDocument doc = Open(output);
+        PdfDictionary shadings = (PdfDictionary)doc.Objects.Resolve(doc.Pages[0].Resources![PdfName.Intern("Shading")]);
+        PdfDictionary shading = (PdfDictionary)doc.Objects.Resolve(shadings[PdfName.Intern("Sh0")]);
+        PdfStream function = (PdfStream)doc.Objects.Resolve(shading[PdfName.Intern("Function")]);
+        PdfArray size = (PdfArray)function.Dictionary[PdfName.Intern("Size")];
+        ((PdfInteger)size[0]).Value.Should().BeLessThan(32);
+        ((PdfInteger)size[1]).Value.Should().BeLessThan(32);
+        byte[] kept = Inflate(function.RawBytes);
+        kept[0].Should().Be(100, "the in-box samples are kept as they were");
+    }
+
+    [Fact]
+    public void AxialShading_KeepsOnlyTheSamplesAlongTheVisiblePartOfTheAxis()
+    {
+        // A 64-sample function along an axis from x 0 to 400; the last
+        // three samples (x ~ 380..400) carry "QZX".
+        byte[] samples = new byte[64];
+        for (int i = 0; i < 64; i++)
+        {
+            samples[i] = 50;
+        }
+
+        samples[61] = (byte)'Q';
+        samples[62] = (byte)'Z';
+        samples[63] = (byte)'X';
+        byte[] pdf = RawPdf.SinglePage(
+            Media + "/Resources<</Shading<</Sh0 5 0 R>>>>",
+            "/Sh0 sh",
+            RawPdf.Obj("<</ShadingType 2/ColorSpace/DeviceGray/Coords[0 0 400 0]/Function 6 0 R/Extend[true true]>>"),
+            RawPdf.Stream("/FunctionType 0/Domain[0 1]/Range[0 1]/Size[64]/BitsPerSample 8", samples));
+
+        byte[] output = ScrubBytes(pdf);
+
+        Encoding.Latin1.GetString(output).Should().NotContain("QZX");
+    }
+
+    [Fact]
+    public void FillEnclosingTheBox_StillPaintsIt()
+    {
+        // Every corner of the rotated square lies outside the box, yet it
+        // covers the whole box: it must be kept (clipped), not dropped.
+        byte[] pdf = RawPdf.SinglePage(
+            Media,
+            "q 0.7 0.7 -0.7 0.7 200 0 cm 1 0 0 rg -400 -400 800 800 re f Q");
+
+        using PdfDocument doc = Open(ScrubBytes(pdf));
+        PixelBuffer pixels = new PageRasterizer(doc.Objects, new RenderOptions { Dpi = 72 }).Rasterize(doc.Pages[0]);
+        (byte b, byte g, byte r, byte _) = pixels.GetPixelBgra(100, 100);
+        r.Should().BeGreaterThan(200);
+        g.Should().BeLessThan(60);
+        b.Should().BeLessThan(60);
+    }
+
+    [Theory]
+    [InlineData("<</ShadingType 3/ColorSpace/DeviceGray/Coords[0 0 0 0 0 560]/Function 6 0 R/Extend[true true]>>")]
+    [InlineData("<</ShadingType 2/ColorSpace/DeviceGray/Coords[0 0 400 0]/Extend[true true]"
+        + "/Function<</FunctionType 3/Domain[0 1]/Bounds[0.5]/Encode[0 1 0 1]/Functions[7 0 R 6 0 R]>>>>")]
+    public void RadialAndStitchedShadings_DropTheSamplesTheBoxCannotShow(string shading)
+    {
+        // Function 6: 20 samples whose last three, "QZX", only colour the
+        // far (off-box) end; function 7 is a plain ramp.
+        byte[] marked = new byte[20];
+        for (int i = 0; i < 20; i++)
+        {
+            marked[i] = 80;
+        }
+
+        marked[17] = (byte)'Q';
+        marked[18] = (byte)'Z';
+        marked[19] = (byte)'X';
+        byte[] ramp = new byte[20];
+        for (int i = 0; i < 20; i++)
+        {
+            ramp[i] = (byte)(i * 10);
+        }
+
+        byte[] pdf = RawPdf.SinglePage(
+            Media + "/Resources<</Shading<</Sh0 5 0 R>>>>",
+            "/Sh0 sh",
+            RawPdf.Obj(shading),
+            RawPdf.Stream("/FunctionType 0/Domain[0 1]/Range[0 1]/Size[20]/BitsPerSample 8", marked),
+            RawPdf.Stream("/FunctionType 0/Domain[0 1]/Range[0 1]/Size[20]/BitsPerSample 8", ramp));
+
+        Encoding.Latin1.GetString(ScrubBytes(pdf)).Should().NotContain("QZX");
+    }
+
+    [Theory]
+    [InlineData("101.5 101.5 0 101.5 101.5 5")]
+    [InlineData("199.3 199.3 0 199.3 199.3 3")]
+    [InlineData("60 60 2 140 120 30")]
+    public void RadialShadingCentredInOrNearTheBox_StillRendersTheSameInside(string coords)
+    {
+        // The circles shrink to a point in or by the box, where s changes
+        // fastest: the trim must keep every sample the box shows.
+        byte[] ramp = new byte[20];
+        for (int i = 0; i < 20; i++)
+        {
+            ramp[i] = (byte)(i * 13);
+        }
+
+        byte[] pdf = RawPdf.SinglePage(
+            Media + "/Resources<</Shading<</Sh0 5 0 R>>>>",
+            "/Sh0 sh",
+            RawPdf.Obj("<</ShadingType 3/ColorSpace/DeviceGray/Coords[" + coords + "]/Function 6 0 R/Extend[true true]>>"),
+            RawPdf.Stream("/FunctionType 0/Domain[0 1]/Range[0 1]/Size[20]/BitsPerSample 8", ramp));
+
+        // The scrubbed page is the 200 x 200 box: its rows sit 200 above the
+        // original's.
+        PixelBuffer before = Render(pdf);
+        PixelBuffer after = Render(ScrubBytes(pdf));
+        int worst = 0;
+        for (int y = 2; y < 198; y++)
+        {
+            for (int x = 2; x < 198; x++)
+            {
+                worst = Math.Max(worst, Math.Abs(before.GetPixelBgra(x, y + 200).Item1 - after.GetPixelBgra(x, y).Item1));
+            }
+        }
+
+        worst.Should().BeLessThan(8);
+    }
+
+    [Fact]
     public void PageThumbnail_LeavesTheFile()
     {
         byte[] pdf = RawPdf.SinglePage(
@@ -341,6 +511,12 @@ public sealed class ScrubPatternShadingAnnotationTests
         using MemoryStream output = new MemoryStream();
         PageCropper.Crop(output, doc, new List<PageCrop> { new PageCrop(0, Crop, PageCropMode.Scrub) });
         return output.ToArray();
+    }
+
+    private static PixelBuffer Render(byte[] pdf)
+    {
+        using PdfDocument doc = Open(pdf);
+        return new PageRasterizer(doc.Objects, new RenderOptions { Dpi = 72 }).Rasterize(doc.Pages[0]);
     }
 
     private static PdfDocument Open(byte[] bytes) => PdfDocument.Open(new MemoryStream(bytes), leaveOpen: false);

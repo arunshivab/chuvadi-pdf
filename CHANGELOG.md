@@ -10,6 +10,67 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.23.0] - 2026-10-28
+
+Backlog 17, 18 and 19: the remaining Scrub residuals (colour-function
+shadings, soft-mask groups), the last pattern-cell redaction edges, and the
+verifier's false alarm on palette images; plus a radial-shading rendering
+fix found while verifying the Scrub trim.
+
+### Fixed
+- **Pattern cells drawn by resource-inheriting forms (backlog 18).** A form
+  without its own `/Resources` that paints a tiling pattern across a box
+  now has the pattern's cell redacted. When every invocation gives it the
+  same resources, the form gets its own copy of them (equivalent for
+  painting) and takes the rewritten cell and blanked images like any form;
+  a partly covered image in it is now blanked instead of removed. When
+  invocations differ, each pattern it paints is rewritten in place (same
+  object number) against the form's contexts, so other uses of that
+  pattern object also see the redacted cell (B15: over-redact).
+- **Decoy "shown elsewhere" tiles (backlog 18).** A tile copy kept as proof
+  that a cell is visible anyway stops counting once anything is painted
+  over it later — fills, strokes (by line width and miter), text (Type 3 or
+  unresolved fonts: anywhere), images, inline images, shadings, forms, a
+  repaint of the same pattern under blending or soft masks, and annotations
+  on the page.
+- **Text state across `q`/`Q`.** Leading (`TL`), font and font size are now
+  saved by `q` and restored by `Q` during redaction, and `TL` is tracked at
+  all, so text placed by `T*`, `'` or `"` after a `TL` or a restored state
+  is found on its real line (it could previously escape a box).
+- **Verifier on palette images (backlog 19).** `RedactionVerifier` reads a
+  partly blanked `/Indexed` image's raw index samples, so blanked index 0 is
+  no longer reported as surviving content. New public
+  `ImageOp.IndexSamples` (DisplayList) carries the indices of 8-bit indexed
+  images.
+- **Scrub: a fill enclosing the box** whose vertices all lie outside it was
+  dropped; it is now kept and clipped.
+- **Radial shadings under unequal scaling or skew (raster and SVG).** The
+  builders mapped the circle centres to the page and scaled both radii by
+  one factor, so a radial shading under a CTM (or pattern `/Matrix`) that
+  scales x and y differently or skews painted the wrong circle at most
+  pixels. Such a shading now keeps its shading-space circles plus the
+  transform: the rasterizer maps each pixel back, and SVG emits a
+  `gradientTransform`. New public `ShadeOp.ShadingToPage` (Raster) and
+  `ShadingOp.ShadingToPage` (DisplayList); null, and output unchanged, for
+  rotation, uniform scale and translation.
+
+### Added
+- **Scrub trims colour-function shadings (backlog 17).** Function-based,
+  axial and radial shadings (types 1–3), as `sh` resources and in shading
+  patterns, keep only the sampled-function data (Type 0, also inside
+  Type 3 stitching functions) for the inputs the box can show, with a
+  2-sample margin. Radial shadings are trimmed only where the painted area
+  covers the whole box (otherwise kept whole); near the cone's apex the
+  exact extremes are sampled.
+- **Scrub scrubs soft-mask groups (backlog 17).** An ExtGState `/SMask`
+  group used under a single placement keeps only what can show in the
+  box; unused ExtGStates leave the resources.
+
+### Known residuals (see BACKLOG 17)
+- A soft mask set under different placements is kept whole; Type 3 glyph
+  procedures are not scrubbed; Type 2/4 functions are not trimmed.
+
+---
 ## [3.22.1] - 2026-10-22
 
 Backlog 18: the content of tiling-pattern cells under a redaction box.

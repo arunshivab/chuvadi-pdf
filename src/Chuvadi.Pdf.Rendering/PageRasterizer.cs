@@ -1091,6 +1091,21 @@ public sealed class PageRasterizer
         double dr = op.R1 - op.R0;
         double aQuad = (cdx * cdx) + (cdy * cdy) - (dr * dr);
 
+        // Radial geometry kept in shading space (a non-conformal CTM): each
+        // page point is mapped back before evaluating.
+        Transform? toShading = null;
+        if (op.ShadingToPage is Transform shadingToPage)
+        {
+            try
+            {
+                toShading = shadingToPage.Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+        }
+
         for (int py = 0; py < buffer.Height; py++)
         {
             List<(double Start, double End)>? allowed = clip?.AllowedIntervals(py + 0.5);
@@ -1110,6 +1125,10 @@ public sealed class PageRasterizer
                 double outerX = (px + 0.5) / scale;
                 double outerY = pageHeight - ((py + 0.5) / scale);
                 PointF page = inverseOuter.TransformPoint(new PointF(outerX, outerY));
+                if (toShading is Transform back)
+                {
+                    page = back.TransformPoint(page);
+                }
 
                 double t;
                 bool inside = op.IsRadial

@@ -94,6 +94,39 @@ public sealed class RedactionTextStateTests
     }
 
     [Fact]
+    public void TextAfterTStarWithLeadingSetByTL_IsFoundOnItsRealLine()
+    {
+        // TL sets the leading T* moves by: the text lands at y 286, inside
+        // the box (282..294); at y 300 it would miss it.
+        byte[] output = Redact(TextPage("BT /F1 12 Tf 14 TL 100 300 Td T* (TLSECRET) Tj ET"),
+            new RectangleF(90, 282, 200, 12));
+
+        Leaks(output, "TLSECRET").Should().BeFalse();
+    }
+
+    [Fact]
+    public void LeadingChangedInsideQ_IsRestoredByQ()
+    {
+        // q 50 TL Q restores the leading to 14, so T* lands at y 286 (inside
+        // the box); a leading of 50 would put the text at y 250, outside it.
+        byte[] output = Redact(TextPage("BT /F1 12 Tf 14 TL q 50 TL Q 100 300 Td T* (QZXL) Tj ET"),
+            new RectangleF(90, 282, 200, 12));
+
+        Leaks(output, "QZXL").Should().BeFalse();
+    }
+
+    [Fact]
+    public void FontSizeChangedInsideQ_IsRestoredByQ()
+    {
+        // q 1 Tf Q restores the 12 pt size; the glyphs reach up into the box
+        // (y 304..316) only at that size.
+        byte[] output = Redact(TextPage("BT /F1 12 Tf q /F1 1 Tf Q 100 300 Td (QZFS) Tj ET"),
+            new RectangleF(90, 309, 200, 6));
+
+        Leaks(output, "QZFS").Should().BeFalse();
+    }
+
+    [Fact]
     public void TilingPatternOnlyUsedByARemovedFill_LeavesTheFile()
     {
         byte[] output = Redact(PatternPage("q /Pattern cs /P0 scn 260 260 100 50 re f Q"));
@@ -161,13 +194,15 @@ public sealed class RedactionTextStateTests
             || text.Contains(hex, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static byte[] Redact(byte[] source)
+    private static byte[] Redact(byte[] source) => Redact(source, Box);
+
+    private static byte[] Redact(byte[] source, RectangleF box)
     {
         using PdfDocument doc = Open(source);
         using MemoryStream output = new MemoryStream();
         Redactor.Apply(output, doc, new RedactionOptions
         {
-            Rectangles = new List<RedactionRect> { new RedactionRect(0, Box) },
+            Rectangles = new List<RedactionRect> { new RedactionRect(0, box) },
         });
         return output.ToArray();
     }

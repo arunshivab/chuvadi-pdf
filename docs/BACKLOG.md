@@ -153,6 +153,16 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.23.0:
+- **Pattern-cell redaction edges** — patterns drawn by resource-inheriting
+  forms, and decoy "shown elsewhere" tiles painted over later (was open
+  item 18).
+- **Scrub colour-function shadings and soft-mask groups** — sampled data
+  of types 1–3 trimmed to the inputs the box shows; single-placement
+  `/SMask` groups scrubbed (was open item 17, residuals listed there).
+- **Verifier on palette images** — raw index samples checked (was open
+  item 19).
+
 Shipped in v3.22.1:
 - **Tiling-pattern cells under redaction** — cell content shown inside a
   box is redacted per tile copy; the verifier inspects pattern cells (was
@@ -172,7 +182,7 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.22.1. Items are independent and may be
+Status verified against code at v3.23.0. Items are independent and may be
 re-ordered.
 
 ### Image codecs (rendering)
@@ -203,14 +213,21 @@ DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
 
 ### Scrub-crop residuals
-**17. Remaining Scrub residuals (after 3.22).** Kept whole under Scrub:
-function-based, axial and radial shadings (types 1–3; their data is a
-colour function, not positioned content); ExtGState soft-mask groups
-(`/SMask /G` forms, including any mesh shading inside one); where the
-visible parts of a tiling cell overlap, the merged group is scrubbed to its
-bounding box in the cell, not the exact union.
-Chuvadi does not render mesh shadings (types 4–7), so trimmed meshes are
-verified structurally; check them visually in another viewer.
+**17. Remaining Scrub residuals (after 3.23).** Kept whole under Scrub:
+an ExtGState soft mask (`/SMask /G`) set under more than one placement;
+the glyph procedures of Type 3 fonts (and anything their resources hold);
+exponential (Type 2) and PostScript (Type 4) functions (no sampled data to
+trim); a radial shading whose painted area ends inside the box. Sampled
+functions keep a 2-sample margin. Where the visible parts of a tiling cell
+overlap, the merged group is scrubbed to its bounding box in the cell, not
+the exact union.
+Chuvadi does not render mesh shadings (types 4–7) or function-based
+shadings (type 1), so those trims are verified structurally; check them
+visually in another viewer.
+Rasterizer note (not a Scrub defect): pattern fills are not anti-aliased,
+so an edge passing exactly through pixel centres can flip one row of
+pixels when Scrub splits the path at the box (seen with a rotated radial
+pattern; shifting the geometry by a fraction of a point removes it).
 
 ### Rendering (major-version switch)
 **9. /UserUnit in the default renderers.** `PdfPage.UserUnit` is exposed
@@ -238,19 +255,6 @@ dependency; still needs bitonal detection + G4 and JBIG2 encode (#10).
 **13. SSIM perceptual target.** SSIM *measurement* exists in the benchmark
 suite; the optimisation *target knob* ("smallest file at visually lossless")
 that would drive the image-recoding stack does not.
-
-### Redaction follow-ups
-**18. Pattern cells under redaction — remaining edges (after 3.22.1).**
-Cell content is now redacted per tile copy. Left open: a pattern drawn
-by a form that inherits its resources (the cell cannot be replaced there);
-and the "shown whole elsewhere" check can be fooled by a decoy fill that is
-painted over afterwards by opaque content, which then keeps the cell whole.
-
-**19. Verifier on blanked palette images.** `RedactionVerifier` checks a
-partly redacted image's pixels in the region; for a palette (`/Indexed`)
-image the blanked index 0 maps to the palette's first colour, so the
-verifier still reports it (a false positive, never a missed leak). Fix by
-exposing raw index samples on the display list's image op.
 
 ---
 

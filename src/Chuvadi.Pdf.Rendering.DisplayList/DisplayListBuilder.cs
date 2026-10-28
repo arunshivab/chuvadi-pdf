@@ -1309,6 +1309,17 @@ public static class DisplayListBuilder
             EmitShadingOp(shadingRef, _stack.Current.Ctm);
         }
 
+        // True when the transform keeps circles circular (rotation, uniform
+        // scale, reflection and translation only).
+        private static bool IsConformal(AffineMatrix m)
+        {
+            double l1 = (m.A * m.A) + (m.B * m.B);
+            double l2 = (m.C * m.C) + (m.D * m.D);
+            double dot = (m.A * m.C) + (m.B * m.D);
+            double tol = 1e-6 * Math.Max(l1, l2);
+            return Math.Abs(l1 - l2) <= tol && Math.Abs(dot) <= tol;
+        }
+
         // Emits a ShadingOp for a shading dictionary under the given
         // shading-space-to-page transform. An unsupported shading type (e.g.
         // mesh shadings 4-7) skips the paint rather than failing the page.
@@ -1340,7 +1351,28 @@ public static class DisplayListBuilder
                 stops.Add(new ShadingStop(t, r, g, b));
             }
 
-            if (shading.IsRadial)
+            if (shading.IsRadial && !IsConformal(ctm))
+            {
+                // Circles become ellipses on the page: keep them in shading
+                // space and carry the transform.
+                Add(new ShadingOp
+                {
+                    BlendMode = _stack.Current.BlendMode,
+                    SoftMask = _stack.Current.SoftMask,
+                    IsRadial = true,
+                    X0 = coords[0],
+                    Y0 = coords[1],
+                    R0 = coords[2],
+                    X1 = coords[3],
+                    Y1 = coords[4],
+                    R1 = coords[5],
+                    ExtendStart = shading.ExtendStart,
+                    ExtendEnd = shading.ExtendEnd,
+                    Stops = stops,
+                    ShadingToPage = ctm,
+                });
+            }
+            else if (shading.IsRadial)
             {
                 (double rx1, double ry1) = ctm.Apply(coords[3], coords[4]);
                 Add(new ShadingOp
@@ -2435,9 +2467,11 @@ public static class DisplayListBuilder
             // DeviceRGB here so soft-mask compositing and the SVG PNG encoder see
             // real colour. Sub-8-bit images are not encoded downstream, so only
             // the 8-bit case needs handling.
+            byte[]? indexSamples = null;
             if (format == ImageFormat.Raw && bpc == 8
                 && TryExpandIndexed(stream.Dictionary, pixelData, width, height, out byte[] expandedRgb))
             {
+                indexSamples = pixelData;
                 pixelData = expandedRgb;
                 cs = PdfColorSpace.DeviceRgb;
             }
@@ -2503,6 +2537,7 @@ public static class DisplayListBuilder
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
                 PixelData = pixelData,
+                IndexSamples = indexSamples,
                 Format = format,
                 Width = width,
                 Height = height,

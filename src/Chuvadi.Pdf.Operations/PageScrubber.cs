@@ -112,6 +112,10 @@ internal static class PageScrubber
         HashSet<string> patternNames = new HashSet<string>(StringComparer.Ordinal);
         Dictionary<string, List<Matrix3x3>> shadingUses = new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
 
+        // Graphics states set by gs, with the CTM of each use (a soft mask's
+        // group is placed in the CTM current when its state is set).
+        Dictionary<string, List<Matrix3x3>> extGStateUses = new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
+
         // The current fill and stroke pattern names (saved by q, restored by
         // Q), and for each pattern the page-space extent it is painted over
         // (a filled path's bounds; the whole box for strokes, text, forms and
@@ -653,6 +657,18 @@ internal static class PageScrubber
                         patternNames.Add(DecodeNameToken(operandTexts[^1]));
                     }
 
+                    if (op == "gs" && operandTexts.Count > 0 && operandTexts[^1].StartsWith('/'))
+                    {
+                        string stateName = DecodeNameToken(operandTexts[^1]);
+                        if (!extGStateUses.TryGetValue(stateName, out List<Matrix3x3>? stateUses))
+                        {
+                            stateUses = new List<Matrix3x3>();
+                            extGStateUses[stateName] = stateUses;
+                        }
+
+                        stateUses.Add(ctm);
+                    }
+
                     EchoVerbatim(output, operandTexts, op);
                     break;
             }
@@ -671,6 +687,7 @@ internal static class PageScrubber
             Patterns = patternNames,
             PatternExtents = patternExtents,
             ShadingUses = shadingUses,
+            ExtGStateUses = extGStateUses,
             BaseCtm = initialCtm,
             Box = (x0, y0, x1, y1),
             Depth = depth,
@@ -708,6 +725,10 @@ internal static class PageScrubber
         /// </summary>
         internal Dictionary<string, (double X0, double Y0, double X1, double Y1)> PatternExtents { get; init; } =
             new Dictionary<string, (double X0, double Y0, double X1, double Y1)>(StringComparer.Ordinal);
+
+        /// <summary>Graphics-state names the scrubbed content sets with gs, and the CTM of each use.</summary>
+        internal Dictionary<string, List<Matrix3x3>> ExtGStateUses { get; init; } =
+            new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
 
         /// <summary>Shading names the scrubbed content paints with sh, and the CTM of each use.</summary>
         internal Dictionary<string, List<Matrix3x3>> ShadingUses { get; init; } =
@@ -1351,6 +1372,11 @@ internal static class PageScrubber
                 {
                     value = allocate(trimmed);
                 }
+                else if (FunctionShadingTrimmer.Trim(value, uses, bx0, by0, bx1, by1, resolver, allocate, out PdfDictionary? sampled)
+                    && sampled is not null)
+                {
+                    value = sampled;
+                }
 
                 keptShadings.Set(key, value);
             }
@@ -1358,12 +1384,98 @@ internal static class PageScrubber
             copy.Set(PdfName.Intern("Shading"), keptShadings);
         }
 
+        // Graphics states: unused ones are pruned; a used one whose soft
+        // mask draws a group (/SMask /G) has that group scrubbed to the box
+        // (placed by the CTM of its use; kept whole when it is set under
+        // different CTMs).
+        if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("ExtGState"))) is PdfDictionary states)
+        {
+            PdfDictionary keptStates = new PdfDictionary();
+            foreach (PdfName key in states.Keys)
+            {
+                if (result.ExtGStateUses.TryGetValue(key.Value, out List<Matrix3x3>? uses))
+                {
+                    keptStates.Set(key, ScrubSoftMaskGroup(states[key], uses, result, resolver, allocate));
+                }
+            }
+
+            copy.Set(PdfName.Intern("ExtGState"), keptStates);
+        }
+
         return copy;
     }
 
-    // A pattern kept by scrubbed content: a tiling pattern's cell is
-    // scrubbed to what can show in the box; a shading pattern's mesh is
-    // trimmed. Anything else is kept as is.
+    private static PdfPrimitive ScrubSoftMaskGroup(
+        PdfPrimitive value, List<Matrix3x3> uses, ScrubResult owner, IPdfObjectResolver resolver,
+        Func<PdfStream, PdfReference> allocate)
+    {
+        if (Res(resolver, value) is not PdfDictionary state
+            || Res(resolver, state.GetAs<PdfPrimitive>(PdfName.Intern("SMask"))) is not PdfDictionary mask
+            || Res(resolver, mask.GetAs<PdfPrimitive>(PdfName.Intern("G"))) is not PdfStream group
+            || owner.Depth + 1 >= MaxFormDepth)
+        {
+            return value;
+        }
+
+        Matrix3x3 use = uses[0];
+        foreach (Matrix3x3 other in uses)
+        {
+            if (!SameMatrix(use, other))
+            {
+                return value;
+            }
+        }
+
+        byte[] content;
+        try
+        {
+            content = DecodeFormContent(group);
+        }
+        catch (Exception)
+        {
+            content = Array.Empty<byte>(); // undecodable group: emptied (B15)
+        }
+
+        PdfDictionary groupDict = group.Dictionary;
+        PdfDictionary? groupResources = Res(resolver, groupDict.GetAs<PdfPrimitive>(PdfName.Resources)) as PdfDictionary;
+        Matrix3x3 placement = ReadMatrix(groupDict, resolver).Multiply(use);
+        (double bx0, double by0, double bx1, double by1) = owner.Box;
+        ScrubResult nested = ScrubCore(
+            content, bx0, by0, bx1, by1, groupResources, resolver, allocate, placement, owner.Depth + 1);
+
+        PdfDictionary newGroup = new PdfDictionary();
+        foreach (PdfName key in groupDict.Keys)
+        {
+            if (key.Value is not ("Filter" or "DecodeParms" or "Length" or "Resources" or "PieceInfo"))
+            {
+                newGroup.Set(key, groupDict[key]);
+            }
+        }
+
+        newGroup.Set(PdfName.Resources, BuildScrubbedResources(groupResources, nested, resolver, allocate));
+        newGroup.Set(PdfName.Length, nested.Content.Length);
+
+        PdfDictionary newMask = new PdfDictionary();
+        foreach (PdfName key in mask.Keys)
+        {
+            newMask.Set(key, mask[key]);
+        }
+
+        newMask.Set(PdfName.Intern("G"), allocate(new PdfStream(newGroup, nested.Content)));
+        PdfDictionary newState = new PdfDictionary();
+        foreach (PdfName key in state.Keys)
+        {
+            newState.Set(key, state[key]);
+        }
+
+        newState.Set(PdfName.Intern("SMask"), newMask);
+        return newState;
+    }
+
+    private static bool SameMatrix(Matrix3x3 a, Matrix3x3 b) =>
+        Math.Abs(a.A - b.A) < 1e-9 && Math.Abs(a.B - b.B) < 1e-9 && Math.Abs(a.C - b.C) < 1e-9
+        && Math.Abs(a.D - b.D) < 1e-9 && Math.Abs(a.E - b.E) < 1e-9 && Math.Abs(a.F - b.F) < 1e-9;
+
     // The part of the box a pattern is painted over, or null when it paints
     // nothing there.
     private static (double X0, double Y0, double X1, double Y1)? PaintedRegion(ScrubResult owner, string name)
@@ -1381,6 +1493,9 @@ internal static class PageScrubber
         return rx1 > rx0 && ry1 > ry0 ? (rx0, ry0, rx1, ry1) : null;
     }
 
+    // A pattern kept by scrubbed content: a tiling pattern's cell is
+    // scrubbed to what can show in the box; a shading pattern's mesh or
+    // sampled function is trimmed. Anything else is kept as is.
     private static PdfPrimitive ScrubPattern(
         PdfPrimitive value, (double X0, double Y0, double X1, double Y1)? region, ScrubResult owner,
         IPdfObjectResolver resolver, Func<PdfStream, PdfReference> allocate)
@@ -1408,6 +1523,19 @@ internal static class PageScrubber
                 }
 
                 copy.Set(PdfName.Intern("Shading"), allocate(trimmed));
+                return copy;
+            }
+
+            if (FunctionShadingTrimmer.Trim(shading, uses, bx0, by0, bx1, by1, resolver, allocate, out PdfDictionary? sampled)
+                && sampled is not null)
+            {
+                PdfDictionary copy = new PdfDictionary();
+                foreach (PdfName key in shadingPattern.Keys)
+                {
+                    copy.Set(key, shadingPattern[key]);
+                }
+
+                copy.Set(PdfName.Intern("Shading"), sampled);
                 return copy;
             }
         }
@@ -1807,7 +1935,7 @@ internal static class PageScrubber
         }
 
         List<(double X, double Y)> cropQuad = ScrubGeometry.TransformRectCorners(inv, x0, y0, x1, y1);
-        ClassifyPath(subpaths, cropQuad, out bool allInside, out bool allOutside);
+        ClassifyPath(subpaths, cropQuad, out bool allInside, out bool _);
 
         if (allInside)
         {
@@ -1815,11 +1943,9 @@ internal static class PageScrubber
             return;
         }
 
-        if (allOutside)
-        {
-            return;
-        }
-
+        // Every vertex outside the box does not mean the path misses it: a
+        // fill can enclose the box, a segment can cross it. The clipping
+        // below decides; an empty result emits nothing.
         StringBuilder clipped = new StringBuilder();
         if (isStroke)
         {

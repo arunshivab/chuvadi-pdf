@@ -9,21 +9,25 @@
 
 ## Last Updated
 
-2026-10-22 — v3.22.1: tiling-pattern cells under redaction (backlog 18) —
-cell content a box would show is redacted per tile copy (text, paths,
-pixel-blanked images, nested patterns); the cell is kept whole only when a
-tile elsewhere on the visible page provably shows it entirely;
-`RedactionVerifier` inspects pattern cells. Released: v3.22.0 (2026-10-22:
-partial image redaction, Scrub residuals, SVG pattern strokes, multi-line
-API docs). Last released version: v3.22.0. Open: BACKLOG 17 (Scrub
-residuals), 18 (pattern-cell edges), 19 (verifier on palette images).
+2026-10-28 — v3.23.0: backlog 17, 18, 19. Redaction: pattern cells drawn by
+resource-inheriting forms are redacted (own copy of the resources when the
+form is always drawn with the same ones, otherwise the pattern is rewritten
+in place); decoy "shown elsewhere" tiles painted over later no longer keep
+a cell whole; `TL`, font and size are saved/restored by `q`/`Q`; the
+verifier reads palette images' raw indices (`ImageOp.IndexSamples`).
+Scrub: colour-function shadings (types 1–3) trimmed to the sampled data
+the box shows; single-placement soft-mask groups scrubbed; a fill enclosing
+the box is kept. Rendering: radial shadings under unequal scaling or skew
+paint the right ellipses (raster and SVG; `ShadingToPage`). Released: v3.22.1 (2026-10-22: pattern cells under
+redaction) and v3.22.0. Last released version: v3.22.1. Open: BACKLOG 17
+(remaining Scrub residuals only).
 
 ---
 
 ## Build Summary
 
-**Last known passing total: 2,707 tests across 30 in-solution test projects,
-0 failures (v3.22.1 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
+**Last known passing total: 2,736 tests across 30 in-solution test projects,
+0 failures (v3.23.0 sandbox gate).** (Two further test projects — the WPF surface and the WASM smoke
 test — build and run outside the default solution test pass.)
 
 The library is **33 packable `src/` projects** (32 modules plus the
@@ -139,7 +143,7 @@ flat-copying `artifacts\nupkg\*.nupkg` into `C:\Users\aruns\Documents\local-nuge
 — the library's job ends there; the Chuvadi Reader picks packages up from that
 feed on its own side. Never `dotnet nuget push` (it creates a mismatched
 hierarchical layout). Tag `vX.Y.Z` after packing. Latest released version:
-**3.22.0** (3.22.1 pending merge + pack on Arun's machine).
+**3.22.1** (3.23.0 pending merge + pack on Arun's machine).
 
 Releases publish to local folder feeds only, never to nuget.org.
 
@@ -172,8 +176,13 @@ Releases publish to local folder feeds only, never to nuget.org.
   through a content-stream `cm` should be re-redacted.
 - ~~Pixel-level partial image redaction~~ — **shipped in 3.22.0**: only the
   covered pixels are blanked.
-- ~~Pattern cells under redaction~~ — **fixed in 3.22.1** (BACKLOG 18 lists
-  the remaining edges).
+- ~~Pattern cells under redaction~~ — **fixed in 3.22.1**; the remaining
+  edges (resource-inheriting forms, decoy tiles painted over) **fixed in
+  3.23.0**.
+- ~~Text after `q … TL … Q` escaping redaction~~ — **fixed in 3.23.0**:
+  leading, font and size were not restored by `Q` (and `TL` was not
+  tracked), so text placed by `T*` could land off its computed line.
+  Documents redacted before 3.23 using `TL`/`T*` should be re-redacted.
 - ~~Tagged-image leak~~ — **fixed in 3.22.0**: a structure-tree `OBJR` to an
   image removed by redaction or Scrub kept its pixels in the file. Documents
   processed before 3.22 with tagged images should be processed again.

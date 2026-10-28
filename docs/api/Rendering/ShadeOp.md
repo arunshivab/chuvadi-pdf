@@ -110,6 +110,14 @@ IReadOnlyList<GradientStop> Stops
 
 Gets the sampled colour stops in increasing offset order.
 
+### `ShadingToPage`
+
+```csharp
+Transform? ShadingToPage
+```
+
+When set, the centres and radii are in shading space and this maps shading space to page space. Used for a radial shading under a transform that does not keep circles circular (unequal scaling or skew), where the circles become ellipses on the page. Null when the geometry is already in page space.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs)_
