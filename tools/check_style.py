@@ -44,6 +44,9 @@ REQUIRED_USINGS = {
     "PdfLimitExceededException":    "using Chuvadi.Pdf.Primitives;",
     "PdfLimits":                    "using Chuvadi.Pdf.Primitives;",
     "PdfWorkScope":                 "using Chuvadi.Pdf.Primitives;",
+    # 3.27 — fallback warnings
+    "PdfWarning":                   "using Chuvadi.Pdf.Primitives;",
+    "PdfWarningKind":               "using Chuvadi.Pdf.Primitives;",
     # Chuvadi.Pdf.Filters types
     "IStreamFilter":    "using Chuvadi.Pdf.Filters;",
     "FilterException":  "using Chuvadi.Pdf.Filters;",

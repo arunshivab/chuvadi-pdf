@@ -60,4 +60,9 @@
       <LogicalName>Chuvadi.Pdf.PdfA.Fonts.LiberationMono-BoldItalic.ttf</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
+  <ItemGroup>
+    <!-- D-61: the Liberation fonts are embedded in this assembly, so their SIL
+         Open Font License text and copyright notices ship in this package. -->
+    <None Include="..\..\tools\fonts\Liberation-LICENSE.txt" Pack="true" PackagePath="licenses\Liberation-OFL-1.1.txt" Visible="false" />
+  </ItemGroup>
 </Project>

@@ -110,6 +110,14 @@ PdfLimits? Limits => _reader.Objects.Limits
 
 Gets the resource limits the document was opened with (applied by `PageRasterizer` and `TextExtractor`), or null for none.
 
+### `OnWarning`
+
+```csharp
+Action<PdfWarning>? OnWarning => _reader.Objects.OnWarning
+```
+
+Gets the receiver of warnings the document was opened with (`PdfOpenOptions.OnWarning`), or null for none.
+
 ### `Warnings`
 
 ```csharp

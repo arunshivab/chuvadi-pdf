@@ -78,9 +78,10 @@ public sealed class OperatorExtractor
                 // Significant vertical movement — treat as new line.
                 sb.AppendLine();
             }
-            else if (xGap > prev.FontSize * 0.3)
+            else if (xGap > prev.FontSize * 0.3 || LeaderSpacing.NeedsSpace(prev, current))
             {
-                // Horizontal gap — treat as word space.
+                // Horizontal gap — treat as word space. A dot leader touching
+                // a word is kept apart from it too (3.27).
                 sb.Append(' ');
             }
 

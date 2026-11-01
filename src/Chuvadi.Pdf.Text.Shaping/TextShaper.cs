@@ -29,6 +29,13 @@ public static class TextShaper
     /// <summary>
     /// Shapes a run of text using the specified font and script.
     /// </summary>
+    /// <remarks>
+    /// The face loaded from <paramref name="ttf"/> is kept and reused for as
+    /// long as that array is alive, so repeated calls with the same array cost
+    /// the same as the <see cref="FontFace"/> overload. Changing the array's
+    /// bytes after a call is not detected: pass a new array for a different
+    /// font program.
+    /// </remarks>
     /// <param name="ttf">Raw TrueType/OpenType font bytes (sfnt).</param>
     /// <param name="text">The text to shape. Must be non-empty.</param>
     /// <param name="script">The script of the text run.</param>
@@ -63,8 +70,13 @@ public static class TextShaper
             throw new ArgumentException("Text must not be empty.", nameof(text));
         }
 
-        return Shape(FontFace.Load(ttf), text, script, features);
+        return Shape(LoadedFaces.GetValue(ttf, static bytes => FontFace.Load(bytes)), text, script, features);
     }
+
+    // The face loaded for each font array passed to Shape(byte[], ...), kept
+    // while the array is alive (3.27, D-70: loading the face and building the
+    // plan on every call made the byte[] overload ten times slower in 3.26).
+    private static readonly ConditionalWeakTable<byte[], FontFace> LoadedFaces = new ConditionalWeakTable<byte[], FontFace>();
 
     /// <summary>
     /// Shapes a run of text with a loaded <see cref="FontFace"/>. The face's

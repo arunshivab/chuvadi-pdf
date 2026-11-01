@@ -44,7 +44,7 @@ public class ShapingBench
         _face = FontFace.Load(_font);
     }
 
-    [Benchmark(Baseline = true, Description = "Shape(bytes) - parses the font each call")]
+    [Benchmark(Baseline = true, Description = "Shape(bytes) - face loaded on the first call, then reused")]
     public IReadOnlyList<ShapedGlyph> ShapeBytes() => TextShaper.Shape(_font, _text, _script);
 
     [Benchmark(Description = "Shape(FontFace) - loaded once, lookups cached")]

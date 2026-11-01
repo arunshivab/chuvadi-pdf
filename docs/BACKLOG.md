@@ -153,6 +153,16 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.27.0 (fallback warnings and 3.24–3.26 follow-ups):
+- **Fallback warnings** (D-62, D-63): `PdfOpenOptions.OnWarning` receives a
+  `PdfWarning` for each substituted font, skipped glyph and skipped shading.
+- **Nesting refusal message** (D-82) names the object, the depth found and the
+  limit; the 512 limit itself is unchanged.
+- **`cpsp` on by default again** (D-68); **`Shape(byte[])` reuses the loaded
+  face** (D-70); **dot leaders kept apart from the label** in extracted text
+  (D-72); **font licence texts** in the Authoring (LiPi Sans) and PdfA
+  (Liberation) packages (D-61).
+
 Shipped in v3.26.0 (HarfBuzz-conformant shaping):
 - **Indic shaping conformance** (was open item 21): `TextShaper` is a port
   of HarfBuzz's OpenType shaper; glyphs, UTF-16 clusters, advances and
@@ -221,6 +231,13 @@ with the Indic shaper, not USE), variation sequences (cmap format 14), the
 legacy `kern` table, vertical text, and variable-font instances other than
 the default. None is needed by a LiPi script; take up when a consumer needs
 one.
+
+**27. Indic shaping speed.** With the face reused, `Shape(byte[])` is as
+fast as the `FontFace` overload, and faster than 3.25 for Latin and Tamil;
+Devanagari is about 8% slower than 3.25's byte overload (74 µs against
+68 µs on a 2-core sandbox), because the full Indic pipeline does more work. The cost is in
+applying the many Devanagari lookups; profile `OtApplyContext.ApplyForward`
+if a consumer needs more.
 
 ### Text extraction
 **26. Text positions in user space.** The content parser places fragments by

@@ -93,7 +93,8 @@ public sealed class LayoutExtractor
                     (prev.Text.Length > 0 && prev.Text[prev.Text.Length - 1] == ' ')
                     || (current.Text.Length > 0 && current.Text[0] == ' ');
 
-                if (xGap > prev.FontSize * 0.3 && !alreadySeparated)
+                // A dot leader touching a word is kept apart from it (3.27).
+                if ((xGap > prev.FontSize * 0.3 || LeaderSpacing.NeedsSpace(prev, current)) && !alreadySeparated)
                 {
                     sb.Append(' ');
                 }
