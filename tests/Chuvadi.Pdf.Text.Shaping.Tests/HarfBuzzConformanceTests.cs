@@ -19,6 +19,10 @@ public sealed class HarfBuzzConformanceTests
 {
     private static readonly string Fixtures = Path.Combine(AppContext.BaseDirectory, "Fixtures");
 
+    // The expected glyphs come from HarfBuzz with its default features, in
+    // which capital spacing is off; Chuvadi's default has it on since 3.27.
+    private static readonly ShapingFeatures HarfBuzzDefaults = new ShapingFeatures { Cpsp = false };
+
     [Theory]
     [InlineData("Tamil")]
     [InlineData("Devanagari")]
@@ -76,7 +80,7 @@ public sealed class HarfBuzzConformanceTests
             string text = string.Concat(p[1].Split(' ').Select(h => char.ConvertFromUtf32(int.Parse(h, NumberStyles.HexNumber, CultureInfo.InvariantCulture))));
             FontFace face = TestFonts.Face(p[2]);
             double k = face.UnitsPerEm / 1000.0;
-            string actual = string.Join(' ', TextShaper.Shape(face, text, script).Select(g => string.Create(
+            string actual = string.Join(' ', TextShaper.Shape(face, text, script, HarfBuzzDefaults).Select(g => string.Create(
                 CultureInfo.InvariantCulture,
                 $"{g.GlyphId}:{g.Cluster}:{Math.Round(g.XAdvance * k)}:{Math.Round(g.XOffset * k)}:{Math.Round(g.YOffset * k)}")));
             if (actual != p[3])

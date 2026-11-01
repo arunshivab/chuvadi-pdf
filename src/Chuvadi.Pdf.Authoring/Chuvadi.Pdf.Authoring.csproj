@@ -21,6 +21,11 @@
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
   </ItemGroup>
   <ItemGroup>
+    <!-- D-61: the LiPi Sans fonts are embedded in this assembly, so their SIL
+         Open Font License text ships in this package. -->
+    <None Include="..\..\assets\fonts\lipi-sans\LICENSE.txt" Pack="true" PackagePath="licenses\LiPi-Sans-OFL-1.1.txt" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Latin.woff2">
       <LogicalName>Chuvadi.Pdf.Authoring.Lipi.LiPi-Sans-Latin.woff2</LogicalName>
     </EmbeddedResource>

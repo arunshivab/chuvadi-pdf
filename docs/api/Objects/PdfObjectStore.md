@@ -36,6 +36,14 @@ PdfLimits? Limits
 
 Gets or sets the resource limits for work on this document's objects (set from `PdfOpenOptions.Limits` when the document is opened). `PageRasterizer` and `TextExtractor` apply them to every call. Null: no limits.
 
+### `OnWarning`
+
+```csharp
+Action<PdfWarning>? OnWarning
+```
+
+Gets or sets the receiver of warnings about fallbacks taken while working on this document's objects (set from `PdfOpenOptions.OnWarning` when the document is opened). It is called on the thread doing the work; an exception it throws passes to the caller of that work. Null: warnings are not reported.
+
 ### `Count`
 
 ```csharp

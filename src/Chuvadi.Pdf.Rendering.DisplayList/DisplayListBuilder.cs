@@ -143,6 +143,11 @@ public static class DisplayListBuilder
         // hidden entries, so painting ops are dropped while it is non-zero.
         // Graphics-state, clip and scope ops are kept so state stays exact.
         private readonly OptionalContentVisibility _visibility;
+
+        // 3.27: fallbacks are reported, once per subject for one page build,
+        // shared with sub-builders (forms, patterns, Type 3 glyphs).
+        private HashSet<string> _warned = new HashSet<string>(StringComparer.Ordinal);
+        private int? _pageNumber;
         private readonly List<bool> _hiddenStack = new();
         private int _hiddenDepth;
 
@@ -184,6 +189,7 @@ public static class DisplayListBuilder
 
         internal PageDisplayList BuildPage(PdfPage page, bool flattenTransforms)
         {
+            _pageNumber = page.PageNumber;
             _resources = page.Resources;
             byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
             ContentStreamWalker.Walk(content, this);
@@ -1016,6 +1022,8 @@ public static class DisplayListBuilder
             }
 
             Builder sub = new Builder(_doc, _visibility);
+            sub._warned = _warned;
+            sub._pageNumber = _pageNumber;
             sub._resources = type3.Resources ?? _resources;
             sub._stack.Current.FillColor = fill;
 
@@ -1238,6 +1246,8 @@ public static class DisplayListBuilder
             }
 
             Builder sub = new Builder(_doc, _visibility);
+            sub._warned = _warned;
+            sub._pageNumber = _pageNumber;
             byte[] content;
             try
             {
@@ -1330,8 +1340,16 @@ public static class DisplayListBuilder
             {
                 shading = PdfShading.Parse(shadingRef, _doc.Objects);
             }
-            catch (ContentException)
+            catch (ContentException ex)
             {
+                string subject = shadingRef is PdfReference r
+                    ? "shading " + r.ObjectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + r.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture) + " R"
+                    : "shading (direct)";
+                if (_doc.Objects.OnWarning is Action<PdfWarning> warn && _warned.Add(subject))
+                {
+                    warn(new PdfWarning(PdfWarningKind.ShadingSkipped, _pageNumber, subject, ex.Message + " The paint is skipped."));
+                }
+
                 return;
             }
 
@@ -1633,6 +1651,8 @@ public static class DisplayListBuilder
             }
 
             Builder sub = new Builder(_doc, _visibility);
+            sub._warned = _warned;
+            sub._pageNumber = _pageNumber;
             sub._patternDepth = _patternDepth + 1;
             sub._resources = _resources;
             if (cell.Dictionary.TryGetValue(PdfName.Intern("Resources"), out PdfPrimitive? rp)

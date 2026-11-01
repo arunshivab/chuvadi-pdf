@@ -169,8 +169,11 @@ and `OutOfMemoryException` (prevent it with `PdfLimits`). A damaged font or
 glyph no longer fails the page: the bad glyphs draw nothing.
 
 Structures that would exhaust the stack or loop forever are stopped first:
-arrays and dictionaries nested more than 512 levels are refused as a
-`PdfParseException`; a page that is its own ancestor, a function or colour
+values nested more than 512 levels deep (every array, dictionary and value
+counts as a level, the object's own value included) are refused as a
+`PdfParseException` whose message names the object, the depth found and the
+limit, for example "Object 3 0: A value is nested 513 levels deep; the limit
+is 512 levels."; a page that is its own ancestor, a function or colour
 space that contains itself, and Type 4 programs nested without end are
 detected and reported (or skipped) instead of crashing the process. A page
 tree's `/Count` is not trusted for allocation.
@@ -186,3 +189,32 @@ the table.
 Use a `PdfDocument` (and the rasterizers and extractors on it) from one
 thread at a time; open the file once per thread for parallel rendering. A
 `PdfWorkScope` flows with the execution context into `await` and `Task.Run`.
+
+## 8. Warnings (fallbacks)
+
+Where Chuvadi meets something in a file it cannot use and carries on without
+it, it tells you instead of staying silent. Pass a receiver when you open the
+document:
+
+```csharp
+List<PdfWarning> warnings = new();
+using PdfDocument doc = PdfDocument.Open(stream, new PdfOpenOptions { OnWarning = warnings.Add });
+```
+
+Each `PdfWarning` says what happened (`Kind`), on which page (`PageNumber`,
+1-based), to what (`Subject`, for example `font /F1` or `shading 12 0 R`) and
+why (`Reason`). `ToString()` gives one line for a log. Your application
+decides what to do with them: show a notice, log them, or refuse the file.
+
+| `Kind` | What Chuvadi did |
+|---|---|
+| `FontSubstituted` | An embedded font program could not be read; the text is drawn with the substitute used for a font that is not embedded. |
+| `GlyphSkipped` | A glyph outline in an embedded font is damaged; that glyph draws nothing. |
+| `ShadingSkipped` | A shading could not be used (an unsupported type or damaged entries); its paint is skipped. |
+
+Each kind is reported once per subject for one page render, not once per
+glyph. The receiver is called on the thread doing the work and is kept on the
+document (`PdfDocument.OnWarning`); an exception it throws passes to the
+caller of that work. Without a receiver, nothing changes: the fallbacks are
+taken exactly as before. Structural repairs made while loading are listed
+separately, in `PdfDocument.Warnings`.

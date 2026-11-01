@@ -70,6 +70,15 @@ public sealed class PdfObjectStore : IPdfObjectResolver
     /// </summary>
     public PdfLimits? Limits { get; set; }
 
+    /// <summary>
+    /// Gets or sets the receiver of warnings about fallbacks taken while
+    /// working on this document's objects (set from
+    /// <c>PdfOpenOptions.OnWarning</c> when the document is opened). It is
+    /// called on the thread doing the work; an exception it throws passes to
+    /// the caller of that work. Null: warnings are not reported.
+    /// </summary>
+    public Action<PdfWarning>? OnWarning { get; set; }
+
     // ── Object management ─────────────────────────────────────────────────
 
     /// <summary>Gets the number of objects currently loaded in the store.</summary>

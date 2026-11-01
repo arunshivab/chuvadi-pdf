@@ -202,6 +202,10 @@ public static class DisplayListBuilder
         // BDC /OC sequence is hidden); painting is suppressed while any open
         // sequence is hidden. Graphics state still updates normally.
         private readonly OptionalContentVisibility _visibility;
+
+        // 3.27: fallbacks are reported, not silent. Shared with sub-workers so
+        // the page number and the once-per-subject rule cover forms too.
+        private WarningReporter _reporter;
         private readonly List<bool> _hiddenStack = new List<bool>();
         private int _hiddenDepth;
 
@@ -211,6 +215,7 @@ public static class DisplayListBuilder
         {
             _visibility = visibility ?? OptionalContentVisibility.AllVisible;
             _objects = objects;
+            _reporter = new WarningReporter(objects.OnWarning);
             _hintingScale = hintingScale;
             _lightHinting = lightHinting;
             _autohintFallback = autohintFallback;
@@ -256,6 +261,7 @@ public static class DisplayListBuilder
         // PDF 32000-1:2008 §12.5.5 — Appearance streams.
         public PageDisplayList BuildFromPage(byte[] content, PdfPage page)
         {
+            _reporter.PageNumber = page.PageNumber;
             _resources = page.Resources;
             ContentStreamWalker.Walk(content, this);
 
@@ -855,6 +861,7 @@ public static class DisplayListBuilder
 
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
+            sub._reporter = _reporter;
 
             byte[] content;
             try
@@ -961,8 +968,12 @@ public static class DisplayListBuilder
             {
                 shading = PdfShading.Parse(shadingRef, _objects);
             }
-            catch (ContentException)
+            catch (ContentException ex)
             {
+                _reporter.Report(
+                    PdfWarningKind.ShadingSkipped,
+                    WarningReporter.Describe("shading", shadingRef),
+                    ex.Message + " The paint is skipped.");
                 return false;
             }
 
@@ -1189,6 +1200,7 @@ public static class DisplayListBuilder
 
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
+            sub._reporter = _reporter;
             sub._state.FillAlpha = _state.FillAlpha;
             sub._state.StrokeAlpha = _state.StrokeAlpha;
             if (ReadIntEntry(dict, "PaintType") == 2)
@@ -1928,6 +1940,7 @@ public static class DisplayListBuilder
 
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
+            sub._reporter = _reporter;
             sub._resources = type3.Resources ?? _resources;
             sub.SeedType3Fill(fill);
 
@@ -2229,7 +2242,7 @@ public static class DisplayListBuilder
         // Returns null when hinting is off or the glyph cannot be hinted.
         // A glyph whose outline data is damaged draws nothing (and advances by
         // the font's /Widths) instead of failing the whole page.
-        private static GlyphOutline SafeOutline(FontRenderer renderer, int glyphId)
+        private GlyphOutline SafeOutline(FontRenderer renderer, int glyphId)
         {
             try
             {
@@ -2237,6 +2250,11 @@ public static class DisplayListBuilder
             }
             catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
             {
+                _reporter.Report(
+                    PdfWarningKind.GlyphSkipped,
+                    "font /" + _state.FontName,
+                    "the outline of glyph " + glyphId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                    " is damaged (" + ex.Message + "); damaged glyphs in this font draw nothing");
                 return new GlyphOutline(new Path(), new GlyphMetrics(0, 0, 1000, default));
             }
         }
@@ -2543,6 +2561,10 @@ public static class DisplayListBuilder
             catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
             {
                 // A damaged font program falls back like a missing one.
+                _reporter.Report(
+                    PdfWarningKind.FontSubstituted,
+                    "font /" + _state.FontName,
+                    "the embedded font program could not be read (" + ex.Message + "); the text is drawn with a substitute font");
                 return null;
             }
         }
@@ -3193,6 +3215,7 @@ public static class DisplayListBuilder
 
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
+            sub._reporter = _reporter;
 
             // A non-group form XObject inherits the graphics state in effect at
             // the Do, including the constant alpha (ExtGState /ca and /CA). The

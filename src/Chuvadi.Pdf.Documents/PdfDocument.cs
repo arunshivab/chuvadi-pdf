@@ -179,7 +179,9 @@ public sealed class PdfDocument : IDisposable
             PdfReader reader = string.IsNullOrEmpty(options.Password)
                 ? PdfReader.Open(stream, options.LeaveOpen)
                 : PdfReader.Open(stream, options.Password, options.LeaveOpen);
-            return WithLimits(new PdfDocument(reader), options.Limits);
+            PdfDocument document = new PdfDocument(reader);
+            reader.Objects.OnWarning = options.OnWarning;
+            return WithLimits(document, options.Limits);
         }
         catch (Exception ex) when (ex is not (PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException)
             && (ex is not IOException || ex is EndOfStreamException))
@@ -205,7 +207,7 @@ public sealed class PdfDocument : IDisposable
         FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
-            return Open(stream, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false });
+            return Open(stream, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning });
         }
         catch
         {
@@ -353,7 +355,7 @@ public sealed class PdfDocument : IDisposable
             }
 
             buffer.Position = 0;
-            return Open(buffer, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false });
+            return Open(buffer, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning });
         }
         catch
         {
@@ -782,6 +784,12 @@ public sealed class PdfDocument : IDisposable
     /// <c>PageRasterizer</c> and <c>TextExtractor</c>), or null for none.
     /// </summary>
     public PdfLimits? Limits => _reader.Objects.Limits;
+
+    /// <summary>
+    /// Gets the receiver of warnings the document was opened with
+    /// (<see cref="PdfOpenOptions.OnWarning"/>), or null for none.
+    /// </summary>
+    public Action<PdfWarning>? OnWarning => _reader.Objects.OnWarning;
 
     /// <summary>
     /// Gets the structural repairs made to the document. A non-empty list means

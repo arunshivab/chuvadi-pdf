@@ -413,16 +413,30 @@ internal sealed class PdfObjectParser
 
     // Arrays and dictionaries nested deeper than this are rejected: real
     // files nest a handful of levels, and unbounded nesting would exhaust the
-    // stack here and in every recursive walk over the parsed objects.
+    // stack here and in every recursive walk over the parsed objects. Every
+    // value counts as a level, the object's own value included.
     private const int MaxNesting = 512;
+
+    // Tokens examined when measuring how deep a refused value goes.
+    private const int MaxDepthScanTokens = 10_000_000;
     private int _depth;
+    private bool _nestingRefused;
 
     /// <summary>Reads one complete PDF value from the current position.</summary>
     internal PdfPrimitive ReadValue()
     {
         if (_depth >= MaxNesting)
         {
-            throw new PdfParseException($"Objects are nested more than {MaxNesting} levels deep.");
+            long offset = PeekToken().ByteOffset;
+            (int depth, bool complete) = MeasureNestingDepth();
+            _nestingRefused = true;
+            string measured = complete
+                ? $"{depth.ToString(CultureInfo.InvariantCulture)} levels deep"
+                : $"at least {depth.ToString(CultureInfo.InvariantCulture)} levels deep";
+            throw new PdfParseException(
+                $"A value is nested {measured}; the limit is {MaxNesting} levels. Every array, dictionary " +
+                $"and value counts as a level, the object's own value included (offset {offset.ToString(CultureInfo.InvariantCulture)}).",
+                offset);
         }
 
         _depth++;
@@ -433,6 +447,97 @@ internal sealed class PdfObjectParser
         finally
         {
             _depth--;
+        }
+    }
+
+    // Measures the deepest level reached by the value that starts at the next
+    // token, counting the levels already open (the depth limit). Reads tokens
+    // without recursion and without building objects; stops at the end of
+    // that value, at the end of the input, or after MaxDepthScanTokens tokens
+    // (then the depth is a lower bound).
+    private (int Depth, bool Complete) MeasureNestingDepth()
+    {
+        // One entry per open container: true for a dictionary expecting a key.
+        Stack<bool> frames = new Stack<bool>();
+        List<bool> kinds = new List<bool>();
+        int deepest = _depth + 1;
+        for (int scanned = 0; scanned < MaxDepthScanTokens; scanned++)
+        {
+            PdfToken token = NextToken();
+            if (token.Type == PdfTokenType.EndOfStream)
+            {
+                return (deepest, false);
+            }
+
+            bool inDictionary = kinds.Count > 0 && kinds[^1];
+            if (inDictionary && frames.Peek())
+            {
+                if (token.Type == PdfTokenType.DictionaryEnd)
+                {
+                    frames.Pop();
+                    kinds.RemoveAt(kinds.Count - 1);
+                    if (frames.Count == 0)
+                    {
+                        return (deepest, true);
+                    }
+
+                    MarkValueRead(frames, kinds);
+                }
+                else if (token.Type == PdfTokenType.Name)
+                {
+                    frames.Pop();
+                    frames.Push(false);
+                }
+
+                continue;
+            }
+
+            if (token.Type == PdfTokenType.ArrayEnd || token.Type == PdfTokenType.DictionaryEnd)
+            {
+                if (frames.Count == 0)
+                {
+                    return (deepest, true);
+                }
+
+                frames.Pop();
+                kinds.RemoveAt(kinds.Count - 1);
+                if (frames.Count == 0)
+                {
+                    return (deepest, true);
+                }
+
+                MarkValueRead(frames, kinds);
+                continue;
+            }
+
+            int level = _depth + frames.Count + 1;
+            deepest = Math.Max(deepest, level);
+            if (token.Type == PdfTokenType.ArrayStart || token.Type == PdfTokenType.DictionaryStart)
+            {
+                bool dictionary = token.Type == PdfTokenType.DictionaryStart;
+                frames.Push(dictionary);
+                kinds.Add(dictionary);
+                continue;
+            }
+
+            if (frames.Count == 0)
+            {
+                return (deepest, true);
+            }
+
+            MarkValueRead(frames, kinds);
+        }
+
+        return (deepest, false);
+    }
+
+    // After a value inside a dictionary, the dictionary expects a key again.
+    private static void MarkValueRead(Stack<bool> frames, List<bool> kinds)
+    {
+        if (kinds[^1])
+        {
+            frames.Pop();
+            frames.Push(true);
         }
     }
 
@@ -528,7 +633,19 @@ internal sealed class PdfObjectParser
         int objectNumber = ParseInt32(numToken, NumberStyles.None, "object number");
         int generation = ParseInt32(genToken, NumberStyles.None, "generation number");
 
-        PdfPrimitive value = ReadValue();
+        PdfPrimitive value;
+        try
+        {
+            value = ReadValue();
+        }
+        catch (PdfParseException refused) when (_nestingRefused)
+        {
+            _nestingRefused = false;
+            throw new PdfParseException(
+                $"Object {objectNumber.ToString(CultureInfo.InvariantCulture)} {generation.ToString(CultureInfo.InvariantCulture)}: {refused.Message}",
+                refused.Offset ?? numToken.ByteOffset,
+                refused);
+        }
 
         PdfToken next = PeekToken();
 

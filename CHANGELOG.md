@@ -10,6 +10,56 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.27.0] - 2026-11-01
+
+Fallback warnings and follow-ups to 3.24–3.26. Fallbacks that used to be
+silent are now reported to the application, the nesting refusal says where
+and how deep, capital spacing is on by default again, `Shape(byte[])` is fast
+again, and table-of-contents leaders are kept apart from their labels in
+extracted text. Changes to defaults and output are listed under "Changed".
+
+### Added
+- **Fallback warnings** (D-62, D-63): `PdfOpenOptions.OnWarning`
+  (`Action<PdfWarning>`) receives a `PdfWarning` (`Kind`, `PageNumber`,
+  `Subject`, `Reason`) when an embedded font program cannot be read and a
+  substitute is used (`FontSubstituted`), a damaged glyph draws nothing
+  (`GlyphSkipped`), or a shading is skipped (`ShadingSkipped`, raster and
+  SVG). One warning per kind and subject per page render. Also
+  `PdfDocument.OnWarning`, `PdfObjectStore.OnWarning`, `PdfWarningKind`.
+  Without a receiver nothing changes. See docs/EMBEDDING.md section 8.
+- **Font licence texts in the packages that embed the fonts** (D-61). The
+  Authoring package carries `licenses/LiPi-Sans-OFL-1.1.txt` and the PdfA
+  package `licenses/Liberation-OFL-1.1.txt` (the 12 Liberation 2.1.5 faces).
+  Both hold the copyright notices read from the font files and the full SIL
+  Open Font License 1.1. `assets/fonts/lipi-sans/LICENSE.txt` held an
+  abridged licence; its header is kept and the licence text is now complete.
+
+### Changed
+- **`ShapingFeatures.Cpsp` defaults to `true` again** (D-68), as the
+  OpenType feature registry recommends; 3.26 had turned it off. Fonts with a
+  `cpsp` feature (for example LiPi Sans Latin) space capitals a little wider
+  by default. `new ShapingFeatures { Cpsp = false }` gives the 3.26 output.
+- **Nesting refusal message** (D-82): the `PdfParseException` for values
+  nested deeper than 512 levels now names the object, the depth found and
+  the limit, for example "Object 3 0: A value is nested 513 levels deep; the
+  limit is 512 levels. …". The limit, how levels are counted, the exception
+  type and when it is thrown are unchanged.
+- **Text extraction: dot leaders** (D-72). A fragment of four or more leader
+  characters (`.`, `…`, `·`, `_`, `-`) that touches a word is separated from
+  it by a space, in both extraction strategies: "ROOMS........ 3" (3.26) is
+  "ROOMS ........ 3" again. Three dots ("Wait...") and leaders inside one
+  string are left as drawn.
+
+### Fixed
+- **`TextShaper.Shape(byte[])` loaded the face and built the shaping plan on
+  every call** (3.26). The face is now kept while the array is alive, so
+  repeat calls cost the same as the `FontFace` overload: Latin about 37 µs
+  (3.25: about 500 µs), Tamil about 21 µs (3.25: about 55 µs), Devanagari
+  about 74 µs (3.25: about 68 µs) on a 2-core sandbox. A test in the gate
+  holds the byte overload within twice the `FontFace` overload. Changing an
+  array's bytes after shaping with it is not detected; pass a new array.
+
+---
 ## [3.26.0] - 2026-10-28
 
 HarfBuzz-conformant shaping. `TextShaper` is now a port of HarfBuzz's

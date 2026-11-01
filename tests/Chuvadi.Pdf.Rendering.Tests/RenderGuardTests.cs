@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -163,6 +164,39 @@ public sealed class RenderGuardTests
 
         // In the page dictionary itself, so reading the page parses it.
         Assert.ThrowsAny<PdfParseException>(() => OpenWith("/X " + deep, "0 0 1 1 re f", "null", "null").Pages[0].Width.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void NestingRefusal_NamesTheObjectTheDepthAndTheLimit()
+    {
+        // Page (level 1) > /Resources (2) > 511 arrays (3 to 513).
+        string deep = new string('[', 511) + new string(']', 511);
+
+        PdfParseException ex = Assert.Throws<PdfParseException>(() => OpenWith("/X " + deep, "0 0 1 1 re f", "null", "null").Pages[0].Width.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        ex.Message.Should().StartWith("Object 3 0: A value is nested 513 levels deep; the limit is 512 levels.");
+        ex.Offset.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void NestingRefusal_MeasuresDictionariesAndVeryDeepValues()
+    {
+        string dictionaries = string.Concat(Enumerable.Repeat("<</K ", 99_999)) + "<<>>" + string.Concat(Enumerable.Repeat(">>", 99_999));
+
+        PdfParseException ex = Assert.Throws<PdfParseException>(() => OpenWith("/X " + dictionaries, "0 0 1 1 re f", "null", "null").Pages[0].Width.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        ex.Message.Should().StartWith("Object 3 0: A value is nested 100002 levels deep; the limit is 512 levels.");
+    }
+
+    [Fact]
+    public void NestingAtTheLimit_IsStillRead()
+    {
+        // 510 arrays reach level 512: unchanged since 3.24.
+        string deep = new string('[', 510) + new string(']', 510);
+
+        using PdfDocument doc = OpenWith("/X " + deep, "0 0 1 1 re f", "null", "null");
+
+        doc.Pages[0].Width.Should().Be(200);
     }
 
     [Fact]

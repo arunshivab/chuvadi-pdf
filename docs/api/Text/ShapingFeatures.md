@@ -58,7 +58,7 @@ Gets or inits whether standard ligatures (liga) are enabled. Default: true.
 bool Cpsp
 ```
 
-Gets or inits whether capital spacing (cpsp) is enabled. Default: false (since 3.26, matching HarfBuzz; cpsp is meant for all-capital text).
+Gets or inits whether capital spacing (cpsp) is enabled. Default: true, as the OpenType feature registry recommends (3.26 had it off; 3.27 restores the earlier default). Set it to false to turn capital spacing off.
 
 ### `Kern`
 

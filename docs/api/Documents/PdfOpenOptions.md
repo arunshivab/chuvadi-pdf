@@ -34,6 +34,14 @@ bool LeaveOpen
 
 Gets a value indicating whether to leave the stream open when the document is disposed. Ignored by the asynchronous and path overloads, which never own the caller's stream.
 
+### `OnWarning`
+
+```csharp
+System.Action<PdfWarning>? OnWarning
+```
+
+Gets the receiver of warnings. Where Chuvadi meets something it cannot use and carries on without it (a damaged embedded font replaced by a substitute, a damaged glyph that draws nothing, a shading that is skipped), it calls this with a `PdfWarning` saying what, on which page and why. It is kept on the document (`PdfDocument.OnWarning`) and called on the thread doing the work, so a handler shared between threads must be thread-safe. An exception it throws passes to the caller of that work. Null: warnings are not reported.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/PdfOpenOptions.cs`](../../../src/Chuvadi.Pdf.Documents/PdfOpenOptions.cs)_

@@ -480,6 +480,8 @@ python tools/gen_api_docs.py
 | [PdfToken](Primitives/PdfToken.md) | struct | A lightweight token produced by `PdfTokenizer`. |
 | [PdfTokenType](Primitives/PdfTokenType.md) | enum | Identifies the type of a token produced by `PdfTokenizer`. |
 | [PdfTokenizer](Primitives/PdfTokenizer.md) | class | A forward-only, byte-level tokenizer for PDF streams. |
+| [PdfWarning](Primitives/PdfWarning.md) | class | Reports a fallback taken while working on a document: something in the file could not be used, and Chuvadi carried on without it instead of failing. |
+| [PdfWarningKind](Primitives/PdfWarningKind.md) | enum | What a `PdfWarning` reports. |
 | [PdfWorkScope](Primitives/PdfWorkScope.md) | class | An ambient cancellation token and set of `PdfLimits` for the Chuvadi work done on the current asynchronous flow until it is disposed. |
 
 ## Chuvadi.Pdf.Reader

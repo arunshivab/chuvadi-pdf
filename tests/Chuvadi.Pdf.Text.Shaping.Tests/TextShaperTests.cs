@@ -136,6 +136,7 @@ public sealed class TextShaperTests
         f.IsEnabled("liga").Should().BeTrue();
         f.IsEnabled("kern").Should().BeTrue();
         f.IsEnabled("mark").Should().BeTrue();
+        f.IsEnabled("cpsp").Should().BeTrue();
         f.IsEnabled("frac").Should().BeFalse();
         f.IsEnabled("dlig").Should().BeFalse();
         f.IsEnabled("zero").Should().BeFalse();
