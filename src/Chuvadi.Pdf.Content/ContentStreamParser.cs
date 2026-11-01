@@ -86,7 +86,7 @@ public sealed class ContentStreamParser
             throw new ArgumentNullException(nameof(streams));
         }
 
-        return ParseStreams(streams, _resources, new HashSet<int>(), 0);
+        return ParseStreams(streams, _resources, new HashSet<int>(), 0, Matrix3x3.Identity);
     }
 
     // Maximum form-XObject nesting depth, guarding against pathological or
@@ -97,11 +97,12 @@ public sealed class ContentStreamParser
         byte[] streams,
         PdfDictionary? resources,
         HashSet<int> visited,
-        int depth)
+        int depth,
+        Matrix3x3 initialCtm)
     {
         List<TextFragment> fragments = new List<TextFragment>();
         Stack<GraphicsState> stateStack = new Stack<GraphicsState>();
-        GraphicsState state = new GraphicsState();
+        GraphicsState state = new GraphicsState { CurrentTransformationMatrix = initialCtm };
         bool inTextObject = false;
 
         List<PdfPrimitive> operands = new List<PdfPrimitive>();
@@ -348,7 +349,7 @@ public sealed class ContentStreamParser
                         {
                             double tx = GetDouble(operands, 0);
                             double ty = GetDouble(operands, 1);
-                            state.TextLineMatrix = state.TextLineMatrix.Translate(tx, ty);
+                            state.TextLineMatrix = Shift(state.TextLineMatrix, tx, ty);
                             state.TextMatrix = state.TextLineMatrix;
                         }
                         break;
@@ -359,7 +360,7 @@ public sealed class ContentStreamParser
                             double tx = GetDouble(operands, 0);
                             double ty = GetDouble(operands, 1);
                             state.TextLeading = -ty;
-                            state.TextLineMatrix = state.TextLineMatrix.Translate(tx, ty);
+                            state.TextLineMatrix = Shift(state.TextLineMatrix, tx, ty);
                             state.TextMatrix = state.TextLineMatrix;
                         }
                         break;
@@ -376,7 +377,7 @@ public sealed class ContentStreamParser
                         if (inTextObject)
                         {
                             state.TextLineMatrix =
-                                state.TextLineMatrix.Translate(0, -state.TextLeading);
+                                Shift(state.TextLineMatrix, 0, -state.TextLeading);
                             state.TextMatrix = state.TextLineMatrix;
                         }
                         break;
@@ -396,7 +397,7 @@ public sealed class ContentStreamParser
                         {
                             // Move to next line then show text.
                             state.TextLineMatrix =
-                                state.TextLineMatrix.Translate(0, -state.TextLeading);
+                                Shift(state.TextLineMatrix, 0, -state.TextLeading);
                             state.TextMatrix = state.TextLineMatrix;
 
                             if (operands.Count >= 1)
@@ -413,7 +414,7 @@ public sealed class ContentStreamParser
                             state.WordSpacing = GetDouble(operands, 0);
                             state.CharacterSpacing = GetDouble(operands, 1);
                             state.TextLineMatrix =
-                                state.TextLineMatrix.Translate(0, -state.TextLeading);
+                                Shift(state.TextLineMatrix, 0, -state.TextLeading);
                             state.TextMatrix = state.TextLineMatrix;
                             byte[] textBytes = GetBytes(operands, 2);
                             ShowString(textBytes, state, fragments);
@@ -436,7 +437,7 @@ public sealed class ContentStreamParser
                         if (operands.Count >= 1 && depth < MaxFormDepth && hiddenDepth == 0)
                         {
                             AppendFormText(
-                                GetString(operands, 0), resources, visited, depth, fragments);
+                                GetString(operands, 0), resources, visited, depth, fragments, state.CurrentTransformationMatrix);
                         }
                         break;
 
@@ -469,9 +470,9 @@ public sealed class ContentStreamParser
         // of a text space unit, applied as a negative horizontal displacement).
         // PDF 32000-1:2008 §9.4.5 — TJ operator.
         StringBuilder sb = new StringBuilder();
-        double startX = state.TextMatrix.TranslationX;
-        double startY = state.TextMatrix.TranslationY;
+        Matrix3x3 start = state.TextMatrix;
         bool widthKnown = true;
+        double th = state.HorizontalScaling / 100.0;
 
         for (int i = 0; i < array.Count; i++)
         {
@@ -495,8 +496,8 @@ public sealed class ContentStreamParser
                     sb.Append(' ');
                 }
 
-                // Adjust text matrix horizontally.
-                state.TextMatrix = state.TextMatrix.Translate(-displacement, 0);
+                // Adjust text matrix horizontally (in text space, §9.4.4).
+                state.TextMatrix = Shift(state.TextMatrix, -displacement * th, 0);
             }
             else if (item is PdfReal realItem)
             {
@@ -507,14 +508,13 @@ public sealed class ContentStreamParser
                     sb.Append(' ');
                 }
 
-                state.TextMatrix = state.TextMatrix.Translate(-displacement, 0);
+                state.TextMatrix = Shift(state.TextMatrix, -displacement * th, 0);
             }
         }
 
         if (sb.Length > 0)
         {
-            double width = widthKnown ? state.TextMatrix.TranslationX - startX : double.NaN;
-            fragments.Add(new TextFragment(sb.ToString(), startX, startY, state.FontSize, width));
+            fragments.Add(Fragment(sb.ToString(), start, state.TextMatrix, widthKnown, state));
         }
     }
 
@@ -523,12 +523,33 @@ public sealed class ContentStreamParser
     private static void ShowString(byte[] textBytes, GraphicsState state, List<TextFragment> fragments)
     {
         string text = state.Font.Decode(textBytes);
-        double x = state.TextMatrix.TranslationX;
-        double y = state.TextMatrix.TranslationY;
+        Matrix3x3 start = state.TextMatrix;
         state.TextMatrix = AdvanceTextMatrix(state.TextMatrix, textBytes, text, state, out bool measured);
-        double width = measured ? state.TextMatrix.TranslationX - x : double.NaN;
-        fragments.Add(new TextFragment(text, x, y, state.FontSize, width));
+        fragments.Add(Fragment(text, start, state.TextMatrix, measured, state));
     }
+
+    // A fragment placed in user space (§9.4.4): its origin is the text
+    // matrix before the glyphs mapped through the CTM, its width the distance
+    // to the origin after them, and its font size Tf scaled by the vertical
+    // scale of the text rendering matrix. Files that scale text through Tm or
+    // cm ("1 Tf" with "12 0 0 12 x y Tm") get the sizes and positions drawn.
+    private static TextFragment Fragment(string text, Matrix3x3 before, Matrix3x3 after, bool measured, GraphicsState state)
+    {
+        Matrix3x3 trm = before.Multiply(state.CurrentTransformationMatrix);
+        Matrix3x3 end = after.Multiply(state.CurrentTransformationMatrix);
+        double size = state.FontSize * Math.Sqrt((trm.C * trm.C) + (trm.D * trm.D));
+        double width = measured
+            ? Math.Sqrt(((end.E - trm.E) * (end.E - trm.E)) + ((end.F - trm.F) * (end.F - trm.F)))
+            : double.NaN;
+        double angle = Math.Atan2(trm.B, trm.A) * 180.0 / Math.PI;
+        return new TextFragment(text, trm.E, trm.F, size, width, Math.Abs(angle) < 1e-9 ? 0.0 : angle);
+    }
+
+    // Moves a text or text-line matrix by (tx, ty) in text space: the
+    // translation is applied before the matrix, so it is scaled and rotated
+    // with the text (§9.4.2, Td: Tlm = [1 0 0 1 tx ty] × Tlm).
+    private static Matrix3x3 Shift(Matrix3x3 matrix, double tx, double ty) =>
+        new Matrix3x3(1, 0, 0, 1, tx, ty).Multiply(matrix);
 
     // ── Text matrix advance ───────────────────────────────────────────────
 
@@ -546,14 +567,14 @@ public sealed class ContentStreamParser
             measured = true;
             double tx = ((width / 1000.0 * state.FontSize) + (state.CharacterSpacing * codes) + (state.WordSpacing * spaces))
                 * (state.HorizontalScaling / 100.0);
-            return matrix.Translate(tx, 0);
+            return Shift(matrix, tx, 0);
         }
 
         // Approximate advance: FontSize * HorizontalScaling/100 per character,
         // for fonts whose widths are not known (standard 14 without /Widths).
         measured = false;
         double advance = text.Length * state.FontSize * (state.HorizontalScaling / 100.0) * 0.6;
-        return matrix.Translate(advance + (state.CharacterSpacing * text.Length), 0);
+        return Shift(matrix, advance + (state.CharacterSpacing * text.Length), 0);
     }
 
     // ── Font resolution ───────────────────────────────────────────────────
@@ -602,7 +623,8 @@ public sealed class ContentStreamParser
         PdfDictionary? resources,
         HashSet<int> visited,
         int depth,
-        List<TextFragment> fragments)
+        List<TextFragment> fragments,
+        Matrix3x3 ctm)
     {
         if (resources is null || string.IsNullOrEmpty(name))
         {
@@ -637,7 +659,13 @@ public sealed class ContentStreamParser
         PdfDictionary? formResources =
             ResolveDictionary(stream.Dictionary, PdfName.Resources) ?? resources;
 
-        fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1));
+        // The form is drawn in its own space: /Matrix, then the CTM at the Do
+        // (§8.10.1), so its text lands where it is painted on the page.
+        Matrix3x3 formMatrix = stream.Dictionary.TryGetValue(PdfName.Intern("Matrix"), out PdfPrimitive? mp)
+            && _resolver.Resolve(mp) is PdfArray m && m.Count >= 6
+            ? new Matrix3x3(NumberAt(m, 0), NumberAt(m, 1), NumberAt(m, 2), NumberAt(m, 3), NumberAt(m, 4), NumberAt(m, 5))
+            : Matrix3x3.Identity;
+        fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1, formMatrix.Multiply(ctm)));
     }
 
     // The /ActualText of a BDC property list (inline or a named /Properties
@@ -677,17 +705,21 @@ public sealed class ContentStreamParser
         // The span covers its glyphs from the first one's left edge to the
         // right edge of the one that ends furthest right, so the text after
         // it is judged against the real extent and gets no false word gap.
+        // Measured along the first glyph's baseline, so rotated text works too.
+        double cos = Math.Cos(first.Angle * Math.PI / 180.0);
+        double sin = Math.Sin(first.Angle * Math.PI / 180.0);
         double right = double.NegativeInfinity;
         for (int i = firstFragment; i < fragments.Count; i++)
         {
             TextFragment f = fragments[i];
-            right = double.IsNaN(f.Width) || double.IsNaN(right) ? double.NaN : Math.Max(right, f.X + f.Width);
+            double along = ((f.X - first.X) * cos) + ((f.Y - first.Y) * sin);
+            right = double.IsNaN(f.Width) || double.IsNaN(right) ? double.NaN : Math.Max(right, along + f.Width);
         }
 
         fragments.RemoveRange(firstFragment, fragments.Count - firstFragment);
         if (actualText.Length > 0)
         {
-            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize, right - first.X));
+            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize, right, first.Angle));
         }
     }
 
@@ -951,6 +983,10 @@ public sealed class ContentStreamParser
         if (ops[index] is PdfString s) { return s.Bytes; }
         return [];
     }
+
+    // A number from an array entry (direct integer or real), 0 otherwise.
+    private static double NumberAt(PdfArray array, int index) =>
+        array[index] is PdfInteger or PdfReal ? PdfReal.ToDouble(array[index]) : 0.0;
 
     private static Matrix3x3 OperandsToMatrix(List<PdfPrimitive> ops)
     {

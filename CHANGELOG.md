@@ -10,6 +10,51 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.28.0] - 2026-11-02
+
+Text positions in user space (backlog 26), with superscripts and rotated text
+read properly (D-99). Text extraction places each fragment where it is drawn
+on the page, so files that scale or move text with `Tm` or `cm`, or draw it
+inside form XObjects, extract with their real line breaks, word gaps and
+sizes. Authoring no longer references Pdf.Documents.
+
+### Added
+- `TextFragment.Angle`: the baseline direction in degrees (0 for ordinary
+  text, 90 for text running up the page), and a constructor taking it.
+
+### Changed
+- **`TextFragment` positions, widths and font sizes are in user space**
+  (`ContentStreamParser`, and so `TextExtractor.ExtractFragments`). Before,
+  they were in text space: the CTM was tracked but not applied, a form
+  XObject's `/Matrix` and the CTM at its `Do` were ignored, and `FontSize`
+  was the `Tf` size alone. Now X and Y are the glyph origin mapped through
+  the text matrix and the CTM, `Width` is the advance along the baseline in
+  user space, and `FontSize` is the `Tf` size scaled by the vertical scale of
+  the text rendering matrix. Pages with plain unscaled text are unchanged.
+- **Text-space moves are scaled with the text.** `Td`, `TD`, `T*`, `'`, `"`,
+  glyph advances and `TJ` numbers moved the text matrix in its outer space
+  (Tm × T); they now move it in text space (T × Tm, §9.4.2), and `TJ` numbers
+  include horizontal scaling (`Tz`, §9.4.4).
+- **Rotated text is read as lines of its own** in both strategies: gaps and
+  lines are measured along and across each fragment's baseline, and a change
+  of direction starts a new line. Layout mode places a rotated line by the
+  page position of its first fragment.
+- **Superscripts and subscripts stay separate tokens**: a fragment at most
+  0.85 times its neighbour's size and moved off the baseline by more than 0.15
+  of the larger size is separated by a space where letters or digits touch
+  ("Cionini" + raised "a" reads "Cionini a"; ordinals such as a raised "th"
+  read "09 th"). The operator strategy's same-line test uses the larger of
+  the two sizes, so text after a superscript stays on its line.
+- **Extracted text changes for such files**, in both strategies: line
+  breaks, word gaps and line order. Checked on 417 PDFs (1,655 page and
+  strategy pairs): 80 changed, in 20 files, with no character lost or added;
+  every change is listed before and after in the release notes.
+- **Chuvadi.Pdf.Authoring no longer depends on Chuvadi.Pdf.Documents.** The
+  reference was added when Authoring was created and never used. Every known
+  consumer that uses Pdf.Documents references it directly or through another
+  package, so none relies on getting it through Authoring.
+
+---
 ## [3.27.0] - 2026-11-01
 
 Fallback warnings and follow-ups to 3.24–3.26. Fallbacks that used to be
