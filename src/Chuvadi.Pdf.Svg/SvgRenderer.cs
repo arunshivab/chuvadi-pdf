@@ -1129,15 +1129,22 @@ public sealed class SvgRenderer
     {
         if (op.Glyphs.Count == 0) { return; }
 
+        // One position per character, from the PDF: a glyph whose text is
+        // several characters (a ligature mapped to "fi") spreads them evenly
+        // over its advance. A run with characters outside the BMP keeps the
+        // single anchor, since SVG position lists count characters.
         StringBuilder sb = new();
         List<double> xPositions = new(op.Glyphs.Count);
-        bool allSingleChar = true;
+        bool positionable = true;
         foreach (DisplayListGlyph g in op.Glyphs)
         {
             if (g.Unicode.Length == 0) { continue; }
             sb.Append(g.Unicode);
-            xPositions.Add(g.X);
-            if (g.Unicode.Length > 1) { allSingleChar = false; }
+            for (int k = 0; k < g.Unicode.Length; k++)
+            {
+                if (char.IsSurrogate(g.Unicode[k])) { positionable = false; }
+                xPositions.Add(g.X + (g.Advance * k / g.Unicode.Length));
+            }
         }
         string text = sb.ToString();
         if (text.Length == 0) { return; }
@@ -1195,13 +1202,15 @@ public sealed class SvgRenderer
         (string? fontWeight, string? fontStyle) = ResolveStyleHints(op.Style);
         string? textExtra = TextOpacityAttrs(op);
 
-        // v2.1.3 — embedded fonts carry authoritative glyph advances in hmtx;
-        // emitting per-glyph X attributes would force the browser to override
-        // them with PDF /Widths positions and produce visible drift when the
-        // two disagree. Use the single-anchor path for embedded fonts; keep
-        // per-glyph X for generic CSS fallback (where /Widths is the only
-        // source of advance information we have).
-        if (!hasEmbeddedFont && allSingleChar && xPositions.Count == text.Length)
+        // v3.31 — every character is placed at its PDF position, embedded
+        // font or not. The PDF's /Widths, character and word spacing and TJ
+        // adjustments decide where glyphs go (PDF 32000-1 §9.2.4, §9.4.4); an
+        // embedded font's own advances may differ (a zero-width space that
+        // the font draws 500 units wide, or advances the wrapped font got
+        // wrong), so anchoring the run once and letting the browser advance
+        // put text off its real position and out of line with search
+        // highlights and selection.
+        if (positionable && xPositions.Count == text.Length)
         {
             w.EmitText(text, xPositions, 0, family, op.FontSize, fill, transform,
                 fontWeight: fontWeight, fontStyle: fontStyle, extraAttrs: textExtra);

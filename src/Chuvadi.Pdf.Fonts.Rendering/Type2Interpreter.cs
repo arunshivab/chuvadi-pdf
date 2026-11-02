@@ -161,7 +161,7 @@ internal sealed class Type2Interpreter
                 }
             case 22: // hmoveto
                 {
-                    ConsumeWidth();
+                    ConsumeWidth(operandCount: 1);
                     if (_stack.Count >= 1)
                     {
                         CloseOpenContour();
@@ -174,7 +174,7 @@ internal sealed class Type2Interpreter
                 }
             case 4:  // vmoveto
                 {
-                    ConsumeWidth();
+                    ConsumeWidth(operandCount: 1);
                     if (_stack.Count >= 1)
                     {
                         CloseOpenContour();
@@ -411,6 +411,9 @@ internal sealed class Type2Interpreter
                 }
             case 19: // hintmask
             case 20: // cntrmask
+                // Implicit vstem pairs may precede the first hintmask, and
+                // the width can come before them (Type 2 §4.1, §4.3).
+                ConsumeWidth();
                 return false;   // mask bytes handled in caller
             case (12 << 8) | 34: // hflex
                 {
@@ -537,13 +540,19 @@ internal sealed class Type2Interpreter
         _y = y6;
     }
 
-    private void ConsumeWidth()
+    // The first stack-clearing operator may carry the advance width as an
+    // extra first operand (Type 2 §3.1). Stem hints, hintmask, rmoveto and
+    // endchar take an even number of operands, so an odd count means a width;
+    // hmoveto and vmoveto take exactly one, so a width is there when there
+    // are two.
+    private void ConsumeWidth(int operandCount = 0)
     {
         if (_widthRead) { return; }
         _widthRead = true;
-        // If the operand stack has an odd count for a movement op (or any count
-        // for hstem etc with a width), the bottom entry is the width offset.
-        if (_stack.Count > 0 && _stack.Count % 2 != 0)
+        bool hasWidth = operandCount == 1
+            ? _stack.Count > 1
+            : _stack.Count % 2 != 0;
+        if (hasWidth)
         {
             AdvanceWidth = _nominalWidthX + (int)_stack[0];
             _stack.RemoveAt(0);

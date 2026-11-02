@@ -153,6 +153,11 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.30.2:
+- **SVG text at PDF positions** for embedded fonts, and CFF advance widths
+  after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
+  Elsevier paper, search box one space left of the text).
+
 Shipped in v3.30.1:
 - **FreeType credit** (D-106, part 1): the FTL credit and licence ship with
   `Chuvadi.Pdf.Fonts.Rendering`, the package that holds the FreeType-derived
