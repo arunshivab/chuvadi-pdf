@@ -15,7 +15,17 @@ This strategy is more accurate than `OperatorExtractor` for PDFs where text is n
 - Group fragments into lines: two fragments are on the same line when their Y difference is less than half the average font size of the line. 
 - Sort lines by descending Y (PDF Y increases upward, so highest Y = top). 
 - Within each line, sort fragments by ascending X. 
-- Insert spaces between fragments based on X gaps.  PDF 32000-1:2008 §9.10 — Extraction of text content.
+- Insert spaces between fragments based on X gaps.  Since 3.29, the lines are read in bands and columns (`Analyze(List{TextFragment})`): a band whose columns look like running text is read column by column, and a line crossing the columns (a title, a footer) is read after the columns above it. Raised and lowered text is written as `Superscripts` says. PDF 32000-1:2008 §9.10 — Extraction of text content.
+
+## Properties
+
+### `Superscripts`
+
+```csharp
+SuperscriptMode Superscripts
+```
+
+Gets or initialises how raised and lowered text is written (since 3.29). Default: `SuperscriptMode.Unicode`.
 
 ## Methods
 
@@ -32,6 +42,35 @@ Converts a list of text fragments to a plain text string using layout-aware line
 - `fragments` — Fragments from `ContentStreamParser`.
 
 **Returns:** The extracted text with spaces and line breaks inserted.
+
+### `Extract`
+
+```csharp
+string Extract(List<TextFragment> fragments, PageLayout layout)
+```
+
+Converts a list of text fragments to a plain text string, reading the page in the given bands and columns (since 3.29).
+
+**Parameters**
+
+- `fragments` — Fragments from `ContentStreamParser`.
+- `layout` — The reading order: `ReadingOrderSource.Columns` reads the layout's bands in order, each column after the next, and the text outside them as rows; any other source reads rows, as 3.28 did.
+
+**Returns:** The extracted text with spaces and line breaks inserted.
+
+### `Analyze`
+
+```csharp
+PageLayout Analyze(List<TextFragment> fragments)
+```
+
+Finds the bands and columns `Extract(List{TextFragment})` reads the fragments by (since 3.29).
+
+**Parameters**
+
+- `fragments` — Fragments from `ContentStreamParser`.
+
+**Returns:** A `ReadingOrderSource.Columns` layout with every band in reading order, or `PageLayout.Rows` when no band is read in columns.
 
 ---
 

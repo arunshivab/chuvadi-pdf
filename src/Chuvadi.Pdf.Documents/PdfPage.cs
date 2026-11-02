@@ -32,16 +32,27 @@ public sealed class PdfPage
     private readonly IPdfObjectResolver _resolver;
     private readonly int _pageIndex;
     private readonly Func<OptionalContentVisibility>? _optionalContent;
+    private readonly Func<PdfDictionary?>? _structTreeRoot;
 
     internal PdfPage(
         PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex,
-        Func<OptionalContentVisibility>? optionalContent = null)
+        Func<OptionalContentVisibility>? optionalContent = null,
+        Func<PdfDictionary?>? structTreeRoot = null)
     {
         _dict = dict ?? throw new ArgumentNullException(nameof(dict));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _pageIndex = pageIndex;
         _optionalContent = optionalContent;
+        _structTreeRoot = structTreeRoot;
     }
+
+    /// <summary>
+    /// Gets the structure-tree root of the document this page belongs to
+    /// (<see cref="PdfDocument.StructTreeRoot"/>), or null when the document
+    /// has none (since 3.29). Text extraction reads a Tagged PDF's reading
+    /// order from it. PDF 32000-1:2008 §14.7.2 — Structure Hierarchy.
+    /// </summary>
+    public PdfDictionary? StructTreeRoot => _structTreeRoot?.Invoke();
 
     /// <summary>
     /// Gets the document's default layer visibility (its <c>/OCProperties /D</c>

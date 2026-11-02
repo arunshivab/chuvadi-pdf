@@ -89,6 +89,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [BaselineShift](Content/BaselineShift.md) | enum | Whether a `TextFragment` sits on the baseline of the line it belongs to, or is raised (a superscript) or lowered (a subscript) off it. |
 | [ContentException](Content/ContentException.md) | class | Thrown when a PDF content stream contains invalid or unsupported operators. |
 | [ContentStreamParser](Content/ContentStreamParser.md) | class | Parses a PDF content stream and extracts text fragments with their approximate positions. |
 | [GraphicsState](Content/GraphicsState.md) | class | Represents the graphics and text state at a point in content stream processing. |
@@ -628,13 +629,18 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [ExtractionStrategy](Text/ExtractionStrategy.md) | enum | Specifies the text extraction strategy. |
+| [LayoutBand](Text/LayoutBand.md) | class | A horizontal band of a page: a region read as a whole before the next band, holding one column (read as rows) or several (read one after another). |
+| [LayoutColumn](Text/LayoutColumn.md) | class | A column of a `LayoutBand`, read top to bottom. |
 | [LayoutExtractor](Text/LayoutExtractor.md) | class | Extracts text from `TextFragment` objects by reconstructing the visual reading order: group by line (Y position), sort by column (X position). |
 | [LipiScript](Text/LipiScript.md) | enum | A script covered by the LiPi Sans font family. |
 | [OperatorExtractor](Text/OperatorExtractor.md) | class | Extracts text from a list of `TextFragment` objects in content stream order with simple heuristics for word and line breaks. |
+| [PageLayout](Text/PageLayout.md) | class | The reading order of one page for layout-aware text extraction: where it comes from and, for `ReadingOrderSource.Columns`, the bands and columns in the order they are read. |
+| [ReadingOrderSource](Text/ReadingOrderSource.md) | enum | Where a page's reading order comes from. |
 | [ScriptClassifier](Text/ScriptClassifier.md) | class | Classifies code points by script and splits text into script runs. |
 | [ScriptRun](Text/ScriptRun.md) | record struct | A maximal run of text in a single script. |
 | [ShapedGlyph](Text/ShapedGlyph.md) | record struct | One glyph of a pre-shaped run, as produced by an external shaper or by `TextShaper`. |
 | [ShapingFeatures](Text/ShapingFeatures.md) | class | Controls which OpenType features `TextShaper` applies when shaping a run. |
+| [SuperscriptMode](Text/SuperscriptMode.md) | enum | How extracted plain text writes raised and lowered small text (superscripts and subscripts). |
 | [TextExtractor](Text/TextExtractor.md) | class | Extracts plain text from a PDF page. |
 | [TextShaper](Text/TextShaper.md) | class | Shapes a run of text using the OpenType GSUB and GPOS tables embedded in a TrueType/OpenType font. |
 

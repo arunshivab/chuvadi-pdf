@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §9.10 — Extraction of text content
 // PHASE: Phase 1 — Chuvadi.Pdf.Text
-// Layout-aware text extraction: groups by line, sorts by X position.
+// Layout-aware text extraction: groups by line, sorts by X position;
+// bands and columns (3.29).
 
 using System;
 using System.Collections.Generic;
@@ -31,10 +32,22 @@ namespace Chuvadi.Pdf.Text;
 ///   <item>Insert spaces between fragments based on X gaps.</item>
 /// </list>
 ///
+/// Since 3.29, the lines are read in bands and columns
+/// (<see cref="Analyze(List{TextFragment})"/>): a band whose columns look
+/// like running text is read column by column, and a line crossing the
+/// columns (a title, a footer) is read after the columns above it. Raised
+/// and lowered text is written as <see cref="Superscripts"/> says.
+///
 /// PDF 32000-1:2008 §9.10 — Extraction of text content.
 /// </remarks>
 public sealed class LayoutExtractor
 {
+    /// <summary>
+    /// Gets or initialises how raised and lowered text is written (since
+    /// 3.29). Default: <see cref="SuperscriptMode.Unicode"/>.
+    /// </summary>
+    public SuperscriptMode Superscripts { get; init; } = SuperscriptMode.Unicode;
+
     /// <summary>
     /// Converts a list of text fragments to a plain text string
     /// using layout-aware line grouping and X-sorted reading order.
@@ -43,32 +56,111 @@ public sealed class LayoutExtractor
     /// <returns>The extracted text with spaces and line breaks inserted.</returns>
     public string Extract(List<TextFragment> fragments)
     {
-        if (fragments is null)
-        {
-            throw new ArgumentNullException(nameof(fragments));
-        }
-
+        ArgumentNullException.ThrowIfNull(fragments);
         if (fragments.Count == 0)
         {
             return string.Empty;
         }
 
-        // Step 1: group fragments into lines.
-        List<List<TextFragment>> lines = GroupIntoLines(fragments);
+        List<List<TextFragment>> lines = GroupIntoLines(ScriptText.Classify(fragments));
+        return Write(ColumnLayout.Arrange(lines, ColumnLayout.Detect(lines)), Superscripts);
+    }
 
-        // Step 2: sort lines top-to-bottom (descending Y in PDF space).
-        lines.Sort((a, b) => b[0].Y.CompareTo(a[0].Y));
-
-        // Step 3: within each line, sort in reading order along its baseline
-        // (ascending X for ordinary text; rotated lines read along their own
-        // direction, 3.28).
-        foreach (List<TextFragment> line in lines)
+    /// <summary>
+    /// Converts a list of text fragments to a plain text string, reading the
+    /// page in the given bands and columns (since 3.29).
+    /// </summary>
+    /// <param name="fragments">Fragments from <see cref="ContentStreamParser"/>.</param>
+    /// <param name="layout">
+    /// The reading order: <see cref="ReadingOrderSource.Columns"/> reads the
+    /// layout's bands in order, each column after the next, and the text
+    /// outside them as rows; any other source reads rows, as 3.28 did.
+    /// </param>
+    /// <returns>The extracted text with spaces and line breaks inserted.</returns>
+    public string Extract(List<TextFragment> fragments, PageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(fragments);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (fragments.Count == 0)
         {
-            double angle = line[0].Angle;
-            line.Sort((a, b) => TextGeometry.Along(a, angle).CompareTo(TextGeometry.Along(b, angle)));
+            return string.Empty;
         }
 
-        // Step 4: assemble output.
+        List<List<TextFragment>> lines = GroupIntoLines(ScriptText.Classify(fragments));
+        return Write(ColumnLayout.Arrange(lines, layout), Superscripts);
+    }
+
+    /// <summary>
+    /// Finds the bands and columns <see cref="Extract(List{TextFragment})"/>
+    /// reads the fragments by (since 3.29).
+    /// </summary>
+    /// <param name="fragments">Fragments from <see cref="ContentStreamParser"/>.</param>
+    /// <returns>
+    /// A <see cref="ReadingOrderSource.Columns"/> layout with every band in
+    /// reading order, or <see cref="PageLayout.Rows"/> when no band is read
+    /// in columns.
+    /// </returns>
+    public PageLayout Analyze(List<TextFragment> fragments)
+    {
+        ArgumentNullException.ThrowIfNull(fragments);
+        return fragments.Count == 0 ? PageLayout.Rows : ColumnLayout.Detect(GroupIntoLines(fragments));
+    }
+
+    // Tagged order (3.29): the text the structure tree orders, in its order,
+    // with the rest read as rows before it (above it on the page) or after it.
+    internal string ExtractTagged(List<TextFragment> classified, Dictionary<int, int> ranks)
+    {
+        List<(TextFragment Fragment, int Rank, int Index)> tagged = new List<(TextFragment, int, int)>();
+        List<TextFragment> untagged = new List<TextFragment>();
+        double top = double.NegativeInfinity;
+        for (int i = 0; i < classified.Count; i++)
+        {
+            TextFragment f = classified[i];
+            if (f.MarkedContentId is int id && ranks.TryGetValue(id, out int rank))
+            {
+                tagged.Add((f, rank, i));
+                top = Math.Max(top, f.Y + f.FontSize);
+            }
+            else
+            {
+                untagged.Add(f);
+            }
+        }
+
+        tagged.Sort((a, b) => a.Rank != b.Rank ? a.Rank.CompareTo(b.Rank) : a.Index.CompareTo(b.Index));
+        List<TextFragment> inOrder = new List<TextFragment>(tagged.Count);
+        foreach ((TextFragment Fragment, int Rank, int Index) t in tagged)
+        {
+            inOrder.Add(t.Fragment);
+        }
+
+        List<TextFragment> above = new List<TextFragment>();
+        List<TextFragment> below = new List<TextFragment>();
+        foreach (TextFragment f in untagged)
+        {
+            (f.Y > top ? above : below).Add(f);
+        }
+
+        List<string> parts = new List<string>(3);
+        if (above.Count > 0)
+        {
+            parts.Add(Write(ColumnLayout.RowOrder(GroupIntoLines(above)), Superscripts));
+        }
+
+        parts.Add(OperatorExtractor.Write(inOrder, Superscripts, layoutSpacing: true));
+        if (below.Count > 0)
+        {
+            parts.Add(Write(ColumnLayout.RowOrder(GroupIntoLines(below)), Superscripts));
+        }
+
+        return string.Join(Environment.NewLine, parts).Trim();
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────
+
+    // Writes lines already in reading order, each sorted along its baseline.
+    internal static string Write(List<List<TextFragment>> lines, SuperscriptMode mode)
+    {
         StringBuilder sb = new StringBuilder();
 
         for (int lineIdx = 0; lineIdx < lines.Count; lineIdx++)
@@ -80,34 +172,37 @@ public sealed class LayoutExtractor
                 sb.AppendLine();
             }
 
+            (string[] texts, bool[] joinBefore) = ScriptText.Plan(line, mode);
+            double angle = line[0].Angle;
             TextFragment prev = line[0];
-            sb.Append(prev.Text);
+            sb.Append(texts[0]);
 
             for (int i = 1; i < line.Count; i++)
             {
                 TextFragment current = line[i];
-                double angle = line[0].Angle;
-                double xGap = TextGeometry.Along(current, angle) - (TextGeometry.Along(prev, angle) + EstimateWidth(prev));
+                double xGap = TextGeometry.Along(current, angle) - (TextGeometry.Along(prev, angle) + ScriptText.Width(prev));
 
                 // Insert a separating space on a positional gap — but not when
                 // the fragments already carry one (many writers end each
                 // word-run with an explicit trailing space; width estimation
                 // errors on such runs would otherwise produce double spaces).
                 bool alreadySeparated =
-                    (prev.Text.Length > 0 && prev.Text[prev.Text.Length - 1] == ' ')
-                    || (current.Text.Length > 0 && current.Text[0] == ' ');
+                    (texts[i - 1].Length > 0 && texts[i - 1][^1] == ' ')
+                    || (texts[i].Length > 0 && texts[i][0] == ' ');
 
-                // A dot leader touching a word (3.27) and a superscript or
-                // subscript touching it (3.28) are kept apart from it.
+                // A dot leader touching a word (3.27) is kept apart from it;
+                // raised or lowered text joins its neighbour or is kept apart
+                // as the superscript mode decides (3.28, 3.29).
+                bool scriptSpace = !joinBefore[i] && TextGeometry.IsScriptBoundary(prev, current);
                 if ((xGap > prev.FontSize * 0.3
                         || LeaderSpacing.NeedsSpace(prev, current)
-                        || TextGeometry.IsScriptBoundary(prev, current))
+                        || scriptSpace)
                     && !alreadySeparated)
                 {
                     sb.Append(' ');
                 }
 
-                sb.Append(current.Text);
+                sb.Append(texts[i]);
                 prev = current;
             }
         }
@@ -115,76 +210,80 @@ public sealed class LayoutExtractor
         return sb.ToString().Trim();
     }
 
-    // ── Private ───────────────────────────────────────────────────────────
-
-    private static List<List<TextFragment>> GroupIntoLines(List<TextFragment> fragments)
+    internal static List<List<TextFragment>> GroupIntoLines(List<TextFragment> fragments)
     {
-        List<List<TextFragment>> lines = new List<List<TextFragment>>();
+        List<LineSums> lines = new List<LineSums>();
 
         foreach (TextFragment fragment in fragments)
         {
             // Grouping is quadratic in the worst case: stay cancellable.
             PdfWorkScope.ThrowIfCancellationRequested();
-            bool placed = false;
+            LineSums? best = null;
+            double bestDistance = double.PositiveInfinity;
 
-            foreach (List<TextFragment> line in lines)
+            foreach (LineSums line in lines)
             {
                 // A line holds fragments of one direction; position across
                 // the baseline decides membership (Y for ordinary text).
-                if (!TextGeometry.SameDirection(fragment, line[0]))
+                if (!TextGeometry.SameDirection(fragment, line.First))
                 {
                     continue;
                 }
 
-                double angle = line[0].Angle;
-                double lineY = AverageAcross(line, angle);
-                double threshold = AverageFontSize(line) * 0.5;
+                // Half the larger of the line's and the fragment's size, so
+                // text on the baseline joins a line begun by a superscript
+                // drawn before it; and the nearest such line, not the first
+                // (3.29).
+                double distance = Math.Abs(TextGeometry.Across(fragment, line.First.Angle) - (line.SumAcross / line.Items.Count));
+                double threshold = Math.Max(line.SumSize / line.Items.Count, fragment.FontSize) * 0.5;
 
-                if (Math.Abs(TextGeometry.Across(fragment, angle) - lineY) <= threshold)
+                if (distance <= threshold && distance < bestDistance)
                 {
-                    line.Add(fragment);
-                    placed = true;
-                    break;
+                    best = line;
+                    bestDistance = distance;
                 }
             }
 
-            if (!placed)
+            if (best is null)
             {
-                lines.Add(new List<TextFragment> { fragment });
+                best = new LineSums(fragment);
+                lines.Add(best);
             }
+
+            best.Add(fragment);
         }
 
-        return lines;
-    }
-
-    private static double AverageAcross(List<TextFragment> line, double angle)
-    {
-        double sum = 0;
-
-        foreach (TextFragment f in line)
+        List<List<TextFragment>> result = new List<List<TextFragment>>(lines.Count);
+        foreach (LineSums line in lines)
         {
-            sum += TextGeometry.Across(f, angle);
+            result.Add(line.Items);
         }
 
-        return sum / line.Count;
+        return result;
     }
 
-    private static double AverageFontSize(List<TextFragment> line)
+    // A line being built, with running sums for its average position across
+    // the baseline and its average size.
+    private sealed class LineSums
     {
-        double sum = 0;
-
-        foreach (TextFragment f in line)
+        internal LineSums(TextFragment first)
         {
-            sum += f.FontSize;
+            First = first;
         }
 
-        return sum / line.Count;
-    }
+        internal TextFragment First { get; }
 
-    private static double EstimateWidth(TextFragment fragment)
-    {
-        // The font's advance when the parser measured it; otherwise
-        // approximately 0.6 of the font size per character.
-        return double.IsNaN(fragment.Width) ? fragment.Text.Length * fragment.FontSize * 0.6 : fragment.Width;
+        internal List<TextFragment> Items { get; } = new List<TextFragment>();
+
+        internal double SumAcross { get; private set; }
+
+        internal double SumSize { get; private set; }
+
+        internal void Add(TextFragment f)
+        {
+            Items.Add(f);
+            SumAcross += TextGeometry.Across(f, First.Angle);
+            SumSize += f.FontSize;
+        }
     }
 }

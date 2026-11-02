@@ -20,6 +20,17 @@ public sealed class SearchOptions
 
     /// <summary>Optional exclusive end page (0-based). Default = page count.</summary>
     public int? PageRangeEnd { get; init; }
+
+    /// <summary>
+    /// Match Unicode compatibility forms as their plain characters (since
+    /// 3.29; default true): the page text and the query are both compared
+    /// in compatibility decomposition (NFKD), with the minus sign read as a
+    /// hyphen-minus, so "H2O" finds "H₂O", "x2" finds "x²", "10-3" finds
+    /// "10⁻³", "fi" finds the "ﬁ" ligature and "A" finds a full-width "Ａ".
+    /// Match offsets and lengths stay in the page's own text. Set false to
+    /// compare the characters exactly, as before 3.29.
+    /// </summary>
+    public bool MatchCompatibilityForms { get; init; } = true;
 }
 
 /// <summary>A search match against the logical text of a page.</summary>

@@ -54,19 +54,35 @@ public static class DocumentSearch
 
             if (text.Length == 0) { continue; }
 
+            // Compare in compatibility decomposition when asked (3.29); the
+            // folded text maps each of its characters back to the page text.
+            string haystack = text;
+            string needle = query;
+            List<int>? origin = null;
+            if (opts.MatchCompatibilityForms)
+            {
+                origin = new List<int>(text.Length);
+                haystack = Fold(text, origin);
+                needle = Fold(query, null);
+                if (needle.Length == 0) { continue; }
+            }
+
             // Find matches in the concatenated text.
             int from = 0;
             while (true)
             {
-                int matchIdx = text.IndexOf(query, from, comparison);
-                if (matchIdx < 0) { break; }
-                if (!opts.WholeWord || IsWholeWord(text, matchIdx, query.Length))
+                int foundAt = haystack.IndexOf(needle, from, comparison);
+                if (foundAt < 0) { break; }
+                (int matchIdx, int matchLen) = origin is null
+                    ? (foundAt, needle.Length)
+                    : ToPageText(text, origin, foundAt, needle.Length);
+                if (!opts.WholeWord || IsWholeWord(text, matchIdx, matchLen))
                 {
-                    SearchMatch match = BuildMatch(pageIdx, matchIdx, query.Length, runIndex, charOffsetInRun, runs);
+                    SearchMatch match = BuildMatch(pageIdx, matchIdx, matchLen, runIndex, charOffsetInRun, runs);
                     yield return match;
                     cancellationToken.ThrowIfCancellationRequested();
                 }
-                from = matchIdx + Math.Max(1, query.Length);
+                from = foundAt + Math.Max(1, needle.Length);
             }
         }
     }
@@ -148,6 +164,49 @@ public static class DocumentSearch
             if (xEnd > maxX) { maxX = xEnd; }
         }
         return new Rect(minX, run.BoundingBox.Y, maxX - minX, run.BoundingBox.Height);
+    }
+
+    // The compatibility decomposition (NFKD) of each character, the minus
+    // sign read as a hyphen-minus; origin receives, for each folded
+    // character, the index of the page-text character it came from.
+    private static string Fold(string text, List<int>? origin)
+    {
+        System.Text.StringBuilder sb = new(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c < 0x80)
+            {
+                sb.Append(c);
+                origin?.Add(i);
+                continue;
+            }
+
+            int width = char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]) ? 2 : 1;
+
+            // A lone surrogate cannot be normalised: kept as it is.
+            string folded = width == 1 && char.IsSurrogate(c)
+                ? c.ToString()
+                : text.Substring(i, width).Normalize(System.Text.NormalizationForm.FormKD).Replace('\u2212', '-');
+            foreach (char f in folded)
+            {
+                sb.Append(f);
+                origin?.Add(i);
+            }
+
+            i += width - 1;
+        }
+
+        return sb.ToString();
+    }
+
+    // A match in the folded text as a start and length in the page text.
+    private static (int Start, int Length) ToPageText(string text, List<int> origin, int start, int length)
+    {
+        int first = origin[start];
+        int last = origin[start + length - 1];
+        int lastWidth = char.IsHighSurrogate(text[last]) && last + 1 < text.Length ? 2 : 1;
+        return (first, last + lastWidth - first);
     }
 
     private static bool IsWholeWord(string text, int start, int length)
