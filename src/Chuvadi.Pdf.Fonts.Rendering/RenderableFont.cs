@@ -114,6 +114,33 @@ public sealed class RenderableFont
     }
 
     /// <summary>
+    /// Builds a <see cref="RenderableFont"/> that draws a font the PDF does
+    /// not embed with a standard 14 font's outlines (since 3.30): characters
+    /// are decoded through the font's own encoding and ToUnicode map, and
+    /// glyph shapes come from <paramref name="standard14Name"/>
+    /// (see <see cref="Standard14Substitute"/>).
+    /// </summary>
+    /// <param name="fontDict">The font dictionary from the page Resources.</param>
+    /// <param name="resolver">Used to resolve indirect object references.</param>
+    /// <param name="standard14Name">The standard 14 font whose outlines to use.</param>
+    /// <returns>A font that reports <see cref="IsStandard14"/> as true.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="standard14Name"/> is not a standard 14 font name.</exception>
+    public static RenderableFont AsSubstitute(PdfDictionary fontDict, IPdfObjectResolver resolver, string standard14Name)
+    {
+        ArgumentNullException.ThrowIfNull(fontDict);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(standard14Name);
+        if (!Std14Names.Contains(standard14Name))
+        {
+            throw new ArgumentException($"'{standard14Name}' is not a standard 14 font name.", nameof(standard14Name));
+        }
+
+        PdfFont pdfFont = PdfFont.FromDictionary(fontDict, resolver);
+        return new RenderableFont(standard14Name, pdfFont, unitsPerEm: 1000, isStandard14: true);
+    }
+
+    /// <summary>
     /// Returns a default <see cref="RenderableFont"/> equivalent to Helvetica
     /// with WinAnsi encoding. Used when no font dictionary is available.
     /// </summary>

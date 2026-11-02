@@ -107,6 +107,8 @@ Enables the automatic LiPi Sans font. After calling this, drawing text with the 
 
 **Returns:** This builder.
 
+**Remarks:** The one name this registers is `"Lipi"`, matched exactly (case-sensitive), for `PageBuilder.DrawText`. The per-script face names written into the PDF (`LiPi-Sans-Latin`, `LiPi-Sans-Tamil` and so on) are internal; any other name throws `ArgumentException` from `PageBuilder.DrawText` (since 3.30).
+
 ### `AddPage`
 
 ```csharp

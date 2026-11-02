@@ -127,6 +127,120 @@ public static class TrueTypeFontPatch
         return SfntAssembler.Assemble(sfVersion, tables);
     }
 
+    /// <summary>
+    /// Returns a copy of <paramref name="fontBytes"/> with minimal
+    /// <c>OS/2</c>, <c>name</c> and <c>post</c> tables added where the font
+    /// has none (since 3.30). PDF font subsets often carry only the tables a
+    /// PDF reader needs; web browsers (their OpenType sanitiser) reject a
+    /// font without these three and draw the text in a fallback font
+    /// instead. Tables the font already has are kept unchanged.
+    /// </summary>
+    /// <param name="fontBytes">A TrueType or OpenType font program.</param>
+    /// <param name="postScriptName">The name recorded in the added <c>name</c> table.</param>
+    /// <param name="isBold">Whether the added tables describe a bold face.</param>
+    /// <param name="isItalic">Whether the added tables describe an italic face.</param>
+    /// <returns>
+    /// The font with the three tables present, re-assembled with every table
+    /// on a 4-byte boundary (browsers also reject misaligned tables).
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="fontBytes"/> or <paramref name="postScriptName"/> is null.
+    /// </exception>
+    /// <exception cref="FontRenderingException">
+    /// The bytes are not a valid TrueType or OpenType font.
+    /// </exception>
+    public static byte[] WithRequiredTables(byte[] fontBytes, string postScriptName, bool isBold, bool isItalic)
+    {
+        ArgumentNullException.ThrowIfNull(fontBytes);
+        ArgumentNullException.ThrowIfNull(postScriptName);
+        if (fontBytes.Length < 12)
+        {
+            throw new FontRenderingException("Font data too short to contain an offset table.");
+        }
+
+        uint sfVersion = SfntAssembler.ReadUInt32BE(fontBytes, 0);
+        if (sfVersion != 0x00010000 && sfVersion != 0x4F54544F && sfVersion != 0x74727565)
+        {
+            throw new FontRenderingException($"Not a valid TrueType/OpenType font. sfVersion = 0x{sfVersion:X8}.");
+        }
+
+        int numTables = SfntAssembler.ReadUInt16BE(fontBytes, 4);
+        if (12 + (numTables * 16) > fontBytes.Length)
+        {
+            throw new FontRenderingException("Truncated table directory.");
+        }
+
+        List<SfntAssembler.TableEntry> tables = ReadTableDirectory(fontBytes, numTables);
+        bool hasOs2 = tables.Exists(t => t.Tag == Os2Tag);
+        bool hasName = tables.Exists(t => t.Tag == NameTag);
+        bool hasPost = tables.Exists(t => t.Tag == PostTag);
+
+        // Metrics for OS/2 from head (units per em, glyph box) and hhea/hmtx
+        // (average advance); sensible defaults when they are missing.
+        SfntAssembler.TableEntry? head = tables.Find(t => t.Tag == HeadTag);
+        int unitsPerEm = 1000;
+        int yMin = -200;
+        int yMax = 800;
+        if (head is not null && head.Data.Length >= 54)
+        {
+            unitsPerEm = Math.Max(16, SfntAssembler.ReadUInt16BE(head.Data, 18));
+            yMin = (short)SfntAssembler.ReadUInt16BE(head.Data, 38);
+            yMax = (short)SfntAssembler.ReadUInt16BE(head.Data, 42);
+        }
+
+        if (!hasOs2)
+        {
+            tables.Add(new SfntAssembler.TableEntry(
+                Os2Tag,
+                OpenTypeFontBuilder.BuildOs2(unitsPerEm, yMin, yMax, 0x20, 0xFFFF, isBold, isItalic, AverageAdvance(tables, unitsPerEm))));
+        }
+
+        if (!hasName)
+        {
+            tables.Add(new SfntAssembler.TableEntry(NameTag, OpenTypeFontBuilder.BuildName(postScriptName, isBold, isItalic)));
+        }
+
+        if (!hasPost)
+        {
+            tables.Add(new SfntAssembler.TableEntry(PostTag, OpenTypeFontBuilder.BuildPost()));
+        }
+
+        return SfntAssembler.Assemble(sfVersion, tables);
+    }
+
+    private const uint Os2Tag = 0x4F532F32u;
+    private const uint NameTag = 0x6E616D65u;
+    private const uint PostTag = 0x706F7374u;
+    private const uint HeadTag = 0x68656164u;
+    private const uint HheaTag = 0x68686561u;
+    private const uint HmtxTag = 0x686D7478u;
+
+    // The mean of the non-zero advances in hmtx, or half an em.
+    private static int AverageAdvance(List<SfntAssembler.TableEntry> tables, int unitsPerEm)
+    {
+        SfntAssembler.TableEntry? hhea = tables.Find(t => t.Tag == HheaTag);
+        SfntAssembler.TableEntry? hmtx = tables.Find(t => t.Tag == HmtxTag);
+        if (hhea is null || hmtx is null || hhea.Data.Length < 36)
+        {
+            return unitsPerEm / 2;
+        }
+
+        int count = Math.Min(SfntAssembler.ReadUInt16BE(hhea.Data, 34), hmtx.Data.Length / 4);
+        long sum = 0;
+        int used = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int advance = SfntAssembler.ReadUInt16BE(hmtx.Data, i * 4);
+            if (advance > 0)
+            {
+                sum += advance;
+                used++;
+            }
+        }
+
+        return used > 0 ? (int)Math.Min(short.MaxValue, sum / used) : unitsPerEm / 2;
+    }
+
     // ── Table directory ──────────────────────────────────────────────────
 
     private static List<SfntAssembler.TableEntry> ReadTableDirectory(byte[] data, int numTables)

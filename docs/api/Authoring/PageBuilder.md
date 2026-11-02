@@ -36,6 +36,19 @@ PageBuilder DrawText(string text, double x, double y, string font, double size, 
 
 Draws a single line of text. The top of the text aligns to `y`.
 
+**Parameters**
+
+- `text` — The text to draw.
+- `x` — The left edge of the text, in points from the left of the page.
+- `y` — The top of the text, in points from the top of the page.
+- `font` — The font name (see remarks).
+- `size` — The font size in points.
+- `color` — The fill color.
+
+**Returns:** This page builder. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException"> `font` is not available (since 3.30; before, the text was written with a font that has no program and came out blank). The message lists the names that are. </exception>
+
+**Remarks:** `font` is one of the standard 14 font names (`StandardFonts`), a name given to `PdfDocumentBuilder.AddTrueTypeFont(string, byte[])`, or `"Lipi"` (exactly, case-sensitive) after `PdfDocumentBuilder.UseLipiFonts`, which picks the LiPi Sans face for each script in the text. The per-script face names (`LiPi-Sans-Latin` and so on) are internal; use `"Lipi"`.
+
 ### `DrawShapedRun`
 
 ```csharp
@@ -105,6 +118,21 @@ TextBlockResult DrawTextBlock(string text, double x, double y, double width, dou
 ```
 
 Draws word-wrapped text inside a rectangle. Returns a result indicating whether all text fit and what (if any) remains.
+
+**Parameters**
+
+- `text` — The text to draw.
+- `x` — The left edge of the rectangle, in points.
+- `y` — The top of the rectangle, in points from the top of the page.
+- `width` — The rectangle's width in points.
+- `height` — The rectangle's height in points.
+- `font` — A standard 14 font name (`StandardFonts`) or a registered font name.
+- `size` — The font size in points.
+- `color` — The fill color.
+- `align` — The horizontal alignment.
+- `lineHeight` — The line height as a multiple of the font size.
+
+**Returns:** Whether all text fit, and the text that did not. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException">`font` is not available (since 3.30); the message lists the names that are.</exception>
 
 ### `DrawHyperlink`
 

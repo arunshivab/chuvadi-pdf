@@ -70,6 +70,24 @@ Builds a `RenderableFont` from a font dictionary.
 - `fontDict` — The font dictionary from the page Resources.
 - `resolver` — Used to resolve indirect object references. <exception cref="ArgumentNullException"> Thrown when `fontDict` or `resolver` is null. </exception>
 
+### `AsSubstitute`
+
+__static__
+
+```csharp
+static RenderableFont AsSubstitute(PdfDictionary fontDict, IPdfObjectResolver resolver, string standard14Name)
+```
+
+Builds a `RenderableFont` that draws a font the PDF does not embed with a standard 14 font's outlines (since 3.30): characters are decoded through the font's own encoding and ToUnicode map, and glyph shapes come from `standard14Name` (see `Standard14Substitute`).
+
+**Parameters**
+
+- `fontDict` — The font dictionary from the page Resources.
+- `resolver` — Used to resolve indirect object references.
+- `standard14Name` — The standard 14 font whose outlines to use.
+
+**Returns:** A font that reports `IsStandard14` as true. <exception cref="ArgumentNullException">An argument is null.</exception> <exception cref="ArgumentException">`standard14Name` is not a standard 14 font name.</exception>
+
 ### `Default`
 
 __static__

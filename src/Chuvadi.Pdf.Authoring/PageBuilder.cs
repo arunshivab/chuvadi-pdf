@@ -25,6 +25,17 @@ public sealed class PageBuilder
     internal List<ImageRef> Images { get; } = new();
     internal HashSet<string> Fonts { get; } = new();
 
+    // The standard 14 font names, in the order the exception message lists them.
+    private static readonly string[] StandardFontNames =
+    {
+        StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique, StandardFonts.HelveticaBoldOblique,
+        StandardFonts.TimesRoman, StandardFonts.TimesBold, StandardFonts.TimesItalic, StandardFonts.TimesBoldItalic,
+        StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique, StandardFonts.CourierBoldOblique,
+        StandardFonts.Symbol, StandardFonts.ZapfDingbats,
+    };
+
+    private readonly Dictionary<string, string> _fontKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+
     // gsKey -> constant alpha (0..1) for fill (/ca) and stroke (/CA); assembled
     // into the page's /ExtGState resource by PdfDocumentBuilder.
     internal Dictionary<string, (double Fill, double Stroke)> ExtGStateAlphas { get; } = new();
@@ -71,6 +82,28 @@ public sealed class PageBuilder
     /// <summary>
     /// Draws a single line of text. The top of the text aligns to <paramref name="y"/>.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="font"/> is one of the standard 14 font names
+    /// (<see cref="StandardFonts"/>), a name given to
+    /// <see cref="PdfDocumentBuilder.AddTrueTypeFont(string, byte[])"/>, or
+    /// <c>"Lipi"</c> (exactly, case-sensitive) after
+    /// <see cref="PdfDocumentBuilder.UseLipiFonts"/>, which picks the LiPi Sans
+    /// face for each script in the text. The per-script face names
+    /// (<c>LiPi-Sans-Latin</c> and so on) are internal; use <c>"Lipi"</c>.
+    /// </remarks>
+    /// <param name="text">The text to draw.</param>
+    /// <param name="x">The left edge of the text, in points from the left of the page.</param>
+    /// <param name="y">The top of the text, in points from the top of the page.</param>
+    /// <param name="font">The font name (see remarks).</param>
+    /// <param name="size">The font size in points.</param>
+    /// <param name="color">The fill color.</param>
+    /// <returns>This page builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> or <paramref name="font"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="font"/> is not available (since 3.30; before, the text
+    /// was written with a font that has no program and came out blank). The
+    /// message lists the names that are.
+    /// </exception>
     public PageBuilder DrawText(
         string text, double x, double y, string font, double size, Color color)
     {
@@ -84,16 +117,17 @@ public sealed class PageBuilder
             return this;
         }
 
+        RequireKnownFont(font);
         Fonts.Add(font);
         _w.PushState();
         _w.SetFillRgb(color);
         if (_customFonts is not null && _customFonts.TryGet(font, out CustomFont custom))
         {
-            _w.ShowGlyphsAt(FontKey(font), size, x, y, EncodeGlyphs(text, custom));
+            _w.ShowGlyphsAt(KeyFor(font), size, x, y, EncodeGlyphs(text, custom));
         }
         else
         {
-            _w.ShowTextAt(FontKey(font), size, x, y, text);
+            _w.ShowTextAt(KeyFor(font), size, x, y, text);
         }
 
         _w.PopState();
@@ -117,7 +151,7 @@ public sealed class PageBuilder
                 // Latin: logical-order cmap emit — no shaping required.
                 _w.PushState();
                 _w.SetFillRgb(color);
-                _w.ShowGlyphsAt(FontKey(faceName), size, penX, y, EncodeGlyphs(run.Text, face));
+                _w.ShowGlyphsAt(KeyFor(faceName), size, penX, y, EncodeGlyphs(run.Text, face));
                 _w.PopState();
                 penX += MeasureLipiRun(run.Text, face, size);
             }
@@ -135,7 +169,7 @@ public sealed class PageBuilder
                     _w.PushState();
                     _w.SetFillRgb(color);
                     _w.ShowGlyphsAt(
-                        FontKey(faceName),
+                        KeyFor(faceName),
                         size,
                         penX + (glyph.XOffset * scale),
                         y - (glyph.YOffset * scale),
@@ -215,7 +249,7 @@ public sealed class PageBuilder
             custom.UsedGlyphs.Add(glyph.GlyphId);
             _w.PushState();
             _w.SetFillRgb(color);
-            _w.ShowGlyphsAt(FontKey(font), size, penX + (glyph.XOffset * scale), y - (glyph.YOffset * scale), GlyphHex(glyph.GlyphId));
+            _w.ShowGlyphsAt(KeyFor(font), size, penX + (glyph.XOffset * scale), y - (glyph.YOffset * scale), GlyphHex(glyph.GlyphId));
             _w.PopState();
             penX += glyph.XAdvance * scale;
         }
@@ -346,7 +380,7 @@ public sealed class PageBuilder
                 }
 
                 _w.ShowGlyphsStyled(
-                    FontKey(font), size, penX + (glyph.XOffset * scale * scaleX), y - (glyph.YOffset * scale),
+                    KeyFor(font), size, penX + (glyph.XOffset * scale * scaleX), y - (glyph.YOffset * scale),
                     GlyphHex(glyph.GlyphId), scaleX, style.Skew, style.StrokeWidth);
                 _w.PopState();
                 penX += glyph.XAdvance * scale * scaleX;
@@ -427,6 +461,19 @@ public sealed class PageBuilder
     /// Draws word-wrapped text inside a rectangle. Returns a result indicating
     /// whether all text fit and what (if any) remains.
     /// </summary>
+    /// <param name="text">The text to draw.</param>
+    /// <param name="x">The left edge of the rectangle, in points.</param>
+    /// <param name="y">The top of the rectangle, in points from the top of the page.</param>
+    /// <param name="width">The rectangle's width in points.</param>
+    /// <param name="height">The rectangle's height in points.</param>
+    /// <param name="font">A standard 14 font name (<see cref="StandardFonts"/>) or a registered font name.</param>
+    /// <param name="size">The font size in points.</param>
+    /// <param name="color">The fill color.</param>
+    /// <param name="align">The horizontal alignment.</param>
+    /// <param name="lineHeight">The line height as a multiple of the font size.</param>
+    /// <returns>Whether all text fit, and the text that did not.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> or <paramref name="font"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="font"/> is not available (since 3.30); the message lists the names that are.</exception>
     public TextBlockResult DrawTextBlock(
         string text,
         double x, double y, double width, double height,
@@ -436,6 +483,7 @@ public sealed class PageBuilder
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(font);
+        RequireKnownFont(font);
         Fonts.Add(font);
 
         List<string> lines = WordWrap(text, font, size, width);
@@ -460,7 +508,7 @@ public sealed class PageBuilder
 
             _w.PushState();
             _w.SetFillRgb(color);
-            _w.ShowTextAt(FontKey(font), size, drawX, yCursor, line);
+            _w.ShowTextAt(KeyFor(font), size, drawX, yCursor, line);
             _w.PopState();
 
             yCursor += lineGap;
@@ -1129,7 +1177,90 @@ public sealed class PageBuilder
 
     internal ContentStreamWriter Writer => _w;
 
-    internal static string FontKey(string fontName) => fontName.Replace("-", string.Empty);
+    // The resource name each font has on this page (3.30, D-105). A name is
+    // the font name without hyphens (as before 3.30) when that is a plain
+    // PDF name; otherwise its letters, digits, '.' and '_' only. A key
+    // already taken by another font gets a number, so two fonts never share
+    // one ("Foo-Bar" and "FooBar" become FooBar and FooBar2).
+    internal string KeyFor(string fontName)
+    {
+        if (_fontKeys.TryGetValue(fontName, out string? key))
+        {
+            return key;
+        }
+
+        string stem = fontName.Replace("-", string.Empty, StringComparison.Ordinal);
+        if (!IsPlainName(stem))
+        {
+            StringBuilder sb = new StringBuilder(stem.Length);
+            foreach (char c in stem)
+            {
+                if (char.IsAsciiLetterOrDigit(c) || c == '.' || c == '_')
+                {
+                    sb.Append(c);
+                }
+            }
+
+            stem = sb.Length > 0 ? sb.ToString() : "F";
+        }
+
+        key = stem;
+        for (int n = 2; _fontKeys.ContainsValue(key); n++)
+        {
+            key = stem + n.ToString(CultureInfo.InvariantCulture);
+        }
+
+        _fontKeys[fontName] = key;
+        return key;
+    }
+
+    // Printable ASCII other than white space, the PDF delimiters and '#':
+    // a name that can be written as it is (§7.3.5).
+    private static bool IsPlainName(string name)
+    {
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (char c in name)
+        {
+            if (c < '!' || c > '~' || "()<>[]{}/%#".Contains(c, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Text needs a font a PDF reader can draw: one of the standard 14, or a
+    // font registered with the document (3.30, D-105). Any other name used to
+    // be written as a font with no program and no widths, so its text came
+    // out blank.
+    private void RequireKnownFont(string font)
+    {
+        if (StandardFontNames.Contains(font) || (_customFonts is not null && _customFonts.TryGet(font, out _)))
+        {
+            return;
+        }
+
+        StringBuilder message = new StringBuilder();
+        message.Append(CultureInfo.InvariantCulture, $"The font '{font}' is not available. Use one of the standard 14 fonts (");
+        message.Append(string.Join(", ", StandardFontNames));
+        message.Append("), a font added with PdfDocumentBuilder.AddTrueTypeFont");
+        if (_customFonts is not null && _customFonts.Fonts.Count > 0)
+        {
+            List<string> registered = new List<string>(_customFonts.Fonts.Keys);
+            registered.Sort(StringComparer.Ordinal);
+            message.Append(" (registered: ").Append(string.Join(", ", registered)).Append(')');
+        }
+
+        message.Append(_lipi is not null
+            ? ", or \"Lipi\" (UseLipiFonts is on)."
+            : ", or \"Lipi\" after PdfDocumentBuilder.UseLipiFonts().");
+        throw new ArgumentException(message.ToString(), nameof(font));
+    }
 
     private static void ValidateOpacity(double opacity)
     {

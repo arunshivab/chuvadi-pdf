@@ -189,6 +189,27 @@ internal static class FontEmbedder
             }
         }
 
+        // 3.30 (D-105): a simple TrueType font whose cmap has only Macintosh
+        // subtables is rejected by browsers ("no supported subtables"). It
+        // gets a Unicode cmap mapping each character the SVG text uses to the
+        // glyph the raster renderer draws for that code.
+        if (pdfFont is not null && format == "truetype" && descendant is null && !HasWindowsOrUnicodeCmap(fontBytes))
+        {
+            Dictionary<int, int> byCode = new Dictionary<int, int>();
+            AddCodeMappings(byCode, fontBytes, pdfFont, IsSymbolic(descriptor));
+            if (byCode.Count > 0)
+            {
+                try
+                {
+                    fontBytes = TrueTypeFontPatch.WithAugmentedCmap(fontBytes, byCode);
+                }
+                catch (FontRenderingException)
+                {
+                    // Corrupt font program: embed it as it is.
+                }
+            }
+        }
+
         // v2.1.6 — wrap CFF font programs in an OpenType (OTTO) envelope.
         //
         // /FontFile3 with subtype /Type1C (simple CFF) or /CIDFontType0C
@@ -202,10 +223,32 @@ internal static class FontEmbedder
         if (fontFile3Subtype is "Type1C" or "CIDFontType0C")
         {
             byte[]? wrapped = TryWrapCff(
+                fontDict,
                 fontBytes, fontFile3Subtype, descriptor, descendant, pdfFont, resolver);
-            if (wrapped is not null)
+            if (wrapped is null)
             {
-                fontBytes = wrapped;
+                // A bare CFF program is not a font a browser can load (3.30):
+                // leave the text to the fallback font instead of embedding
+                // data that fails to decode.
+                return null;
+            }
+
+            fontBytes = wrapped;
+        }
+
+        // 3.30 (D-105): browsers reject a font without OS/2, name and post
+        // tables ("OTS parsing error") and draw the text in a fallback font.
+        // PDF subsets often omit them, so the missing ones are added.
+        if (IsSfnt(fontBytes))
+        {
+            try
+            {
+                (bool isBold, bool isItalic) = DetectStyle(descriptor);
+                fontBytes = TrueTypeFontPatch.WithRequiredTables(fontBytes, ResolveFontName(descriptor), isBold, isItalic);
+            }
+            catch (FontRenderingException)
+            {
+                // A damaged table directory: embed the bytes as they are.
             }
         }
 
@@ -222,6 +265,18 @@ internal static class FontEmbedder
             writer.AddFontFace(family, dataUrl, format);
         }
         return family;
+    }
+
+    // TrueType (0x00010000, 'true') or OpenType ('OTTO') font data.
+    private static bool IsSfnt(byte[] data)
+    {
+        if (data.Length < 12)
+        {
+            return false;
+        }
+
+        uint v = ((uint)data[0] << 24) | ((uint)data[1] << 16) | ((uint)data[2] << 8) | data[3];
+        return v is 0x00010000u or 0x4F54544Fu or 0x74727565u;
     }
 
     // ── Resolution helpers ───────────────────────────────────────────────
@@ -415,6 +470,7 @@ internal static class FontEmbedder
     /// (in which case the caller emits the original bytes, matching
     /// pre-v2.1.6 behaviour).
     /// </summary>
+    /// <param name="fontDict">The font dictionary (for a simple font's /Encoding /Differences).</param>
     /// <param name="cffBytes">The decoded CFF program.</param>
     /// <param name="subtype">The /FontFile3 subtype (Type1C or CIDFontType0C).</param>
     /// <param name="descriptor">The resolved FontDescriptor (for style flags).</param>
@@ -422,6 +478,7 @@ internal static class FontEmbedder
     /// <param name="pdfFont">The PdfFont, used for the CID font's ToUnicode map.</param>
     /// <param name="resolver">Resolver for indirect object references.</param>
     private static byte[]? TryWrapCff(
+        PdfDictionary? fontDict,
         byte[] cffBytes,
         string subtype,
         PdfDictionary descriptor,
@@ -475,6 +532,14 @@ internal static class FontEmbedder
             // Simple CFF (Type1C): the charset maps glyph name → GID, and the
             // Adobe Glyph List resolves glyph name → Unicode. Compose them.
             unicodeToGid = BuildUnicodeToGidFromNames(loader.GlyphNameToGid);
+
+            // Glyph names outside the Adobe Glyph List (TeX math fonts, for
+            // example) give no Unicode; the characters the text actually
+            // uses are added from the font's codes (3.30).
+            if (pdfFont is not null && fontDict is not null)
+            {
+                AddDifferencesMappings(unicodeToGid, fontDict, resolver, loader, pdfFont);
+            }
         }
 
         if (unicodeToGid.Count == 0)
@@ -526,6 +591,152 @@ internal static class FontEmbedder
         }
 
         return result;
+    }
+
+    // For each single-byte code of a simple font: the character the text
+    // shows for it (the PDF's encoding or ToUnicode) mapped to the glyph the
+    // raster renderer draws for that code. Characters already mapped are kept.
+    private static void AddCodeMappings(Dictionary<int, int> unicodeToGid, byte[] program, PdfFont pdfFont, bool symbolic)
+    {
+        FontRenderer renderer;
+        try
+        {
+            renderer = new FontRenderer(program);
+        }
+        catch (Exception ex) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(ex))
+        {
+            return;
+        }
+
+        for (int code = 0; code < 256; code++)
+        {
+            string text = pdfFont.DecodeCode(code);
+            if (text.Length != 1 || text[0] < 0x20 || char.IsSurrogate(text[0]) || unicodeToGid.ContainsKey(text[0]))
+            {
+                continue;
+            }
+
+            int gid = 0;
+            if (!symbolic)
+            {
+                gid = renderer.GetGlyphIndexUnicode(text[0]);
+            }
+
+            if (gid == 0)
+            {
+                gid = renderer.GetGlyphIndexForCode(code, symbolic);
+            }
+
+            if (gid == 0 && symbolic)
+            {
+                gid = renderer.GetGlyphIndexUnicode(text[0]);
+            }
+
+            if (gid > 0 && gid <= 0xFFFF)
+            {
+                unicodeToGid[text[0]] = gid;
+            }
+        }
+    }
+
+    // For a simple CFF font: each code the /Encoding /Differences array
+    // names, mapped from the character the text shows for that code to the
+    // glyph of that name.
+    private static void AddDifferencesMappings(
+        Dictionary<int, int> unicodeToGid, PdfDictionary fontDict, IPdfObjectResolver resolver, CffLoader loader, PdfFont pdfFont)
+    {
+        if (!fontDict.TryGetValue(PdfName.Intern("Encoding"), out PdfPrimitive? encoding)
+            || resolver.Resolve(encoding) is not PdfDictionary encodingDict
+            || !encodingDict.TryGetValue(PdfName.Intern("Differences"), out PdfPrimitive? differences)
+            || resolver.Resolve(differences) is not PdfArray array)
+        {
+            return;
+        }
+
+        int code = 0;
+        for (int i = 0; i < array.Count; i++)
+        {
+            PdfPrimitive item = resolver.Resolve(array[i]);
+            if (item is PdfInteger start)
+            {
+                code = start.Value;
+                continue;
+            }
+
+            if (item is not PdfName name)
+            {
+                continue;
+            }
+
+            if (code >= 0 && code < 256
+                && loader.GlyphNameToGid.TryGetValue(name.Value, out int gid) && gid > 0 && gid <= 0xFFFF)
+            {
+                string text = pdfFont.DecodeCode(code);
+                if (text.Length == 1 && text[0] >= 0x20 && !char.IsSurrogate(text[0]))
+                {
+                    unicodeToGid.TryAdd(text[0], gid);
+                }
+            }
+
+            code++;
+        }
+    }
+
+    // The descriptor's /Flags symbolic bit (bit 3).
+    private static bool IsSymbolic(PdfDictionary descriptor) =>
+        descriptor.TryGetValue(PdfName.Intern("Flags"), out PdfPrimitive? flags)
+        && flags is PdfInteger value
+        && (value.Value & 4) != 0;
+
+    // True when the font's cmap has a Windows (platform 3) or Unicode
+    // (platform 0) subtable, which browsers use; false when it has only
+    // Macintosh subtables or no cmap.
+    private static bool HasWindowsOrUnicodeCmap(byte[] data)
+    {
+        if (!IsSfnt(data))
+        {
+            return true;
+        }
+
+        int numTables = (data[4] << 8) | data[5];
+        for (int i = 0; i < numTables; i++)
+        {
+            int entry = 12 + (i * 16);
+            if (entry + 16 > data.Length)
+            {
+                return true;
+            }
+
+            if (data[entry] == 'c' && data[entry + 1] == 'm' && data[entry + 2] == 'a' && data[entry + 3] == 'p')
+            {
+                long offset = ((long)data[entry + 8] << 24) | ((long)data[entry + 9] << 16) | ((long)data[entry + 10] << 8) | data[entry + 11];
+                if (offset + 4 > data.Length)
+                {
+                    return true;
+                }
+
+                int count = (data[offset + 2] << 8) | data[offset + 3];
+                for (int k = 0; k < count; k++)
+                {
+                    long record = offset + 4 + (k * 8);
+                    if (record + 2 > data.Length)
+                    {
+                        return true;
+                    }
+
+                    int platform = (data[record] << 8) | data[record + 1];
+                    if (platform == 0 || platform == 3)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        // No cmap at all: browsers need one.
+        return false;
     }
 
     /// <summary>

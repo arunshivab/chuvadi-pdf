@@ -233,7 +233,7 @@ public static class OpenTypeFontBuilder
         return ms.ToArray();
     }
 
-    private static byte[] BuildName(string postScriptName, bool isBold, bool isItalic)
+    internal static byte[] BuildName(string postScriptName, bool isBold, bool isItalic)
     {
         string psName = SanitizePostScriptName(postScriptName);
         string subfamily = (isBold && isItalic) ? "Bold Italic" : isBold ? "Bold" : isItalic ? "Italic" : "Regular";
@@ -278,7 +278,7 @@ public static class OpenTypeFontBuilder
         return ms.ToArray();
     }
 
-    private static byte[] BuildOs2(int unitsPerEm, int yMin, int yMax, int firstChar, int lastChar, bool isBold, bool isItalic, int avgAdvance)
+    internal static byte[] BuildOs2(int unitsPerEm, int yMin, int yMax, int firstChar, int lastChar, bool isBold, bool isItalic, int avgAdvance)
     {
         using MemoryStream ms = new();
         WriteU16(ms, 4);                                 // version
@@ -328,7 +328,7 @@ public static class OpenTypeFontBuilder
         return ms.ToArray();
     }
 
-    private static byte[] BuildPost()
+    internal static byte[] BuildPost()
     {
         using MemoryStream ms = new();
         WriteU32(ms, 0x00030000u);       // version 3.0 (no glyph names)

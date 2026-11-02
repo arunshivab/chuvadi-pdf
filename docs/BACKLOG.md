@@ -153,6 +153,15 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.30.0:
+- **Fonts that went missing** (D-105): unknown font names are refused by
+  Authoring, font resource names are written validly, the raster renderer
+  substitutes fonts a PDF does not embed (Liberation outlines, `/Widths`
+  positions, `FontSubstituted` warning; Indic text with the bundled LiPi Sans
+  faces, which now live in the shared Chuvadi.Pdf.Fonts.Bundled package,
+  D-87, D-100), escaped resource names resolve, and SVG fonts carry the tables
+  browsers require.
+
 Shipped in v3.29.0:
 - **Reading order and raised text** (were open items 28 and 29, D-104):
   Layout mode follows a Tagged PDF's structure tree, otherwise reads columns
@@ -260,6 +269,11 @@ map is missing or wrong (the Word-made maths test sheet in the 3.29
 reference pack), WPS reads the real characters from the embedded font's own
 cmap; Acrobat and Chuvadi give the wrong letters. Take up when a consumer
 needs maths or symbol text from such files.
+
+### Rendering (3.30 findings)
+**32. Deterministic SVG ids.** `SvgRenderer` gives clip paths and masks a
+random suffix, so the same page renders to different SVG text each time.
+Harmless to viewers, but it makes output comparison and caching harder.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round
