@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// Derived in part from FreeType (the FreeType License, FTL); see THIRD-PARTY-NOTICES.md.
 // SPEC:  FreeType autohinter — latin blue zones (alignment zones)
 // PHASE: Phase 2 — Autohinting (Component 2: alignment zones)
 // The set of alignment zones built once per font from reference glyphs.

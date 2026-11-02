@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// Derived in part from FreeType (the FreeType License, FTL); see THIRD-PARTY-NOTICES.md.
 // SPEC:  FreeType autohinter — latin segment and edge detection (Y direction)
 // PHASE: Phase 2.7 — Autohinting (Component 3: horizontal edge detection)
 // Finds horizontal edges (flat runs of outline points) in a raw glyph outline.

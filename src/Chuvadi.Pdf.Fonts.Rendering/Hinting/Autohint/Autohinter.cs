@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// Derived in part from FreeType (the FreeType License, FTL); see THIRD-PARTY-NOTICES.md.
 // SPEC:  FreeType autohinter — latin Y-direction grid fitting (blue zone
 //        anchoring, stem fitting, untouched-point interpolation) and, for
 //        full hinting, X-direction vertical-stem fitting

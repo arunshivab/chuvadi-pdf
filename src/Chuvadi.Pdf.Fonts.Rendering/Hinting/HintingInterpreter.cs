@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// Derived in part from FreeType (the FreeType License, FTL); see THIRD-PARTY-NOTICES.md.
 // SPEC:  Apple TrueType Reference Manual — the instruction set
 //        https://learn.microsoft.com/typography/opentype/spec/tt_instructions
 // PHASE: Phase 2 — TrueType bytecode hinting (Stage 2: VM skeleton)

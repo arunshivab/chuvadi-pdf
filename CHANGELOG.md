@@ -10,6 +10,21 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.30.1] - 2026-11-02
+
+FreeType credit (D-106, part 1). No code or output change.
+
+### Changed
+- **The FreeType credit ships with the hinting code.** The TrueType
+  instruction interpreter and the autohinter in
+  `Chuvadi.Pdf.Fonts.Rendering` are derived in part from FreeType, which
+  Chuvadi uses under the FreeType License (FTL). `THIRD-PARTY-NOTICES.md`
+  now credits FreeType, the `Chuvadi.Pdf.Fonts.Rendering` package carries
+  that file and the unaltered licence (`licenses/FreeType/FTL.TXT`), the
+  README credits it, and the derived source files say so in their headers.
+  The licence is also in the repository as `third-party/freetype/FTL.TXT`.
+
+---
 ## [3.30.0] - 2026-11-02
 
 Fonts that went missing (D-105). Text drawn with a font Authoring cannot
