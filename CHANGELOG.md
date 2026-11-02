@@ -10,6 +10,37 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.30.2] - 2026-11-03
+
+SVG text in embedded fonts sits where the PDF puts it.
+
+### Fixed
+- **SVG: text in embedded fonts is placed at the PDF's glyph positions.**
+  Every character of a `<text>` element now gets its own `x` position from
+  the PDF (its `/Widths`, character and word spacing and `TJ` adjustments),
+  as text in fonts that are not embedded already did. Before, a run in an
+  embedded font was anchored once and the browser advanced each glyph by
+  the font's own widths. Where those differ from the PDF, text drifted: a
+  space the PDF gives no width but the font draws 500 units wide pushed the
+  run one space to the right (an Elsevier paper shows " patients" a space
+  past its search highlight), and letters overlapped or spread unevenly.
+  Search highlights and selection now line up with the drawn text.
+- **CFF advance widths after `hmoveto`, `vmoveto` and an opening
+  `hintmask`.** A Type 2 charstring may start with the glyph's width as an
+  extra operand. It was found only when the operand count was odd, which is
+  right for stem hints, `rmoveto` and `endchar` but not for `hmoveto` and
+  `vmoveto` (one operand, so a width makes two), and it was not looked for
+  before an opening `hintmask`. Those glyphs got `defaultWidthX` instead.
+  This corrects the advance widths of embedded CFF fonts in SVG output
+  (the cause of overlapping letters such as "Recomended" and
+  "indcators") and in raster output where a font has no `/Widths`.
+- **Output changes** on 417 PDFs (up to 5 pages each): SVG output changes on
+  118 pages, only in the `x` positions of `<text>` elements and in the
+  advance widths inside embedded CFF fonts; raster output changes on 2
+  pages (TeX Gyre font tables whose CFF fonts lack some widths, now spaced
+  evenly); extracted text and warnings are unchanged.
+
+---
 ## [3.30.1] - 2026-11-02
 
 FreeType credit (D-106, part 1). No code or output change.
