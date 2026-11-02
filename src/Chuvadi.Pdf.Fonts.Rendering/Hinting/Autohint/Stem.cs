@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// Derived in part from FreeType (the FreeType License, FTL); see THIRD-PARTY-NOTICES.md.
 // SPEC:  FreeType autohinter — segment/stem model (latin hinting)
 // PHASE: Phase 2 — Autohinting (Component 1: stem detection)
 // A detected vertical stem: the two opposing near-vertical edges of a stroke.

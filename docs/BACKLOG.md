@@ -153,6 +153,11 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.30.1:
+- **FreeType credit** (D-106, part 1): the FTL credit and licence ship with
+  `Chuvadi.Pdf.Fonts.Rendering`, the package that holds the FreeType-derived
+  hinting code.
+
 Shipped in v3.30.0:
 - **Fonts that went missing** (D-105): unknown font names are refused by
   Authoring, font resource names are written validly, the raster renderer
@@ -274,6 +279,18 @@ needs maths or symbol text from such files.
 **32. Deterministic SVG ids.** `SvgRenderer` gives clip paths and masks a
 random suffix, so the same page renders to different SVG text each time.
 Harmless to viewers, but it makes output comparison and caching harder.
+
+### Hinting provenance (D-106)
+**33. Clean-room TrueType interpreter.** Rewrite `HintingInterpreter` from
+the Apple and Microsoft TrueType instruction-set specifications only, with a
+trace log, and delete the FreeType-derived interpreter once the new one
+matches today's output on a hinting test set. Plan and estimate first; no
+rewrite code until Arun approves.
+
+**34. Autohinter: rewrite or drop.** Measure what the autohinter changes on
+real documents, then report to Arun the pros and cons of rewriting it from a
+published design description against dropping it. No rewrite before Arun
+decides.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round

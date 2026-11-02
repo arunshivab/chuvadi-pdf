@@ -304,5 +304,10 @@ the changelog records the release-by-release detail.
 
 Apache-2.0. See `LICENSE`.
 
+Parts of Chuvadi are derived from HarfBuzz (text shaping) and FreeType
+(TrueType hinting). Portions of this software are copyright © 1996-2025 The
+FreeType Project (https://freetype.org). All rights reserved. See
+`THIRD-PARTY-NOTICES.md` for the notices and licences.
+
 Chuvadi is and will remain free for all use including commercial.
 There is no dual-licensing tier and no premium edition.

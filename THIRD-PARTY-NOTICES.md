@@ -54,3 +54,22 @@ property tables are generated from HarfBuzz's own data
     FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
     ON AN "AS IS" BASIS, AND THE COPYRIGHT HOLDER HAS NO OBLIGATION TO
     PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+## FreeType
+
+`Chuvadi.Pdf.Fonts.Rendering` contains C# code derived in part from FreeType
+(https://freetype.org): the TrueType instruction interpreter
+(`Hinting/HintingInterpreter.cs`) follows FreeType's interpreter where the
+TrueType specifications leave behaviour open, and the autohinter
+(`Hinting/Autohint/`) follows the design of FreeType's latin autohinter. The
+derived files say so in their headers. They are not copies of FreeType source
+files: they are Chuvadi's own C# written against FreeType's behaviour and
+design. Chuvadi uses FreeType under the FreeType License (FTL), not the GPL.
+
+    Portions of this software are copyright © 1996-2025 The FreeType
+    Project (https://freetype.org).  All rights reserved.
+
+This software is based in part on the work of the FreeType Team. The full,
+unaltered FreeType License is in `third-party/freetype/FTL.TXT` in the source
+repository and in `licenses/FreeType/FTL.TXT` in the
+`Chuvadi.Pdf.Fonts.Rendering` package.

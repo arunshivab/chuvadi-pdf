@@ -13,6 +13,12 @@
     <EmbeddedResource Include="Resources\Standard14.bin" />
   </ItemGroup>
   <ItemGroup>
+    <!-- D-106: the FreeType credit and its licence travel with the package
+         that contains the FreeType-derived hinting code. -->
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="..\..\third-party\freetype\FTL.TXT" Pack="true" PackagePath="licenses\FreeType\FTL.TXT" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
