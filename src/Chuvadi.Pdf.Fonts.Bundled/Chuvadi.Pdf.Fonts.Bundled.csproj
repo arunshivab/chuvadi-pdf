@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Chuvadi.Pdf.Fonts.Bundled</AssemblyName>
+    <RootNamespace>Chuvadi.Pdf.Fonts.Bundled</RootNamespace>
+    <Description>
+      The fonts bundled with Chuvadi (LiPi Sans: Latin and nine Indic scripts,
+      SIL Open Font License 1.1), shared by authoring, which embeds them, and
+      the raster renderer, which draws text in fonts a PDF does not embed with
+      them (3.30, D-87, D-100).
+    </Description>
+    <PackageId>Chuvadi.Pdf.Fonts.Bundled</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- D-61: the LiPi Sans fonts are embedded in this assembly, so their SIL
+         Open Font License text ships in this package. -->
+    <None Include="..\..\assets\fonts\lipi-sans\LICENSE.txt" Pack="true" PackagePath="licenses\LiPi-Sans-OFL-1.1.txt" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Latin.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Latin.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Tamil.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Tamil.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Devanagari.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Devanagari.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Bengali.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Bengali.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Gurmukhi.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Gurmukhi.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Gujarati.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Gujarati.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Odia.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Odia.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Telugu.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Telugu.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Kannada.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Kannada.woff2</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\fonts\lipi-sans\fonts\LiPi-Sans-Malayalam.woff2">
+      <LogicalName>Chuvadi.Pdf.Fonts.Bundled.LiPi-Sans-Malayalam.woff2</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

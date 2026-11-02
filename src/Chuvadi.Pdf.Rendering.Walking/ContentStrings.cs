@@ -4,6 +4,8 @@
 // PHASE: Phase 2.8 — DisplayList consolidation (one walker, two sinks)
 // Token-to-value decoding shared by the content-stream walker.
 
+using System;
+using System.Text;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Rendering.Walking;
@@ -46,13 +48,21 @@ internal static class ContentStrings
             return string.Empty;
         }
 
-        byte[] bytes = token.RawBytes;
-        char[] chars = new char[bytes.Length];
-        for (int i = 0; i < bytes.Length; i++)
+        // "#xx" escapes are decoded (§7.3.5), as the object parser does for
+        // resource dictionary keys, so /F#20A finds the key "F A" (3.30).
+        if (token.RawBytes.Length == 0 || Array.IndexOf(token.RawBytes, (byte)'#') < 0)
         {
-            chars[i] = (char)bytes[i];
+            return Encoding.Latin1.GetString(token.RawBytes);
         }
-        return new string(chars);
+
+        try
+        {
+            return PdfName.FromRawBytes(token.RawBytes).Value;
+        }
+        catch (PdfParseException)
+        {
+            return Encoding.Latin1.GetString(token.RawBytes);
+        }
     }
 
 }

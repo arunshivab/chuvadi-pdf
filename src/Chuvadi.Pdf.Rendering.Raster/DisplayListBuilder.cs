@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
@@ -18,6 +19,7 @@ using PdfBlendMode = Chuvadi.Pdf.Rendering.DisplayList.PdfBlendMode;
 using Type3Font = Chuvadi.Pdf.Rendering.DisplayList.Type3Font;
 using Type3Glyph = Chuvadi.Pdf.Rendering.DisplayList.Type3Glyph;
 using Chuvadi.Pdf.Rendering.Walking;
+using Chuvadi.Pdf.Text.Shaping;
 using Path = Chuvadi.Pdf.Graphics.Path;
 
 namespace Chuvadi.Pdf.Rendering.Raster;
@@ -170,6 +172,8 @@ public static class DisplayListBuilder
         private readonly Dictionary<string, bool> _symbolicCache;
         private readonly Dictionary<string, Type1FontRenderer?> _type1Cache;
         private readonly Dictionary<string, (int First, double[] Widths)?> _widthsCache;
+        private readonly Dictionary<string, (Dictionary<int, double> Widths, double Default)> _compositeWidthsCache =
+            new Dictionary<string, (Dictionary<int, double>, double)>();
         private readonly Dictionary<string, Type3Font?> _type3FontCache;
         private readonly Dictionary<(string Font, int Code, uint Fill), PageDisplayList> _type3GlyphCache;
 
@@ -2185,6 +2189,15 @@ public static class DisplayListBuilder
             FontRenderer? renderer = GetFontRenderer();
             int[]? cidToGid = renderer is null ? null : GetCidToGidMap();
 
+            // 3.30 (D-105): a Type 0 font with no font program is drawn with a
+            // standard 14 substitute, each code decoded through ToUnicode and
+            // placed by the descendant's /W widths. Before, it drew nothing.
+            if (renderer is null && GetStd14Font() is RenderableFont substitute)
+            {
+                ShowTextCompositeSubstitute(raw, substitute, emit);
+                return;
+            }
+
             for (int i = 0; i + 1 < raw.Length; i += 2)
             {
                 PdfWorkScope.CountOperators();
@@ -2227,6 +2240,252 @@ public static class DisplayListBuilder
                 Transform advanceMatrix = new Transform(1, 0, 0, 1, tx, 0);
                 _textMatrix = advanceMatrix.Multiply(_textMatrix);
             }
+        }
+
+        private void ShowTextCompositeSubstitute(byte[] raw, RenderableFont substitute, bool emit)
+        {
+            Chuvadi.Pdf.Fonts.PdfFont? pdfFont = GetPdfFont();
+            (Dictionary<int, double> Widths, double Default) widths = GetCompositeWidths();
+            int count = raw.Length / 2;
+            int[] cids = new int[count];
+            string[] texts = new string[count];
+            for (int k = 0; k < count; k++)
+            {
+                cids[k] = (raw[2 * k] << 8) | raw[(2 * k) + 1];
+                texts[k] = pdfFont?.DecodeCode(cids[k]) ?? string.Empty;
+            }
+
+            int i = 0;
+            while (i < count)
+            {
+                PdfWorkScope.CountOperators();
+
+                // Indic text (D-100): the run of codes in one script is shaped
+                // with the bundled LiPi Sans face for it and drawn from the
+                // run's start; the codes still advance by their /W widths.
+                LipiScript script = ScriptOf(texts[i]);
+                if (script != LipiScript.Latin)
+                {
+                    int end = i + 1;
+                    while (end < count && (ScriptOf(texts[end]) == script || IsJoiner(texts[end])))
+                    {
+                        end++;
+                    }
+
+                    StringBuilder run = new StringBuilder();
+                    for (int k = i; k < end; k++)
+                    {
+                        run.Append(texts[k]);
+                    }
+
+                    if (emit && _state.FillValid)
+                    {
+                        DrawBundledRun(run.ToString(), script);
+                    }
+
+                    for (int k = i; k < end; k++)
+                    {
+                        AdvanceByWidth(cids[k], widths);
+                    }
+
+                    i = end;
+                    continue;
+                }
+
+                string text = texts[i];
+                if (text.Length > 0 && emit && _state.FillValid)
+                {
+                    Path glyphPath = substitute.GetGlyphPath(text[0], _state.FontSize);
+                    if (!glyphPath.IsEmpty)
+                    {
+                        EmitGlyphPath(glyphPath);
+                    }
+                    else if (!char.IsWhiteSpace(text[0]))
+                    {
+                        ReportMissingGlyph(text);
+                    }
+                }
+
+                AdvanceByWidth(cids[i], widths);
+                i++;
+            }
+        }
+
+        private void AdvanceByWidth(int cid, (Dictionary<int, double> Widths, double Default) widths)
+        {
+            double advance = (widths.Widths.TryGetValue(cid, out double w) ? w : widths.Default) / 1000.0 * _state.FontSize;
+
+            // Word spacing applies to single-byte code 32 only (§9.3.3).
+            double tx = (advance + _state.CharacterSpacing) * (_state.HorizontalScaling / 100.0);
+            _textMatrix = new Transform(1, 0, 0, 1, tx, 0).Multiply(_textMatrix);
+        }
+
+        private void EmitGlyphPath(Path glyphPath)
+        {
+            Transform glyphPlacement = _textMatrix.Multiply(_state.Ctm);
+            if (_state.TextRise != 0.0)
+            {
+                glyphPlacement = new Transform(1, 0, 0, 1, 0, _state.TextRise).Multiply(glyphPlacement);
+            }
+
+            EmitOp(new DrawGlyphOp(TransformPath(glyphPath, glyphPlacement), EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+        }
+
+        private void ReportMissingGlyph(string text)
+        {
+            _reporter.Report(
+                PdfWarningKind.GlyphSkipped,
+                "font /" + _state.FontName + " characters",
+                "the substitute for this font that is not embedded has no glyph for some of its characters (for example U+"
+                    + char.ConvertToUtf32(text, 0).ToString("X4", System.Globalization.CultureInfo.InvariantCulture) + "); they are not drawn");
+        }
+
+        // Shapes a run of one Indic script with the bundled face for it and
+        // draws the glyphs at their natural advances from the current position.
+        private void DrawBundledRun(string text, LipiScript script)
+        {
+            BundledFace? face = BundledFace.For(script);
+            if (face is null || text.Length == 0)
+            {
+                ReportMissingGlyph(text.Length > 0 ? text : " ");
+                return;
+            }
+
+            IReadOnlyList<ShapedGlyph> glyphs;
+            try
+            {
+                glyphs = TextShaper.Shape(face.Face, text, script);
+            }
+            catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
+            {
+                ReportMissingGlyph(text);
+                return;
+            }
+
+            double scale = _state.FontSize / 1000.0;
+            double th = _state.HorizontalScaling / 100.0;
+            double pen = 0.0;
+            Transform start = _textMatrix;
+            foreach (ShapedGlyph glyph in glyphs)
+            {
+                GlyphOutline outline = SafeOutline(face.Renderer, glyph.GlyphId).Scale(_state.FontSize);
+                if (!outline.IsEmpty)
+                {
+                    Transform at = new Transform(1, 0, 0, 1, (pen + glyph.XOffset) * scale * th, glyph.YOffset * scale).Multiply(start);
+                    Transform glyphPlacement = at.Multiply(_state.Ctm);
+                    if (_state.TextRise != 0.0)
+                    {
+                        glyphPlacement = new Transform(1, 0, 0, 1, 0, _state.TextRise).Multiply(glyphPlacement);
+                    }
+
+                    EmitOp(new DrawGlyphOp(TransformPath(outline.Outline, glyphPlacement), EffectiveFill, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                }
+
+                pen += glyph.XAdvance;
+            }
+        }
+
+        // The bundled script a decoded code's text belongs to: Latin (drawn
+        // with the standard 14 substitute) unless its first character is in
+        // one of the Indic scripts the bundled faces cover.
+        private static LipiScript ScriptOf(string text) =>
+            text.Length == 0 || IsJoiner(text) ? LipiScript.Latin : ScriptClassifier.Classify(char.ConvertToUtf32(text, 0));
+
+        // Zero-width (non-)joiners shape with the run around them.
+        private static bool IsJoiner(string text) => text.Length == 1 && (text[0] == '\u200C' || text[0] == '\u200D');
+
+        // The current Type 0 font's descendant /W widths by CID and its /DW
+        // (1000 when absent), in glyph-space thousandths (§9.7.4.3).
+        private (Dictionary<int, double> Widths, double Default) GetCompositeWidths()
+        {
+            string key = _state.FontName ?? string.Empty;
+            if (_compositeWidthsCache.TryGetValue(key, out (Dictionary<int, double>, double) cached))
+            {
+                return cached;
+            }
+
+            Dictionary<int, double> widths = new Dictionary<int, double>();
+            double fallback = 1000.0;
+            PdfDictionary? descendant = CurrentDescendantFont();
+            if (descendant is not null)
+            {
+                if (descendant.TryGetValue(PdfName.Intern("DW"), out PdfPrimitive? dw) && dw is not null)
+                {
+                    fallback = _objects.Resolve(dw) switch { PdfInteger n => n.Value, PdfReal r => r.Value, _ => fallback };
+                }
+
+                if (descendant.TryGetValue(PdfName.Intern("W"), out PdfPrimitive? wRef) && wRef is not null
+                    && _objects.Resolve(wRef) is PdfArray w)
+                {
+                    ReadCidWidths(w, widths);
+                }
+            }
+
+            (Dictionary<int, double>, double) result = (widths, fallback);
+            _compositeWidthsCache[key] = result;
+            return result;
+        }
+
+        // /W entries: "c [w1 w2 …]" or "cFirst cLast w".
+        private void ReadCidWidths(PdfArray w, Dictionary<int, double> widths)
+        {
+            int i = 0;
+            while (i + 1 < w.Count)
+            {
+                if (_objects.Resolve(w[i]) is not PdfInteger first)
+                {
+                    break;
+                }
+
+                PdfPrimitive next = _objects.Resolve(w[i + 1]);
+                if (next is PdfArray list)
+                {
+                    for (int k = 0; k < list.Count && k < 65536; k++)
+                    {
+                        widths[first.Value + k] = Number(_objects.Resolve(list[k]));
+                    }
+
+                    i += 2;
+                }
+                else if (next is PdfInteger last && i + 2 < w.Count)
+                {
+                    double width = Number(_objects.Resolve(w[i + 2]));
+                    for (int c = first.Value; c <= last.Value && c - first.Value < 65536; c++)
+                    {
+                        widths[c] = width;
+                    }
+
+                    i += 3;
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+
+        private static double Number(PdfPrimitive value) => value switch
+        {
+            PdfInteger n => n.Value,
+            PdfReal r => r.Value,
+            _ => 0.0,
+        };
+
+        private PdfDictionary? CurrentDescendantFont()
+        {
+            PdfDictionary? resources = _state.FontResources;
+            if (resources is null || string.IsNullOrEmpty(_state.FontName)
+                || !resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontsRef) || fontsRef is null
+                || _objects.ResolveAs<PdfDictionary>(fontsRef) is not PdfDictionary fonts
+                || !fonts.TryGetValue(PdfName.Intern(_state.FontName), out PdfPrimitive? fontRef) || fontRef is null
+                || _objects.ResolveAs<PdfDictionary>(fontRef) is not PdfDictionary font
+                || !font.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? dfRef) || dfRef is null
+                || _objects.ResolveAs<PdfArray>(dfRef) is not { Count: > 0 } descendants)
+            {
+                return null;
+            }
+
+            return _objects.ResolveAs<PdfDictionary>(descendants[0]);
         }
 
         // ── Font resolution ───────────────────────────────────────────────
@@ -2399,12 +2658,89 @@ public static class DisplayListBuilder
             try
             {
                 RenderableFont font = RenderableFont.FromDictionary(fd, _objects);
-                return font.IsStandard14 ? font : null;
+                if (font.IsStandard14)
+                {
+                    return font;
+                }
+
+                // 3.30 (D-105): a simple font the PDF names but does not embed
+                // is drawn with a standard 14 substitute (Liberation outlines)
+                // at the PDF's /Widths positions. Before, it drew nothing.
+                string? substitute = SubstituteFor(fd);
+                return substitute is null ? null : RenderableFont.AsSubstitute(fd, _objects, substitute);
             }
             catch (System.Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
                 return null;
             }
+        }
+
+        // The standard 14 font that stands in for a font dictionary with no
+        // font program (a simple font, or a Type 0 font's descendant), or null
+        // when the font is embedded, is a Type 3 font, or has no substitute.
+        // Reports the substitution once per font.
+        private string? SubstituteFor(PdfDictionary fontDict)
+        {
+            string subtype = _objects.ResolveAs<PdfName>(fontDict.TryGetValue(PdfName.Intern("Subtype"), out PdfPrimitive? st) ? st ?? PdfNull.Value : PdfNull.Value)?.Value ?? string.Empty;
+            PdfDictionary target = fontDict;
+            if (subtype == "Type0")
+            {
+                PdfArray? descendants = _objects.ResolveAs<PdfArray>(fontDict.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? df) ? df ?? PdfNull.Value : PdfNull.Value);
+                PdfDictionary? descendant = descendants is { Count: > 0 } ? _objects.ResolveAs<PdfDictionary>(descendants[0]) : null;
+                if (descendant is null)
+                {
+                    return null;
+                }
+
+                target = descendant;
+            }
+            else if (subtype is not ("Type1" or "MMType1" or "TrueType"))
+            {
+                return null;
+            }
+
+            PdfDictionary? descriptor = _objects.ResolveAs<PdfDictionary>(
+                target.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? fdRef) ? fdRef ?? PdfNull.Value : PdfNull.Value);
+            if (descriptor is not null
+                && (descriptor.ContainsKey(PdfName.Intern("FontFile"))
+                    || descriptor.ContainsKey(PdfName.Intern("FontFile2"))
+                    || descriptor.ContainsKey(PdfName.Intern("FontFile3"))))
+            {
+                return null;
+            }
+
+            string baseFont = _objects.ResolveAs<PdfName>(
+                fontDict.TryGetValue(PdfName.Intern("BaseFont"), out PdfPrimitive? bf) ? bf ?? PdfNull.Value : PdfNull.Value)?.Value ?? string.Empty;
+            int flags = descriptor is not null ? (int)NumberIn(descriptor, "Flags") : 0;
+            string? substitute = Standard14Substitute.Choose(
+                baseFont,
+                flags,
+                descriptor is not null ? NumberIn(descriptor, "ItalicAngle") : 0.0,
+                descriptor is not null ? NumberIn(descriptor, "FontWeight") : 0.0);
+
+            _reporter.Report(
+                PdfWarningKind.FontSubstituted,
+                "font /" + _state.FontName,
+                substitute is null
+                    ? "the font '" + baseFont + "' is not embedded and has no substitute; its text is not drawn"
+                    : "the font '" + baseFont + "' is not embedded; its text is drawn with " + Standard14Substitute.OutlineSource(substitute)
+                        + " (" + substitute + ") at the PDF's character positions");
+            return substitute;
+        }
+
+        private double NumberIn(PdfDictionary dict, string key)
+        {
+            if (!dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value) || value is null)
+            {
+                return 0.0;
+            }
+
+            return _objects.Resolve(value) switch
+            {
+                PdfInteger i => i.Value,
+                PdfReal r => r.Value,
+                _ => 0.0,
+            };
         }
 
         private Type1FontRenderer? GetType1Font()

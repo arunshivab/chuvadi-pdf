@@ -10,6 +10,80 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.30.0] - 2026-11-02
+
+Fonts that went missing (D-105). Text drawn with a font Authoring cannot
+write is refused instead of coming out blank; font names are always written
+as valid PDF names; the raster renderer draws fonts a PDF names but does not
+embed; and fonts in SVG output load in browsers (Chromium, WebView2).
+
+### Added
+- **Chuvadi.Pdf.Fonts.Bundled**, a new package (34 packages now) holding the
+  one copy of the bundled LiPi Sans faces (Latin and nine Indic scripts,
+  WOFF2) and their SIL OFL 1.1 licence: `BundledFonts.FaceNames`,
+  `FaceForScript` and `GetFontProgram` (decoded once, shared). Authoring and
+  the raster renderer both use it (D-87).
+- `Standard14Substitute` (Chuvadi.Pdf.Fonts.Rendering): picks the standard
+  14 font (Liberation Sans, Serif or Mono outlines) that stands in for a
+  font a PDF does not embed, from its name, descriptor flags, `/FontWeight`
+  and `/ItalicAngle`; `OutlineSource` names the Liberation face.
+- `RenderableFont.AsSubstitute(fontDict, resolver, standard14Name)`.
+- `TrueTypeFontPatch.WithRequiredTables(fontBytes, postScriptName, isBold,
+  isItalic)`: adds minimal `OS/2`, `name` and `post` tables where missing
+  and re-assembles the font with every table 4-byte aligned.
+
+### Changed
+- **`PageBuilder.DrawText` and `DrawTextBlock` throw `ArgumentException`
+  (parameter `font`) for a font name that is not one of the standard 14, a
+  font added with `AddTrueTypeFont`, or `"Lipi"` after `UseLipiFonts`.** The
+  message lists the names that are available. Before, any other name was
+  written as a Type 1 font with no program and no widths, so its text came
+  out blank in every viewer. `"Lipi"` is the one name `UseLipiFonts`
+  registers (case-sensitive); the per-script face names are internal.
+- **Font resource names are written as valid PDF names.** A name with a
+  space or a delimiter (`AddTrueTypeFont("Body Serif", …)`) is reduced to its
+  letters, digits, `.` and `_` (`BodySerif`); before, the space was written
+  into the content stream and broke the `Tf` operator, so the text was
+  invisible. Two fonts whose keys would be the same get a number
+  (`HelveticaBold`, `HelveticaBold2`); before, the second replaced the first.
+  Keys of other names are unchanged.
+- **The raster renderer draws text in fonts the PDF does not embed** (simple
+  Type 1 and TrueType fonts, and Type 0 fonts through their ToUnicode map)
+  with a standard 14 substitute: Liberation Sans for Arial, Helvetica and
+  other sans faces, Liberation Serif for Times and other serif faces,
+  Liberation Mono for Courier and fixed-pitch faces, bold and italic from
+  the name or descriptor. Characters stay at the PDF's `/Widths` (or `/W`)
+  positions with their natural width, and a `FontSubstituted` warning names
+  the font and the substitute. Before, such text drew nothing, with no
+  warning. Picture fonts (Wingdings, Webdings) have no substitute and are
+  reported. Indic text in a Type 0 font that is not embedded (Mangal,
+  Nirmala UI and the like) is decoded through its ToUnicode map, shaped with
+  the bundled LiPi Sans face for its script and drawn from the run's start,
+  while the codes keep their `/W` positions (D-100). Text in scripts neither
+  covers (Arabic, CJK) is not drawn and is reported as `GlyphSkipped`.
+- **The LiPi Sans fonts moved from Chuvadi.Pdf.Authoring into
+  Chuvadi.Pdf.Fonts.Bundled**, with their licence file. Authoring now depends
+  on the new package (its install size is unchanged); Chuvadi.Pdf.Rendering.Raster
+  now depends on it and on Chuvadi.Pdf.Text.Shaping, so apps that install the
+  raster renderer download the fonts and the shaper too.
+- **Resource names with `#xx` escapes resolve** in the raster and SVG
+  renderers (fonts, colour spaces, images, graphics states, shadings,
+  patterns): `/F#20A` finds the key `F A`. Before, the name was looked up
+  undecoded and missed.
+- **SVG output: embedded fonts load in browsers.** Fonts without `OS/2`,
+  `name` or `post` get minimal ones and every font is re-assembled with
+  aligned tables; a simple TrueType font with only a Macintosh cmap gets a
+  Windows Unicode cmap mapping the characters the SVG text uses; a simple
+  CFF font whose glyph names are not in the Adobe Glyph List (TeX maths
+  fonts) is mapped through its `/Differences`; a bare CFF program that still
+  cannot be wrapped is no longer embedded (the text uses the fallback font
+  instead of an undecodable one). On the 417-file corpus, Chromium rejected
+  13 of 493 embedded fonts before and none after.
+- **Output changes** on 417 PDFs (up to 5 pages each, 534 pages): raster
+  output and extracted text are unchanged on every page; SVG output differs
+  only in embedded font data, on 70 pages in 25 files.
+
+---
 ## [3.29.0] - 2026-11-02
 
 Reading order and raised text (backlog 28 and 29, D-104). Layout extraction

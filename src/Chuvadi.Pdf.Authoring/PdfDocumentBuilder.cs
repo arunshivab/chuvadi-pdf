@@ -126,6 +126,14 @@ public sealed class PdfDocumentBuilder
     /// carry their source text as <c>/ActualText</c>, so they extract and
     /// search as written.
     /// </summary>
+    /// <remarks>
+    /// The one name this registers is <c>"Lipi"</c>, matched exactly
+    /// (case-sensitive), for <see cref="PageBuilder.DrawText"/>. The
+    /// per-script face names written into the PDF (<c>LiPi-Sans-Latin</c>,
+    /// <c>LiPi-Sans-Tamil</c> and so on) are internal; any other name throws
+    /// <see cref="ArgumentException"/> from <see cref="PageBuilder.DrawText"/>
+    /// (since 3.30).
+    /// </remarks>
     /// <returns>This builder.</returns>
     public PdfDocumentBuilder UseLipiFonts()
     {
@@ -246,7 +254,7 @@ public sealed class PdfDocumentBuilder
                 if (customFontIds.TryGetValue(fontName, out PdfObjectId customId))
                 {
                     fontDict.Set(
-                        PdfName.Intern(PageBuilder.FontKey(fontName)), new PdfReference(customId));
+                        PdfName.Intern(p.KeyFor(fontName)), new PdfReference(customId));
                     continue;
                 }
 
@@ -257,7 +265,7 @@ public sealed class PdfDocumentBuilder
                 font.Set(PdfName.Intern("BaseFont"), PdfName.Intern(fontName));
                 font.Set(PdfName.Intern("Encoding"), PdfName.Intern("WinAnsiEncoding"));
                 objects.Add(new PdfIndirectObject(fontId, font));
-                fontDict.Set(PdfName.Intern(PageBuilder.FontKey(fontName)), new PdfReference(fontId));
+                fontDict.Set(PdfName.Intern(p.KeyFor(fontName)), new PdfReference(fontId));
             }
 
             // XObject dictionary for images. Alpha channels emit a second

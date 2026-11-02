@@ -281,6 +281,7 @@ python tools/gen_api_docs.py
 | [AdobeGlyphList](Fonts/AdobeGlyphList.md) | class | Provides the canonical Adobe Glyph List (AGL) version 2.0, mapping PostScript glyph names to their Unicode scalar values. |
 | [BrotliEncoder](Fonts/BrotliEncoder.md) | class | Pure-C# Brotli encoder. |
 | [BrotliStoredEncoder](Fonts/BrotliStoredEncoder.md) | class | Emits Brotli-compatible bitstreams for WOFF2 packaging. |
+| [BundledFonts](Fonts/BundledFonts.md) | class | The fonts bundled with Chuvadi: LiPi Sans, one face per script (Latin, Tamil, Devanagari, Bengali, Gurmukhi, Gujarati, Odia, Telugu, Kannada and Malayalam), licensed under the SIL Open Font License 1.1 (the licence text is in this package). |
 | [CMapParseResult](Fonts/CMapParseResult.md) | class | The full result of parsing a ToUnicode CMap: the bf-char/bf-range mappings and the declared codespace ranges. |
 | [CMapParser](Fonts/CMapParser.md) | class | Parses a PDF ToUnicode CMap stream and builds a character code to Unicode string mapping. |
 | [CffLoader](Fonts/CffLoader.md) | class | Loads a Compact Font Format (CFF) / Type 1C font program and produces glyph outlines. |
@@ -299,6 +300,7 @@ python tools/gen_api_docs.py
 | [RenderableFont](Fonts/RenderableFont.md) | class | A PDF font that supports both text decoding (character codes to Unicode) and glyph rendering (character codes to vector outlines + metrics). |
 | [Standard14GlyphWidths](Fonts/Standard14GlyphWidths.md) | class | Per-character widths for the PDF Standard 14 fonts. |
 | [Standard14Outlines](Fonts/Standard14Outlines.md) | class | Provides glyph outlines for the PDF Standard 14 fonts from an embedded resource, so they work even on hosts that lack the fonts (Blazor WASM, headless servers). |
+| [Standard14Substitute](Fonts/Standard14Substitute.md) | class | Chooses a standard 14 font to draw text whose font the PDF names but does not embed ("Arial", "TimesNewRomanPSMT", "Calibri,Bold"). |
 | [Standard14Widths](Fonts/Standard14Widths.md) | class | Exact per-glyph advance-width metrics for the PDF Standard 14 fonts in 1/1000-em font design units. |
 | [TrueTypeFontPatch](Fonts/TrueTypeFontPatch.md) | class | Rewrites the cmap table of an embedded TrueType font program so the browser can locate the embedded glyph by its semantic Unicode code point rather than the font's legacy encoding code point. |
 | [TrueTypeLoader](Fonts/TrueTypeLoader.md) | class | Loads a TrueType or OpenType font from raw bytes and provides access to glyph outlines and metrics. |

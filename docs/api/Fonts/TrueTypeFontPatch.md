@@ -35,6 +35,25 @@ Returns a copy of `fontBytes` whose cmap table has been replaced by a fresh tabl
 
 **Returns:** New font program bytes with the cmap table replaced. <exception cref="ArgumentNullException"> Thrown when `fontBytes` or `unicodeToGid` is null. </exception> <exception cref="FontRenderingException"> Thrown when the input bytes are not a valid TrueType/OpenType font or are too short to contain an offset table. </exception>
 
+### `WithRequiredTables`
+
+__static__
+
+```csharp
+static byte[] WithRequiredTables(byte[] fontBytes, string postScriptName, bool isBold, bool isItalic)
+```
+
+Returns a copy of `fontBytes` with minimal `OS/2`, `name` and `post` tables added where the font has none (since 3.30). PDF font subsets often carry only the tables a PDF reader needs; web browsers (their OpenType sanitiser) reject a font without these three and draw the text in a fallback font instead. Tables the font already has are kept unchanged.
+
+**Parameters**
+
+- `fontBytes` — A TrueType or OpenType font program.
+- `postScriptName` — The name recorded in the added `name` table.
+- `isBold` — Whether the added tables describe a bold face.
+- `isItalic` — Whether the added tables describe an italic face.
+
+**Returns:** The font with the three tables present, re-assembled with every table on a 4-byte boundary (browsers also reject misaligned tables). <exception cref="ArgumentNullException"> `fontBytes` or `postScriptName` is null. </exception> <exception cref="FontRenderingException"> The bytes are not a valid TrueType or OpenType font. </exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeFontPatch.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/TrueTypeFontPatch.cs)_

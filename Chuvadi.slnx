@@ -25,6 +25,7 @@
     <Project Path="src/Chuvadi.Pdf.Documents/Chuvadi.Pdf.Documents.csproj" />
     <Project Path="src/Chuvadi.Pdf.Encryption/Chuvadi.Pdf.Encryption.csproj" />
     <Project Path="src/Chuvadi.Pdf.Filters/Chuvadi.Pdf.Filters.csproj" />
+    <Project Path="src/Chuvadi.Pdf.Fonts.Bundled/Chuvadi.Pdf.Fonts.Bundled.csproj" />
     <Project Path="src/Chuvadi.Pdf.Fonts.Rendering/Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <Project Path="src/Chuvadi.Pdf.Fonts.Woff2/Chuvadi.Pdf.Fonts.Woff2.csproj" />
     <Project Path="src/Chuvadi.Pdf.Text.Shaping/Chuvadi.Pdf.Text.Shaping.csproj" />
