@@ -118,6 +118,10 @@ public sealed class ContentStreamParser
         List<(string Text, int FirstFragment)?> actualTextStack = new List<(string, int)?>();
         int actualTextDepth = 0;
 
+        // Parallel to hiddenStack: the /MCID of each open sequence (3.29),
+        // so fragments carry the identifier the structure tree refers to.
+        List<int?> mcidStack = new List<int?>();
+
         int tokensSinceCheck = 0;
         using (MemoryStream ms = new MemoryStream(streams))
         using (PdfTokenizer tokenizer = new PdfTokenizer(ms, leaveOpen: false))
@@ -218,6 +222,7 @@ public sealed class ContentStreamParser
                     case "BMC":
                         hiddenStack.Add(false);
                         actualTextStack.Add(null);
+                        mcidStack.Add(null);
                         break;
 
                     case "BDC":
@@ -240,6 +245,8 @@ public sealed class ContentStreamParser
                             {
                                 actualTextDepth++;
                             }
+
+                            mcidStack.Add(McidOf(operands, resources));
                         }
 
                         break;
@@ -264,6 +271,11 @@ public sealed class ContentStreamParser
                             }
 
                             actualTextStack.RemoveAt(actualTextStack.Count - 1);
+                        }
+
+                        if (mcidStack.Count > 0)
+                        {
+                            mcidStack.RemoveAt(mcidStack.Count - 1);
                         }
 
                         break;
@@ -449,6 +461,19 @@ public sealed class ContentStreamParser
                 if (hiddenDepth > 0 && fragments.Count > fragmentsBefore)
                 {
                     fragments.RemoveRange(fragmentsBefore, fragments.Count - fragmentsBefore);
+                }
+
+                // Text shown inside a marked-content sequence with an /MCID
+                // (directly, or through a form XObject) carries it (3.29).
+                if (fragments.Count > fragmentsBefore && op != "EMC" && CurrentMcid(mcidStack) is int mcid)
+                {
+                    for (int i = fragmentsBefore; i < fragments.Count; i++)
+                    {
+                        if (fragments[i].MarkedContentId is null)
+                        {
+                            fragments[i] = WithMcid(fragments[i], mcid);
+                        }
+                    }
                 }
 
                 operands.Clear();
@@ -668,21 +693,60 @@ public sealed class ContentStreamParser
         fragments.AddRange(ParseStreams(content, formResources, visited, depth + 1, formMatrix.Multiply(ctm)));
     }
 
-    // The /ActualText of a BDC property list (inline or a named /Properties
-    // entry), or null.
-    private string? ActualTextOf(List<PdfPrimitive> operands, PdfDictionary? resources)
+    // The innermost open /MCID, or null.
+    private static int? CurrentMcid(List<int?> mcidStack)
+    {
+        for (int i = mcidStack.Count - 1; i >= 0; i--)
+        {
+            if (mcidStack[i] is int mcid)
+            {
+                return mcid;
+            }
+        }
+
+        return null;
+    }
+
+    private static TextFragment WithMcid(TextFragment f, int mcid) =>
+        new TextFragment(f.Text, f.X, f.Y, f.FontSize, f.Width, f.Angle)
+        {
+            IsActualText = f.IsActualText,
+            MarkedContentId = mcid,
+        };
+
+    // The /MCID of a BDC property list (inline or a named /Properties
+    // entry), or null (PDF 32000-1:2008 §14.7.4.2).
+    private int? McidOf(List<PdfPrimitive> operands, PdfDictionary? resources)
+    {
+        PdfDictionary? props = PropertiesOf(operands, resources);
+        return props is not null
+            && props.TryGetValue(PdfName.Intern("MCID"), out PdfPrimitive? value)
+            && _resolver.Resolve(value) is PdfInteger id
+            && id.Value >= 0
+            ? id.Value
+            : null;
+    }
+
+    private PdfDictionary? PropertiesOf(List<PdfPrimitive> operands, PdfDictionary? resources)
     {
         if (operands.Count < 2)
         {
             return null;
         }
 
-        PdfDictionary? props = operands[1] switch
+        return operands[1] switch
         {
             PdfDictionary inline => inline,
             PdfName name => ResolveProperty(resources, name) is PdfPrimitive entry ? _resolver.Resolve(entry) as PdfDictionary : null,
             _ => null,
         };
+    }
+
+    // The /ActualText of a BDC property list (inline or a named /Properties
+    // entry), or null.
+    private string? ActualTextOf(List<PdfPrimitive> operands, PdfDictionary? resources)
+    {
+        PdfDictionary? props = PropertiesOf(operands, resources);
         return props is not null
             && props.TryGetValue(PdfName.Intern("ActualText"), out PdfPrimitive? value)
             && _resolver.Resolve(value) is PdfString text
@@ -719,7 +783,11 @@ public sealed class ContentStreamParser
         fragments.RemoveRange(firstFragment, fragments.Count - firstFragment);
         if (actualText.Length > 0)
         {
-            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize, right, first.Angle));
+            fragments.Add(new TextFragment(actualText, first.X, first.Y, first.FontSize, right, first.Angle)
+            {
+                IsActualText = true,
+                MarkedContentId = first.MarkedContentId,
+            });
         }
     }
 

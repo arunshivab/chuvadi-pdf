@@ -64,6 +64,14 @@ Returns true when the page has at least one non-empty content stream. This is a 
 
 ## Methods
 
+### `_structTreeRoot?.Invoke`
+
+```csharp
+PdfDictionary? StructTreeRoot => _structTreeRoot?.Invoke()
+```
+
+Gets the structure-tree root of the document this page belongs to (`PdfDocument.StructTreeRoot`), or null when the document has none (since 3.29). Text extraction reads a Tagged PDF's reading order from it. PDF 32000-1:2008 §14.7.2 — Structure Hierarchy.
+
 ### `FindViewport`
 
 ```csharp

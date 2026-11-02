@@ -100,6 +100,38 @@ double Angle
 
 Gets the direction of the baseline in degrees, counter-clockwise from the positive X axis of user space (since 3.28): 0 for ordinary text, 90 for text running up the page, -90 for text running down it.
 
+### `BaselineShift`
+
+```csharp
+BaselineShift BaselineShift
+```
+
+Gets whether the fragment is raised or lowered off the baseline of its line (since 3.29). Set by text extraction, which compares the fragment with the main text of its line; `BaselineShift.None` on fragments straight from the content-stream parser.
+
+### `BaselineShiftAmount`
+
+```csharp
+double BaselineShiftAmount
+```
+
+Gets how far the fragment's baseline is off its line's baseline, in user space, measured across the baseline: positive when raised, negative when lowered, 0 when `BaselineShift` is `BaselineShift.None` (since 3.29).
+
+### `IsActualText`
+
+```csharp
+bool IsActualText
+```
+
+Gets whether the text came from a marked-content `/ActualText` entry (PDF 32000-1:2008 §14.9.4) rather than from the glyphs' own Unicode mapping (since 3.29). Text extraction never rewrites such text: the source text wins.
+
+### `MarkedContentId`
+
+```csharp
+int? MarkedContentId
+```
+
+Gets the marked-content identifier (`/MCID`) of the innermost marked-content sequence the text was shown in, or null when it has none (since 3.29). In a Tagged PDF the structure tree refers to page content by these identifiers (PDF 32000-1:2008 §14.7.4).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Content/TextFragment.cs`](../../../src/Chuvadi.Pdf.Content/TextFragment.cs)_

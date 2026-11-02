@@ -153,6 +153,14 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.29.0:
+- **Reading order and raised text** (were open items 28 and 29, D-104):
+  Layout mode follows a Tagged PDF's structure tree, otherwise reads columns
+  of running text one after another (`TextExtractor.AnalyzeLayout`,
+  `PageLayout`); superscripts and subscripts are written with their Unicode
+  forms by default (`SuperscriptMode`), ordinals join their number ("09th"),
+  and fragments carry `BaselineShift`. Search matches compatibility forms.
+
 Shipped in v3.28.0:
 - **Text positions in user space** (was open item 26): fragments are placed
   through the text matrix and the CTM (and a form's /Matrix); text-space
@@ -247,14 +255,11 @@ applying the many Devanagari lookups; profile `OtApplyContext.ApplyForward`
 if a consumer needs more.
 
 ### Text extraction
-**28. Columns in Layout mode.** Layout extraction groups text into lines
-across the whole page, so two columns side by side share lines. Before 3.28
-this was hidden on some files by text-space positions. Column detection would
-fix it; take up when a consumer needs reading order across columns.
-
-**29. Ordinals as superscripts.** Since 3.28 a raised "th" after "09" reads
-"09 th", like every superscript. Exempting ordinal suffixes (st, nd, rd, th
-after digits) is Arun's call.
+**30. Letters recovered from the embedded font.** When a font's ToUnicode
+map is missing or wrong (the Word-made maths test sheet in the 3.29
+reference pack), WPS reads the real characters from the embedded font's own
+cmap; Acrobat and Chuvadi give the wrong letters. Take up when a consumer
+needs maths or symbol text from such files.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round

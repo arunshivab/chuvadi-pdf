@@ -1,0 +1,26 @@
+# SuperscriptMode
+
+**Enum** in `Chuvadi.Pdf.Text` (Text)
+
+How extracted plain text writes raised and lowered small text (superscripts and subscripts).
+
+```csharp
+public enum SuperscriptMode
+```
+
+## Remarks
+
+Plain text is a derived representation: the PDF is never changed, and `TextExtractor.ExtractFragments(Chuvadi.Pdf.Documents.PdfPage)` still returns every fragment with its own text and its `Chuvadi.Pdf.Content.TextFragment.BaselineShift`, whatever the mode. Text that came from a marked-content `/ActualText` entry is never rewritten.
+
+## Values
+
+| Name | Description |
+|---|---|
+| `Unicode` | The default. A raised ordinal ending after a digit joins it as typed ("09th"). Other raised or lowered text is written with the Unicode superscript or subscript characters when every letter and digit has an exact one ("mc²", "H₂O", "10⁻³", "Cioniniᵃ"); Unicode compatibility normalisation (NFKC) turns these back into the plain characters. Text with no exact form stays a separate word, as in `Separate`. |
+| `Join` | Raised and lowered text joins the text next to it unchanged ("mc2", "H2O", "Cioninia"), the way common PDF viewers copy it. |
+| `Separate` | Raised and lowered text between letters or digits is kept apart from them by a space ("mc 2", "Cionini a"), as in 3.28. |
+
+---
+
+_Source: [`src/Chuvadi.Pdf.Text/SuperscriptMode.cs`](../../../src/Chuvadi.Pdf.Text/SuperscriptMode.cs)_
+_Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

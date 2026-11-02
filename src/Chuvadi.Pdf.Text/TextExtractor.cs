@@ -28,7 +28,10 @@ public enum ExtractionStrategy
 
     /// <summary>
     /// Layout-aware extraction. Groups by line, sorts by X position.
-    /// Better for multi-column and table-heavy PDFs.
+    /// Better for multi-column and table-heavy PDFs. Since 3.29 it follows a
+    /// Tagged PDF's structure tree when the tree orders the page's text, and
+    /// otherwise reads columns of running text one after another
+    /// (<see cref="TextExtractor.AnalyzeLayout(PdfPage)"/>).
     /// </summary>
     Layout,
 }
@@ -81,6 +84,24 @@ public sealed class TextExtractor
     /// </summary>
     public OptionalContentVisibility? OptionalContent { get; init; }
 
+    /// <summary>
+    /// Gets or initialises how raised and lowered text (superscripts and
+    /// subscripts) is written in the extracted text (since 3.29). Default:
+    /// <see cref="SuperscriptMode.Unicode"/>. Extracted text is a derived
+    /// representation: the PDF is never changed, and
+    /// <see cref="ExtractFragments(PdfPage)"/> returns each fragment's own
+    /// text with its <see cref="TextFragment.BaselineShift"/> whatever the mode.
+    /// </summary>
+    public SuperscriptMode Superscripts { get; init; } = SuperscriptMode.Unicode;
+
+    /// <summary>
+    /// Gets or initialises whether layout-aware extraction follows a Tagged
+    /// PDF's structure tree (since 3.29). Default true: when the tree orders
+    /// at least 80% of a page's text, that order is used; otherwise, or when
+    /// false, columns and rows are found from the page's geometry.
+    /// </summary>
+    public bool UseTaggedOrder { get; init; } = true;
+
     // ── Public API ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -132,19 +153,83 @@ public sealed class TextExtractor
         }
     }
 
+    /// <summary>
+    /// Extracts the page's text with layout-aware reading, in the given
+    /// reading order whatever the extractor's strategy (since 3.29).
+    /// </summary>
+    /// <remarks>
+    /// Pass a layout from <see cref="AnalyzeLayout(PdfPage)"/>, changed as the
+    /// application needs, to override the bands and columns found;
+    /// <see cref="PageLayout.Rows"/> reads plain rows (the 3.28 order), and
+    /// <see cref="PageLayout.Tagged"/> uses the structure tree when it orders
+    /// the page's text, and otherwise finds columns as
+    /// <see cref="ExtractionStrategy.Layout"/> does.
+    /// </remarks>
+    /// <param name="page">The page to extract text from.</param>
+    /// <param name="layout">The reading order to use.</param>
+    /// <returns>The extracted text, or an empty string when the page has no text.</returns>
+    public string ExtractText(PdfPage page, PageLayout layout) => ExtractText(page, layout, CancellationToken.None);
+
+    /// <summary>
+    /// Extracts the page's text in the given reading order, stopping when
+    /// <paramref name="cancellationToken"/> is cancelled. See
+    /// <see cref="ExtractText(PdfPage, PageLayout)"/>, and
+    /// <see cref="ExtractText(PdfPage, CancellationToken)"/> for limits and exceptions.
+    /// </summary>
+    /// <param name="page">The page to extract text from.</param>
+    /// <param name="layout">The reading order to use.</param>
+    /// <param name="cancellationToken">A token that cancels the extraction.</param>
+    /// <returns>The extracted text, or an empty string when the page has no text.</returns>
+    public string ExtractText(PdfPage page, PageLayout layout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(layout);
+        return Guard(() => LayoutText(page, ScriptText.Classify(ReadFragments(page)), layout), cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns the reading order layout-aware extraction uses for the page
+    /// (since 3.29): <see cref="PageLayout.Tagged"/> when the document's
+    /// structure tree orders the page's text (and <see cref="UseTaggedOrder"/>
+    /// is true), otherwise the bands and columns
+    /// found (<see cref="ReadingOrderSource.Columns"/>), or
+    /// <see cref="PageLayout.Rows"/> when no band is read in columns.
+    /// </summary>
+    /// <param name="page">The page to analyse.</param>
+    /// <returns>The page's reading order.</returns>
+    public PageLayout AnalyzeLayout(PdfPage page) => AnalyzeLayout(page, CancellationToken.None);
+
+    /// <summary>
+    /// Returns the reading order layout-aware extraction uses for the page,
+    /// stopping when <paramref name="cancellationToken"/> is cancelled. See
+    /// <see cref="AnalyzeLayout(PdfPage)"/>, and
+    /// <see cref="ExtractText(PdfPage, CancellationToken)"/> for limits and exceptions.
+    /// </summary>
+    /// <param name="page">The page to analyse.</param>
+    /// <param name="cancellationToken">A token that cancels the analysis.</param>
+    /// <returns>The page's reading order.</returns>
+    public PageLayout AnalyzeLayout(PdfPage page, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        return Guard(
+            () =>
+            {
+                List<TextFragment> fragments = ReadFragments(page);
+                if (UseTaggedOrder && TaggedOrder.Ranks(page, _objects, fragments) is not null)
+                {
+                    return PageLayout.Tagged;
+                }
+
+                return fragments.Count == 0
+                    ? PageLayout.Rows
+                    : ColumnLayout.Detect(LayoutExtractor.GroupIntoLines(fragments));
+            },
+            cancellationToken);
+    }
+
     private string ExtractTextCore(PdfPage page)
     {
-        byte[] contentBytes = ReadContentBytes(page);
-
-        ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
-        {
-            OptionalContent = VisibilityFor(page),
-        };
-        List<TextFragment> fragments = contentBytes.Length > 0
-            ? parser.Parse(contentBytes)
-            : new List<TextFragment>();
-
-        AppendAnnotationFragments(page, fragments);
+        List<TextFragment> fragments = ScriptText.Classify(ReadFragments(page));
 
         if (fragments.Count == 0)
         {
@@ -152,8 +237,32 @@ public sealed class TextExtractor
         }
 
         return _strategy == ExtractionStrategy.Layout
-            ? new LayoutExtractor().Extract(fragments)
-            : new OperatorExtractor().Extract(fragments);
+            ? LayoutText(page, fragments, PageLayout.Tagged)
+            : OperatorExtractor.Write(fragments, Superscripts);
+    }
+
+    // Layout-aware text in the requested order: the structure tree first when
+    // asked for, then columns, then rows (3.29).
+    private string LayoutText(PdfPage page, List<TextFragment> classified, PageLayout layout)
+    {
+        if (classified.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        LayoutExtractor extractor = new LayoutExtractor { Superscripts = Superscripts };
+        if (layout.Source == ReadingOrderSource.Tagged)
+        {
+            Dictionary<int, int>? ranks = UseTaggedOrder ? TaggedOrder.Ranks(page, _objects, classified) : null;
+            if (ranks is not null)
+            {
+                return extractor.ExtractTagged(classified, ranks);
+            }
+
+            return extractor.Extract(classified);
+        }
+
+        return extractor.Extract(classified, layout);
     }
 
     /// <summary>
@@ -163,7 +272,10 @@ public sealed class TextExtractor
     /// Each fragment is a piece of text shown by a single Tj or TJ entry with
     /// the X, Y position (PDF user space) and font size at the time of rendering.
     /// Returned in operator order, not reading order — callers wanting reading
-    /// order should apply layout reconstruction.
+    /// order should apply layout reconstruction. Since 3.29 each fragment
+    /// that is raised or lowered off its line's baseline carries
+    /// <see cref="TextFragment.BaselineShift"/> and its shift; the text of
+    /// every fragment is the PDF's own.
     /// </remarks>
     /// <param name="page">The page to extract fragments from.</param>
     /// <returns>A list of fragments, or an empty list when the page has no text.</returns>
@@ -183,7 +295,10 @@ public sealed class TextExtractor
         return Guard(() => ExtractFragmentsCore(page), cancellationToken);
     }
 
-    private List<TextFragment> ExtractFragmentsCore(PdfPage page)
+    // Fragments in operator order, raised and lowered ones marked (3.29).
+    private List<TextFragment> ExtractFragmentsCore(PdfPage page) => ScriptText.Classify(ReadFragments(page));
+
+    private List<TextFragment> ReadFragments(PdfPage page)
     {
         byte[] contentBytes = ReadContentBytes(page);
 
@@ -260,7 +375,10 @@ public sealed class TextExtractor
                     (ap.MatrixB * ap.MatrixB) + (ap.MatrixD * ap.MatrixD));
                 double fontSize = fragment.FontSize * Math.Abs(ap.ScaleY) * matrixYScale;
 
-                fragments.Add(new TextFragment(fragment.Text, pageX, pageY, fontSize));
+                fragments.Add(new TextFragment(fragment.Text, pageX, pageY, fontSize)
+                {
+                    IsActualText = fragment.IsActualText,
+                });
             }
         }
     }

@@ -94,12 +94,13 @@ public sealed class UserSpacePositionTests
     public void ASuperscriptTouchingAWord_StaysASeparateToken(ExtractionStrategy strategy)
     {
         // "Cionini" then a raised 7 pt "a", then ", Gardani" back on the baseline.
+        // The 3.28 behaviour, kept by SuperscriptMode.Separate since 3.29.
         string content =
             "BT /F1 12 Tf 50 300 Td (Cionini) Tj ET\n" +
             "BT /F1 7 Tf 92 305 Td (a) Tj ET\n" +
             "BT /F1 12 Tf 95.5 300 Td (, Gardani) Tj ET\n";
 
-        Extract(content, strategy).Should().Be("Cionini a, Gardani");
+        Extract(content, strategy, SuperscriptMode.Separate).Should().Be("Cionini a, Gardani");
     }
 
     [Theory]
@@ -111,7 +112,7 @@ public sealed class UserSpacePositionTests
             "BT /F1 12 Tf 50 300 Td (CO) Tj ET\n" +
             "BT /F1 7 Tf 62 296 Td (2) Tj ET\n";
 
-        Extract(content, strategy).Should().Be("CO 2");
+        Extract(content, strategy, SuperscriptMode.Separate).Should().Be("CO 2");
     }
 
     [Theory]
@@ -145,10 +146,10 @@ public sealed class UserSpacePositionTests
         return new TextExtractor(doc.Objects).ExtractFragments(doc.Pages[0]);
     }
 
-    private static string Extract(string content, ExtractionStrategy strategy)
+    private static string Extract(string content, ExtractionStrategy strategy, SuperscriptMode superscripts = SuperscriptMode.Unicode)
     {
         using PdfDocument doc = Open(content, null, null);
-        return new TextExtractor(doc.Objects, strategy).ExtractText(doc.Pages[0]).Trim();
+        return new TextExtractor(doc.Objects, strategy) { Superscripts = superscripts }.ExtractText(doc.Pages[0]).Trim();
     }
 
     private static PdfDocument Open(string content, string? form, string? formMatrix)

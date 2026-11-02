@@ -10,6 +10,75 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.29.0] - 2026-11-02
+
+Reading order and raised text (backlog 28 and 29, D-104). Layout extraction
+follows a Tagged PDF's structure tree, otherwise reads columns of running
+text one after another, and superscripts and subscripts are written with
+their Unicode forms ("mc²", "H₂O", "09th"). Measured against what Adobe
+Acrobat and WPS produce for the same files; the aim was to do better than
+both. Plain text is a derived representation: the PDF is never changed.
+
+### Added
+- `BaselineShift` (`None`, `Raised`, `Lowered`) and, on `TextFragment`,
+  `BaselineShift`, `BaselineShiftAmount` (user space, positive when raised),
+  `IsActualText`, `MarkedContentId` and `WithBaselineShift`. Fragments from
+  `TextExtractor.ExtractFragments` carry the shift, so an application can
+  render real `<sup>`/`<sub>` without inspecting characters.
+- `SuperscriptMode` (`Unicode`, `Join`, `Separate`) and a `Superscripts`
+  property on `TextExtractor`, `LayoutExtractor` and `OperatorExtractor`.
+- `PageLayout`, `LayoutBand`, `LayoutColumn` and `ReadingOrderSource`
+  (`Rows`, `Columns`, `Tagged`); `TextExtractor.AnalyzeLayout(page)` returns
+  the bands and columns (rectangles, in reading order) that layout
+  extraction uses, and `TextExtractor.ExtractText(page, layout)` reads a page
+  by a layout the application supplies (`PageLayout.Rows`, `PageLayout.Tagged`
+  or its own bands). `LayoutExtractor.Analyze` and
+  `LayoutExtractor.Extract(fragments, layout)` do the same from fragments.
+- `TextExtractor.UseTaggedOrder` (default true).
+- `PdfPage.StructTreeRoot`: the document's structure-tree root.
+- `SearchOptions.MatchCompatibilityForms` (default true).
+
+### Changed
+- **Superscripts and subscripts** (default `SuperscriptMode.Unicode`): a
+  raised ordinal ending after a digit joins it ("09th"); other raised or
+  lowered text is written with the Unicode superscript or subscript
+  characters when every letter and digit has an exact one ("mc²", "x² + y²",
+  "10⁻³", "H₂O", "Cioniniᵃ", "earlier¹"); text with no exact form (for
+  example "q", the capitals C, F, Q, S, X, Y and Z, or a word of more than
+  three letters) stays a separate word as in 3.28; text from `/ActualText` is never rewritten, and text the
+  PDF already maps to superscript or subscript characters is kept. Each
+  form normalises (NFKC) back to its plain character; a raised hyphen-minus
+  becomes the superscript minus. `SuperscriptMode.Separate` gives the 3.28
+  output, `SuperscriptMode.Join` the way common viewers copy it ("mc2").
+  A fragment is raised or lowered when it is at most 0.85 of its line's
+  main size, off the main baseline by more than 0.1 of it, and touching the
+  text next to it.
+- **Layout mode follows the structure tree** of a Tagged PDF when the tree
+  orders at least 80% of the page's characters; text outside the tree
+  (headers, page numbers) is read as rows above or below it. Operator mode
+  is unchanged.
+- **Layout mode reads columns**: lines that share a vertical gutter form a
+  band, a line crossing the gutter (a title, a footer, a footnote) ends it,
+  and a band whose columns all look like running text is read column by
+  column; when that test is unsure the band is read as rows, so tables and
+  label–value forms are not split. Pages with no such band read as in 3.28.
+- **Layout line grouping**: a fragment joins the nearest line within half of
+  the larger of its size and the line's average size (before: the first line
+  within half the line's size), so text after a superscript drawn first, and
+  glyph names in font tables, land on the right line.
+- **Search** (`DocumentSearch`) matches Unicode compatibility forms as their
+  plain characters (NFKD, minus sign as hyphen-minus): "H2O" finds "H₂O",
+  "fi" finds the "ﬁ" ligature. Match offsets and lengths stay in the page
+  text. `MatchCompatibilityForms = false` restores exact matching.
+- **Extracted text changes** for files with columns, tags or raised text.
+  Checked on 417 PDFs (1,655 page and strategy pairs): 134 changed, in 24
+  files, with no character lost or added apart from the superscript and
+  subscript forms; every change is listed before and after in the release
+  notes. Speed: the layout stage is faster than in 3.28 (running sums in line
+  grouping); operator mode spends about 0.1 ms more per page classifying
+  raised text.
+
+---
 ## [3.28.0] - 2026-11-02
 
 Text positions in user space (backlog 26), with superscripts and rotated text
