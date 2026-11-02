@@ -11,8 +11,10 @@ namespace Chuvadi.Pdf.Content;
 /// its approximate position in user space.
 /// </summary>
 /// <remarks>
-/// Position coordinates are in PDF user space (origin bottom-left, Y increases upward).
-/// The X and Y values come from the text matrix at the point the text was rendered.
+/// Position coordinates are in PDF user space (origin bottom-left, Y increases upward):
+/// the origin of the first glyph, from the text matrix mapped through the current
+/// transformation matrix (and a form XObject's /Matrix). Since 3.28 the CTM is
+/// applied; before, positions were in text space.
 ///
 /// For a full layout-aware extraction, these fragments should be sorted and
 /// grouped based on their Y coordinates (same line = similar Y) and X coordinates
@@ -45,12 +47,34 @@ public sealed class TextFragment
     /// widths are not known.
     /// </param>
     public TextFragment(string text, double x, double y, double fontSize, double width)
+        : this(text, x, y, fontSize, width, 0.0)
+    {
+    }
+
+    /// <summary>
+    /// Initialises a new <see cref="TextFragment"/> with its advance width and
+    /// the direction of its baseline.
+    /// </summary>
+    /// <param name="text">The Unicode text content of this fragment.</param>
+    /// <param name="x">The X position in user space (origin of the first glyph).</param>
+    /// <param name="y">The Y position in user space (baseline of the text).</param>
+    /// <param name="fontSize">The font size in user space.</param>
+    /// <param name="width">
+    /// The advance of the shown glyphs along the baseline, in user space, or
+    /// <see cref="double.NaN"/> when the font's widths are not known.
+    /// </param>
+    /// <param name="angle">
+    /// The direction of the baseline in degrees, counter-clockwise from the
+    /// positive X axis: 0 for ordinary text, 90 for text running up the page.
+    /// </param>
+    public TextFragment(string text, double x, double y, double fontSize, double width, double angle)
     {
         Text = text ?? string.Empty;
         X = x;
         Y = y;
         FontSize = fontSize;
         Width = width;
+        Angle = angle;
     }
 
     /// <summary>Gets the Unicode text content of this fragment.</summary>
@@ -62,14 +86,26 @@ public sealed class TextFragment
     /// <summary>Gets the Y position (baseline) in PDF user space.</summary>
     public double Y { get; }
 
-    /// <summary>Gets the font size in points.</summary>
+    /// <summary>
+    /// Gets the font size in user space: the <c>Tf</c> size scaled by the
+    /// vertical scale of the text matrix and the CTM (since 3.28; before, the
+    /// <c>Tf</c> size alone).
+    /// </summary>
     public double FontSize { get; }
 
     /// <summary>
-    /// Gets the advance width of the fragment's glyphs (from the font's
-    /// widths), or <see cref="double.NaN"/> when it is not known.
+    /// Gets the advance of the fragment's glyphs along the baseline, in user
+    /// space (from the font's widths), or <see cref="double.NaN"/> when it is
+    /// not known.
     /// </summary>
     public double Width { get; }
+
+    /// <summary>
+    /// Gets the direction of the baseline in degrees, counter-clockwise from
+    /// the positive X axis of user space (since 3.28): 0 for ordinary text, 90
+    /// for text running up the page, -90 for text running down it.
+    /// </summary>
+    public double Angle { get; }
 
     /// <inheritdoc/>
     public override string ToString() =>

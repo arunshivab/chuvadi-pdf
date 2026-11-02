@@ -69,19 +69,28 @@ public sealed class OperatorExtractor
 
             TextFragment current = fragments[i];
 
-            double xGap = current.X - (prev.X + EstimateWidth(prev));
-            double yDrop = Math.Abs(current.Y - prev.Y);
-            double lineThreshold = prev.FontSize * 0.5;
+            // Measured along and across the previous fragment's baseline, so
+            // rotated text is read like horizontal text (3.28).
+            double angle = prev.Angle;
+            double xGap = TextGeometry.Along(current, angle) - (TextGeometry.Along(prev, angle) + EstimateWidth(prev));
+            double yDrop = Math.Abs(TextGeometry.Across(current, angle) - TextGeometry.Across(prev, angle));
+            // Half the larger size: a superscript (small, raised) followed by
+            // text back on the baseline is still the same line (3.28).
+            double lineThreshold = Math.Max(prev.FontSize, current.FontSize) * 0.5;
 
-            if (yDrop > lineThreshold)
+            if (yDrop > lineThreshold || !TextGeometry.SameDirection(prev, current))
             {
-                // Significant vertical movement — treat as new line.
+                // Significant movement across the baseline, or a change of
+                // direction — treat as new line.
                 sb.AppendLine();
             }
-            else if (xGap > prev.FontSize * 0.3 || LeaderSpacing.NeedsSpace(prev, current))
+            else if (xGap > prev.FontSize * 0.3
+                || LeaderSpacing.NeedsSpace(prev, current)
+                || TextGeometry.IsScriptBoundary(prev, current))
             {
-                // Horizontal gap — treat as word space. A dot leader touching
-                // a word is kept apart from it too (3.27).
+                // Gap along the baseline — treat as word space. A dot leader
+                // touching a word (3.27) and a superscript or subscript
+                // touching it (3.28) are kept apart from it too.
                 sb.Append(' ');
             }
 

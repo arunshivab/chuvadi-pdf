@@ -153,6 +153,13 @@ Shipped in v3.21.0 (Acrobat alignment + last Reader asks):
 - **PDF-15** — `/UserUnit`, viewports and `/Measure` with formatted
   real-world distances, areas and coordinates.
 
+Shipped in v3.28.0:
+- **Text positions in user space** (was open item 26): fragments are placed
+  through the text matrix and the CTM (and a form's /Matrix); text-space
+  moves are scaled with the text. Superscripts and subscripts stay separate
+  tokens, rotated text reads as lines of its own (`TextFragment.Angle`), and
+  Authoring no longer references Pdf.Documents (D-99).
+
 Shipped in v3.27.0 (fallback warnings and 3.24–3.26 follow-ups):
 - **Fallback warnings** (D-62, D-63): `PdfOpenOptions.OnWarning` receives a
   `PdfWarning` for each substituted font, skipped glyph and skipped shading.
@@ -240,15 +247,14 @@ applying the many Devanagari lookups; profile `OtApplyContext.ApplyForward`
 if a consumer needs more.
 
 ### Text extraction
-**26. Text positions in user space.** The content parser places fragments by
-the text matrix alone and moves it as Tm × T rather than T × Tm (§9.4.4); the
-CTM is tracked but not applied, and `TextFragment.FontSize` is the `Tf` size.
-Files that scale text through Tm or `cm` ("1 Tf" with "12 0 0 12 … Tm") get
-positions, widths and gap thresholds in unscaled units. Fixing it changes
-line and word breaks (tried in 3.26: a certificate PDF drawn with one `cm`
-per line lost its line breaks because the heuristics compare positions
-across coordinate systems), so it needs page-space positions and its own
-corpus check.
+**28. Columns in Layout mode.** Layout extraction groups text into lines
+across the whole page, so two columns side by side share lines. Before 3.28
+this was hidden on some files by text-space positions. Column detection would
+fix it; take up when a consumer needs reading order across columns.
+
+**29. Ordinals as superscripts.** Since 3.28 a raised "th" after "09" reads
+"09 th", like every superscript. Exempting ordinal suffixes (st, nd, rd, th
+after digits) is Arun's call.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round

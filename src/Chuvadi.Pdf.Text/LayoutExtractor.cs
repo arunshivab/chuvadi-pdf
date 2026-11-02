@@ -59,10 +59,13 @@ public sealed class LayoutExtractor
         // Step 2: sort lines top-to-bottom (descending Y in PDF space).
         lines.Sort((a, b) => b[0].Y.CompareTo(a[0].Y));
 
-        // Step 3: within each line, sort left-to-right (ascending X).
+        // Step 3: within each line, sort in reading order along its baseline
+        // (ascending X for ordinary text; rotated lines read along their own
+        // direction, 3.28).
         foreach (List<TextFragment> line in lines)
         {
-            line.Sort((a, b) => a.X.CompareTo(b.X));
+            double angle = line[0].Angle;
+            line.Sort((a, b) => TextGeometry.Along(a, angle).CompareTo(TextGeometry.Along(b, angle)));
         }
 
         // Step 4: assemble output.
@@ -83,7 +86,8 @@ public sealed class LayoutExtractor
             for (int i = 1; i < line.Count; i++)
             {
                 TextFragment current = line[i];
-                double xGap = current.X - (prev.X + EstimateWidth(prev));
+                double angle = line[0].Angle;
+                double xGap = TextGeometry.Along(current, angle) - (TextGeometry.Along(prev, angle) + EstimateWidth(prev));
 
                 // Insert a separating space on a positional gap — but not when
                 // the fragments already carry one (many writers end each
@@ -93,8 +97,12 @@ public sealed class LayoutExtractor
                     (prev.Text.Length > 0 && prev.Text[prev.Text.Length - 1] == ' ')
                     || (current.Text.Length > 0 && current.Text[0] == ' ');
 
-                // A dot leader touching a word is kept apart from it (3.27).
-                if ((xGap > prev.FontSize * 0.3 || LeaderSpacing.NeedsSpace(prev, current)) && !alreadySeparated)
+                // A dot leader touching a word (3.27) and a superscript or
+                // subscript touching it (3.28) are kept apart from it.
+                if ((xGap > prev.FontSize * 0.3
+                        || LeaderSpacing.NeedsSpace(prev, current)
+                        || TextGeometry.IsScriptBoundary(prev, current))
+                    && !alreadySeparated)
                 {
                     sb.Append(' ');
                 }
@@ -121,10 +129,18 @@ public sealed class LayoutExtractor
 
             foreach (List<TextFragment> line in lines)
             {
-                double lineY = AverageY(line);
+                // A line holds fragments of one direction; position across
+                // the baseline decides membership (Y for ordinary text).
+                if (!TextGeometry.SameDirection(fragment, line[0]))
+                {
+                    continue;
+                }
+
+                double angle = line[0].Angle;
+                double lineY = AverageAcross(line, angle);
                 double threshold = AverageFontSize(line) * 0.5;
 
-                if (Math.Abs(fragment.Y - lineY) <= threshold)
+                if (Math.Abs(TextGeometry.Across(fragment, angle) - lineY) <= threshold)
                 {
                     line.Add(fragment);
                     placed = true;
@@ -141,13 +157,13 @@ public sealed class LayoutExtractor
         return lines;
     }
 
-    private static double AverageY(List<TextFragment> line)
+    private static double AverageAcross(List<TextFragment> line, double angle)
     {
         double sum = 0;
 
         foreach (TextFragment f in line)
         {
-            sum += f.Y;
+            sum += TextGeometry.Across(f, angle);
         }
 
         return sum / line.Count;
