@@ -8,7 +8,9 @@ Two corpora, generated deterministically:
      character strings per script, plus Latin text on LiPi Latin, Carlito,
      Liberation Serif and the CFF test fixture (no GPOS: fallback marks).
 
-Each line is shaped with HarfBuzz (uharfbuzz) and written as
+Each line is shaped with HarfBuzz (uharfbuzz), left to right, with the row's
+script and no language (the fonts' default language system, never the
+machine's locale), and written as
     script <TAB> code points (hex) <TAB> font file <TAB> glyph:cluster:x_advance:x_offset:y_offset ...
 
 Usage (needs fontTools and uharfbuzz):
@@ -151,8 +153,12 @@ def main():
                 fonts[font] = hb.Font(hb.Face(b.getvalue()))
             buf = hb.Buffer()
             buf.add_str(text)
-            buf.guess_segment_properties()
+            # 3.31.1 (D-182): every property set explicitly, never guessed.
+            # Left to right, the row's script, and no language: the fonts'
+            # default language system (dflt), whatever the machine's locale.
+            buf.direction = 'ltr'
             buf.script = ISO[script]
+            assert buf.language is None, 'the language must stay unset'
             hb.shape(fonts[font], buf)
             glyphs = ' '.join('%d:%d:%d:%d:%d' % (i.codepoint, i.cluster, p.x_advance, p.x_offset, p.y_offset)
                               for i, p in zip(buf.glyph_infos, buf.glyph_positions))

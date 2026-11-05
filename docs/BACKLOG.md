@@ -158,6 +158,10 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.31.1:
+- **`FontFace.Load` speed** (D-201): only the full-repertoire character map
+  subtable that is chosen is read; output unchanged.
+
 Shipped in v3.30.1:
 - **FreeType credit** (D-106, part 1): the FTL credit and licence ship with
   `Chuvadi.Pdf.Fonts.Rendering`, the package that holds the FreeType-derived
@@ -281,6 +285,18 @@ cmap; Acrobat and Chuvadi give the wrong letters. Take up when a consumer
 needs maths or symbol text from such files.
 
 ### Rendering (3.30 findings)
+**36. SVG text when ToUnicode contradicts the encoding (D-175, D-201).** In
+an embedded TrueType simple font the raster renderer chooses the glyph from
+the font's encoding (3.31), but the SVG text is the ToUnicode character, and
+the browser draws that character's glyph from the embedded font. The two
+differ only when ToUnicode contradicts the encoding; no PDF in the corpus
+does. Measure on such files before choosing a fix.
+
+**37. Glyph choice in non-embedded fonts (D-175, D-201).** A substitute font
+still chooses glyphs from the decoded text, not from the encoding's glyph
+names. On the O9 Courier fixture Chuvadi draws "BBBB" where MuPDF draws
+"AAAA". Measure on the corpus before choosing a fix.
+
 **32. Deterministic SVG ids.** `SvgRenderer` gives clip paths and masks a
 random suffix, so the same page renders to different SVG text each time.
 Harmless to viewers, but it makes output comparison and caching harder.
@@ -296,6 +312,14 @@ rewrite code until Arun approves.
 real documents, then report to Arun the pros and cons of rewriting it from a
 published design description against dropping it. No rewrite before Arun
 decides.
+
+**35. The setup program's graphics state (D-201).** Apple's TrueType manual
+says the graphics state left by the control value program (`prep`) is the
+starting state of every glyph program. The interpreter starts every glyph
+from the defaults instead, and the clean-room rewrite (33) copies that,
+because its gate requires today's output. Fix it after the rewrite passes, as
+its own measured Rule 5 change: it changes hinted output for fonts whose
+`prep` sets graphics state.
 
 ### Rendering follow-ups (3.25 findings)
 **22. Round joins** are drawn as bevel joins in the raster stroker (round
