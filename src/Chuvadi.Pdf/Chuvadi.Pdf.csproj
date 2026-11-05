@@ -40,6 +40,7 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Bundled\Chuvadi.Pdf.Fonts.Bundled.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Forms\Chuvadi.Pdf.Forms.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />

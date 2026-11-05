@@ -41,6 +41,11 @@ public sealed class FontRenderer
 {
     private readonly TrueTypeLoader? _loader;
     private readonly CffLoader? _cff;
+
+    // 3.31 (D-169): the sfnt cmap of an OpenType font with CFF outlines
+    // ('OTTO'). Its glyph ids are the CFF glyph ids, and it comes before the
+    // glyph-name map, which cannot name every glyph.
+    private readonly TrueTypeLoader? _cffSfntCmap;
     private readonly Dictionary<int, int> _cffUnicodeToGid;
     private readonly Dictionary<int, GlyphOutline> _cache;
     private readonly Dictionary<long, GlyphOutline?> _hintedCache;
@@ -67,6 +72,17 @@ public sealed class FontRenderer
         {
             _cff = new CffLoader(cffBytes);
             BuildCffUnicodeToGid(_cff, _cffUnicodeToGid);
+            if (!ReferenceEquals(cffBytes, fontData))
+            {
+                try
+                {
+                    _cffSfntCmap = new TrueTypeLoader(fontData);
+                }
+                catch (FontRenderingException)
+                {
+                    _cffSfntCmap = null;
+                }
+            }
         }
         else
         {
@@ -74,9 +90,28 @@ public sealed class FontRenderer
         }
     }
 
+    // A Unicode code point in a CFF program: the sfnt cmap first (when the
+    // program is OpenType and the glyph is in range), then the glyph names.
+    private int CffUnicodeGlyph(int codePoint)
+    {
+        if (_cffSfntCmap is not null)
+        {
+            int gid = _cffSfntCmap.GetGlyphIndexUnicode(codePoint);
+            if (gid > 0 && gid < _cff!.NumGlyphs)
+            {
+                return gid;
+            }
+        }
+
+        return _cffUnicodeToGid.GetValueOrDefault(codePoint, 0);
+    }
+
     // The TrueType loader, required when the program is not CFF.
     private TrueTypeLoader Loader =>
         _loader ?? throw new InvalidOperationException("Font program is CFF; no TrueType loader is available.");
+
+    // True for CFF outlines (a bare CFF program or OpenType 'OTTO').
+    internal bool IsCff => _cff is not null;
 
     /// <summary>Gets the number of font design units per em square.</summary>
     public int UnitsPerEm => _cff?.UnitsPerEm ?? Loader.UnitsPerEm;
@@ -94,7 +129,7 @@ public sealed class FontRenderer
     {
         if (_cff is not null)
         {
-            return _cffUnicodeToGid.GetValueOrDefault(codePoint, 0);
+            return CffUnicodeGlyph(codePoint);
         }
 
         return Loader.GetGlyphIndex(codePoint);
@@ -144,7 +179,7 @@ public sealed class FontRenderer
     {
         if (_cff is not null)
         {
-            return _cffUnicodeToGid.GetValueOrDefault(codePoint, 0);
+            return CffUnicodeGlyph(codePoint);
         }
 
         return Loader.GetGlyphIndexUnicode(codePoint);
@@ -258,9 +293,17 @@ public sealed class FontRenderer
 
         double x = 0;
 
-        foreach (char c in text)
+        // 3.31 (D-169): by code point, so a surrogate pair is one glyph.
+        for (int i = 0; i < text.Length; i++)
         {
-            GlyphOutline scaled = GetGlyphOutlineForChar(c).Scale(pointSize);
+            int codePoint = text[i];
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                codePoint = char.ConvertToUtf32(text[i], text[i + 1]);
+                i++;
+            }
+
+            GlyphOutline scaled = GetGlyphOutline(GetGlyphIndex(codePoint)).Scale(pointSize);
             result.Add((x, scaled));
             x += scaled.Metrics.AdvanceWidthAt(pointSize);
         }
@@ -282,9 +325,17 @@ public sealed class FontRenderer
 
         double width = 0;
 
-        foreach (char c in text)
+        // 3.31 (D-169): by code point, so a surrogate pair is one glyph.
+        for (int i = 0; i < text.Length; i++)
         {
-            int glyphId = GetGlyphIndex(c);
+            int codePoint = text[i];
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                codePoint = char.ConvertToUtf32(text[i], text[i + 1]);
+                i++;
+            }
+
+            int glyphId = GetGlyphIndex(codePoint);
             GlyphMetrics metrics = GetGlyphOutline(glyphId).Metrics;
             width += metrics.AdvanceWidthAt(pointSize);
         }

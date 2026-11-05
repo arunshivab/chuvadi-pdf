@@ -2,6 +2,8 @@
 
 **Enum** in `Chuvadi.Pdf.IO` (IO)
 
+Selects which document-level metadata `PdfWriter` synthesises when it is absent from the objects being written. The file identifier (/ID) is always written, because it carries no document content and keeps output deterministic and viewer-friendly. The default is `All`, which preserves the writer's standard behaviour; pass a reduced set to suppress synthesis (for example when deliberately stripping metadata). Metadata that is already present in the written objects is never altered — these flags govern synthesis of absent entries only.
+
 ```csharp
 public enum SynthesizedMetadata
 ```

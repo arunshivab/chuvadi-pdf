@@ -18,10 +18,6 @@ Initializes a measurement from a value already expressed in points.
 
 - `points` — The length in PDF points.
 
-### `static XfaMeasurement Zero => new XfaMeasurement(0.0)`
-
-A zero-length measurement.
-
 ## Properties
 
 ### `Points`
@@ -31,6 +27,16 @@ double Points
 ```
 
 Gets the measurement value in PDF points (1/72 inch).
+
+### `Zero`
+
+__static__
+
+```csharp
+static XfaMeasurement Zero => new XfaMeasurement(0.0)
+```
+
+A zero-length measurement.
 
 ## Methods
 

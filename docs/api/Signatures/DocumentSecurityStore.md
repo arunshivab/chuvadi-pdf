@@ -26,6 +26,30 @@ Initialises a new DSS snapshot including a VRI sub-dictionary.
 
 ## Properties
 
+### `Certificates`
+
+```csharp
+ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
+```
+
+The certificates carried in the DSS `/Certs` array.
+
+### `Crls`
+
+```csharp
+ReadOnlyCollection<CertificateList> Crls => new(_crls)
+```
+
+The CRLs carried in the DSS `/CRLs` array.
+
+### `OcspResponses`
+
+```csharp
+ReadOnlyCollection<OcspResponse> OcspResponses => new(_ocspResponses)
+```
+
+The OCSP responses carried in the DSS `/OCSPs` array.
+
 ### `Vri`
 
 ```csharp
@@ -35,30 +59,6 @@ IReadOnlyDictionary<string, VriEntry> Vri => _vri
 Per-signature validation material keyed by upper-case SHA-1 hex of the signature's binary `/Contents` bytes (ISO 32000-2 §12.8.4.3). Empty when the DSS contains no `/VRI` sub-dictionary.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
-```
-
-The certificates carried in the DSS `/Certs` array.
-
-### `new`
-
-```csharp
-ReadOnlyCollection<CertificateList> Crls => new(_crls)
-```
-
-The CRLs carried in the DSS `/CRLs` array.
-
-### `new`
-
-```csharp
-ReadOnlyCollection<OcspResponse> OcspResponses => new(_ocspResponses)
-```
-
-The OCSP responses carried in the DSS `/OCSPs` array.
 
 ### `TryFindForSignature`
 

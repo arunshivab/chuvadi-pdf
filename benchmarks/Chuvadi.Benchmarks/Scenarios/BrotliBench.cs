@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 2.2 stage 4 — Brotli ratio benchmark
 
+// Fonts.Bundled and Fonts.Woff2 are deprecated (3.31.0) but still ship and are still measured.
+#pragma warning disable CS0618
+
 using System;
 using System.Collections.Generic;
 using System.IO;

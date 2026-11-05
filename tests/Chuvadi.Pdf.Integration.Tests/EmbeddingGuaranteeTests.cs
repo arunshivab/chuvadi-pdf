@@ -29,7 +29,7 @@ public sealed class EmbeddingGuaranteeTests
     {
         "Chuvadi.Pdf.Primitives", "Chuvadi.Pdf.Filters", "Chuvadi.Pdf.Objects", "Chuvadi.Pdf.Encryption",
         "Chuvadi.Pdf.IO", "Chuvadi.Pdf.Documents", "Chuvadi.Pdf.Content", "Chuvadi.Pdf.Fonts",
-        "Chuvadi.Pdf.Fonts.Rendering", "Chuvadi.Pdf.Fonts.Woff2", "Chuvadi.Pdf.Graphics", "Chuvadi.Pdf.Images",
+        "Chuvadi.Pdf.Fonts.Rendering", "Chuvadi.Fonts", "Chuvadi.Pdf.Graphics", "Chuvadi.Pdf.Images",
         "Chuvadi.Pdf.Rendering.Walking", "Chuvadi.Pdf.Rendering.DisplayList", "Chuvadi.Pdf.Rendering.Raster",
         "Chuvadi.Pdf.Rendering", "Chuvadi.Pdf.Text", "Chuvadi.Pdf.Text.Shaping", "Chuvadi.Pdf.Svg",
     };

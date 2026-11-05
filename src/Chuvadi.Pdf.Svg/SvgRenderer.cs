@@ -166,7 +166,7 @@ public sealed class SvgRenderer
         OptionalContentVisibility visibility = _opts.IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
             : document.Pages[pageIndex].OptionalContent.WithOverrides(_opts.LayerVisibility);
-        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, visibility);
+        PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, visibility, _opts.AnnotationMode);
 
         if (_opts.MaxVectorOps > 0
             && _opts.DensityFallback == SvgDensityFallback.Rasterize
@@ -280,7 +280,7 @@ public sealed class SvgRenderer
         int count = 0;
         foreach (RenderOp op in list)
         {
-            if (op is PathOp || op is ShadingOp)
+            if (op is PathOp || op is ShadingOp { IsExpressible: true })
             {
                 count++;
             }
@@ -435,6 +435,9 @@ public sealed class SvgRenderer
                         for (int i = 0; i < clipsToClose; i++) { w.CloseGroup(); }
                         w.CloseGroup();
                     }
+                    break;
+                case ShadingOp { IsExpressible: false }:
+                    // 3.31: shadings the list cannot express are for printers; SVG skips them as before.
                     break;
                 case ShadingOp sh:
                     FlushPendingFillRect(ref pendingFillRect, w);

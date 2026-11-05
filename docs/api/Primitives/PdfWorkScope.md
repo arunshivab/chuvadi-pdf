@@ -20,6 +20,16 @@ Content walking, text parsing, painting, stream decoding and image decoding chec
 
 ## Properties
 
+### `Current`
+
+__static__
+
+```csharp
+static PdfWorkScope? Current => Live(CurrentScope.Value)
+```
+
+Gets the innermost open scope on the current flow, or null when none is open.
+
 ### `Limits`
 
 ```csharp
@@ -36,19 +46,7 @@ CancellationToken CancellationToken
 
 Gets this scope's cancellation token.
 
-## Methods
-
-### `Live`
-
-__static__
-
-```csharp
-static PdfWorkScope? Current => Live(CurrentScope.Value)
-```
-
-Gets the innermost open scope on the current flow, or null when none is open.
-
-### `Interlocked.Read`
+### `MemoryBytes`
 
 ```csharp
 long MemoryBytes => Interlocked.Read(ref _memoryBytes)
@@ -56,13 +54,15 @@ long MemoryBytes => Interlocked.Read(ref _memoryBytes)
 
 Gets the large-buffer bytes charged to this scope so far.
 
-### `Interlocked.Read`
+### `ContentOperators`
 
 ```csharp
 long ContentOperators => Interlocked.Read(ref _operators)
 ```
 
 Gets the content-stream operators counted in this scope so far.
+
+## Methods
 
 ### `Enter`
 

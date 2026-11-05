@@ -112,6 +112,13 @@ public sealed class AnnotationAppearance
     /// The appearance form's resolved <c>/Resources</c> dictionary, or null
     /// when the form declares none.
     /// </summary>
+    /// <summary>
+    /// True when <see cref="Appearance"/> was made from the annotation's own
+    /// entries by an <see cref="IAnnotationAppearanceProvider"/> rather than
+    /// taken from its <c>/AP</c> (3.31).
+    /// </summary>
+    public bool IsGenerated { get; internal init; }
+
     public PdfDictionary? Resources { get; }
 }
 
@@ -123,7 +130,30 @@ public sealed class AnnotationAppearance
 public static class PageAnnotationAppearances
 {
     private const int FlagHidden = 0x2;
+    private const int FlagPrint = 0x4;
     private const int FlagNoView = 0x20;
+
+    /// <summary>
+    /// Collects the drawable annotation appearances of <paramref name="page"/>
+    /// for an <see cref="AnnotationMode"/> (3.31), taking generated appearances
+    /// from <paramref name="provider"/> where the file's own are missing or out
+    /// of date.
+    /// </summary>
+    /// <param name="page">The page whose annotations are collected.</param>
+    /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <param name="mode">Which annotations to include.</param>
+    /// <param name="provider">Supplies generated appearances, or null for the file's own only.</param>
+    /// <returns>The drawable appearances in <c>/Annots</c> order.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="page"/> or <paramref name="objects"/> is null.
+    /// </exception>
+    public static IReadOnlyList<AnnotationAppearance> Collect(
+        PdfPage page, PdfObjectStore objects, AnnotationMode mode, IAnnotationAppearanceProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(objects);
+        return CollectCore(page, objects, mode, provider);
+    }
 
     /// <summary>
     /// Collects the drawable annotation appearances of <paramref name="page"/>.
@@ -147,7 +177,29 @@ public static class PageAnnotationAppearances
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(objects);
+        return CollectCore(page, objects, AnnotationMode.View, null);
+    }
 
+    // True when an annotation with these flags and subtype is included in the mode.
+    private static bool Included(AnnotationMode mode, int flags, string? subtype)
+    {
+        if ((flags & FlagHidden) != 0 || subtype == "Popup")
+        {
+            return false;
+        }
+
+        return mode switch
+        {
+            AnnotationMode.View => (flags & FlagNoView) == 0,
+            AnnotationMode.Print => (flags & FlagPrint) != 0,
+            AnnotationMode.FormFieldsOnly => (flags & FlagPrint) != 0 && subtype == "Widget",
+            _ => false,
+        };
+    }
+
+    private static IReadOnlyList<AnnotationAppearance> CollectCore(
+        PdfPage page, PdfObjectStore objects, AnnotationMode mode, IAnnotationAppearanceProvider? provider)
+    {
         List<AnnotationAppearance> result = new List<AnnotationAppearance>();
 
         if (!page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsPrim))
@@ -172,20 +224,15 @@ public static class PageAnnotationAppearances
             }
 
             PdfName? subtype = annot.GetName(PdfName.Subtype);
-
-            if (subtype is not null && subtype.Value == "Popup")
-            {
-                continue;
-            }
-
             int flags = annot.GetInteger(PdfName.Intern("F"), 0);
 
-            if ((flags & FlagHidden) != 0 || (flags & FlagNoView) != 0)
+            if (!Included(mode, flags, subtype?.Value))
             {
                 continue;
             }
 
-            PdfStream? appearance = ResolveNormalAppearance(annot, objects);
+            PdfStream? stored = ResolveNormalAppearance(annot, objects);
+            PdfStream? appearance = provider is null ? stored : provider.GetAppearance(annot, stored, page, objects);
 
             if (appearance is null)
             {
@@ -216,7 +263,10 @@ public static class PageAnnotationAppearances
                 annot, appearance, rect,
                 scaleX, scaleY, offsetX, offsetY,
                 ma, mb, mc, md, me, mf,
-                resources));
+                resources)
+            {
+                IsGenerated = !ReferenceEquals(appearance, stored),
+            });
         }
 
         return result;

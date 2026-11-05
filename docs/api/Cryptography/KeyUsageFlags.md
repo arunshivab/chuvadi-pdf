@@ -2,6 +2,8 @@
 
 **Enum** in `Chuvadi.Cryptography.X509` (Cryptography)
 
+The named bits in a KeyUsage extension (RFC 5280 §4.2.1.3).
+
 ```csharp
 public enum KeyUsageFlags
 ```

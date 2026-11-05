@@ -10,6 +10,16 @@ public readonly record struct FontStyle(string FontFamily, int Weight, FontSlant
 
 ## Properties
 
+### `Default`
+
+__static__
+
+```csharp
+static FontStyle Default => new(string.Empty, 400, FontSlant.Normal, 0.0)
+```
+
+A neutral upright 400-weight style with no family.
+
 ### `IsBold`
 
 ```csharp
@@ -25,18 +35,6 @@ bool IsItalic => Slant != FontSlant.Normal
 ```
 
 True when the slant is italic or oblique.
-
-## Methods
-
-### `new`
-
-__static__
-
-```csharp
-static FontStyle Default => new(string.Empty, 400, FontSlant.Normal, 0.0)
-```
-
-A neutral upright 400-weight style with no family.
 
 ---
 

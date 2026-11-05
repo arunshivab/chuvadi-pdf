@@ -55,6 +55,14 @@ bool UseTaggedOrder
 
 Gets or initialises whether layout-aware extraction follows a Tagged PDF's structure tree (since 3.29). Default true: when the tree orders at least 80% of a page's text, that order is used; otherwise, or when false, columns and rows are found from the page's geometry.
 
+### `AnnotationMode`
+
+```csharp
+AnnotationMode AnnotationMode
+```
+
+Gets or initialises which annotations' text is extracted (3.31): View (the default), Print, FormFieldsOnly or None. Form fields without up-to-date appearances are read from their values in every mode.
+
 ## Methods
 
 ### `ExtractText`

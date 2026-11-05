@@ -87,6 +87,7 @@ Add-Project "tools/Chuvadi.Pdf.Cli/Chuvadi.Pdf.Cli.csproj"
 # ── Restore and build to verify ───────────────────────────────────────────────
 
 Write-Host "`nRestoring packages..." -ForegroundColor White
+& (Join-Path $PSScriptRoot "build\fetch-fonts.ps1")
 dotnet restore
 if ($LASTEXITCODE -ne 0) { Write-Error "Restore failed"; exit 1 }
 

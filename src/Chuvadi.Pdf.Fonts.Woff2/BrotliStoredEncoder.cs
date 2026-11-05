@@ -20,6 +20,7 @@ namespace Chuvadi.Pdf.Fonts.Woff2;
 /// Output bytes are byte-identical to <see cref="BrotliEncoder.Encode"/>.
 /// </para>
 /// </remarks>
+[System.Obsolete("Deprecated: no longer used by Chuvadi; for the LiPi Sans faces use Chuvadi.Fonts (FontPack). Removed at the Pdf move.")]
 public static class BrotliStoredEncoder
 {
     /// <summary>Encodes <paramref name="data"/> as a valid Brotli stream.</summary>

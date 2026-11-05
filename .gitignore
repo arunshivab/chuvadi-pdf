@@ -89,3 +89,6 @@ commitmsg.txt
 
 # Local-only reference files (kept on Arun's machine, not published)
 /Intercom_Directory_v1.pdf
+
+# ── Chuvadi.Fonts local feed (build/fetch-fonts.ps1, D-147) ─────────────────
+/.fonts-feed/

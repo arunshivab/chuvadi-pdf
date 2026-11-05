@@ -24,6 +24,14 @@ Initialises an OID from dotted form (e.g. "1.2.840.113549.1.7.2").
 
 ## Properties
 
+### `Arcs`
+
+```csharp
+long[] Arcs => (long[])_arcs.Clone()
+```
+
+The arcs as an array (defensive copy).
+
 ### `Dotted`
 
 ```csharp
@@ -33,14 +41,6 @@ string Dotted => _dotted
 The OID in dotted-decimal form.
 
 ## Methods
-
-### `=>`
-
-```csharp
-long[] Arcs => (long[])_arcs.Clone()
-```
-
-The arcs as an array (defensive copy).
 
 ### `ToString`
 

@@ -30,6 +30,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
       - name: Restore
         run: dotnet restore
 
@@ -65,6 +69,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
       - name: Restore
         run: dotnet restore
 
@@ -83,6 +91,10 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
 
       - name: Restore
         run: dotnet restore
@@ -115,6 +127,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
       - name: Install wasm-tools workload
         run: dotnet workload install wasm-tools
 
@@ -144,6 +160,10 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
 
       - name: Restore
         run: dotnet restore benchmarks/Chuvadi.Benchmarks/Chuvadi.Benchmarks.csproj

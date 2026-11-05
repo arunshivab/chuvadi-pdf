@@ -1,5 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
+// MOVED 3.31: from Chuvadi.Pdf.Rendering.DisplayList to Walking, same namespace (D-143).
 // SPEC:  PDF 32000-1:2008 §9.6.5 — Type 3 fonts
 // PHASE: Phase 2 — item 26, Type 3 fonts (rendering)
 //

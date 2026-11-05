@@ -17,9 +17,11 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Bundled\Chuvadi.Pdf.Fonts.Bundled.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Text.Shaping\Chuvadi.Pdf.Text.Shaping.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Walking\Chuvadi.Pdf.Rendering.Walking.csproj" />
-    <ProjectReference Include="..\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Annotations\Chuvadi.Pdf.Annotations.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Chuvadi.Fonts" />
   </ItemGroup>
 </Project>

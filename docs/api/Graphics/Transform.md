@@ -82,6 +82,14 @@ static Transform Identity
 
 The identity matrix [1 0 0 1 0 0].
 
+### `Translation`
+
+```csharp
+PointF Translation => new PointF(E, F)
+```
+
+Gets the translation component as a point.
+
 ## Methods
 
 ### `CreateTranslation`
@@ -177,14 +185,6 @@ Transform Translate(double tx, double ty)
 ```
 
 Returns a copy of this transform with a translation prepended.
-
-### `PointF`
-
-```csharp
-PointF Translation => new PointF(E, F)
-```
-
-Gets the translation component as a point.
 
 ### `==`
 

@@ -358,6 +358,21 @@ Returns the glyph for a Unicode code point, or 0 (.notdef) when the face has non
 
 **Returns:** The glyph id.
 
+### `GetVariantGlyphIndex`
+
+```csharp
+int GetVariantGlyphIndex(int codePoint, int variationSelector) => _loader.GetVariantGlyphIndex(codePoint, variationSelector)
+```
+
+Returns the glyph for a Unicode variation sequence, a base character followed by a variation selector (U+FE00-U+FE0F or U+E0100-U+E01EF), from the face's format 14 character map (3.31).
+
+**Parameters**
+
+- `codePoint` — The base character.
+- `variationSelector` — The variation selector.
+
+**Returns:** The glyph id the face lists for the sequence (the base character's own glyph for a default sequence), or -1 when the face does not list it.
+
 ### `HasGlyph`
 
 ```csharp

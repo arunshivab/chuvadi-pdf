@@ -118,13 +118,19 @@ double MatrixF
 
 The appearance form's `/Matrix` component f (default 0).
 
+### `IsGenerated`
+
+```csharp
+bool IsGenerated
+```
+
+The appearance form's resolved `/Resources` dictionary, or null when the form declares none. True when `Appearance` was made from the annotation's own entries by an `IAnnotationAppearanceProvider` rather than taken from its `/AP` (3.31).
+
 ### `Resources`
 
 ```csharp
 PdfDictionary? Resources
 ```
-
-The appearance form's resolved `/Resources` dictionary, or null when the form declares none.
 
 ---
 

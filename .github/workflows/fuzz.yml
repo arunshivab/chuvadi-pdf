@@ -38,6 +38,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
       - name: Restore
         run: dotnet restore tests/Chuvadi.Pdf.Fuzz/Chuvadi.Pdf.Fuzz.csproj
 

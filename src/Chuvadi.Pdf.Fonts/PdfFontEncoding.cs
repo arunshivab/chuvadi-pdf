@@ -83,13 +83,59 @@ public sealed class PdfFontEncoding
         return new PdfFontEncoding(map);
     }
 
-    private static PdfFontEncoding FromEncodingDictionary(PdfDictionary dict)
+    /// <summary>
+    /// Builds an encoding for a font whose built-in encoding is known (3.31,
+    /// D-172): an encoding dictionary without <c>/BaseEncoding</c> starts from
+    /// <paramref name="builtIn"/> (PDF 32000-1:2008 §9.6.6.1, Table 114).
+    /// </summary>
+    internal static PdfFontEncoding Build(PdfPrimitive? encoding, string? builtIn)
     {
-        // Start from the base encoding.
+        return encoding is PdfDictionary dict && builtIn is not null
+            ? FromEncodingDictionary(dict, builtIn.ToCharArray())
+            : Build(encoding);
+    }
+
+    // A built-in encoding table (code to Unicode) as an encoding (3.31, D-176).
+    internal static PdfFontEncoding FromTable(string table) => new PdfFontEncoding(table.ToCharArray());
+
+    // True for an encoding dictionary with /Differences and no /BaseEncoding,
+    // whose base is the font's implicit built-in encoding (Table 114).
+    internal static bool HasImplicitBase(PdfPrimitive? encoding) =>
+        encoding is PdfDictionary dict
+        && dict.GetName(PdfName.Intern("BaseEncoding")) is null
+        && dict.GetArray(PdfName.Intern("Differences")) is not null;
+
+    // The built-in encoding of a standard 14 font, by its /BaseFont name (a
+    // subset prefix such as "ABCDEF+" is ignored), or null for other fonts.
+    internal static string? Standard14BuiltIn(string? baseFont)
+    {
+        if (baseFont is null)
+        {
+            return null;
+        }
+
+        string name = baseFont.Length > 7 && baseFont[6] == '+' ? baseFont[7..] : baseFont;
+        return name switch
+        {
+            "Symbol" => BuiltInEncodings.Symbol,
+            "ZapfDingbats" => BuiltInEncodings.ZapfDingbats,
+            "Helvetica" or "Helvetica-Bold" or "Helvetica-Oblique" or "Helvetica-BoldOblique"
+                or "Times-Roman" or "Times-Bold" or "Times-Italic" or "Times-BoldItalic"
+                or "Courier" or "Courier-Bold" or "Courier-Oblique" or "Courier-BoldOblique" => BuiltInEncodings.Standard,
+            _ => null,
+        };
+    }
+
+    private static PdfFontEncoding FromEncodingDictionary(PdfDictionary dict) => FromEncodingDictionary(dict, null);
+
+    private static PdfFontEncoding FromEncodingDictionary(PdfDictionary dict, char[]? builtIn)
+    {
+        // Start from the base encoding: /BaseEncoding when present, else the
+        // font's built-in encoding when known (3.31), else WinAnsiEncoding.
         PdfName? baseName = dict.GetName(PdfName.Intern("BaseEncoding"));
         char[] map = baseName is not null
             ? FromNamedEncoding(baseName.Value)._map.Clone() as char[] ?? BuildWinAnsi()
-            : BuildWinAnsi();
+            : builtIn ?? BuildWinAnsi();
 
         // Apply /Differences array.
         // Format: [code name name name code name ...] where each integer
@@ -170,7 +216,17 @@ public sealed class PdfFontEncoding
             }
         }
 
-        return AdobeGlyphList.TryGetValue(name, out char c) ? c : '\0';
+        if (AdobeGlyphList.TryGetValue(name, out char c))
+        {
+            return c;
+        }
+
+        // 3.31 (D-172): every other name of the Adobe Glyph List ("A",
+        // "eacute", "one", ...). Before, these resolved to nothing, so a
+        // /Differences entry naming them was ignored.
+        return Chuvadi.Pdf.Fonts.Rendering.AdobeGlyphList.TryGetCodePoint(name, out int scalar) && scalar < 0x10000
+            ? (char)scalar
+            : '\0';
     }
 
     // ── Standard encoding tables ──────────────────────────────────────────
@@ -261,20 +317,8 @@ public sealed class PdfFontEncoding
         return map;
     }
 
-    private static char[] BuildStandard()
-    {
-        // Standard PDF encoding — simplified subset for common characters.
-        char[] map = new char[256];
-
-        for (int i = 0x20; i <= 0x7E; i++)
-        {
-            map[i] = (char)i;
-        }
-
-        map[0x60] = '\u2018'; // grave accent → left single quote in Standard
-        map[0x27] = '\u2019'; // apostrophe → right single quote
-        return map;
-    }
+    // StandardEncoding, all 149 codes (3.31; before, only 0x20-0x7E).
+    private static char[] BuildStandard() => BuiltInEncodings.Standard.ToCharArray();
 
     private static char[] BuildPdfDoc()
     {

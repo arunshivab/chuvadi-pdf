@@ -51,7 +51,8 @@ its own NuGet package, with a `Chuvadi.Pdf` meta-package for the common case.
 | Raster / display-list / walker split     | Chuvadi.Pdf.Rendering.{Raster,DisplayList,Walking} |
 | SVG page rendering (selectable text)     | Chuvadi.Pdf.Svg                   |
 | TrueType bytecode hinting + autohinter   | Chuvadi.Pdf.Fonts.Rendering       |
-| WOFF2 decode (in-house Brotli)           | Chuvadi.Pdf.Fonts.Woff2           |
+| WOFF2 decode (in-house Brotli); deprecated in 3.31.0 | Chuvadi.Pdf.Fonts.Woff2 |
+| LiPi Sans faces (Latin + 9 Indic scripts) | Chuvadi.Fonts (Chuvadi's own package, fetched by `build/fetch-fonts.ps1`) |
 | Text and image watermarks                | Chuvadi.Pdf.Watermark             |
 | **True PHI-safe redaction**              | Chuvadi.Pdf.Redaction             |
 | AcroForm read and fill; outlines         | Chuvadi.Pdf.Forms                 |
@@ -227,7 +228,8 @@ chuvadi/
 │   ├── Chuvadi.Pdf.Content/           # content-stream tokenizer/parser
 │   ├── Chuvadi.Pdf.Fonts/             # font program inspection
 │   ├── Chuvadi.Pdf.Fonts.Rendering/   # glyph outlines + TrueType hinting
-│   ├── Chuvadi.Pdf.Fonts.Woff2/       # WOFF2 decode (in-house Brotli)
+│   ├── Chuvadi.Pdf.Fonts.Woff2/       # WOFF2 decode (in-house Brotli), deprecated
+│   ├── Chuvadi.Pdf.Fonts.Bundled/     # LiPi Sans as WOFF2, deprecated (use Chuvadi.Fonts)
 │   ├── Chuvadi.Pdf.Text/              # text extraction strategies
 │   ├── Chuvadi.Pdf.Text.Shaping/      # complex-script shaping (GSUB/GPOS)
 │   ├── Chuvadi.Pdf.Graphics/          # geometry, color, path primitives
@@ -272,11 +274,12 @@ chuvadi/
 ## Building
 
 ```bash
+pwsh build/fetch-fonts.ps1      # once: Chuvadi.Fonts into .fonts-feed/ (SHA-256 checked)
 dotnet build Chuvadi.slnx -c Release
 dotnet test  Chuvadi.slnx -c Release
 ```
 
-Requires the .NET 10 SDK. **2,392 tests across 30 test projects, 0 failures.**
+Requires the .NET 10 SDK. On Windows PowerShell 5, run `.\build\fetch-fonts.ps1`. **3,165 tests across 30 test projects, 0 failures.**
 
 ---
 

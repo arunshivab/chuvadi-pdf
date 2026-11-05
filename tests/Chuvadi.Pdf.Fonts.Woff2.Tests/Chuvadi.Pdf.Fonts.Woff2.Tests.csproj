@@ -4,7 +4,7 @@
     <AssemblyName>Chuvadi.Pdf.Fonts.Woff2.Tests</AssemblyName>
     <RootNamespace>Chuvadi.Pdf.Fonts.Woff2.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CS0618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

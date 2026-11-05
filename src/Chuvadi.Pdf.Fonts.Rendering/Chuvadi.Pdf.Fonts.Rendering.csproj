@@ -26,5 +26,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.Raster" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.DisplayList" />
   </ItemGroup>
 </Project>

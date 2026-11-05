@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: Phase 4 (Phase 0) — LiPi automatic font embedding
 //
-// Maps each script to its LiPi Sans face. The faces themselves live in the
-// shared Chuvadi.Pdf.Fonts.Bundled package (3.30); the face name is used as
-// the builder's font key.
+// Maps each script to its LiPi Sans face. The faces themselves come from the
+// Chuvadi.Fonts package (3.31, D-113): the Regular file of each script. The
+// face name is used as the builder's font key.
 
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Chuvadi.Pdf.Fonts.Bundled;
+using Chuvadi.Fonts;
 using Chuvadi.Pdf.Text.Shaping;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -37,8 +38,15 @@ internal sealed class LipiFontSet
     /// <returns>The face name, e.g. "LiPi-Sans-Tamil".</returns>
     internal static string FaceName(LipiScript script) => "LiPi-Sans-" + ResourceByScript[script];
 
-    /// <summary>Returns the sfnt program for a script's LiPi face (decoded once, shared).</summary>
+    private static readonly ConcurrentDictionary<LipiScript, byte[]> Programs = new ConcurrentDictionary<LipiScript, byte[]>();
+
+    /// <summary>Returns the Chuvadi.Fonts file name of a script's LiPi face.</summary>
     /// <param name="script">The script.</param>
-    /// <returns>The decoded TrueType sfnt bytes.</returns>
-    internal byte[] GetFontProgram(LipiScript script) => BundledFonts.GetFontProgram(FaceName(script));
+    /// <returns>The file name, e.g. "LiPi-Sans-Tamil-Regular.ttf".</returns>
+    internal static string FileName(LipiScript script) => FaceName(script) + "-Regular.ttf";
+
+    /// <summary>Returns the sfnt program for a script's LiPi face (read once, shared).</summary>
+    /// <param name="script">The script.</param>
+    /// <returns>The TrueType sfnt bytes. The array is shared: do not change it.</returns>
+    internal byte[] GetFontProgram(LipiScript script) => Programs.GetOrAdd(script, s => FontPack.ReadAllBytes(FileName(s)));
 }

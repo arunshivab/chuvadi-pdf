@@ -24,6 +24,14 @@ Initialises a new ExtendedKeyUsageExtension.
 
 ## Properties
 
+### `Purposes`
+
+```csharp
+ReadOnlyCollection<ObjectIdentifier> Purposes => new(_purposes)
+```
+
+The set of key purpose OIDs.
+
 ### `Oid`
 
 __static__
@@ -35,14 +43,6 @@ static ObjectIdentifier Oid => KnownOids.ExtKeyUsage
 The OID identifying this extension.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<ObjectIdentifier> Purposes => new(_purposes)
-```
-
-The set of key purpose OIDs.
 
 ### `Allows`
 

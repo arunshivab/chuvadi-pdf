@@ -99,7 +99,7 @@ public sealed class PageContentInventory
                 case ImageOp i when i.Alpha > 0 && i.Width > 0 && i.Height > 0:
                     images++;
                     break;
-                case ShadingOp:
+                case ShadingOp { IsExpressible: true }:
                     shadings++;
                     break;
                 case TilingPatternOp tp when depth < 8 && (tp.Tiles.Count > 0 || tp.IsRepeating):

@@ -30,9 +30,7 @@ IReadOnlyList<XfaPacket> Packets => _packets
 
 Gets the XFA packets in document order.
 
-## Methods
-
-### `Get`
+### `Template`
 
 ```csharp
 XfaPacket? Template => Get("template")
@@ -40,7 +38,7 @@ XfaPacket? Template => Get("template")
 
 Gets the `template` packet (form layout), or null when absent.
 
-### `Get`
+### `Datasets`
 
 ```csharp
 XfaPacket? Datasets => Get("datasets")
@@ -48,7 +46,7 @@ XfaPacket? Datasets => Get("datasets")
 
 Gets the `datasets` packet (data layer), or null when absent.
 
-### `Get`
+### `Config`
 
 ```csharp
 XfaPacket? Config => Get("config")
@@ -56,7 +54,7 @@ XfaPacket? Config => Get("config")
 
 Gets the `config` packet, or null when absent.
 
-### `Get`
+### `Form`
 
 ```csharp
 XfaPacket? Form => Get("form")
@@ -64,13 +62,15 @@ XfaPacket? Form => Get("form")
 
 Gets the `form` packet, or null when absent.
 
-### `BuildDataFields`
+### `DataFields`
 
 ```csharp
 IReadOnlyList<XfaDataField> DataFields => _dataFields ??= BuildDataFields()
 ```
 
 Gets the data layer as a flat list of fields walked from the `datasets` packet's `&lt;xfa:data&gt;` subtree, each with a best-effort `XfaGeometry` when a matching AcroForm widget is found. Empty when there is no `datasets` packet. Computed once and cached.
+
+## Methods
 
 ### `Get`
 

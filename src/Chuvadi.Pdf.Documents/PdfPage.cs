@@ -33,12 +33,15 @@ public sealed class PdfPage
     private readonly int _pageIndex;
     private readonly Func<OptionalContentVisibility>? _optionalContent;
     private readonly Func<PdfDictionary?>? _structTreeRoot;
+    private readonly Func<PdfDictionary?>? _acroForm;
 
     internal PdfPage(
         PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex,
         Func<OptionalContentVisibility>? optionalContent = null,
-        Func<PdfDictionary?>? structTreeRoot = null)
+        Func<PdfDictionary?>? structTreeRoot = null,
+        Func<PdfDictionary?>? acroForm = null)
     {
+        _acroForm = acroForm;
         _dict = dict ?? throw new ArgumentNullException(nameof(dict));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _pageIndex = pageIndex;
@@ -53,6 +56,14 @@ public sealed class PdfPage
     /// order from it. PDF 32000-1:2008 §14.7.2 — Structure Hierarchy.
     /// </summary>
     public PdfDictionary? StructTreeRoot => _structTreeRoot?.Invoke();
+
+    /// <summary>
+    /// Gets the interactive form dictionary (<c>/AcroForm</c>) of the document
+    /// this page belongs to, or null when it has none (3.31). Field appearances
+    /// are made from its <c>/DA</c>, <c>/DR</c> and <c>/NeedAppearances</c>.
+    /// PDF 32000-1:2008 §12.7.2 — Interactive Form Dictionary.
+    /// </summary>
+    public PdfDictionary? AcroForm => _acroForm?.Invoke();
 
     /// <summary>
     /// Gets the document's default layer visibility (its <c>/OCProperties /D</c>
@@ -102,6 +113,30 @@ public sealed class PdfPage
 
         set => SetBox(PdfName.CropBox, value);
     }
+
+    /// <summary>
+    /// Gets the BleedBox — the region printed content is clipped to in
+    /// production (3.31). Defaults to <see cref="CropBox"/>; not inherited.
+    /// PDF 32000-1:2008 §14.11.2.
+    /// </summary>
+    public PdfRectangle BleedBox => OwnBoxOrCropBox("BleedBox");
+
+    /// <summary>
+    /// Gets the TrimBox — the intended size of the finished page (3.31).
+    /// Defaults to <see cref="CropBox"/>; not inherited. PDF 32000-1:2008 §14.11.2.
+    /// </summary>
+    public PdfRectangle TrimBox => OwnBoxOrCropBox("TrimBox");
+
+    /// <summary>
+    /// Gets the ArtBox — the extent of the page's meaningful content (3.31).
+    /// Defaults to <see cref="CropBox"/>; not inherited. PDF 32000-1:2008 §14.11.2.
+    /// </summary>
+    public PdfRectangle ArtBox => OwnBoxOrCropBox("ArtBox");
+
+    private PdfRectangle OwnBoxOrCropBox(string key) =>
+        _dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v) && _resolver.Resolve(v ?? PdfNull.Value) is PdfArray arr && arr.Count >= 4
+            ? RectangleFromArray(arr)
+            : CropBox;
 
     /// <summary>
     /// Gets the width of the page's MediaBox in points (1/72 inch).

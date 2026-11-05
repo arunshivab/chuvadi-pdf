@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Annotations;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
@@ -380,7 +381,16 @@ public static class AnnotationFlattener
                     continue;
                 }
 
-                PdfStream? appearance = ResolveNormalAppearance(annot);
+                // 3.31 (D-152): a field or comment whose appearance is missing
+                // or out of date flattens with one made from its own entries,
+                // exactly as the renderers draw it.
+                PdfStream? stored = ResolveNormalAppearance(annot);
+                PdfStream? appearance = GeneratedAppearances.Instance.GetAppearance(annot, stored, page, _store);
+                if (appearance is not null && !ReferenceEquals(appearance, stored))
+                {
+                    appearance = HoistNestedStreams(appearance);
+                }
+
                 if (appearance is null
                     || !TryReadRect(annot, out double rx0, out double ry0, out double rx1, out double ry1)
                     || !TryComputePlacement(appearance, rx0, ry0, rx1, ry1, out double sx, out double sy, out double tx, out double ty))
@@ -652,6 +662,55 @@ public static class AnnotationFlattener
             PdfObjectId id = NextId();
             _extraObjects.Add(new PdfIndirectObject(id, new PdfStream(form, appearance.RawBytes)));
             return id;
+        }
+
+        // A generated appearance holds its fonts' programs and ToUnicode maps
+        // as direct streams; a PDF file needs every stream to be an indirect
+        // object, so each nested one becomes a new object.
+        private PdfStream HoistNestedStreams(PdfStream appearance)
+        {
+            PdfDictionary dict = (PdfDictionary)Hoist(appearance.Dictionary, top: true);
+            return new PdfStream(dict, appearance.RawBytes);
+        }
+
+        private PdfPrimitive Hoist(PdfPrimitive value, bool top = false)
+        {
+            switch (value)
+            {
+                case PdfStream stream when !top:
+                    {
+                        PdfDictionary inner = (PdfDictionary)Hoist(stream.Dictionary, top: true);
+                        inner.Set(PdfName.Length, stream.RawBytes.Length);
+                        PdfObjectId id = NextId();
+                        _extraObjects.Add(new PdfIndirectObject(id, new PdfStream(inner, stream.RawBytes)));
+                        return new PdfReference(id);
+                    }
+
+                case PdfDictionary dict:
+                    {
+                        PdfDictionary copy = new PdfDictionary();
+                        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                        {
+                            copy.Set(entry.Key, Hoist(entry.Value));
+                        }
+
+                        return copy;
+                    }
+
+                case PdfArray array:
+                    {
+                        PdfArray copy = new PdfArray(array.Count);
+                        foreach (PdfPrimitive item in array)
+                        {
+                            copy.Add(Hoist(item));
+                        }
+
+                        return copy;
+                    }
+
+                default:
+                    return value;
+            }
         }
 
         private PdfObjectId MaterializeRawStream(PdfStream stream)

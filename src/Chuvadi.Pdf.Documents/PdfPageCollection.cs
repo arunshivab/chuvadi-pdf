@@ -42,13 +42,16 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     private readonly int _count;
     private readonly Func<OptionalContentVisibility>? _optionalContent;
     private readonly Func<PdfDictionary?>? _structTreeRoot;
+    private readonly Func<PdfDictionary?>? _acroForm;
 
     internal PdfPageCollection(
         PdfDictionary pagesRoot, IPdfObjectResolver resolver,
         Func<OptionalContentVisibility>? optionalContent = null,
-        Func<PdfDictionary?>? structTreeRoot = null)
+        Func<PdfDictionary?>? structTreeRoot = null,
+        Func<PdfDictionary?>? acroForm = null)
     {
         _structTreeRoot = structTreeRoot;
+        _acroForm = acroForm;
         _pagesRoot = pagesRoot ?? throw new ArgumentNullException(nameof(pagesRoot));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _optionalContent = optionalContent;
@@ -117,7 +120,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         int index = 0;
         foreach (PdfDictionary leaf in WalkPageDictionaries(_pagesRoot, 0))
         {
-            yield return new PdfPage(leaf, _resolver, index, _optionalContent, _structTreeRoot);
+            yield return new PdfPage(leaf, _resolver, index, _optionalContent, _structTreeRoot, _acroForm);
             index++;
         }
     }
@@ -214,7 +217,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
             {
                 if (localOffset == targetIndex)
                 {
-                    return new PdfPage(kidDict, _resolver, targetIndex, _optionalContent, _structTreeRoot);
+                    return new PdfPage(kidDict, _resolver, targetIndex, _optionalContent, _structTreeRoot, _acroForm);
                 }
 
                 localOffset++;

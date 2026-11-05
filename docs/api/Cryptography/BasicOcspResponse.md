@@ -47,6 +47,14 @@ DateTimeOffset ProducedAt
 
 The time the response was produced.
 
+### `Responses`
+
+```csharp
+ReadOnlyCollection<SingleResponse> Responses => new(_responses)
+```
+
+The per-certificate status entries.
+
 ### `TbsRawEncoding`
 
 ```csharp
@@ -71,17 +79,7 @@ BitStringValue SignatureValue
 
 The signature over `TbsRawEncoding`.
 
-## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<SingleResponse> Responses => new(_responses)
-```
-
-The per-certificate status entries.
-
-### `new`
+### `Certificates`
 
 ```csharp
 ReadOnlyCollection<X509Certificate> Certificates => new(_certs)

@@ -96,6 +96,14 @@ BitStringValue? SubjectUniqueId
 
 Optional v2/v3 subjectUniqueID.
 
+### `Extensions`
+
+```csharp
+ReadOnlyCollection<X509Extension> Extensions => new(_extensions)
+```
+
+The v3 extensions.
+
 ### `RawEncoding`
 
 ```csharp
@@ -105,14 +113,6 @@ byte[] RawEncoding
 The complete TBSCertificate encoding — the bytes whose hash is signed by the outer Certificate.signatureValue.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<X509Extension> Extensions => new(_extensions)
-```
-
-The v3 extensions.
 
 ### `FindExtension`
 

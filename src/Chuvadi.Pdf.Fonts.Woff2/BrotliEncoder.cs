@@ -30,6 +30,7 @@ namespace Chuvadi.Pdf.Fonts.Woff2;
 /// <see cref="System.IO.Compression.BrotliStream"/>.
 /// </para>
 /// </remarks>
+[System.Obsolete("Deprecated: no longer used by Chuvadi; for the LiPi Sans faces use Chuvadi.Fonts (FontPack). Removed at the Pdf move.")]
 public static class BrotliEncoder
 {
     // RFC §9.2: with MNIBBLES=4, MLEN-1 fits in 16 bits → max 65536 bytes per stored block.

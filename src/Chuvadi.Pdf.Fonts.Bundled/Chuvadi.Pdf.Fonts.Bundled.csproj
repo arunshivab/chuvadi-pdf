@@ -3,12 +3,16 @@
     <AssemblyName>Chuvadi.Pdf.Fonts.Bundled</AssemblyName>
     <RootNamespace>Chuvadi.Pdf.Fonts.Bundled</RootNamespace>
     <Description>
+      DEPRECATED in 3.31.0: use the Chuvadi.Fonts package, which carries the
+      same LiPi Sans faces as static TrueType files. Removed at the Pdf move.
       The fonts bundled with Chuvadi (LiPi Sans: Latin and nine Indic scripts,
       SIL Open Font License 1.1), shared by authoring, which embeds them, and
       the raster renderer, which draws text in fonts a PDF does not embed with
       them (3.30, D-87, D-100).
     </Description>
     <PackageId>Chuvadi.Pdf.Fonts.Bundled</PackageId>
+    <!-- Deprecated with Fonts.Woff2 (3.31.0); still decodes its WOFF2 files with it. -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Woff2\Chuvadi.Pdf.Fonts.Woff2.csproj" />

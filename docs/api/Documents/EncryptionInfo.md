@@ -79,9 +79,7 @@ bool EncryptMetadata
 
 Gets whether the /Metadata stream is encrypted.
 
-## Methods
-
-### `=>`
+### `AllowPrint`
 
 ```csharp
 bool AllowPrint => (Permissions & PrintBit) != 0
@@ -89,7 +87,7 @@ bool AllowPrint => (Permissions & PrintBit) != 0
 
 Bit 3 — Print the document (possibly at low quality).
 
-### `=>`
+### `AllowModify`
 
 ```csharp
 bool AllowModify => (Permissions & ModifyBit) != 0
@@ -97,7 +95,7 @@ bool AllowModify => (Permissions & ModifyBit) != 0
 
 Bit 4 — Modify the contents of the document.
 
-### `=>`
+### `AllowCopy`
 
 ```csharp
 bool AllowCopy => (Permissions & CopyBit) != 0
@@ -105,7 +103,7 @@ bool AllowCopy => (Permissions & CopyBit) != 0
 
 Bit 5 — Copy or extract text and graphics from the document.
 
-### `=>`
+### `AllowAnnotate`
 
 ```csharp
 bool AllowAnnotate => (Permissions & AnnotateBit) != 0
@@ -113,7 +111,7 @@ bool AllowAnnotate => (Permissions & AnnotateBit) != 0
 
 Bit 6 — Add or modify text annotations and fill in interactive form fields.
 
-### `=>`
+### `AllowFillForms`
 
 ```csharp
 bool AllowFillForms => (Permissions & FillFormsBit) != 0
@@ -121,7 +119,7 @@ bool AllowFillForms => (Permissions & FillFormsBit) != 0
 
 Bit 9 — Fill in existing interactive form fields (R≥3).
 
-### `=>`
+### `AllowAccessibilityExtract`
 
 ```csharp
 bool AllowAccessibilityExtract => (Permissions & AccessibilityBit) != 0
@@ -129,7 +127,7 @@ bool AllowAccessibilityExtract => (Permissions & AccessibilityBit) != 0
 
 Bit 10 — Extract text and graphics for accessibility (R≥3, deprecated in PDF 2.0).
 
-### `=>`
+### `AllowAssemble`
 
 ```csharp
 bool AllowAssemble => (Permissions & AssembleBit) != 0
@@ -137,7 +135,7 @@ bool AllowAssemble => (Permissions & AssembleBit) != 0
 
 Bit 11 — Assemble the document: insert, rotate, or delete pages (R≥3).
 
-### `=>`
+### `AllowPrintHighQuality`
 
 ```csharp
 bool AllowPrintHighQuality => (Permissions & PrintHighQualityBit) != 0

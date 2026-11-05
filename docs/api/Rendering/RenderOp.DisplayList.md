@@ -34,6 +34,30 @@ SoftMaskInfo? SoftMask
 
 Active soft mask (ExtGState /SMask) gating this op, or null.
 
+### `Annotation`
+
+```csharp
+AnnotationSource? Annotation
+```
+
+The annotation this op was drawn from (3.31), or null for the page's own content. Lets a printer filter or group annotation content.
+
+### `GroupIds`
+
+```csharp
+IReadOnlyList<int> GroupIds
+```
+
+The ids of the transparency groups this op is drawn inside, outermost first (3.31, D-173), for example `[7, 9]`. Empty when the op is in no group; never null. Each id is a `TransparencyGroup.Id` in `PageDisplayList.TransparencyGroups`.
+
+### `GroupTransparency`
+
+```csharp
+OpTransparency? GroupTransparency
+```
+
+For an op inside a transparency group (3.31, D-173): its own opacity, blend mode and soft mask within the innermost group, without the values the group itself is composited with (those are on the `TransparencyGroup`). Null for an op in no group. The op's `BlendMode`, `SoftMask` and opacity properties keep the values drawn by renderers that do not composite groups.
+
 ### `Layers`
 
 ```csharp

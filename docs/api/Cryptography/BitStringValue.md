@@ -37,9 +37,7 @@ int UnusedBitsInFinalOctet
 
 Number of bits in the final octet that are not part of the value.
 
-## Methods
-
-### `=>`
+### `BitLength`
 
 ```csharp
 int BitLength => (Bytes.Length * 8) - UnusedBitsInFinalOctet

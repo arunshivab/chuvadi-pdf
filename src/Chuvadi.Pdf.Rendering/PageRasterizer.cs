@@ -198,7 +198,7 @@ public sealed class PageRasterizer
         double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
         bool lightHint = options.Hinting == HintingMode.Light;
         PageDisplayList list = DisplayListBuilder.Build(
-            page, _objects, options.VisibilityFor(page), hintScale, lightHint, options.AutohintUnhintedFonts);
+            page, _objects, options.VisibilityFor(page), options.AnnotationMode, hintScale, lightHint, options.AutohintUnhintedFonts);
 
         if (list.Ops.Count == 0)
         {
@@ -531,7 +531,7 @@ public sealed class PageRasterizer
         double hintScale = options.Hinting == HintingMode.Off ? 0.0 : options.Scale;
         bool lightHint = options.Hinting == HintingMode.Light;
         PageDisplayList list = DisplayListBuilder.Build(
-            page, _objects, options.VisibilityFor(page), hintScale, lightHint, options.AutohintUnhintedFonts);
+            page, _objects, options.VisibilityFor(page), options.AnnotationMode, hintScale, lightHint, options.AutohintUnhintedFonts);
         if (list.Ops.Count == 0)
         {
             return;

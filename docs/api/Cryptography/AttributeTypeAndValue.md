@@ -48,15 +48,15 @@ Asn1UniversalTag ValueTag
 
 The original ASN.1 string tag of the encoded value.
 
-## Methods
-
-### `GetShortName`
+### `ShortName`
 
 ```csharp
 string ShortName => GetShortName(Type)
 ```
 
 The short attribute name (e.g. "CN", "O") if registered, otherwise the OID dotted form.
+
+## Methods
 
 ### `ToString`
 

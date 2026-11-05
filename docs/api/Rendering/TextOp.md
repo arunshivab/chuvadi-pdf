@@ -34,6 +34,14 @@ required string BaseFont
 
 Base font name (e.g. "Helvetica", "Times-Roman", or a subset like "ABCDEF+MyFont").
 
+### `Font`
+
+```csharp
+DisplayListFont? Font
+```
+
+The font, resolved through the same resources as the text (3.31): the program, its kind and the substitute for a font that is not embedded. One instance per font dictionary on the page. Null when the font resource cannot be found.
+
 ### `FontSize`
 
 ```csharp

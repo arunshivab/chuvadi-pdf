@@ -31,9 +31,10 @@ Opening a document (`PdfDocument.Open` / `OpenAsync`), rendering it
 
 These are checked by `EmbeddingGuaranteeTests`, which scans the compiled
 assemblies on the viewing path (Primitives, Filters, Objects, Encryption, IO,
-Documents, Content, Fonts, Fonts.Rendering, Fonts.Woff2, Graphics, Images,
+Documents, Content, Fonts, Fonts.Rendering, Graphics, Images,
 Rendering.Walking, Rendering.DisplayList, Rendering.Raster, Rendering, Text,
-Text.Shaping, Svg) for any reference to network, process, temporary-file or
+Text.Shaping, Svg, and the Chuvadi.Fonts package they read the LiPi Sans
+faces from) for any reference to network, process, temporary-file or
 file-system APIs (other than that one read-only open), and checks that none of
 them depends on `Chuvadi.Pdf.Xfa`, `Chuvadi.Pdf.Signatures` or
 `Chuvadi.Cryptography`.

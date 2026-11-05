@@ -308,6 +308,19 @@ public sealed class FontFace
     public int GetGlyphIndex(int codePoint) => _loader.GetGlyphIndex(codePoint);
 
     /// <summary>
+    /// Returns the glyph for a Unicode variation sequence, a base character
+    /// followed by a variation selector (U+FE00-U+FE0F or U+E0100-U+E01EF),
+    /// from the face's format 14 character map (3.31).
+    /// </summary>
+    /// <param name="codePoint">The base character.</param>
+    /// <param name="variationSelector">The variation selector.</param>
+    /// <returns>
+    /// The glyph id the face lists for the sequence (the base character's own
+    /// glyph for a default sequence), or -1 when the face does not list it.
+    /// </returns>
+    public int GetVariantGlyphIndex(int codePoint, int variationSelector) => _loader.GetVariantGlyphIndex(codePoint, variationSelector);
+
+    /// <summary>
     /// Gets the face's Unicode character map: every code point the face maps,
     /// to its glyph id.
     /// </summary>

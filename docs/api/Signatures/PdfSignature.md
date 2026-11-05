@@ -116,15 +116,15 @@ bool IsDocumentTimestamp
 
 True when this is a document timestamp (/Type /DocTimeStamp), not a signature.
 
-## Methods
-
-### `SignatureSubFilter.IsCmsBased`
+### `IsCmsBased`
 
 ```csharp
 bool IsCmsBased => SignatureSubFilter.IsCmsBased(SubFilter ?? string.Empty)
 ```
 
 True when the /SubFilter indicates the /Contents bytes are a CMS / PKCS#7 SignedData container that can be parsed by `DecodeCms`.
+
+## Methods
 
 ### `DecodeCms`
 

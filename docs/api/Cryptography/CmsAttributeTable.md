@@ -20,6 +20,14 @@ Initialises a new CmsAttributeTable.
 
 ## Properties
 
+### `Attributes`
+
+```csharp
+ReadOnlyCollection<CmsAttribute> Attributes => new(_attributes)
+```
+
+The attributes in their original order.
+
 ### `Count`
 
 ```csharp
@@ -37,14 +45,6 @@ byte[] DerEncodedForVerification
 The DER encoding of the SET OF Attribute, with the universal SET tag (0x31) substituted for the IMPLICIT [0] tag that appeared on the wire. These are the bytes the signature actually covers per RFC 5652 §5.4.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<CmsAttribute> Attributes => new(_attributes)
-```
-
-The attributes in their original order.
 
 ### `Find`
 

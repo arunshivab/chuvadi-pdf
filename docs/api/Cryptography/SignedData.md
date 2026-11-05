@@ -37,6 +37,14 @@ int Version
 
 The CMS version (1 for typical PDF signatures, 3 for SKI signers).
 
+### `DigestAlgorithms`
+
+```csharp
+ReadOnlyCollection<AlgorithmIdentifier> DigestAlgorithms => new(_digestAlgorithms)
+```
+
+The set of digest algorithms used by any SignerInfo.
+
 ### `EncapContentInfo`
 
 ```csharp
@@ -45,17 +53,7 @@ EncapsulatedContentInfo EncapContentInfo
 
 The encapsulated content (or its absence, for detached signatures).
 
-## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<AlgorithmIdentifier> DigestAlgorithms => new(_digestAlgorithms)
-```
-
-The set of digest algorithms used by any SignerInfo.
-
-### `new`
+### `Certificates`
 
 ```csharp
 ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
@@ -63,7 +61,7 @@ ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
 
 The certificates embedded in the SignedData.
 
-### `new`
+### `Crls`
 
 ```csharp
 ReadOnlyCollection<byte[]> Crls => new(_crls)
@@ -71,13 +69,15 @@ ReadOnlyCollection<byte[]> Crls => new(_crls)
 
 The CRLs embedded in the SignedData (raw bytes — CRL decoder lands later).
 
-### `new`
+### `SignerInfos`
 
 ```csharp
 ReadOnlyCollection<SignerInfo> SignerInfos => new(_signerInfos)
 ```
 
 The SignerInfos.
+
+## Methods
 
 ### `Read`
 

@@ -6,8 +6,9 @@
     Individual projects reference packages without specifying versions.
 
     POLICY: Test projects may use xUnit and related packages.
-            Source projects (src/) have ZERO NuGet dependencies.
-            This file exists only for test and tooling packages.
+            Source projects (src/) have ZERO third-party NuGet dependencies.
+            The one package they may use is Chuvadi's own Chuvadi.Fonts
+            (D-113, D-147), restored from .fonts-feed (build/fetch-fonts.ps1).
   -->
 
   <PropertyGroup>
@@ -28,6 +29,11 @@
 
     <!-- Benchmarking: for performance regression tests -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Chuvadi's own LiPi Sans font pack (fonts-v1.0.0 release, D-147). -->
+    <PackageVersion Include="Chuvadi.Fonts" Version="1.0.0" />
   </ItemGroup>
 
 </Project>

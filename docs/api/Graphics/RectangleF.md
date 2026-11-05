@@ -64,6 +64,38 @@ double Top => Y + Height
 
 Top edge in PDF space (Y + Height).
 
+### `BottomLeft`
+
+```csharp
+PointF BottomLeft => new PointF(X, Y)
+```
+
+Bottom-left corner.
+
+### `TopRight`
+
+```csharp
+PointF TopRight => new PointF(Right, Top)
+```
+
+Top-right corner.
+
+### `Centre`
+
+```csharp
+PointF Centre => new PointF(X + Width / 2.0, Y + Height / 2.0)
+```
+
+Centre of the rectangle.
+
+### `Size`
+
+```csharp
+SizeF Size => new SizeF(Width, Height)
+```
+
+Size of the rectangle.
+
 ### `Zero`
 
 __static__
@@ -83,38 +115,6 @@ bool IsEmpty => Width == 0 || Height == 0
 Returns true when Width or Height is zero.
 
 ## Methods
-
-### `PointF`
-
-```csharp
-PointF BottomLeft => new PointF(X, Y)
-```
-
-Bottom-left corner.
-
-### `PointF`
-
-```csharp
-PointF TopRight => new PointF(Right, Top)
-```
-
-Top-right corner.
-
-### `PointF`
-
-```csharp
-PointF Centre => new PointF(X + Width / 2.0, Y + Height / 2.0)
-```
-
-Centre of the rectangle.
-
-### `SizeF`
-
-```csharp
-SizeF Size => new SizeF(Width, Height)
-```
-
-Size of the rectangle.
 
 ### `FromCorners`
 

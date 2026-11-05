@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate src/Chuvadi.Pdf.Fonts.Rendering/AdobeGlyphList.cs from the vendored AGL.
+"""Generate src/Chuvadi.Pdf.Fonts/AdobeGlyphList.cs from the vendored AGL (in Chuvadi.Pdf.Fonts since 3.31).
 
 Reads the Adobe Glyph List (AGL) version 2.0 from the repo-local, vendored copy at
 tools/agl/glyphlist.txt and emits a faithful, complete C# source file containing the
@@ -16,7 +16,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AGL_PATH = REPO_ROOT / "tools" / "agl" / "glyphlist.txt"
-OUT_PATH = REPO_ROOT / "src" / "Chuvadi.Pdf.Fonts.Rendering" / "AdobeGlyphList.cs"
+OUT_PATH = REPO_ROOT / "src" / "Chuvadi.Pdf.Fonts" / "AdobeGlyphList.cs"
 AGL_SOURCE_NOTE = "Adobe Glyph List (AGL) v2.0, vendored at tools/agl/glyphlist.txt"
 
 

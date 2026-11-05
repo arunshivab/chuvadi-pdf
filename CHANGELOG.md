@@ -10,6 +10,173 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.31.0] - 2026-11-05
+
+Everything a printer needs from the structured display list; form fields and
+comments drawn from their own entries; the LiPi Sans faces from Chuvadi.Fonts;
+character maps above U+FFFF.
+
+### Added
+- **Annotation modes.** `AnnotationMode` (`View`, `Print`, `FormFieldsOnly`,
+  `None`) on the structured `DisplayListBuilder.Build`, the raster builder,
+  `RenderOptions`, `SvgExportOptions` and `TextExtractor`. `View` is the
+  default and matches 3.30 (NoView and Hidden respected). `Print` lets the
+  Print flag decide and ignores NoView. `FormFieldsOnly` keeps widgets and
+  drops the page content and every other annotation. `None` drops all
+  annotations.
+- **Generated appearances.** `IAnnotationAppearanceProvider` (Documents),
+  `FieldAppearanceGenerator` (Forms), `CommentAppearanceGenerator` and
+  `GeneratedAppearances.Instance` (Annotations). Text fields (single-line,
+  multiline, comb, password), combo and list boxes, check boxes, radio
+  buttons and push buttons are drawn from their values; Highlight,
+  Underline, Squiggly, StrikeOut, Square, Circle, Line, Polygon, PolyLine,
+  Ink, FreeText, Text (7 note icons), Stamp (14 standard names as words,
+  red when no `/C`), Caret and FileAttachment (4 icons) from their entries.
+  Signature fields and Sound are never generated. Generated streams live in
+  memory only; the document is not changed. Characters the field's font
+  cannot show are drawn with the LiPi Sans face of their script, in the
+  style of the `/DA` font, with a `FontSubstituted` warning.
+- **Fonts on the structured list.** `DisplayListFont` (program bytes and
+  kind, subset flag, units per em, widths, glyph ids, glyph outlines,
+  embedding rights, CID system info, substitute), `TextOp.Font`,
+  `DisplayListGlyph.Code` and `CodeLength`, `PageDisplayList.Fonts`.
+- **`FontEmbeddingReport.Check(PdfDocument)`**: an all-fonts-embedded
+  verdict (`AllEmbedded`, `NotAllEmbedded`, `Unknown`) covering pages, form
+  XObjects, patterns, Type 3 resources and annotation appearances, with each
+  font that is not embedded (`FontUse`) and `NeedsGeneratedAppearances`.
+- **Images:** `ImageOp.Source`, `Decode`, `IsStencilMask`, `StencilColor`,
+  `JpegColorTransform`, `JpegComponents`, `IsCmykJpeg`, `IccProfileStream`,
+  `GetIccProfile()`.
+- **Shadings:** `ShadingOp.ShadingType`, `Shading`, `IsExpressible`,
+  `GetShadingData()`.
+- **Page boxes:** `PageDisplayList.MediaBox`, `CropBox`, `BleedBox`,
+  `TrimBox`, `ArtBox` (clipped to the media box); `PdfPage.BleedBox`,
+  `TrimBox`, `ArtBox` and `AcroForm`.
+- **Op tags:** `RenderOp.Annotation` (`AnnotationSource`: the annotation, its
+  subtype, flags, field name and whether its appearance was generated).
+- **Transparency groups (D-173):** `RenderOp.GroupIds` (the ids of the groups
+  an op is inside, outermost first, for example `[7, 9]`),
+  `RenderOp.GroupTransparency` (`OpTransparency`: the op's own opacity, blend
+  mode and soft mask inside its group) and `PageDisplayList.TransparencyGroups`
+  (`TransparencyGroup`: id, parent, depth, isolated, knockout, colour space,
+  box, matrix, the group's own opacity, blend mode and soft mask, its form, and
+  its run of ops). Each group's ops are one unbroken run, nested inside its
+  parent's; groups that paint nothing are left out; the same form drawn twice
+  is two groups. `PageDisplayList.HasTransparency` also counts groups. No new
+  op types; SVG, WPF and raster output do not change.
+- **Variation sequences:** `FontFace.GetVariantGlyphIndex(codePoint,
+  variationSelector)`, from the cmap format 14 subtable.
+- `PdfWarningKind.AppearanceNotGenerated`.
+- `PdfFont.GetEncodingCharacter(code)`: the character a simple font's
+  encoding gives a code, without ToUnicode.
+
+### Changed
+- **Default (View) output.** Forms with `/NeedAppearances` true show their
+  values (forms filled by `FormFiller` included); widgets with a value but no
+  `/AP`, and comments without `/AP`, are drawn. Text extraction returns those
+  values and FreeText contents. `AnnotationFlattener` flattens generated
+  appearances. Annotations with a current `/AP` are unchanged.
+- **Bold Indic text in fonts a PDF does not embed** is drawn with the LiPi
+  Sans Bold face of its script instead of Regular. Ink is heavier and wider;
+  the position of the text after each run does not change. Italic Indic text
+  stays upright.
+- **LiPi Sans comes from `Chuvadi.Fonts` 1.0.0** (static TTFs) in Authoring
+  and Raster. The Regular faces have the same outlines, advances and hinting
+  tables as the old defaults. Authoring output: `/W`, ToUnicode and rendered
+  pages are the same; the embedded subsets are 9% to 36% smaller.
+- **Structured display list dependencies (O10, D-170).** The DisplayList
+  package now depends on Annotations, Forms, Text.Shaping and Chuvadi.Fonts:
+  4.62 MB of assemblies (Chuvadi.Fonts.dll 4.11 MB, Text.Shaping 0.37 MB,
+  Annotations 0.08 MB, Forms 0.06 MB), so every caller gets generated
+  appearances. Raster no longer depends on DisplayList. Forms and Annotations
+  gain the font packages; Text and Operations gain Annotations.
+- `PdfBlendMode`, `BlendModes`, `Type3Font` and `Type3Glyph` moved to the
+  Walking assembly (same namespace, type-forwarded from DisplayList).
+- `AdobeGlyphList` and `GlyphNameToUnicode` moved from Fonts.Rendering to
+  the Fonts assembly (same namespace, type-forwarded), so simple-font
+  encodings can use the whole list. The Fonts assembly grows from 36 KB to
+  221 KB.
+- Shadings of types 1 and 4 to 7 now appear in the structured op stream as
+  `ShadingOp` with `IsExpressible = false` (they were skipped). SVG and WPF
+  skip them, so their output does not change.
+- `FontRenderer.MeasureText` and `LayoutText` step by code point: a
+  surrogate pair is one glyph.
+- The API documentation generator keeps a type's summary across attribute
+  lines such as `[Obsolete]` and `[Flags]`, and names expression-bodied
+  properties whose body calls a method correctly.
+
+### Deprecated
+- `Chuvadi.Pdf.Fonts.Bundled` (`BundledFonts`) and `Chuvadi.Pdf.Fonts.Woff2`
+  (`Woff2Unpacker`, `Woff2Packer`, `BrotliEncoder`, `BrotliStoredEncoder`)
+  are `[Obsolete]` (warning CS0618). Use `Chuvadi.Fonts` (`FontPack`). They
+  are removed at the Pdf move.
+
+### Fixed
+- **Character maps above U+FFFF.** The TrueType loader reads cmap formats
+  12 and 13 and prefers them in the OpenType order (full-repertoire Windows
+  3,10 and Unicode 0,4/0,6 before BMP-only 3,1 and 0,3). Before, the first
+  format 4 subtable won, so every character above U+FFFF was `.notdef` in
+  FontFace, FontRenderer, the shaper, Authoring and the raster renderer
+  (45 code points of LiPi Sans in the oracle's vector). A damaged format 12
+  or 13 subtable is skipped. Formats 2, 8 and 10 are still not read.
+- **Variation sequences** listed in a font's format 14 subtable are shaped to
+  their variant glyph (one glyph, selector dropped, as HarfBuzz does).
+- **OpenType fonts with CFF outlines** look Unicode characters up in their
+  sfnt cmap first, then by glyph name.
+- **Surrogate pairs** select the glyph of the whole character (before, the
+  high surrogate alone): in the shared glyph rules for CFF simple fonts,
+  whose glyph still comes from the decoded text, and in the SVG font
+  embedder's cmap.
+- **The same font name in a page and a form XObject** (for example `/F1`)
+  gives two fonts on the structured list (the second keyed `F1#2`), each with
+  its own encoding and widths. Before, the form's text used the page's font:
+  on a Certificate of Incorporation page, regular-weight text was measured
+  with Times-Bold widths (SVG text 3.95 pt from MuPDF's positions on average;
+  now 0.91 pt).
+- **`/Differences` encodings (D-172).** Every Adobe Glyph List name in a
+  `/Differences` array is applied. Before, only about 90 punctuation and
+  symbol names were known, so entries naming letters, digits, accented
+  letters, Greek or maths symbols ("A", "eacute", "one", "rho", "infinity",
+  "nacute", "multiply") were ignored and the code was read as itself. An
+  encoding dictionary without `/BaseEncoding` now starts from the standard 14
+  font's built-in encoding: StandardEncoding for the twelve text fonts, and
+  the Symbol and ZapfDingbats fonts' own encodings (PDF 32000-1:2008
+  §9.6.6.1, Annex D). Other fonts keep WinAnsiEncoding as that base. The
+  `/StandardEncoding` table has all 149 codes (before, only 0x20 to 0x7E).
+  On the 417-PDF corpus: text, search and SVG change on 21 pages of 13 PDFs
+  (TeX and Latin Modern documents), and raster on 5 PDFs; every change moves
+  closer to MuPDF (for example "Gryń", "200×200 bp", "ρ = ∞", "e^87i·φ").
+- **Glyph choice in embedded TrueType simple fonts follows the spec (D-175).**
+  The glyph comes from the font's encoding (base encoding and `/Differences`,
+  through the Adobe Glyph List, then the Unicode cmap), not from its
+  ToUnicode CMap, which stays for extraction and search (PDF 32000-1:2008
+  §9.6.6.4), as MuPDF does. CFF programs keep the 3.30 order. No change on
+  the 417-PDF corpus.
+- **Implicit base encodings (D-176).** A `/Differences` dictionary without
+  `/BaseEncoding` in a font that is not standard 14 starts from the base
+  Table 114 gives: an embedded program's built-in encoding (a Type 1
+  program's `/Encoding`, a CFF program's Encoding; StandardEncoding for a
+  non-symbolic TrueType program), otherwise StandardEncoding for a
+  non-symbolic font. A symbolic font whose built-in encoding cannot be read
+  keeps WinAnsiEncoding. A standard 14 font with no `/Encoding` uses its
+  built-in encoding (StandardEncoding, or Symbol's or ZapfDingbats' own)
+  instead of WinAnsiEncoding. The encoding tables of 58 corpus fonts change,
+  in codes their pages do not use: no output change on the 417-PDF corpus.
+- **SVG clip-path and mask ids** are the same on every run for the same input
+  (a fixed FNV-1a hash replaces `string.GetHashCode`). Rendering does not
+  change; the id values do.
+
+### Build
+- Restore needs `Chuvadi.Fonts.1.0.0.nupkg`: run `build/fetch-fonts.ps1`
+  (downloads the fonts-v1.0.0 release asset and checks its SHA-256). It is
+  wired into `setup.ps1`, `pack.ps1` and the CI workflows; `nuget.config`
+  maps `Chuvadi.Fonts` to the local `.fonts-feed` folder. Every consumer feed
+  needs the package next to the 3.31.0 packages.
+- `CffStandardStrings` moved from Fonts.Rendering to Fonts (internal, with
+  `tools/gen_cff_standard_strings.py` writing there); its output is
+  unchanged.
+- 3,165 tests across 30 test projects.
+
 ## [3.30.2] - 2026-11-03
 
 SVG text in embedded fonts sits where the PDF puts it.

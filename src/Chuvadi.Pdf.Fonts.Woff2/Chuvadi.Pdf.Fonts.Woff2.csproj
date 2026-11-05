@@ -3,11 +3,15 @@
     <AssemblyName>Chuvadi.Pdf.Fonts.Woff2</AssemblyName>
     <RootNamespace>Chuvadi.Pdf.Fonts.Woff2</RootNamespace>
     <Description>
+      DEPRECATED in 3.31.0: no longer used by Chuvadi, and removed at the Pdf
+      move. For the LiPi Sans faces use the Chuvadi.Fonts package.
       WOFF2 (Web Open Font Format 2.0) container packer with pure-C# Brotli
       stored-block emission. Phase 2.1 v1 packs TTF into a valid WOFF2
       container using uncompressed Brotli blocks; full Brotli compression
       is deferred to Phase 2.2.
     </Description>
     <PackageId>Chuvadi.Pdf.Fonts.Woff2</PackageId>
+    <!-- The package's own types are [Obsolete] (3.31.0); they still use each other. -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
   </PropertyGroup>
 </Project>

@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using Chuvadi.Pdf.Annotations;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
@@ -101,6 +102,13 @@ public sealed class TextExtractor
     /// false, columns and rows are found from the page's geometry.
     /// </summary>
     public bool UseTaggedOrder { get; init; } = true;
+
+    /// <summary>
+    /// Gets or initialises which annotations' text is extracted (3.31): View
+    /// (the default), Print, FormFieldsOnly or None. Form fields without
+    /// up-to-date appearances are read from their values in every mode.
+    /// </summary>
+    public AnnotationMode AnnotationMode { get; init; } = AnnotationMode.View;
 
     // ── Public API ────────────────────────────────────────────────────────
 
@@ -300,7 +308,8 @@ public sealed class TextExtractor
 
     private List<TextFragment> ReadFragments(PdfPage page)
     {
-        byte[] contentBytes = ReadContentBytes(page);
+        // FormFieldsOnly (3.31): the form fields' text only, not the page's.
+        byte[] contentBytes = AnnotationMode == AnnotationMode.FormFieldsOnly ? Array.Empty<byte>() : ReadContentBytes(page);
 
         ContentStreamParser parser = new ContentStreamParser(_objects, page.Resources)
         {
@@ -327,8 +336,9 @@ public sealed class TextExtractor
     /// </summary>
     private void AppendAnnotationFragments(PdfPage page, List<TextFragment> fragments)
     {
-        IReadOnlyList<AnnotationAppearance> appearances =
-            PageAnnotationAppearances.Collect(page, _objects);
+        IReadOnlyList<AnnotationAppearance> appearances = AnnotationMode == AnnotationMode.None
+            ? Array.Empty<AnnotationAppearance>()
+            : PageAnnotationAppearances.Collect(page, _objects, AnnotationMode, GeneratedAppearances.Instance);
 
         for (int i = 0; i < appearances.Count; i++)
         {
