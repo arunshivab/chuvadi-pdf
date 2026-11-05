@@ -21,7 +21,9 @@ python tools/shaping-data/gen_shaping_tables.py ucd.tsv
 
 `hb_conformance.py` (needs `fontTools` and `uharfbuzz`) builds the two
 corpora — 19,641 Indic syllables and 9,852 words, stress strings and Latin
-lines — and shapes every line with HarfBuzz:
+lines — and shapes every line with HarfBuzz. It sets every buffer property
+explicitly (3.31.1): left to right, the row's script, and no language, so the
+fonts' default language system is used whatever the machine's locale:
 
 ```sh
 python tools/shaping-data/hb_conformance.py full corpus.tsv

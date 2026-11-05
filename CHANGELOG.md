@@ -10,6 +10,33 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.31.1] - 2026-11-06
+
+`FontFace.Load` speed (D-201). No output change.
+
+### Changed
+- **Faster font loading.** Since 3.31.0 (D-169) the character map loader
+  read every full-repertoire Unicode subtable (formats 12 and 13 under
+  (3,10) and (0,4) / (0,6)) and kept only the best. It now reads them best
+  first and stops at the first that gives mappings, so subtables that cannot
+  be chosen are no longer read. The choice is unchanged: Windows before
+  Unicode, then the first in the table directory, and a damaged or empty
+  subtable falls through to the next. Affects `FontFace.Load`,
+  `TrueTypeLoader`, `FontRenderer` and everything that loads TrueType or
+  OpenType fonts. Output is identical (measured on fonts and on the PDF
+  corpus).
+- **The HarfBuzz corpus generator sets the language explicitly**
+  (`tools/shaping-data/hb_conformance.py`, D-182). It sets direction, script
+  and no language on every line instead of guessing them, so the result never
+  depends on the machine's locale. Both corpora and the test fixture come out
+  byte for byte the same.
+
+### Backlog
+- New tickets 35 to 37 in `docs/BACKLOG.md` (D-201): hinting item 15, SVG
+  text when ToUnicode contradicts the encoding, and glyph choice in
+  non-embedded fonts.
+
+---
 ## [3.31.0] - 2026-11-05
 
 Everything a printer needs from the structured display list; form fields and

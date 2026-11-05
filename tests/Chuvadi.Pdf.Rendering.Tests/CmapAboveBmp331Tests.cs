@@ -3,6 +3,8 @@
 // PHASE: 3.31 (D-169) — the cmap above U+FFFF: formats 12 and 13 read and
 //        preferred in the OpenType order, format 14 variation sequences, the
 //        sfnt cmap of a CFF OpenType font, and the oracle's test vector.
+//        3.31.1 (D-201): only the format 12 or 13 subtable that is chosen is
+//        read; the tests below pin which one is chosen in every order.
 
 // Fonts.Bundled is deprecated (3.31.0) but still ships; the vector names its WOFF2 faces.
 #pragma warning disable CS0618
@@ -145,6 +147,44 @@ public sealed class CmapAboveBmp331Tests
         WriteU32(bad, 12, 0x7FFFFFFF); // numGroups far past the data
         FontFace face = FontFace.Load(WithCmap(lipi, Cmap((3, 1, Format4(new Dictionary<int, int> { ['A'] = a })), (3, 10, bad))));
         face.GetGlyphIndex('A').Should().Be(a);
+    }
+
+    [Fact]
+    public void AmongFullRepertoireSubtables_WindowsWins_ThenTheFirstInTheDirectory()
+    {
+        // 3.31.1 reads only the subtable that is chosen; the choice is the 3.31.0 one.
+        byte[] lipi = FontPack.ReadAllBytes("LiPi-Sans-Latin-Regular.ttf");
+        (int a, int b, int c) = Glyphs(lipi, 'A', 'B', 'C');
+        byte[] f4 = Format4(new Dictionary<int, int> { ['A'] = a });
+        byte[] withB = Format12(('A', 'A', b));
+        byte[] withC = Format12(('A', 'A', c));
+
+        Pick(Cmap((0, 4, withB), (3, 10, withC))).Should().Be(c, "Windows (3,10) comes before Unicode (0,4)");
+        Pick(Cmap((3, 10, withC), (0, 4, withB))).Should().Be(c, "Windows (3,10) comes before Unicode (0,4)");
+        Pick(Cmap((3, 1, f4), (0, 6, withB), (0, 4, withC))).Should().Be(b, "among Unicode equals the first wins");
+        Pick(Cmap((3, 10, withB), (3, 10, withC))).Should().Be(b, "among Windows equals the first wins");
+        Pick(Cmap((0, 4, withB), (3, 10, Format13(('A', 'A', c))))).Should().Be(c, "format 13 ranks with format 12");
+
+        int Pick(byte[] cmap) => FontFace.Load(WithCmap(lipi, cmap)).GetGlyphIndex('A');
+    }
+
+    [Fact]
+    public void WhenTheBestFullRepertoireSubtableIsDamagedOrEmpty_TheNextOneIsUsed()
+    {
+        byte[] lipi = FontPack.ReadAllBytes("LiPi-Sans-Latin-Regular.ttf");
+        (int a, int b, int c) = Glyphs(lipi, 'A', 'B', 'C');
+        byte[] f4 = Format4(new Dictionary<int, int> { ['A'] = a });
+        byte[] damaged = Format12(('A', 'A', c));
+        WriteU32(damaged, 12, 0x7FFFFFFF); // numGroups far past the data
+        byte[] empty = Format12();
+        byte[] withB = Format12(('A', 'A', b));
+
+        Pick(Cmap((3, 1, f4), (3, 10, damaged), (0, 4, withB))).Should().Be(b, "a damaged (3,10) falls back to (0,4)");
+        Pick(Cmap((3, 1, f4), (3, 10, empty), (0, 4, withB))).Should().Be(b, "an empty (3,10) falls back to (0,4)");
+        Pick(Cmap((3, 1, f4), (3, 10, damaged), (0, 4, empty))).Should().Be(a, "with no usable full-repertoire subtable, format 4 is used");
+        Pick(Cmap((3, 10, damaged))).Should().Be(0, "with no usable subtable, nothing is mapped");
+
+        int Pick(byte[] cmap) => FontFace.Load(WithCmap(lipi, cmap)).GetGlyphIndex('A');
     }
 
     [Fact]

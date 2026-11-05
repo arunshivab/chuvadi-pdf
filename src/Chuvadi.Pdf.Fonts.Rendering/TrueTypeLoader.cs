@@ -266,6 +266,12 @@ public sealed class TrueTypeLoader
 
         int numTables = ReadUInt16(_cmapOffset + 2);
 
+        // 3.31.1: full-repertoire Unicode subtables (formats 12 and 13) are
+        // read after the loop, best first, and only until one gives mappings.
+        // The others cannot be chosen, so reading them only cost time. Their
+        // reader never throws, so skipping them changes no result.
+        List<(int Priority, uint Offset, bool ManyToOne)>? fullRepertoire = null;
+
         // Retain Unicode, Macintosh, and symbol subtables separately. Simple
         // PDF fonts select glyphs by character code through whichever of these
         // applies (PDF 32000-1:2008 §9.6.6); embedded subset fonts often carry
@@ -282,6 +288,14 @@ public sealed class TrueTypeLoader
             if (format == 14)
             {
                 TryParseFormat14(subtableOffset);
+                continue;
+            }
+
+            bool unicodePlatform = (platformId == 3 && (encodingId == 1 || encodingId == 10)) || platformId == 0;
+            if (unicodePlatform && format is 12 or 13)
+            {
+                fullRepertoire ??= new List<(int Priority, uint Offset, bool ManyToOne)>();
+                fullRepertoire.Add((platformId == 3 ? 0 : 1, subtableOffset, format == 13));
                 continue;
             }
 
@@ -307,12 +321,14 @@ public sealed class TrueTypeLoader
             {
                 _cmapMac ??= parsed;
             }
-            else if ((platformId == 3 && (encodingId == 1 || encodingId == 10)) || platformId == 0)
+            else if (unicodePlatform)
             {
                 // 3.31 (D-169): the OpenType order. Full-repertoire subtables
                 // (formats 12 and 13: Windows 3,10 and Unicode 0,4 / 0,6) come
                 // before BMP-only ones (Windows 3,1, then Unicode 0,0-0,3); among
-                // equals the first in the table directory wins, as before.
+                // equals the first in the table directory wins, as before. Since
+                // 3.31.1 the full-repertoire ones are chosen after this loop
+                // (ChooseFullRepertoire), so only BMP-only formats arrive here.
                 int priority = (format is 12 or 13 ? 0 : 10) + (platformId == 3 ? 0 : 1);
                 if (priority < _cmapUnicodePriority)
                 {
@@ -327,8 +343,45 @@ public sealed class TrueTypeLoader
             }
         }
 
+        if (fullRepertoire is not null)
+        {
+            ChooseFullRepertoire(fullRepertoire);
+        }
+
         // Back-compatible default used by GetGlyphIndex (Unicode lookups).
         _cmapF4 = _cmapUnicode ?? _cmapMac ?? _cmapSymbol;
+    }
+
+    // Reads the format 12 and 13 Unicode subtables best first: Windows (3,10)
+    // before Unicode (0,4 / 0,6), and among equals the first in the table
+    // directory, as the main loop's priority rule did. It stops at the first
+    // that gives mappings, which always beats a BMP-only subtable.
+    private void ChooseFullRepertoire(List<(int Priority, uint Offset, bool ManyToOne)> candidates)
+    {
+        for (int pass = 0; pass <= 1; pass++)
+        {
+            foreach ((int priority, uint offset, bool manyToOne) in candidates)
+            {
+                if (priority != pass)
+                {
+                    continue;
+                }
+
+                Dictionary<int, int>? parsed = TryParseFormat12Or13(offset, manyToOne);
+                if (parsed is null || parsed.Count == 0)
+                {
+                    continue;
+                }
+
+                if (priority < _cmapUnicodePriority)
+                {
+                    _cmapUnicode = parsed;
+                    _cmapUnicodePriority = priority;
+                }
+
+                return;
+            }
+        }
     }
 
     /// <summary>
