@@ -106,6 +106,42 @@ AffineMatrix? ShadingToPage
 
 When set, the centres and radii are in shading space and this maps shading space to page space. Used for a radial shading under a transform that does not keep circles circular (unequal scaling or skew), where the circles become ellipses on the page. Null when the geometry is already in page space.
 
+### `ShadingType`
+
+```csharp
+int ShadingType
+```
+
+The `/ShadingType`, 1 to 7 (3.31); 2 (axial) or 3 (radial) for the ops the list draws.
+
+### `Shading`
+
+```csharp
+PdfPrimitive? Shading
+```
+
+The shading dictionary, or for mesh types 4 to 7 the shading stream (3.31), so a printer can pass it on as it is (PostScript Level 3 and PCL accept all seven types). Null for ops built without one.
+
+### `IsExpressible`
+
+```csharp
+bool IsExpressible
+```
+
+False for a shading the structured list cannot express as stops (function-based type 1, meshes 4 to 7, 3.31): only `ShadingType`, `Shading` and `ShadingToPage` are set, and SVG and WPF skip the op.
+
+## Methods
+
+### `GetShadingData`
+
+```csharp
+byte[]? GetShadingData()
+```
+
+For a mesh shading (types 4 to 7), its decoded stream data (3.31); otherwise null.
+
+**Returns:** The data, or null.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_

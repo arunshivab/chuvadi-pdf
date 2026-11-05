@@ -50,6 +50,14 @@ bool PrettyPrint
 
 Indent the SVG output (default: false, compact).
 
+### `AnnotationMode`
+
+```csharp
+Chuvadi.Pdf.Documents.AnnotationMode AnnotationMode
+```
+
+Which annotations are drawn (3.31): View (the default), Print, FormFieldsOnly or None. Used by `SvgRenderer`.
+
 ### `Background`
 
 ```csharp

@@ -23,6 +23,14 @@ Initialises a new CrlDistributionPointsExtension.
 
 ## Properties
 
+### `Points`
+
+```csharp
+ReadOnlyCollection<DistributionPoint> Points => new(_points)
+```
+
+The distribution points.
+
 ### `Oid`
 
 __static__
@@ -34,14 +42,6 @@ static ObjectIdentifier Oid => KnownOids.CrlDistributionPoints
 The OID identifying this extension.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<DistributionPoint> Points => new(_points)
-```
-
-The distribution points.
 
 ### `Parse`
 

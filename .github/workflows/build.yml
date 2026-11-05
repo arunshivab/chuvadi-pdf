@@ -81,6 +81,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:

@@ -72,6 +72,12 @@ public sealed class TrueTypeLoader
     private Dictionary<int, int>? _cmapSymbol;
     private Dictionary<int, int>? _cmapMac;
 
+    // 3.31 (D-169): the priority of the Unicode subtable kept so far (lower
+    // wins) and the format 14 variation sequences.
+    private int _cmapUnicodePriority = int.MaxValue;
+    private Dictionary<(int Selector, int CodePoint), int>? _uvsNonDefault;
+    private Dictionary<int, List<(int Start, int Count)>>? _uvsDefault;
+
     /// <summary>
     /// Loads a font from raw TTF/OTF bytes.
     /// </summary>
@@ -273,11 +279,18 @@ public sealed class TrueTypeLoader
             uint subtableOffset = _cmapOffset + ReadUInt32(recordOffset + 4);
             int format = ReadUInt16(subtableOffset);
 
+            if (format == 14)
+            {
+                TryParseFormat14(subtableOffset);
+                continue;
+            }
+
             Dictionary<int, int>? parsed = format switch
             {
                 0 => ParseCmapFormat0(subtableOffset),
                 4 => ParseCmapFormat4(subtableOffset),
                 6 => ParseCmapFormat6(subtableOffset),
+                12 or 13 => TryParseFormat12Or13(subtableOffset, format == 13),
                 _ => null,
             };
 
@@ -296,7 +309,16 @@ public sealed class TrueTypeLoader
             }
             else if ((platformId == 3 && (encodingId == 1 || encodingId == 10)) || platformId == 0)
             {
-                _cmapUnicode ??= parsed;
+                // 3.31 (D-169): the OpenType order. Full-repertoire subtables
+                // (formats 12 and 13: Windows 3,10 and Unicode 0,4 / 0,6) come
+                // before BMP-only ones (Windows 3,1, then Unicode 0,0-0,3); among
+                // equals the first in the table directory wins, as before.
+                int priority = (format is 12 or 13 ? 0 : 10) + (platformId == 3 ? 0 : 1);
+                if (priority < _cmapUnicodePriority)
+                {
+                    _cmapUnicode = parsed;
+                    _cmapUnicodePriority = priority;
+                }
             }
             else
             {
@@ -357,6 +379,147 @@ public sealed class TrueTypeLoader
         }
         glyphId = 0;
         return false;
+    }
+
+    // Formats 12 and 13 (OpenType §cmap): groups of (startCharCode,
+    // endCharCode, startGlyphID). Format 12 maps a range to consecutive
+    // glyphs, format 13 maps the whole range to one glyph. A damaged subtable
+    // is skipped rather than failing the font (these formats were not read
+    // before 3.31).
+    private Dictionary<int, int>? TryParseFormat12Or13(uint offset, bool manyToOne)
+    {
+        try
+        {
+            uint numGroups = ReadUInt32(offset + 12);
+            if ((long)numGroups * 12 > _data.Length)
+            {
+                return null;
+            }
+
+            Dictionary<int, int> map = new Dictionary<int, int>();
+            for (uint g = 0; g < numGroups; g++)
+            {
+                uint rec = offset + 16 + (g * 12);
+                uint start = ReadUInt32(rec);
+                uint end = ReadUInt32(rec + 4);
+                uint glyph = ReadUInt32(rec + 8);
+                if (end < start || end > 0x10FFFF || end - start > 0x10FFFF)
+                {
+                    continue;
+                }
+
+                for (uint cp = start; cp <= end; cp++)
+                {
+                    long gid = manyToOne ? glyph : glyph + (cp - start);
+                    if (gid <= 0 || gid >= _numGlyphs)
+                    {
+                        if (!manyToOne && gid >= _numGlyphs)
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    map.TryAdd((int)cp, (int)gid);
+                }
+            }
+
+            return map;
+        }
+        catch (FontRenderingException)
+        {
+            return null;
+        }
+    }
+
+    // Format 14 (OpenType §cmap): Unicode variation sequences. Default UVS
+    // ranges use the base character's own glyph; non-default mappings name a
+    // glyph. A damaged subtable is ignored.
+    private void TryParseFormat14(uint offset)
+    {
+        try
+        {
+            uint count = ReadUInt32(offset + 6);
+            if ((long)count * 11 > _data.Length)
+            {
+                return;
+            }
+
+            for (uint i = 0; i < count; i++)
+            {
+                uint rec = offset + 10 + (i * 11);
+                int selector = ReadUInt24(rec);
+                uint defaultOffset = ReadUInt32(rec + 3);
+                uint nonDefaultOffset = ReadUInt32(rec + 7);
+                if (defaultOffset != 0)
+                {
+                    uint at = offset + defaultOffset;
+                    uint ranges = ReadUInt32(at);
+                    List<(int, int)> list = new List<(int, int)>();
+                    for (uint r = 0; r < ranges && r < 0x110000; r++)
+                    {
+                        uint e = at + 4 + (r * 4);
+                        list.Add((ReadUInt24(e), ReadByte(e + 3)));
+                    }
+
+                    _uvsDefault ??= new Dictionary<int, List<(int, int)>>();
+                    _uvsDefault[selector] = list;
+                }
+
+                if (nonDefaultOffset != 0)
+                {
+                    uint at = offset + nonDefaultOffset;
+                    uint mappings = ReadUInt32(at);
+                    for (uint m = 0; m < mappings && m < 0x110000; m++)
+                    {
+                        uint e = at + 4 + (m * 5);
+                        int cp = ReadUInt24(e);
+                        int gid = ReadUInt16(e + 3);
+                        _uvsNonDefault ??= new Dictionary<(int, int), int>();
+                        _uvsNonDefault.TryAdd((selector, cp), gid);
+                    }
+                }
+            }
+        }
+        catch (FontRenderingException)
+        {
+            _uvsDefault = null;
+            _uvsNonDefault = null;
+        }
+    }
+
+    private int ReadUInt24(uint offset)
+    {
+        EnsureReadable(offset, 3);
+        return (_data[offset] << 16) | (_data[offset + 1] << 8) | _data[offset + 2];
+    }
+
+    /// <summary>
+    /// Maps a Unicode variation sequence (base character plus variation
+    /// selector) to a glyph through the format 14 subtable (3.31). Returns the
+    /// base character's own glyph for a default sequence, the named glyph for a
+    /// non-default one, and -1 when the font does not list the sequence.
+    /// </summary>
+    internal int GetVariantGlyphIndex(int codePoint, int selector)
+    {
+        if (_uvsNonDefault is not null && _uvsNonDefault.TryGetValue((selector, codePoint), out int gid))
+        {
+            return gid;
+        }
+
+        if (_uvsDefault is not null && _uvsDefault.TryGetValue(selector, out List<(int Start, int Count)>? ranges))
+        {
+            foreach ((int start, int count) in ranges)
+            {
+                if (codePoint >= start && codePoint <= start + count)
+                {
+                    return GetGlyphIndex(codePoint);
+                }
+            }
+        }
+
+        return -1;
     }
 
     // format 0: byte-encoding table — 256 single-byte codes to glyph indices.

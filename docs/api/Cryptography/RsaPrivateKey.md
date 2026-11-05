@@ -52,9 +52,7 @@ BigInteger PrivateExponent
 
 The RSA private exponent (d).
 
-## Methods
-
-### `=>`
+### `ModulusSizeBytes`
 
 ```csharp
 int ModulusSizeBytes => (int)((Modulus.GetBitLength() + 7) / 8)
@@ -62,13 +60,15 @@ int ModulusSizeBytes => (int)((Modulus.GetBitLength() + 7) / 8)
 
 The size of the modulus in bytes (k = ⌈log256 n⌉).
 
-### `new`
+### `PublicKey`
 
 ```csharp
 RsaPublicKey PublicKey => new(Modulus, PublicExponent)
 ```
 
 The corresponding RSA public key.
+
+## Methods
 
 ### `FromPkcs8`
 

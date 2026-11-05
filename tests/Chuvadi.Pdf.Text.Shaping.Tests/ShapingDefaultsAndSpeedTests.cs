@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // 3.27: cpsp on by default again (D-68); Shape(byte[]) reuses the loaded face (D-70).
 
+// Fonts.Bundled and Fonts.Woff2 are deprecated (3.31.0) but still ship and are still tested.
+#pragma warning disable CS0618
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

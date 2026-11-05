@@ -114,7 +114,22 @@ public sealed class PdfFont
                 encodingEntry = resolver.Resolve(encRef);
             }
 
-            encoding = PdfFontEncoding.Build(encodingEntry);
+            // 3.31 (D-172, D-176), PDF 32000-1:2008 §9.6.6.1 and Table 114:
+            // a standard 14 font with no /Encoding uses its built-in encoding,
+            // and a /Differences dictionary without /BaseEncoding starts from
+            // the font's implicit base encoding.
+            string? standard14 = PdfFontEncoding.Standard14BuiltIn(fontDict.GetName(PdfName.Intern("BaseFont"))?.Value);
+            if (encodingEntry is null && standard14 is not null)
+            {
+                encoding = PdfFontEncoding.FromTable(standard14);
+            }
+            else
+            {
+                string? implicitBase = PdfFontEncoding.HasImplicitBase(encodingEntry)
+                    ? standard14 ?? ImplicitBaseEncoding(fontDict, resolver)
+                    : null;
+                encoding = PdfFontEncoding.Build(encodingEntry, implicitBase);
+            }
         }
 
         return new PdfFont(
@@ -265,6 +280,18 @@ public sealed class PdfFont
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// The character a simple font's encoding gives a 1-byte code (3.31,
+    /// D-175): its <c>/Encoding</c> (named, or a base with <c>/Differences</c>)
+    /// through the Adobe Glyph List, without the ToUnicode CMap. This is what
+    /// selects a glyph in a TrueType font's Unicode cmap (PDF 32000-1:2008
+    /// §9.6.6.4); the ToUnicode CMap is for extraction only.
+    /// </summary>
+    /// <param name="code">The character code, 0 to 255.</param>
+    /// <returns>The character, or '\0' for a composite font, a code outside 0 to 255, or a code the encoding does not map.</returns>
+    public char GetEncodingCharacter(int code) =>
+        _encoding is not null && code >= 0 && code <= 255 ? _encoding.GetCharacter((byte)code) : '\0';
 
     /// <summary>
     /// Converts a single character code to a Unicode string.
@@ -424,6 +451,51 @@ public sealed class PdfFont
         }
 
         return current;
+    }
+
+    // The implicit base encoding of a font that is not standard 14 (Table
+    // 114): an embedded program's built-in encoding (a Type 1 program's
+    // /Encoding, a CFF program's Encoding; StandardEncoding for a
+    // non-symbolic TrueType or OpenType program, §9.6.6.4), otherwise
+    // StandardEncoding for a non-symbolic font. Null for a symbolic font
+    // whose built-in encoding cannot be read; WinAnsiEncoding is then the
+    // base, as before 3.31.
+    private static string? ImplicitBaseEncoding(PdfDictionary fontDict, IPdfObjectResolver resolver)
+    {
+        PdfDictionary? descriptor = fontDict.TryGetValue(PdfName.Intern("FontDescriptor"), out PdfPrimitive? fdp)
+            ? resolver.Resolve(fdp) as PdfDictionary
+            : null;
+        bool symbolic = descriptor is not null
+            && descriptor.TryGetValue(PdfName.Intern("Flags"), out PdfPrimitive? flagsPrim)
+            && resolver.Resolve(flagsPrim) is PdfInteger flags
+            && (flags.Value & 4) != 0;
+        string? standard = symbolic ? null : BuiltInEncodings.Standard;
+        if (descriptor is null)
+        {
+            return standard;
+        }
+
+        try
+        {
+            if (descriptor.TryGetValue(PdfName.Intern("FontFile"), out PdfPrimitive? ff) && resolver.Resolve(ff) is PdfStream type1)
+            {
+                char[]? builtIn = FontProgramEncoding.FromType1(DecodeFilterChain(type1, resolver));
+                return builtIn is null ? standard : new string(builtIn);
+            }
+
+            if (descriptor.TryGetValue(PdfName.Intern("FontFile3"), out PdfPrimitive? ff3) && resolver.Resolve(ff3) is PdfStream program
+                && program.Dictionary.GetName(PdfName.Intern("Subtype"))?.Value == "Type1C")
+            {
+                char[]? builtIn = FontProgramEncoding.FromCff(DecodeFilterChain(program, resolver));
+                return builtIn is null ? standard : new string(builtIn);
+            }
+        }
+        catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
+        {
+            return standard;
+        }
+
+        return standard;
     }
 
     private static CMapParseResult? ParseToUnicode(

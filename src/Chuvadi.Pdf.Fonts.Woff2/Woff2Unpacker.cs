@@ -22,6 +22,7 @@ namespace Chuvadi.Pdf.Fonts.Woff2;
 /// <see cref="Woff2Packer"/>; intended for converting WOFF2 assets into a form
 /// that can be embedded in a PDF.
 /// </summary>
+[System.Obsolete("Deprecated: no longer used by Chuvadi; for the LiPi Sans faces use Chuvadi.Fonts (FontPack). Removed at the Pdf move.")]
 public static class Woff2Unpacker
 {
     private const uint Woff2Signature = 0x774F4632; // 'wOF2'

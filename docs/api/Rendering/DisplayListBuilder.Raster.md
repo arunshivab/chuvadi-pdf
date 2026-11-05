@@ -64,6 +64,28 @@ Interprets a page's content with an explicit layer visibility: content in hidden
 __static__
 
 ```csharp
+static PageDisplayList Build(PdfPage page, PdfObjectStore objects, OptionalContentVisibility optionalContent, AnnotationMode annotations, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
+```
+
+Builds a page's display list with explicit layer visibility and an `AnnotationMode` (3.31): `AnnotationMode.Print` draws what prints (the Print flag decides), `AnnotationMode.FormFieldsOnly` only the form fields, and `AnnotationMode.None` no annotations.
+
+**Parameters**
+
+- `page` — The page.
+- `objects` — The object store for resolving indirect references.
+- `optionalContent` — Which layers are visible.
+- `annotations` — Which annotations are drawn.
+- `hintingScale` — Device scale (DPI/72) for grid-fitting; 0 disables hinting.
+- `lightHinting` — When true, grid-fit the Y axis only.
+- `autohintFallback` — When true, fonts with no hinting programs are autohinted.
+
+**Returns:** The page's display list. <exception cref="ArgumentNullException">An argument is null.</exception>
+
+### `Build`
+
+__static__
+
+```csharp
 static PageDisplayList Build(byte[] content, PdfDictionary? resources, PdfObjectStore objects, double pageWidth, double pageHeight, double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
 ```
 

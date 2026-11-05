@@ -28,6 +28,7 @@ namespace Chuvadi.Pdf.Fonts.Woff2;
 /// (the transform is optional per the spec).
 /// </para>
 /// </remarks>
+[System.Obsolete("Deprecated: no longer used by Chuvadi; for the LiPi Sans faces use Chuvadi.Fonts (FontPack). Removed at the Pdf move.")]
 public static class Woff2Packer
 {
     private const uint Woff2Signature = 0x774F4632;   // 'wOF2'

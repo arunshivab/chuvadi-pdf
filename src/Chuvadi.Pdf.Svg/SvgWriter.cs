@@ -351,7 +351,7 @@ internal sealed class SvgWriter
     /// <summary>Adds a clipPath definition; returns the assigned id.</summary>
     internal string AddClipPath(string pathData, string fillRule = "nonzero")
     {
-        string id = $"clip{_defs.Length:X}_{pathData.GetHashCode():X}";
+        string id = $"clip{_defs.Length:X}_{StableHash(pathData):X}";
         _defs.Append("<clipPath id=\"").Append(id).Append("\">");
         _defs.Append("<path d=\"").Append(EscapeXml(pathData)).Append("\" clip-rule=\"")
             .Append(EscapeXml(fillRule)).Append("\"/></clipPath>");
@@ -366,7 +366,7 @@ internal sealed class SvgWriter
     /// </summary>
     internal string AddStrokeMask(string pathData, string strokeAttrs, double x, double y, double width, double height)
     {
-        string id = $"smask{_defs.Length:X}_{pathData.GetHashCode():X}";
+        string id = $"smask{_defs.Length:X}_{StableHash(pathData):X}";
         _defs.Append("<mask id=\"").Append(id).Append("\" maskUnits=\"userSpaceOnUse\" x=\"")
             .Append(F(x)).Append("\" y=\"").Append(F(y)).Append("\" width=\"").Append(F(width))
             .Append("\" height=\"").Append(F(height)).Append("\">");
@@ -441,6 +441,21 @@ internal sealed class SvgWriter
     /// tab, newline, and carriage return are replaced with a space so the
     /// result is always well-formed XML 1.0.
     /// </summary>
+    // A hash of an id's path data that is the same in every process (#32).
+    // string.GetHashCode is randomised per process, so ids built from it
+    // differed on every run for the same page. FNV-1a, 32 bits, over the
+    // UTF-16 code units.
+    private static uint StableHash(string text)
+    {
+        uint hash = 2166136261u;
+        foreach (char c in text)
+        {
+            hash = unchecked((hash ^ c) * 16777619u);
+        }
+
+        return hash;
+    }
+
     private static string EscapeXml(string text)
     {
         StringBuilder sb = new(text.Length + 8);

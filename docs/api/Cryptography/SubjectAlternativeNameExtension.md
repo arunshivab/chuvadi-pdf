@@ -24,6 +24,14 @@ Initialises a new SubjectAlternativeNameExtension.
 
 ## Properties
 
+### `Names`
+
+```csharp
+ReadOnlyCollection<GeneralName> Names => new(_names)
+```
+
+The alternative names for the subject.
+
 ### `Oid`
 
 __static__
@@ -35,14 +43,6 @@ static ObjectIdentifier Oid => KnownOids.SubjectAltName
 The OID identifying this extension.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<GeneralName> Names => new(_names)
-```
-
-The alternative names for the subject.
 
 ### `Parse`
 

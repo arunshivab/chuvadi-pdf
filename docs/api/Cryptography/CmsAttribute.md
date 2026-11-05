@@ -32,6 +32,14 @@ ObjectIdentifier Type
 
 The attribute type OID.
 
+### `Values`
+
+```csharp
+ReadOnlyCollection<byte[]> Values => new(_values)
+```
+
+The complete encoded TLV bytes of each value in the order they appeared in the SET.
+
 ### `IsSingleValued`
 
 ```csharp
@@ -41,14 +49,6 @@ bool IsSingleValued => _values.Length == 1
 True when the attribute carries exactly one value (the typical case).
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<byte[]> Values => new(_values)
-```
-
-The complete encoded TLV bytes of each value in the order they appeared in the SET.
 
 ### `Read`
 

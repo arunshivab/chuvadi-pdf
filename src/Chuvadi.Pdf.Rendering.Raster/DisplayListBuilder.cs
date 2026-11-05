@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Chuvadi.Pdf.Annotations;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
@@ -91,14 +92,35 @@ public static class DisplayListBuilder
     /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
     public static PageDisplayList Build(
         PdfPage page, PdfObjectStore objects, OptionalContentVisibility optionalContent,
+        double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true) =>
+        Build(page, objects, optionalContent, AnnotationMode.View, hintingScale, lightHinting, autohintFallback);
+
+    /// <summary>
+    /// Builds a page's display list with explicit layer visibility and an
+    /// <see cref="AnnotationMode"/> (3.31): <see cref="AnnotationMode.Print"/>
+    /// draws what prints (the Print flag decides),
+    /// <see cref="AnnotationMode.FormFieldsOnly"/> only the form fields, and
+    /// <see cref="AnnotationMode.None"/> no annotations.
+    /// </summary>
+    /// <param name="page">The page.</param>
+    /// <param name="objects">The object store for resolving indirect references.</param>
+    /// <param name="optionalContent">Which layers are visible.</param>
+    /// <param name="annotations">Which annotations are drawn.</param>
+    /// <param name="hintingScale">Device scale (DPI/72) for grid-fitting; 0 disables hinting.</param>
+    /// <param name="lightHinting">When true, grid-fit the Y axis only.</param>
+    /// <param name="autohintFallback">When true, fonts with no hinting programs are autohinted.</param>
+    /// <returns>The page's display list.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static PageDisplayList Build(
+        PdfPage page, PdfObjectStore objects, OptionalContentVisibility optionalContent, AnnotationMode annotations,
         double hintingScale = 0.0, bool lightHinting = false, bool autohintFallback = true)
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(objects);
         ArgumentNullException.ThrowIfNull(optionalContent);
 
-        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback, optionalContent);
-        byte[] content = ContentStreamLoader.Load(page.Contents, objects);
+        Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback, optionalContent) { Annotations = annotations };
+        byte[] content = annotations == AnnotationMode.FormFieldsOnly ? Array.Empty<byte>() : ContentStreamLoader.Load(page.Contents, objects);
         return worker.BuildFromPage(content, page);
     }
 
@@ -213,6 +235,9 @@ public static class DisplayListBuilder
         private readonly List<bool> _hiddenStack = new List<bool>();
         private int _hiddenDepth;
 
+        // 3.31 (D-146): which annotations are drawn.
+        internal AnnotationMode Annotations { get; init; } = AnnotationMode.View;
+
         public Worker(
             PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false,
             bool autohintFallback = true, OptionalContentVisibility? visibility = null)
@@ -269,8 +294,9 @@ public static class DisplayListBuilder
             _resources = page.Resources;
             ContentStreamWalker.Walk(content, this);
 
-            IReadOnlyList<AnnotationAppearance> appearances =
-                PageAnnotationAppearances.Collect(page, _objects);
+            IReadOnlyList<AnnotationAppearance> appearances = Annotations == AnnotationMode.None
+                ? Array.Empty<AnnotationAppearance>()
+                : PageAnnotationAppearances.Collect(page, _objects, Annotations, GeneratedAppearances.Instance);
 
             for (int i = 0; i < appearances.Count; i++)
             {
@@ -2028,50 +2054,10 @@ public static class DisplayListBuilder
             return (first.Value, widths);
         }
 
-        // Resolves a content-stream byte code to a glyph index in an embedded
-        // TrueType/OpenType program. Non-symbolic fonts with a Unicode cmap go
-        // code -> Unicode (via the font's encoding) -> Unicode cmap, preserving
-        // standard-encoding behaviour; otherwise the code selects the glyph
-        // directly through the symbol/Mac cmap or as a subset glyph index.
-        private int ResolveEmbeddedGid(
-            FontRenderer renderer, Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code, bool symbolic)
-        {
-            if (!symbolic && pdfFont is not null)
-            {
-                string decoded = pdfFont.DecodeCode(code);
-                if (decoded.Length > 0)
-                {
-                    int gid = renderer.GetGlyphIndexUnicode(decoded[0]);
-                    if (gid != 0)
-                    {
-                        return gid;
-                    }
-                }
-            }
-
-            int byCode = renderer.GetGlyphIndexForCode(code, symbolic);
-            if (byCode != 0)
-            {
-                return byCode;
-            }
-
-            // Final attempt: a symbolic font that nonetheless has a usable
-            // Unicode mapping via its encoding.
-            if (pdfFont is not null)
-            {
-                string decoded = pdfFont.DecodeCode(code);
-                if (decoded.Length > 0)
-                {
-                    int gid = renderer.GetGlyphIndexUnicode(decoded[0]);
-                    if (gid != 0)
-                    {
-                        return gid;
-                    }
-                }
-            }
-
-            return 0;
-        }
+        // The shared code-to-glyph rules (3.31, Fonts.Rendering EmbeddedGlyphs).
+        private static int ResolveEmbeddedGid(
+            FontRenderer renderer, Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code, bool symbolic) =>
+            EmbeddedGlyphs.ForSimpleCode(renderer, pdfFont, code, symbolic);
 
         // Decodes a single content-stream code to one character via the font's
         // encoding/ToUnicode, for substitute (Standard-14) rendering. Falls back
@@ -2202,9 +2188,7 @@ public static class DisplayListBuilder
             {
                 PdfWorkScope.CountOperators();
                 int cid = (raw[i] << 8) | raw[i + 1];
-                int code = cidToGid is not null
-                    ? (cid < cidToGid.Length ? cidToGid[cid] : 0)
-                    : renderer?.GetGlyphIndexForCid(cid) ?? cid;
+                int code = EmbeddedGlyphs.ForCid(renderer, cidToGid, cid);
                 double advance;
 
                 if (renderer is null)
@@ -2280,7 +2264,7 @@ public static class DisplayListBuilder
 
                     if (emit && _state.FillValid)
                     {
-                        DrawBundledRun(run.ToString(), script);
+                        DrawBundledRun(run.ToString(), script, IsBoldSubstitute(substitute));
                     }
 
                     for (int k = i; k < end; k++)
@@ -2340,11 +2324,18 @@ public static class DisplayListBuilder
                     + char.ConvertToUtf32(text, 0).ToString("X4", System.Globalization.CultureInfo.InvariantCulture) + "); they are not drawn");
         }
 
-        // Shapes a run of one Indic script with the bundled face for it and
-        // draws the glyphs at their natural advances from the current position.
-        private void DrawBundledRun(string text, LipiScript script)
+        // The standard 14 substitute chosen for a font that is not embedded
+        // carries the font's weight (Standard14Substitute decides it from the
+        // name, flags and /FontWeight), so it also picks the LiPi weight.
+        private static bool IsBoldSubstitute(RenderableFont substitute) =>
+            substitute.FontName.Contains("Bold", StringComparison.Ordinal);
+
+        // Shapes a run of one Indic script with the LiPi Sans face for it (Bold
+        // for bold text, D-152) and draws the glyphs at their natural advances
+        // from the current position.
+        private void DrawBundledRun(string text, LipiScript script, bool bold)
         {
-            BundledFace? face = BundledFace.For(script);
+            LipiFace? face = LipiFace.For(script, bold);
             if (face is null || text.Length == 0)
             {
                 ReportMissingGlyph(text.Length > 0 ? text : " ");

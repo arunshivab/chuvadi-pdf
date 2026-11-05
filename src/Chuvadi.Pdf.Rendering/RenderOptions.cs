@@ -138,6 +138,14 @@ public sealed class RenderOptions
     public bool AutohintUnhintedFonts { get; init; }
 
     /// <summary>
+    /// Gets or initialises which annotations are drawn (3.31): View (the
+    /// default, as on screen), Print (the Print flag decides), FormFieldsOnly
+    /// or None. Form fields without up-to-date appearances and comments
+    /// without appearances are drawn from their own entries in every mode.
+    /// </summary>
+    public Chuvadi.Pdf.Documents.AnnotationMode AnnotationMode { get; init; } = Chuvadi.Pdf.Documents.AnnotationMode.View;
+
+    /// <summary>
     /// Computes the scale factor from PDF points to device pixels for this DPI.
     /// </summary>
     public double Scale => Dpi / 72.0;

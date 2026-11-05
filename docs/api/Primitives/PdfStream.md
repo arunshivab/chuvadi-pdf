@@ -49,6 +49,14 @@ int RawLength => RawBytes.Length
 
 Gets the number of raw bytes in this stream. Equivalent to `RawBytes.Length`.
 
+### `Filter`
+
+```csharp
+PdfPrimitive? Filter => Dictionary.GetAs<PdfPrimitive>(PdfName.Filter)
+```
+
+Gets the `/Filter` entry from the stream dictionary, which identifies the compression filter(s) applied to the data. Returns `null` if the stream is uncompressed.
+
 ### `IsFiltered`
 
 ```csharp
@@ -72,18 +80,6 @@ override PdfPrimitiveType PrimitiveType => PdfPrimitiveType.Stream
 ```
 
 <inheritdoc/>
-
-## Methods
-
-### `Dictionary.GetAs<PdfPrimitive>`
-
-```csharp
-PdfPrimitive? Filter => Dictionary.GetAs<PdfPrimitive>(PdfName.Filter)
-```
-
-Gets the `/Filter` entry from the stream dictionary, which identifies the compression filter(s) applied to the data. Returns `null` if the stream is uncompressed.
-
-**Remarks:** The filter may be a single `PdfName` or a `PdfArray` of names for chained filters.
 
 ---
 

@@ -18,9 +18,9 @@ ISO 32000-2 §12.8.4.3: the VRI sub-dictionary maps each signature's SHA-1 hex (
 
 Initialises a new VRI entry.
 
-## Methods
+## Properties
 
-### `new`
+### `Certificates`
 
 ```csharp
 ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
@@ -28,7 +28,7 @@ ReadOnlyCollection<X509Certificate> Certificates => new(_certificates)
 
 Certificates from the VRI entry's `/Cert` array.
 
-### `new`
+### `Crls`
 
 ```csharp
 ReadOnlyCollection<CertificateList> Crls => new(_crls)
@@ -36,7 +36,7 @@ ReadOnlyCollection<CertificateList> Crls => new(_crls)
 
 CRLs from the VRI entry's `/CRL` array.
 
-### `new`
+### `OcspResponses`
 
 ```csharp
 ReadOnlyCollection<OcspResponse> OcspResponses => new(_ocspResponses)

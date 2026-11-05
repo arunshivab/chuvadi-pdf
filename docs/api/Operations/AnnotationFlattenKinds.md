@@ -2,6 +2,8 @@
 
 **Enum** in `Chuvadi.Pdf.Operations` (Operations)
 
+Selects which annotation kinds `AnnotationFlattener` bakes into page content. An annotation's kind is decided by its `/Subtype`: `/Widget` annotations (AcroForm fields) are `FormFields`; every other subtype (markup, stamps, ink, links, …) is `Markup`.
+
 ```csharp
 public enum AnnotationFlattenKinds
 ```

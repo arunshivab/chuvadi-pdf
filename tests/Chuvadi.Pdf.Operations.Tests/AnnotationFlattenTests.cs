@@ -437,7 +437,10 @@ public sealed class AnnotationFlattenTests
 
         PdfDictionary acroForm = new PdfDictionary();
         acroForm.Set(PdfName.Intern("Fields"), new PdfArray([new PdfReference(widgetId)]));
-        acroForm.Set(PdfName.Intern("NeedAppearances"), true);
+        // 3.31: false, so the widget's own appearance is the one flattened.
+        // With true the field is drawn from its value instead (D-146), which
+        // AnnotationAppearanceGenerationTests covers.
+        acroForm.Set(PdfName.Intern("NeedAppearances"), false);
         objects.Add(new PdfIndirectObject(acroFormId, acroForm));
 
         return Write(objects, catalogId);

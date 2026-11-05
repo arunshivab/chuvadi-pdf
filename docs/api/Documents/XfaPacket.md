@@ -26,9 +26,7 @@ byte[] Xml
 
 Gets the packet's XML content with all stream filters already removed (for example FlateDecode). The bytes are the raw XML as authored.
 
-## Methods
-
-### `Encoding.UTF8.GetString`
+### `Text`
 
 ```csharp
 string Text => _text ??= Encoding.UTF8.GetString(Xml)

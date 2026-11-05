@@ -2,9 +2,15 @@
 
 **Enum** in `Chuvadi.Pdf.Primitives` (Primitives)
 
+Permission bits carried in a PDF document's encryption dictionary, controlling which operations a user-password holder is allowed to perform. PDF 32000-1:2008 §7.6.3.2 — User access permissions.
+
 ```csharp
 public enum PdfPermissions
 ```
+
+## Remarks
+
+Permissions are advisory and enforced cooperatively by conforming readers; a sufficiently determined attacker who already has the user password can ignore them. The flags exist to let well-behaved software honour the document author's intent. The owner password bypasses all permission checks. Documents opened with the owner password should not surface `PdfPermissionException` for any operation. Bit values match the PDF specification's P-entry semantics: a set bit means the corresponding action is <em>allowed</em>, a cleared bit means it is <em>denied</em>.
 
 ## Values
 

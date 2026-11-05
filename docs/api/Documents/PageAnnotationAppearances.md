@@ -15,6 +15,25 @@ public static class PageAnnotationAppearances
 __static__
 
 ```csharp
+static IReadOnlyList<AnnotationAppearance> Collect(PdfPage page, PdfObjectStore objects, AnnotationMode mode, IAnnotationAppearanceProvider? provider)
+```
+
+Collects the drawable annotation appearances of `page` for an `AnnotationMode` (3.31), taking generated appearances from `provider` where the file's own are missing or out of date.
+
+**Parameters**
+
+- `page` — The page whose annotations are collected.
+- `objects` — The object store for resolving indirect references.
+- `mode` — Which annotations to include.
+- `provider` — Supplies generated appearances, or null for the file's own only.
+
+**Returns:** The drawable appearances in `/Annots` order. <exception cref="ArgumentNullException"> Thrown when `page` or `objects` is null. </exception>
+
+### `Collect`
+
+__static__
+
+```csharp
 static IReadOnlyList<AnnotationAppearance> Collect(PdfPage page, PdfObjectStore objects)
 ```
 

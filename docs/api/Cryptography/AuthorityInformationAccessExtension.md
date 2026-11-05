@@ -23,6 +23,14 @@ Initialises a new AuthorityInformationAccessExtension.
 
 ## Properties
 
+### `Descriptions`
+
+```csharp
+ReadOnlyCollection<AccessDescription> Descriptions => new(_descriptions)
+```
+
+The access descriptions.
+
 ### `Oid`
 
 __static__
@@ -34,14 +42,6 @@ static ObjectIdentifier Oid => KnownOids.AuthorityInfoAccess
 The OID identifying this extension.
 
 ## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<AccessDescription> Descriptions => new(_descriptions)
-```
-
-The access descriptions.
 
 ### `Parse`
 

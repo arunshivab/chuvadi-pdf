@@ -120,6 +120,71 @@ public sealed class PageDisplayList : IReadOnlyList<RenderOp>
         OptionalContentGroups = optionalContentGroups;
     }
 
+    /// <summary>The page's MediaBox (3.31). The default (all zeros) when the list was not built from a page.</summary>
+    public PdfRectangle MediaBox { get; init; }
+
+    /// <summary>
+    /// The CropBox, the region a viewer shows and a printer prints (3.31),
+    /// defaulting to the MediaBox. PDF 32000-1:2008 §14.11.2.
+    /// </summary>
+    public PdfRectangle CropBox { get; init; }
+
+    /// <summary>The BleedBox (3.31), defaulting to the CropBox.</summary>
+    public PdfRectangle BleedBox { get; init; }
+
+    /// <summary>The TrimBox (3.31), defaulting to the CropBox.</summary>
+    public PdfRectangle TrimBox { get; init; }
+
+    /// <summary>The ArtBox (3.31), defaulting to the CropBox.</summary>
+    public PdfRectangle ArtBox { get; init; }
+
+    /// <summary>
+    /// Every font used by text on the page, once each, in first-use order
+    /// (3.31). The same objects as <see cref="TextOp.Font"/>.
+    /// </summary>
+    public IReadOnlyList<DisplayListFont> Fonts { get; init; } = Array.Empty<DisplayListFont>();
+
+    /// <summary>
+    /// The page's transparency groups (3.31, D-173), by id: entry <c>i</c> has
+    /// <see cref="TransparencyGroup.Id"/> <c>i + 1</c>. Empty when there are none.
+    /// </summary>
+    public IReadOnlyList<TransparencyGroup> TransparencyGroups { get; init; } = Array.Empty<TransparencyGroup>();
+
+    /// <summary>
+    /// True when anything on the page needs transparency (3.31): a blend mode
+    /// other than Normal, a soft mask, an opacity below 1, or a transparency
+    /// group.
+    /// </summary>
+    public bool HasTransparency
+    {
+        get
+        {
+            foreach (RenderOp op in _ops)
+            {
+                if (op.BlendMode != PdfBlendMode.Normal || op.SoftMask is not null || op.GroupIds.Count > 0)
+                {
+                    return true;
+                }
+
+                switch (op)
+                {
+                    case OpacityOp { Push: true } o when o.Alpha < 1 || o.Isolated:
+                        return true;
+                    case BlendModeOp { Push: true } b when b.Mode != PdfBlendMode.Normal:
+                        return true;
+                    case TextOp t when t.FillOpacity < 1 || t.StrokeOpacity < 1:
+                        return true;
+                    case ImageOp img when img.Alpha < 1 || img.SoftMaskAlpha is not null:
+                        return true;
+                    case PathOp p when p.FillOpacity < 1 || p.StrokeOpacity < 1:
+                        return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     /// <summary>Page width in points.</summary>
     public double MediaWidth { get; }
 

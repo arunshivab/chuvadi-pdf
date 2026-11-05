@@ -60,6 +60,14 @@ byte[] RawEncoding
 
 The complete DER encoding of the Certificate.
 
+### `TbsAndOuterAlgorithmsMatch`
+
+```csharp
+bool TbsAndOuterAlgorithmsMatch => Tbs.Signature.Equals(SignatureAlgorithm)
+```
+
+True when the algorithm in the TBS body matches the outer signatureAlgorithm. RFC 5280 §4.1.1.2: these MUST be equal.
+
 ### `Subject`
 
 ```csharp
@@ -85,14 +93,6 @@ Validity Validity => Tbs.Validity
 Convenience accessor for the validity period.
 
 ## Methods
-
-### `Tbs.Signature.Equals`
-
-```csharp
-bool TbsAndOuterAlgorithmsMatch => Tbs.Signature.Equals(SignatureAlgorithm)
-```
-
-True when the algorithm in the TBS body matches the outer signatureAlgorithm. RFC 5280 §4.1.1.2: these MUST be equal.
 
 ### `Decode`
 

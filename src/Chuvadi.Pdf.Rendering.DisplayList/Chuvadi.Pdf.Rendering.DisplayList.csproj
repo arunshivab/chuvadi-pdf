@@ -20,5 +20,6 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Walking\Chuvadi.Pdf.Rendering.Walking.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Annotations\Chuvadi.Pdf.Annotations.csproj" />
   </ItemGroup>
 </Project>

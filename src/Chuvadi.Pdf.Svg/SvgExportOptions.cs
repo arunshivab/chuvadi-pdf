@@ -84,6 +84,12 @@ public sealed class SvgExportOptions
     public bool PrettyPrint { get; init; }
 
     /// <summary>
+    /// Which annotations are drawn (3.31): View (the default), Print,
+    /// FormFieldsOnly or None. Used by <see cref="SvgRenderer"/>.
+    /// </summary>
+    public Chuvadi.Pdf.Documents.AnnotationMode AnnotationMode { get; init; } = Chuvadi.Pdf.Documents.AnnotationMode.View;
+
+    /// <summary>
     /// Opaque colour for the page sheet, emitted as a full-page background
     /// rectangle behind all content. Defaults to <see cref="ColorF.White"/>,
     /// matching the rasteriser's default white paper. Set to <see langword="null"/>

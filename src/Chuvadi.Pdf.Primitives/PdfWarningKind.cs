@@ -18,4 +18,12 @@ public enum PdfWarningKind
 
     /// <summary>A shading could not be used (unsupported type or damaged entries); its paint is skipped.</summary>
     ShadingSkipped,
+
+    /// <summary>
+    /// An annotation needed an appearance made from its own entries (a form
+    /// field with <c>/NeedAppearances</c>, or an annotation with no
+    /// <c>/AP</c>), and it could not be made; the annotation draws nothing
+    /// (3.31).
+    /// </summary>
+    AppearanceNotGenerated,
 }

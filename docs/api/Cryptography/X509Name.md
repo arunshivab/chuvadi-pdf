@@ -29,6 +29,14 @@ Initialises a new X509Name.
 
 ## Properties
 
+### `Rdns`
+
+```csharp
+ReadOnlyCollection<RelativeDistinguishedName> Rdns => new(_rdns)
+```
+
+The RDNs in encoded order (most-general first).
+
 ### `RawEncoding`
 
 ```csharp
@@ -37,23 +45,15 @@ byte[] RawEncoding
 
 The original DER encoding of the Name. Preserved because signature verification requires byte-identical comparison of issuer/subject names.
 
-## Methods
-
-### `new`
-
-```csharp
-ReadOnlyCollection<RelativeDistinguishedName> Rdns => new(_rdns)
-```
-
-The RDNs in encoded order (most-general first).
-
-### `FindFirst`
+### `CommonName`
 
 ```csharp
 string? CommonName => FindFirst(KnownOids.CommonName)
 ```
 
 Convenience accessor: returns the value of the first CN attribute encountered, or null if no CN exists in the DN.
+
+## Methods
 
 ### `FindFirst`
 

@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Annotations;
 using Chuvadi.Pdf.Content;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Fonts;
@@ -72,6 +73,60 @@ public static class DisplayListBuilder
         return new Builder(document, optionalContent).BuildPage(page, flattenTransforms);
     }
 
+    /// <summary>
+    /// Builds the display list for one page with an <see cref="AnnotationMode"/>
+    /// (3.31): <see cref="AnnotationMode.Print"/> for printing (the Print flag
+    /// decides), <see cref="AnnotationMode.FormFieldsOnly"/>, or
+    /// <see cref="AnnotationMode.None"/>. The other overloads use
+    /// <see cref="AnnotationMode.View"/>.
+    /// </summary>
+    /// <param name="document">The document.</param>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <param name="optionalContent">Which layers are visible.</param>
+    /// <param name="annotations">Which annotations are drawn.</param>
+    /// <param name="flattenTransforms">As for <see cref="Build(PdfDocument, int, bool)"/>.</param>
+    /// <returns>The page's display list.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the page index is out of range.</exception>
+    public static PageDisplayList Build(
+        PdfDocument document, int pageIndex, OptionalContentVisibility optionalContent,
+        AnnotationMode annotations, bool flattenTransforms = false)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(optionalContent);
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pageIndex));
+        }
+
+        PdfPage page = document.Pages[pageIndex];
+        return new Builder(document, optionalContent, annotations).BuildPage(page, flattenTransforms);
+    }
+
+    /// <summary>
+    /// Builds the display list for one page with the document's default layer
+    /// visibility and an <see cref="AnnotationMode"/> (3.31).
+    /// </summary>
+    /// <param name="document">The document.</param>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <param name="annotations">Which annotations are drawn.</param>
+    /// <param name="flattenTransforms">As for <see cref="Build(PdfDocument, int, bool)"/>.</param>
+    /// <returns>The page's display list.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="document"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the page index is out of range.</exception>
+    public static PageDisplayList Build(
+        PdfDocument document, int pageIndex, AnnotationMode annotations, bool flattenTransforms = false)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pageIndex));
+        }
+
+        PdfPage page = document.Pages[pageIndex];
+        return new Builder(document, page.OptionalContent, annotations).BuildPage(page, flattenTransforms);
+    }
+
     private sealed class Builder : IContentOperatorSink
     {
         private readonly PdfDocument _doc;
@@ -83,6 +138,9 @@ public static class DisplayListBuilder
         // (e.g. SvgRenderer emits CSS @font-face data URLs from these). Keys
         // match the resource-name used in TextOp.FontKey.
         private readonly Dictionary<string, PdfDictionary> _fontDictsByKey = new();
+
+        // 3.31: one DisplayListFont per font dictionary (by identity).
+        private readonly Dictionary<PdfDictionary, DisplayListFont> _fontObjects = new(ReferenceEqualityComparer.Instance);
 
         // Follow-up item 2 (docs/v2.1.8-filter-array-and-followups.md):
         // resolved PdfFont cache, keyed by the resource-name used in
@@ -181,26 +239,152 @@ public static class DisplayListBuilder
         // few legitimate breaks. Better than the opposite.
         private const double GapToleranceFraction = 0.3;
 
-        internal Builder(PdfDocument doc, OptionalContentVisibility visibility)
+        internal Builder(PdfDocument doc, OptionalContentVisibility visibility, AnnotationMode annotations = AnnotationMode.View)
         {
             _doc = doc;
             _visibility = visibility;
+            _annotationMode = annotations;
         }
+
+        // 3.31 (D-146): which annotations are drawn, and the one being drawn
+        // now (stamped on every op it produces).
+        private readonly AnnotationMode _annotationMode;
+        private AnnotationSource? _currentAnnotation;
+        // 3.31 (D-173): the transparency groups started so far, the ids of
+        // those open now (outermost first) and the array stamped on ops.
+        private readonly List<TransparencyGroup> _groups = new List<TransparencyGroup>();
+        private readonly List<int> _openGroups = new List<int>();
+        private int[] _currentGroupIds = Array.Empty<int>();
 
         internal PageDisplayList BuildPage(PdfPage page, bool flattenTransforms)
         {
             _pageNumber = page.PageNumber;
             _resources = page.Resources;
-            byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
-            ContentStreamWalker.Walk(content, this);
-            EmitAnnotationAppearances(page);
+            if (_annotationMode != AnnotationMode.FormFieldsOnly)
+            {
+                byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
+                ContentStreamWalker.Walk(content, this);
+            }
+
+            if (_annotationMode != AnnotationMode.None)
+            {
+                EmitAnnotationAppearances(page);
+            }
             int rotation = 0;
             if (page.Dictionary.TryGetValue(PdfName.Intern("Rotate"), out PdfPrimitive? rv)
                 && rv is PdfInteger ri) { rotation = ri.Value; }
             IReadOnlyList<OptionalContentGroup> layers = OptionalContentReader.GetGroups(_doc);
             IReadOnlyList<RenderOp> ops = flattenTransforms ? WithoutTransformOps(_ops) : _ops;
+            IReadOnlyList<TransparencyGroup> groups = FinishGroups(ops);
+            PdfRectangle media = page.MediaBox;
+            PdfRectangle crop = Intersect(page.CropBox, media);
             return new PageDisplayList(
-                ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers);
+                ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers)
+            {
+                MediaBox = media,
+                CropBox = crop,
+                BleedBox = Intersect(page.BleedBox, crop),
+                TrimBox = Intersect(page.TrimBox, crop),
+                ArtBox = Intersect(page.ArtBox, crop),
+                Fonts = new List<DisplayListFont>(_fontObjects.Values),
+                TransparencyGroups = groups,
+            };
+        }
+
+        // 3.31 (D-173): the group table for the final op list. A group that
+        // paints nothing (only q/Q, clips or nested empty groups) is left out
+        // and its id removed from its ops; the rest are numbered 1, 2, 3 … in
+        // start order, and each gets its run. Every op inside a group is
+        // emitted while the group's form is being walked, so each run is
+        // unbroken and nested inside its parent's.
+        private List<TransparencyGroup> FinishGroups(IReadOnlyList<RenderOp> ops)
+        {
+            List<TransparencyGroup> table = new List<TransparencyGroup>();
+            if (_groups.Count == 0)
+            {
+                return table;
+            }
+
+            bool[] paints = new bool[_groups.Count + 1];
+            foreach (RenderOp op in ops)
+            {
+                if (IsPaintingOp(op))
+                {
+                    foreach (int id in op.GroupIds)
+                    {
+                        paints[id] = true;
+                    }
+                }
+            }
+
+            int[] newId = new int[_groups.Count + 1];
+            int next = 1;
+            for (int id = 1; id <= _groups.Count; id++)
+            {
+                newId[id] = paints[id] ? next++ : 0;
+            }
+
+            Dictionary<int[], int[]> renumbered = new Dictionary<int[], int[]>(ReferenceEqualityComparer.Instance);
+            foreach (RenderOp op in _ops)
+            {
+                if (op.GroupIds is not int[] { Length: > 0 } old)
+                {
+                    continue;
+                }
+
+                if (!renumbered.TryGetValue(old, out int[]? mapped))
+                {
+                    mapped = Array.FindAll(Array.ConvertAll(old, id => newId[id]), id => id > 0);
+                    renumbered[old] = mapped;
+                }
+
+                op.GroupIds = mapped;
+                if (mapped.Length == 0)
+                {
+                    op.GroupTransparency = null;
+                }
+            }
+
+            int[] first = new int[next];
+            int[] count = new int[next];
+            Array.Fill(first, -1);
+            for (int i = 0; i < ops.Count; i++)
+            {
+                foreach (int id in ops[i].GroupIds)
+                {
+                    if (first[id] < 0)
+                    {
+                        first[id] = i;
+                    }
+
+                    count[id]++;
+                }
+            }
+
+            foreach (TransparencyGroup g in _groups)
+            {
+                if (newId[g.Id] == 0)
+                {
+                    continue;
+                }
+
+                int? parent = g.ParentId;
+                while (parent is int p && newId[p] == 0)
+                {
+                    parent = _groups[p - 1].ParentId;
+                }
+
+                int id = newId[g.Id];
+                table.Add(g with
+                {
+                    Id = id,
+                    ParentId = parent is int kept ? newId[kept] : null,
+                    FirstOpIndex = first[id],
+                    OpCount = count[id],
+                });
+            }
+
+            return table;
         }
 
         // Draws the page's annotation normal appearances (/AP /N) after the
@@ -214,7 +398,7 @@ public static class DisplayListBuilder
         private void EmitAnnotationAppearances(PdfPage page)
         {
             IReadOnlyList<AnnotationAppearance> appearances =
-                PageAnnotationAppearances.Collect(page, _doc.Objects);
+                PageAnnotationAppearances.Collect(page, _doc.Objects, _annotationMode, GeneratedAppearances.Instance);
 
             for (int i = 0; i < appearances.Count; i++)
             {
@@ -224,11 +408,49 @@ public static class DisplayListBuilder
                     continue;
                 }
 
+                _currentAnnotation = DescribeAnnotation(ap);
                 SaveState();
                 ConcatMatrix(ap.ScaleX, 0, 0, ap.ScaleY, ap.OffsetX, ap.OffsetY);
                 EmitFormXObject(ap.Appearance);
                 RestoreState();
+                _currentAnnotation = null;
             }
+        }
+
+        // Page boxes are clipped to the box that contains them (§14.11.2).
+        private static PdfRectangle Intersect(PdfRectangle box, PdfRectangle outer)
+        {
+            double x1 = Math.Max(Math.Min(box.X1, box.X2), Math.Min(outer.X1, outer.X2));
+            double y1 = Math.Max(Math.Min(box.Y1, box.Y2), Math.Min(outer.Y1, outer.Y2));
+            double x2 = Math.Min(Math.Max(box.X1, box.X2), Math.Max(outer.X1, outer.X2));
+            double y2 = Math.Min(Math.Max(box.Y1, box.Y2), Math.Max(outer.Y1, outer.Y2));
+            return x2 > x1 && y2 > y1 ? new PdfRectangle(x1, y1, x2, y2) : outer;
+        }
+
+        private AnnotationSource DescribeAnnotation(AnnotationAppearance ap)
+        {
+            PdfDictionary a = ap.Annotation;
+            string subtype = _doc.Objects.ResolveAs<PdfName>(a.TryGetValue(PdfName.Subtype, out PdfPrimitive? st) ? st ?? PdfNull.Value : PdfNull.Value)?.Value ?? string.Empty;
+            int flags = a.GetInteger(PdfName.Intern("F"), 0);
+            string? fieldName = null;
+            if (subtype == "Widget")
+            {
+                List<string> parts = new List<string>();
+                PdfDictionary? d = a;
+                for (int depth = 0; d is not null && depth < 32; depth++)
+                {
+                    if (d.TryGetValue(PdfName.Intern("T"), out PdfPrimitive? t) && _doc.Objects.Resolve(t ?? PdfNull.Value) is PdfString s)
+                    {
+                        parts.Insert(0, s.ToTextString());
+                    }
+
+                    d = d.TryGetValue(PdfName.Intern("Parent"), out PdfPrimitive? p) ? _doc.Objects.ResolveAs<PdfDictionary>(p ?? PdfNull.Value) : null;
+                }
+
+                fieldName = parts.Count > 0 ? string.Join(".", parts) : null;
+            }
+
+            return new AnnotationSource(a, subtype, flags, fieldName, ap.IsGenerated);
         }
 
         // Returns a copy of the op list with every TransformOp removed. Safe
@@ -259,6 +481,14 @@ public static class DisplayListBuilder
 
             op.Layers = _currentLayers;
             op.Clips = _stack.Current.Clips;
+            op.Annotation = _currentAnnotation;
+            op.GroupIds = _currentGroupIds;
+            if (_currentGroupIds.Length > 0)
+            {
+                BuilderState g = _stack.Current;
+                op.GroupTransparency = new OpTransparency(g.LocalFillAlpha, g.LocalStrokeAlpha, g.LocalBlendMode, g.LocalSoftMask);
+            }
+
             _ops.Add(op);
         }
 
@@ -911,22 +1141,84 @@ public static class DisplayListBuilder
         public void SetFont(string name, double size)
         {
             BuilderState s = _stack.Current;
-            s.FontKey = name;
+            string key = ScopedFontKey(name);
+            s.FontKey = key;
+            s.Font = ResolveDisplayListFont(name);
             s.FontSize = size;
-            s.BaseFont = ResolveBaseFont(name);
-            s.Style = ResolveFontStyle(name, s.BaseFont);
-            s.Type3 = GetType3Font(name);
+            s.BaseFont = ResolveBaseFont(key);
+            s.Style = ResolveFontStyle(key, s.BaseFont);
+            s.Type3 = GetType3Font(key, name);
+        }
+
+        // 3.31 bug fix (O9): the per-name font caches cover the whole page, so
+        // a form XObject or annotation appearance that uses a page font's name
+        // for a different font used to get the page's font. The cache key is
+        // the name while it means one font on the page; a second font under
+        // the same name gets the key "name#2" (then "#3", ...).
+        private string ScopedFontKey(string name)
+        {
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontsRef)
+                || _doc.Objects.ResolveAs<PdfDictionary>(fontsRef ?? PdfNull.Value) is not PdfDictionary fonts
+                || !fonts.TryGetValue(PdfName.Intern(name), out PdfPrimitive? fontRef)
+                || _doc.Objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value) is not PdfDictionary fontDict)
+            {
+                return name;
+            }
+
+            string key = name;
+            for (int n = 2; n < 10000; n++)
+            {
+                if (!_fontDictsByKey.TryGetValue(key, out PdfDictionary? known))
+                {
+                    _fontDictsByKey[key] = fontDict;
+                    return key;
+                }
+
+                if (ReferenceEquals(known, fontDict))
+                {
+                    return key;
+                }
+
+                key = name + "#" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            return name;
+        }
+
+        // 3.31 (D-144): the font object for a resource name, looked up in the
+        // CURRENT resources (page, form, annotation appearance, pattern or
+        // Type 3 glyph) rather than the per-name caches, and shared per font
+        // dictionary.
+        private DisplayListFont? ResolveDisplayListFont(string name)
+        {
+            if (_resources is null
+                || !_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fontsRef)
+                || _doc.Objects.ResolveAs<PdfDictionary>(fontsRef ?? PdfNull.Value) is not PdfDictionary fonts
+                || !fonts.TryGetValue(PdfName.Intern(name), out PdfPrimitive? fontRef)
+                || _doc.Objects.ResolveAs<PdfDictionary>(fontRef ?? PdfNull.Value) is not PdfDictionary fontDict)
+            {
+                return null;
+            }
+
+            if (!_fontObjects.TryGetValue(fontDict, out DisplayListFont? font))
+            {
+                font = DisplayListFont.Create(fontDict, _doc.Objects);
+                _fontObjects[fontDict] = font;
+            }
+
+            return font;
         }
 
         // Resolves and caches the Type 3 font for a resource name, or null.
-        private Type3Font? GetType3Font(string name)
+        private Type3Font? GetType3Font(string key, string name)
         {
             if (string.IsNullOrEmpty(name) || _resources is null)
             {
                 return null;
             }
 
-            if (_type3FontCache.TryGetValue(name, out Type3Font? cached))
+            if (_type3FontCache.TryGetValue(key, out Type3Font? cached))
             {
                 return cached;
             }
@@ -940,7 +1232,7 @@ public static class DisplayListBuilder
                 font = Type3Font.FromDictionary(fontDict, _doc.Objects);
             }
 
-            _type3FontCache[name] = font;
+            _type3FontCache[key] = font;
             return font;
         }
 
@@ -1166,8 +1458,8 @@ public static class DisplayListBuilder
             // /ca — constant non-stroking (fill) alpha; /CA — constant stroking
             // alpha. PDF 32000-1:2008 §8.4.5, Table 58. Values outside 0..1 are
             // clamped. Other ExtGState entries are not interpreted here.
-            if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; }
-            if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; }
+            if (TryReadAlpha(gs, "ca", out double fillAlpha)) { s.FillAlpha = fillAlpha; s.LocalFillAlpha = fillAlpha; }
+            if (TryReadAlpha(gs, "CA", out double strokeAlpha)) { s.StrokeAlpha = strokeAlpha; s.LocalStrokeAlpha = strokeAlpha; }
 
             // /BM — blend mode (PDF §11.3.5). A name, or an array of names whose
             // first supported entry wins. Unsupported/non-separable names map to
@@ -1175,6 +1467,7 @@ public static class DisplayListBuilder
             if (TryReadBlendMode(gs, out PdfBlendMode blendMode))
             {
                 s.BlendMode = blendMode;
+                s.LocalBlendMode = blendMode;
             }
 
             // /SMask — soft mask (PDF §11.6.5.2). /None clears; a dictionary
@@ -1195,6 +1488,7 @@ public static class DisplayListBuilder
                 if (nm.Value == "None")
                 {
                     _stack.Current.SoftMask = null;
+                    _stack.Current.LocalSoftMask = null;
                 }
 
                 return;
@@ -1223,6 +1517,7 @@ public static class DisplayListBuilder
             PageDisplayList group = BuildSoftMaskGroup(groupStream, out AffineMatrix groupMatrix);
             _stack.Current.SoftMask = new SoftMaskInfo(
                 group, groupMatrix.Multiply(_stack.Current.Ctm), isLuminosity, backdrop);
+            _stack.Current.LocalSoftMask = _stack.Current.SoftMask;
         }
 
         private PageDisplayList BuildSoftMaskGroup(
@@ -1342,6 +1637,28 @@ public static class DisplayListBuilder
             }
             catch (ContentException ex)
             {
+                // 3.31 (Print item g): a valid shading of a type this list
+                // cannot express (function-based 1, meshes 4 to 7) still appears
+                // as an op, marked not expressible, so a printer can pass it on
+                // or rasterise the region. SVG and WPF skip such ops.
+                PdfPrimitive raw = _doc.Objects.Resolve(shadingRef);
+                PdfDictionary? rawDict = raw is PdfStream rs ? rs.Dictionary : raw as PdfDictionary;
+                int type = rawDict is not null && rawDict.TryGetValue(PdfName.Intern("ShadingType"), out PdfPrimitive? tp)
+                    && _doc.Objects.Resolve(tp ?? PdfNull.Value) is PdfInteger ti ? ti.Value : 0;
+                if (type is 1 or 4 or 5 or 6 or 7)
+                {
+                    Add(new ShadingOp
+                    {
+                        BlendMode = _stack.Current.BlendMode,
+                        SoftMask = _stack.Current.SoftMask,
+                        IsRadial = false,
+                        ShadingToPage = ctm,
+                        ShadingType = type,
+                        Shading = raw,
+                        IsExpressible = false,
+                    });
+                }
+
                 string subject = shadingRef is PdfReference r
                     ? "shading " + r.ObjectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + r.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture) + " R"
                     : "shading (direct)";
@@ -1387,6 +1704,8 @@ public static class DisplayListBuilder
                     ExtendStart = shading.ExtendStart,
                     ExtendEnd = shading.ExtendEnd,
                     Stops = stops,
+                    ShadingType = shading.IsRadial ? 3 : 2,
+                    Shading = _doc.Objects.Resolve(shadingRef),
                     ShadingToPage = ctm,
                 });
             }
@@ -1407,6 +1726,8 @@ public static class DisplayListBuilder
                     ExtendStart = shading.ExtendStart,
                     ExtendEnd = shading.ExtendEnd,
                     Stops = stops,
+                    ShadingType = shading.IsRadial ? 3 : 2,
+                    Shading = _doc.Objects.Resolve(shadingRef),
                 });
             }
             else
@@ -1424,6 +1745,8 @@ public static class DisplayListBuilder
                     ExtendStart = shading.ExtendStart,
                     ExtendEnd = shading.ExtendEnd,
                     Stops = stops,
+                    ShadingType = shading.IsRadial ? 3 : 2,
+                    Shading = _doc.Objects.Resolve(shadingRef),
                 });
             }
         }
@@ -1896,7 +2219,11 @@ public static class DisplayListBuilder
                     Unicode: unicode,
                     X: xAdvance,
                     Y: 0,
-                    Advance: advance));
+                    Advance: advance)
+                {
+                    Code = code,
+                    CodeLength = codeStep,
+                });
 
                 xAdvance += advance;
             }
@@ -1926,6 +2253,7 @@ public static class DisplayListBuilder
                 SoftMask = _stack.Current.SoftMask,
                 FontKey = s.FontKey,
                 BaseFont = s.BaseFont ?? "Helvetica",
+                Font = s.Font,
                 FontSize = s.FontSize,
                 Glyphs = glyphs,
                 Transform = combined,
@@ -2036,7 +2364,11 @@ public static class DisplayListBuilder
                             Unicode: unicode,
                             X: cursorX,
                             Y: 0,
-                            Advance: advance));
+                            Advance: advance)
+                        {
+                            Code = code,
+                            CodeLength = codeStep,
+                        });
                         cursorX += advance;
                     }
 
@@ -2141,6 +2473,7 @@ public static class DisplayListBuilder
                 SoftMask = _stack.Current.SoftMask,
                 FontKey = s.FontKey!,
                 BaseFont = s.BaseFont ?? "Helvetica",
+                Font = s.Font,
                 FontSize = s.FontSize,
                 Glyphs = pending,
                 Transform = transform,
@@ -2305,6 +2638,22 @@ public static class DisplayListBuilder
 
         private string DecodeText(byte[] bytes, string fontKey)
         {
+            // 3.31 (O9): a key SetFont registered for the current resources
+            // ("F1", or "F1#2" for a second font under that name).
+            if (_fontDictsByKey.TryGetValue(fontKey, out PdfDictionary? registered))
+            {
+                try
+                {
+                    return GetOrBuildPdfFont(fontKey, registered).Decode(bytes);
+                }
+                catch (Exception ex) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(ex))
+                {
+                    AddDiagnostic(DiagnosticKind.DecodeFallback,
+                        $"Font '{fontKey}' could not be resolved: PdfFont.FromDictionary threw {ex.GetType().Name}: {ex.Message}. Falling back to Latin-1 decoding.");
+                    return TryLatin(bytes);
+                }
+            }
+
             if (_resources is null)
             {
                 AddDiagnostic(DiagnosticKind.DecodeFallback,
@@ -2366,6 +2715,14 @@ public static class DisplayListBuilder
 
         private string? ResolveBaseFont(string fontKey)
         {
+            // 3.31 (O9): a registered key ("F1#2") names its own font dictionary.
+            if (_fontDictsByKey.TryGetValue(fontKey, out PdfDictionary? registered))
+            {
+                return registered.TryGetValue(PdfName.Intern("BaseFont"), out PdfPrimitive? rb) && rb is PdfName rn
+                    ? (rn.Value.IndexOf('+') is int p && p >= 0 && p < rn.Value.Length - 1 ? rn.Value[(p + 1)..] : rn.Value)
+                    : null;
+            }
+
             if (_resources is null) { return null; }
             if (!_resources.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? fonts))
             {
@@ -2433,12 +2790,95 @@ public static class DisplayListBuilder
             ConcatMatrix(a, b, c, d, e, f);
             _patternBaseCtm = _stack.Current.Ctm;
             _resources = formResources;
+            int[] savedGroupIds = _currentGroupIds;
+            bool isGroup = BeginTransparencyGroup(formStream);
             _formDepth++;
             ContentStreamWalker.Walk(formContent, this);
             _formDepth--;
+            if (isGroup)
+            {
+                _openGroups.RemoveAt(_openGroups.Count - 1);
+            }
+
+            _currentGroupIds = savedGroupIds;
             _resources = savedResources;
             _patternBaseCtm = savedPatternBase;
             RestoreState();
+        }
+
+        // 3.31 (Print item i, D-173): a form XObject with /Group /S
+        // /Transparency starts a group: its table entry takes the /I, /K and
+        // /CS entries, the transformed /BBox, and the opacity, blend mode and
+        // soft mask in effect inside the parent group; inside the group those
+        // start again at their defaults. Called after the form's /Matrix is
+        // applied.
+        private bool BeginTransparencyGroup(PdfStream formStream)
+        {
+            PdfDictionary form = formStream.Dictionary;
+            if (!form.TryGetValue(PdfName.Intern("Group"), out PdfPrimitive? gp)
+                || _doc.Objects.ResolveAs<PdfDictionary>(gp ?? PdfNull.Value) is not PdfDictionary group
+                || _doc.Objects.ResolveAs<PdfName>(group.TryGetValue(PdfName.Intern("S"), out PdfPrimitive? sp) ? sp ?? PdfNull.Value : PdfNull.Value)?.Value != "Transparency")
+            {
+                return false;
+            }
+
+            bool Flag(string key) => group.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v) && _doc.Objects.Resolve(v ?? PdfNull.Value) is PdfBoolean { Value: true };
+            PdfPrimitive cs = group.TryGetValue(PdfName.Intern("CS"), out PdfPrimitive? c) ? _doc.Objects.Resolve(c ?? PdfNull.Value) : PdfNull.Value;
+            string? colorSpace = cs switch
+            {
+                PdfName n => n.Value,
+                PdfArray { Count: > 0 } arr when _doc.Objects.Resolve(arr[0]) is PdfName first => first.Value,
+                _ => null,
+            };
+            BuilderState s = _stack.Current;
+            int id = _groups.Count + 1;
+            _groups.Add(new TransparencyGroup
+            {
+                Id = id,
+                ParentId = _openGroups.Count > 0 ? _openGroups[^1] : null,
+                Depth = _openGroups.Count + 1,
+                Isolated = Flag("I"),
+                Knockout = Flag("K"),
+                ColorSpace = colorSpace,
+                Box = TransformedBox(form, s.Ctm),
+                Matrix = s.Ctm,
+                Opacity = s.LocalFillAlpha,
+                StrokeOpacity = s.LocalStrokeAlpha,
+                BlendMode = s.LocalBlendMode,
+                SoftMask = s.LocalSoftMask,
+                Form = formStream,
+            });
+            _openGroups.Add(id);
+            _currentGroupIds = _openGroups.ToArray();
+            s.LocalFillAlpha = 1.0;
+            s.LocalStrokeAlpha = 1.0;
+            s.LocalBlendMode = PdfBlendMode.Normal;
+            s.LocalSoftMask = null;
+            return true;
+        }
+
+        private PdfRectangle TransformedBox(PdfDictionary form, AffineMatrix ctm)
+        {
+            if (_doc.Objects.ResolveAs<PdfArray>(form.TryGetValue(PdfName.Intern("BBox"), out PdfPrimitive? bp) ? bp ?? PdfNull.Value : PdfNull.Value) is not PdfArray { Count: >= 4 } bb)
+            {
+                return default;
+            }
+
+            double x0 = NumberOf(bb[0]);
+            double y0 = NumberOf(bb[1]);
+            double x1 = NumberOf(bb[2]);
+            double y1 = NumberOf(bb[3]);
+            (double X, double Y)[] corners = { ctm.Apply(x0, y0), ctm.Apply(x1, y0), ctm.Apply(x0, y1), ctm.Apply(x1, y1) };
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach ((double x, double y) in corners)
+            {
+                minX = Math.Min(minX, x);
+                minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x);
+                maxY = Math.Max(maxY, y);
+            }
+
+            return new PdfRectangle(minX, minY, maxX, maxY);
         }
 
         private void EmitXObject(string name, BuilderState s)
@@ -2591,6 +3031,11 @@ public static class DisplayListBuilder
                 SoftMaskHeight = softMaskHeight,
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
+                Source = stream,
+                Decode = ReadDecodeArray(stream.Dictionary),
+                IccProfileStream = FindIccProfile(stream.Dictionary),
+                JpegColorTransform = format == ImageFormat.Jpeg ? JpegInfo.ReadTransform(pixelData) : JpegColorTransform.None,
+                JpegComponents = format == ImageFormat.Jpeg ? JpegInfo.ReadComponents(pixelData) : 0,
             });
         }
 
@@ -2729,7 +3174,57 @@ public static class DisplayListBuilder
                 SoftMaskHeight = height,
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
+                Source = stream,
+                Decode = ReadDecodeArray(stream.Dictionary),
+                IsStencilMask = true,
+                StencilColor = s.FillColor,
             });
+        }
+
+        // 3.31 (Print item f): the image's /Decode array, or null.
+        private double[]? ReadDecodeArray(PdfDictionary dict)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? d) || _doc.Objects.ResolveAs<PdfArray>(d ?? PdfNull.Value) is not PdfArray arr)
+            {
+                return null;
+            }
+
+            double[] values = new double[arr.Count];
+            for (int i = 0; i < values.Length; i++)
+            {
+                values[i] = NumberOf(arr[i]);
+            }
+
+            return values;
+        }
+
+        // 3.31 (Print item f): the ICC profile stream of an [/ICCBased stream]
+        // colour space (directly, or as the base of /Indexed), or null.
+        private PdfStream? FindIccProfile(PdfDictionary dict)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csRef))
+            {
+                return null;
+            }
+
+            PdfPrimitive cs = _doc.Objects.Resolve(csRef ?? PdfNull.Value);
+            for (int depth = 0; depth < 4 && cs is PdfArray arr && arr.Count >= 2; depth++)
+            {
+                string? family = _doc.Objects.ResolveAs<PdfName>(arr[0])?.Value;
+                if (family == "ICCBased")
+                {
+                    return _doc.Objects.ResolveAs<PdfStream>(arr[1]);
+                }
+
+                if (family != "Indexed")
+                {
+                    return null;
+                }
+
+                cs = _doc.Objects.Resolve(arr[1]);
+            }
+
+            return null;
         }
 
         private static bool BoolOf(PdfDictionary dict, string key)

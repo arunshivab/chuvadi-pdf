@@ -63,5 +63,5 @@ Applies a separable blend function to a single colour channel, per PDF §11.3.5 
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/BlendModes.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/BlendModes.cs)_
+_Source: [`src/Chuvadi.Pdf.Rendering.Walking/BlendModes.cs`](../../../src/Chuvadi.Pdf.Rendering.Walking/BlendModes.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

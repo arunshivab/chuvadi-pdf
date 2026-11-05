@@ -19,6 +19,7 @@ Thank you for your interest in contributing.
 git clone https://github.com/chuvadi/chuvadi
 cd chuvadi
 pwsh setup.ps1       # Creates .sln file, restores packages
+pwsh build/fetch-fonts.ps1   # Chuvadi.Fonts into .fonts-feed/ (SHA-256 checked)
 dotnet build
 dotnet test
 ```

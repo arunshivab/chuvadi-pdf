@@ -20,6 +20,7 @@ namespace Chuvadi.Pdf.Fonts.Bundled;
 /// Malayalam), licensed under the SIL Open Font License 1.1 (the licence text
 /// is in this package).
 /// </summary>
+[System.Obsolete("Deprecated: use Chuvadi.Fonts (FontPack). Removed at the Pdf move.")]
 public static class BundledFonts
 {
     private const string Prefix = "LiPi-Sans-";

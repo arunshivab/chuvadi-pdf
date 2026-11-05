@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # Copyright 2025 Chuvadi Contributors
 # SPDX-License-Identifier: Apache-2.0
-# Regenerates src/Chuvadi.Pdf.Fonts.Rendering/CffStandardStrings.cs from
+# Regenerates src/Chuvadi.Pdf.Fonts/CffStandardStrings.cs (in Chuvadi.Pdf.Fonts since 3.31) from
 # fontTools' canonical CFF Standard Strings table (Adobe TN #5176 Appendix A).
 # Offline: reads the constant bundled in fontTools; no network access.
 from pathlib import Path
 from fontTools.cffLib import cffStandardStrings as S
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT = REPO_ROOT / "src" / "Chuvadi.Pdf.Fonts.Rendering" / "CffStandardStrings.cs"
+OUT = REPO_ROOT / "src" / "Chuvadi.Pdf.Fonts" / "CffStandardStrings.cs"
 
 def main():
     assert len(S) == 391, f"expected 391 standard strings, got {len(S)}"

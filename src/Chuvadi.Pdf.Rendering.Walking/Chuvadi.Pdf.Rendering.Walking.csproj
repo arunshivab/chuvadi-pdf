@@ -4,7 +4,9 @@
       Chuvadi content-stream walker. Parses a PDF page's content stream into a
       sequence of operator callbacks (IContentOperatorSink), shared by the
       display-list and raster builders. Neutral, allocation-light, no rendering
-      policy of its own.
+      policy of its own. Also holds the value types both builders share
+      (PdfBlendMode, BlendModes, Type3Font, Type3Glyph), which keep their
+      Chuvadi.Pdf.Rendering.DisplayList namespace (3.31.0).
     </Description>
     <PackageId>Chuvadi.Pdf.Rendering.Walking</PackageId>
   </PropertyGroup>

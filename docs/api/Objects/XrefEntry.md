@@ -68,6 +68,14 @@ int IndexInStream
 
 For `XrefEntryType.Compressed`: the zero-based index of this object within the object stream.
 
+### `ObjectId`
+
+```csharp
+PdfObjectId ObjectId => new PdfObjectId(ObjectNumber, Generation)
+```
+
+Gets the `PdfObjectId` for this entry.
+
 ### `IsInUse`
 
 ```csharp
@@ -125,14 +133,6 @@ Initialises a new compressed `XrefEntry` for an object stored inside an object s
 - `objectNumber` — This object's number.
 - `streamObjectNumber` — Object number of the object stream containing this object.
 - `indexInStream` — Zero-based index of this object within the object stream.
-
-### `PdfObjectId`
-
-```csharp
-PdfObjectId ObjectId => new PdfObjectId(ObjectNumber, Generation)
-```
-
-Gets the `PdfObjectId` for this entry.
 
 ### `==`
 

@@ -335,13 +335,31 @@ internal static class Normalizer
         }
     }
 
-    // Variation sequences (cmap format 14) are not mapped: the selector is passed
-    // through for GSUB, as HarfBuzz does when the font has no variation glyph.
+    // Variation sequences (3.31, D-169): when the font's cmap format 14 lists
+    // the sequence, the base character takes the variant glyph and the
+    // selector is dropped (HarfBuzz replace_glyphs(2, 1)). Otherwise the
+    // selector is passed through for GSUB, as HarfBuzz does.
     private static void HandleVariationSelectorCluster(ShapePlan plan, ShapeBuffer buffer, int end)
     {
         while (buffer.Idx < end - 1)
         {
-            if (UnicodeData.IsVariationSelector(buffer.Cur(1).Codepoint))
+            int variant = UnicodeData.IsVariationSelector(buffer.Cur(1).Codepoint)
+                ? plan.VariantGlyph(buffer.Cur().Codepoint, buffer.Cur(1).Codepoint)
+                : -1;
+            if (variant >= 0)
+            {
+                int unicode = buffer.Cur().Codepoint;
+                buffer.Cur().NormalizerGlyph = variant;
+                buffer.ReplaceGlyphs(2, 1, [unicode]);
+
+                // Skip any further variation selectors.
+                while (buffer.Idx < end && UnicodeData.IsVariationSelector(buffer.Cur().Codepoint))
+                {
+                    SetGlyph(plan, ref buffer.Cur());
+                    buffer.NextGlyph();
+                }
+            }
+            else if (UnicodeData.IsVariationSelector(buffer.Cur(1).Codepoint))
             {
                 SetGlyph(plan, ref buffer.Cur());
                 buffer.NextGlyph();

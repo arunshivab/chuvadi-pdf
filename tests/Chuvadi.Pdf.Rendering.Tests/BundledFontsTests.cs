@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // PHASE: 3.30 — one shared copy of the bundled fonts (D-87).
 
+// Fonts.Bundled and Fonts.Woff2 are deprecated (3.31.0) but still ship and are still tested.
+#pragma warning disable CS0618
+
 using System;
 using Chuvadi.Pdf.Fonts.Bundled;
 using FluentAssertions;

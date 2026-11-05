@@ -610,8 +610,8 @@ internal static class FontEmbedder
 
         for (int code = 0; code < 256; code++)
         {
-            string text = pdfFont.DecodeCode(code);
-            if (text.Length != 1 || text[0] < 0x20 || char.IsSurrogate(text[0]) || unicodeToGid.ContainsKey(text[0]))
+            int cp = SingleCodePoint(pdfFont.DecodeCode(code));
+            if (cp < 0x20 || unicodeToGid.ContainsKey(cp))
             {
                 continue;
             }
@@ -619,7 +619,7 @@ internal static class FontEmbedder
             int gid = 0;
             if (!symbolic)
             {
-                gid = renderer.GetGlyphIndexUnicode(text[0]);
+                gid = renderer.GetGlyphIndexUnicode(cp);
             }
 
             if (gid == 0)
@@ -629,12 +629,12 @@ internal static class FontEmbedder
 
             if (gid == 0 && symbolic)
             {
-                gid = renderer.GetGlyphIndexUnicode(text[0]);
+                gid = renderer.GetGlyphIndexUnicode(cp);
             }
 
             if (gid > 0 && gid <= 0xFFFF)
             {
-                unicodeToGid[text[0]] = gid;
+                unicodeToGid[cp] = gid;
             }
         }
     }
@@ -671,16 +671,24 @@ internal static class FontEmbedder
             if (code >= 0 && code < 256
                 && loader.GlyphNameToGid.TryGetValue(name.Value, out int gid) && gid > 0 && gid <= 0xFFFF)
             {
-                string text = pdfFont.DecodeCode(code);
-                if (text.Length == 1 && text[0] >= 0x20 && !char.IsSurrogate(text[0]))
+                int cp = SingleCodePoint(pdfFont.DecodeCode(code));
+                if (cp >= 0x20)
                 {
-                    unicodeToGid.TryAdd(text[0], gid);
+                    unicodeToGid.TryAdd(cp, gid);
                 }
             }
 
             code++;
         }
     }
+
+    // The one code point a decoded string holds: a BMP character or, since
+    // 3.31 (D-169), a surrogate pair (the cmap builder writes format 12 for
+    // these). -1 for an empty string, a lone surrogate or several characters.
+    private static int SingleCodePoint(string text) =>
+        text.Length == 1 && !char.IsSurrogate(text[0]) ? text[0]
+        : text.Length == 2 && char.IsSurrogatePair(text[0], text[1]) ? char.ConvertToUtf32(text[0], text[1])
+        : -1;
 
     // The descriptor's /Flags symbolic bit (bit 3).
     private static bool IsSymbolic(PdfDictionary descriptor) =>

@@ -30,4 +30,9 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 3.31 (D-176): the CFF standard strings moved here; Fonts.Rendering still uses them. -->
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Fonts.Rendering" />
+  </ItemGroup>
+
 </Project>

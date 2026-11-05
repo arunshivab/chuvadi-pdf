@@ -433,7 +433,7 @@ public sealed class PdfDocument : IDisposable
             if (_pages is null)
             {
                 PdfDictionary? pagesDict = GetPagesRoot();
-                _pages = new PdfPageCollection(pagesDict, _reader.Objects, () => DefaultOptionalContent, () => StructTreeRoot);
+                _pages = new PdfPageCollection(pagesDict, _reader.Objects, () => DefaultOptionalContent, () => StructTreeRoot, () => ResolveCatalogDictionary("AcroForm"));
             }
 
             return _pages;

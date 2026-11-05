@@ -74,5 +74,5 @@ Determines whether the specified glyph name is present in the Adobe Glyph List.
 
 ---
 
-_Source: [`src/Chuvadi.Pdf.Fonts.Rendering/AdobeGlyphList.cs`](../../../src/Chuvadi.Pdf.Fonts.Rendering/AdobeGlyphList.cs)_
+_Source: [`src/Chuvadi.Pdf.Fonts/AdobeGlyphList.cs`](../../../src/Chuvadi.Pdf.Fonts/AdobeGlyphList.cs)_
 _Generated from XML doc comments. Do not edit; regenerate with `python tools/gen_api_docs.py`._

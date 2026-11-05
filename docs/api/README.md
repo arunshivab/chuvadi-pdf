@@ -19,7 +19,9 @@ python tools/gen_api_docs.py
 | [BorderStyle](Annotations/BorderStyle.md) | class | Border style for an annotation, describing width, style, and (for dashed borders) dash pattern. |
 | [BorderStyleType](Annotations/BorderStyleType.md) | enum | PDF border-style kind. |
 | [CircleAnnotation](Annotations/CircleAnnotation.md) | class | Circle (ellipse outline) annotation. |
+| [CommentAppearanceGenerator](Annotations/CommentAppearanceGenerator.md) | class | Makes a normal appearance for a comment annotation from its own entries: Highlight, Underline, Squiggly, StrikeOut, Square, Circle, Line, Polygon, PolyLine, Ink, FreeText, Text (the seven standard note icons), Stamp (its name in a box), Caret and FileAttachment (four icons). |
 | [FreeTextAnnotation](Annotations/FreeTextAnnotation.md) | class | Free-text annotation drawn directly on the page (§12.5.6.6). |
+| [GeneratedAppearances](Annotations/GeneratedAppearances.md) | class | The appearance provider the renderers, text extraction and flattening use (3.31). |
 | [GenericAnnotation](Annotations/GenericAnnotation.md) | class | Catch-all annotation for subtypes not specifically modelled. |
 | [InkAnnotation](Annotations/InkAnnotation.md) | class | Free-hand ink annotation (§12.5.6.13). |
 | [LineAnnotation](Annotations/LineAnnotation.md) | class | Line annotation. |
@@ -166,7 +168,7 @@ python tools/gen_api_docs.py
 | [ITsaClient](Cryptography/ITsaClient.md) | interface | A client capable of fetching an RFC 3161 timestamp from a TSA. |
 | [IssuerAndSerialNumber](Cryptography/IssuerAndSerialNumber.md) | class | Identifies an X.509 certificate by its issuer's distinguished name and the certificate's serial number. |
 | [KeyUsageExtension](Cryptography/KeyUsageExtension.md) | class | The Key Usage extension — restricts the cryptographic operations the certified key may participate in. |
-| [KeyUsageFlags](Cryptography/KeyUsageFlags.md) | enum | — |
+| [KeyUsageFlags](Cryptography/KeyUsageFlags.md) | enum | The named bits in a KeyUsage extension (RFC 5280 §4.2.1.3). |
 | [KnownOids](Cryptography/KnownOids.md) | class | Named ObjectIdentifier constants for the OIDs Chuvadi cares about. |
 | [MessageImprint](Cryptography/MessageImprint.md) | class | The cryptographic commitment that a timestamp token covers. |
 | [ObjectIdentifier](Cryptography/ObjectIdentifier.md) | class | An ASN.1 OBJECT IDENTIFIER — an ordered sequence of non-negative arcs. |
@@ -219,7 +221,9 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [AnnotationAppearance](Documents/AnnotationAppearance.md) | class | A page annotation's resolved normal appearance and its placement on the page, per PDF 32000-1:2008 §12.5.5. |
+| [AnnotationMode](Documents/AnnotationMode.md) | enum | Which annotations a renderer or text extractor includes with a page. |
 | [EncryptionInfo](Documents/EncryptionInfo.md) | class | Describes the encryption properties of a `PdfDocument`. |
+| [IAnnotationAppearanceProvider](Documents/IAnnotationAppearanceProvider.md) | interface | Supplies an appearance stream for an annotation when the file's own is missing or out of date (a form field when `/NeedAppearances` is true, or an annotation with no `/AP`). |
 | [OptionalContentGroup](Documents/OptionalContentGroup.md) | class | An Optional Content Group (OCG) — a named, toggleable layer in a PDF. |
 | [OptionalContentReader](Documents/OptionalContentReader.md) | class | Reads optional content groups (layers) from a PDF document. |
 | [OptionalContentVisibility](Documents/OptionalContentVisibility.md) | class | Decides whether optional content (layers) is visible: the document's default configuration (`/OCProperties /D`: `/BaseState`, `/ON`, `/OFF`, and the `/AS` auto-state for viewing), optionally overridden per layer name. |
@@ -312,6 +316,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [FieldAppearanceGenerator](Forms/FieldAppearanceGenerator.md) | class | Makes a widget's normal appearance stream from the field's value and its `/DA`, `/Q`, `/MK` and flags: text fields (single line, multiline, comb, password), check boxes and radio buttons, combo and list boxes, and push-button captions. |
 | [FormException](Forms/FormException.md) | class | Thrown when an AcroForm or outline operation fails. |
 | [FormField](Forms/FormField.md) | class | A single AcroForm field, read from a PDF document. |
 | [FormFieldType](Forms/FormFieldType.md) | enum | Type of an AcroForm field. |
@@ -353,7 +358,7 @@ python tools/gen_api_docs.py
 | [PdfRepairer](IO/PdfRepairer.md) | class | Repairs structurally damaged PDFs that standard readers reject — broken or missing cross-reference tables, wrong `startxref` offsets, missing or corrupt trailers, leading junk before the header, truncated files, and duplicate objects from incremental updates. |
 | [PdfWriter](IO/PdfWriter.md) | class | Writes a complete PDF file to an output stream. |
 | [RepairReport](IO/RepairReport.md) | class | Describes what `PdfRepairer` did while reconstructing a damaged PDF. |
-| [SynthesizedMetadata](IO/SynthesizedMetadata.md) | enum | — |
+| [SynthesizedMetadata](IO/SynthesizedMetadata.md) | enum | Selects which document-level metadata `PdfWriter` synthesises when it is absent from the objects being written. |
 | [XrefStyle](IO/XrefStyle.md) | enum | Selects the cross-reference format `PdfWriter` writes. |
 
 ## Chuvadi.Pdf.Images
@@ -393,7 +398,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
-| [AnnotationFlattenKinds](Operations/AnnotationFlattenKinds.md) | enum | — |
+| [AnnotationFlattenKinds](Operations/AnnotationFlattenKinds.md) | enum | Selects which annotation kinds `AnnotationFlattener` bakes into page content. |
 | [AnnotationFlattenOptions](Operations/AnnotationFlattenOptions.md) | class | Options controlling `AnnotationFlattener`: which annotation kinds to bake, whether to strip the AcroForm field tree once its widgets are baked, whether to skip invisible annotations, and whether to drop any annotations left live after baking. |
 | [AnnotationFlattener](Operations/AnnotationFlattener.md) | class | Flattens annotations and AcroForm field widgets by baking each annotation's normal appearance stream (`/AP /N`) into the page content as a form XObject, then removing the live annotation. |
 | [BandText](Operations/BandText.md) | class | The left, centre, and right text segments of a header or footer band. |
@@ -473,7 +478,7 @@ python tools/gen_api_docs.py
 | [PdfParseException](Primitives/PdfParseException.md) | class | Thrown when the bytes of a PDF cannot be parsed because they violate the PDF syntax: malformed tokens, structural errors in dictionaries or arrays, invalid integer or real literals, missing required keywords. |
 | [PdfPasswordRequiredException](Primitives/PdfPasswordRequiredException.md) | class | Thrown when an encrypted PDF cannot be opened without a password: none was given and the empty user password does not open it, or the password given is neither the user nor the owner password. |
 | [PdfPermissionException](Primitives/PdfPermissionException.md) | class | Thrown when an operation is blocked because the document's permission flags forbid it: extracting text from a copy-restricted document, modifying a write-protected document, assembling a no-assembly document. |
-| [PdfPermissions](Primitives/PdfPermissions.md) | enum | — |
+| [PdfPermissions](Primitives/PdfPermissions.md) | enum | Permission bits carried in a PDF document's encryption dictionary, controlling which operations a user-password holder is allowed to perform. |
 | [PdfPrimitive](Primitives/PdfPrimitive.md) | class | Abstract base class for all PDF primitive object types. |
 | [PdfPrimitiveType](Primitives/PdfPrimitiveType.md) | enum | Identifies the concrete type of a `PdfPrimitive`. |
 | [PdfReal](Primitives/PdfReal.md) | class | Represents a PDF real (floating-point) object. |
@@ -518,31 +523,42 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [AffineMatrix](Rendering/AffineMatrix.md) | record struct | 2D affine transformation matrix in PDF convention.  |
+| [AnnotationSource](Rendering/AnnotationSource.md) | record | The annotation an op was drawn from (3.31). |
 | [BlendModeOp](Rendering/BlendModeOp.md) | class | Pushes or pops a blend mode. |
 | [BlendModes](Rendering/BlendModes.md) | class | Helpers for the PDF blend-mode (/BM) names. |
+| [CidSystemInfo](Rendering/CidSystemInfo.md) | record | The `/CIDSystemInfo` of a CIDFont (§9.7.3). |
 | [ClipOp](Rendering/ClipOp.md) | class | Pushes a clipping region. |
 | [ClipPath](Rendering/ClipPath.md) | struct | A clipping path applied to a single render operation. |
 | [ClipRegion](Rendering/ClipRegion.md) | class | A device-space clipping region used by `ScanlineRasterizer` to restrict where a fill is painted. |
 | [DiagnosticKind](Rendering/DiagnosticKind.md) | enum | Classifies a `RenderingDiagnostic`. |
 | [DisplayListBuilder](Rendering/DisplayListBuilder.DisplayList.md) | class | Builds a `PageDisplayList` by walking a page's content stream and translating each PDF operator to a `RenderOp`. |
 | [DisplayListBuilder](Rendering/DisplayListBuilder.Raster.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
+| [DisplayListFont](Rendering/DisplayListFont.md) | class | A font used by text on a page, as the structured display list sees it: one shared instance per font dictionary, referenced from every `TextOp` drawn with it. |
 | [DocumentSearch](Rendering/DocumentSearch.md) | class | Searches the text of a `PdfDocument` by page, streaming matches asynchronously. |
 | [DrawGlyphOp](Rendering/DrawGlyphOp.md) | class | Paints a single glyph outline. |
 | [DrawImageOp](Rendering/DrawImageOp.md) | class | Paints a decoded image at the position specified by a transformation matrix. |
 | [FillPathOp](Rendering/FillPathOp.md) | class | Fills a path with a flat colour, applying the configured fill rule. |
 | [FillRule](Rendering/FillRule.md) | enum | Fill rule for a path or clip region. |
+| [FontEmbeddingPermission](Rendering/FontEmbeddingPermission.md) | enum | The embedding permission of a font program (OpenType `OS/2` `fsType`). |
+| [FontEmbeddingReport](Rendering/FontEmbeddingReport.md) | class | Checks whether every font a document can use is embedded (3.31). |
+| [FontEmbeddingRights](Rendering/FontEmbeddingRights.md) | record struct | A font program's embedding rights (OpenType `OS/2` `fsType`). |
+| [FontEmbeddingVerdict](Rendering/FontEmbeddingVerdict.md) | enum | The whole-document answer of `FontEmbeddingReport`. |
+| [FontProgramKind](Rendering/FontProgramKind.md) | enum | The kind of an embedded font program (§9.9, Table 124). |
 | [FontSlant](Rendering/FontSlant.md) | enum | Slant classification for a text run. |
 | [FontStyle](Rendering/FontStyle.md) | record struct | Resolved presentation style for a text run — family, weight, and slant — derived from a font's base name and FontDescriptor. |
 | [FontStyleClassifier](Rendering/FontStyleClassifier.md) | class | Derives a `FontStyle` from a font's base name and, when available, its FontDescriptor `/Flags`, `/ItalicAngle`, and `/StemV`. |
+| [FontUse](Rendering/FontUse.md) | record | A font that is not embedded, and where it is used. |
 | [GlyphPosition](Rendering/GlyphPosition.md) | record struct | The position of a single glyph in a `TextRun`. |
 | [GradientStop](Rendering/GradientStop.md) | struct | A single sampled gradient stop: an offset in [0, 1] and its colour. |
 | [HintingMode](Rendering/HintingMode.md) | enum | Controls how strongly the TrueType bytecode hinting interpreter adjusts glyph outlines before rasterization. |
 | [ImageFormat](Rendering/ImageFormat.md) | enum | Raster format of image pixel data. |
 | [ImageOp](Rendering/ImageOp.md) | class | Renders a raster image. |
+| [JpegColorTransform](Rendering/JpegColorTransform.md) | enum | The colour transform of a JPEG image (its Adobe APP14 marker, if any). |
 | [LineCap](Rendering/LineCap.md) | enum | Line cap style (PDF §8.4.3.3). |
 | [LineJoin](Rendering/LineJoin.md) | enum | Line join style (PDF §8.4.3.4). |
 | [LineSegmentExtraction](Rendering/LineSegmentExtraction.md) | class | Extension accessor that presents a page's path content as a flat list of `LineSegment`s, flattening cubic curves to polylines. |
 | [NestedDisplayListOp](Rendering/NestedDisplayListOp.md) | class | Paints another `PageDisplayList` with a composing transform. |
+| [OpTransparency](Rendering/OpTransparency.md) | record | An op's own transparency inside its innermost group (3.31): the values the group's content set, starting from the defaults at the group's start (PDF 32000-1:2008 §11.6.6). |
 | [OpacityOp](Rendering/OpacityOp.md) | class | Pushes or pops an opacity group. |
 | [PageContentInventory](Rendering/PageContentInventory.md) | class | Counts what a page actually paints, from the same display list the SVG and raster renderers draw — page content, nested form XObjects, Type 3 glyphs and visible annotation appearances included. |
 | [PageDisplayList](Rendering/PageDisplayList.DisplayList.md) | class | A page's content as a neutral, ordered sequence of `RenderOp`s. |
@@ -585,6 +601,7 @@ python tools/gen_api_docs.py
 | [TilingFillOp](Rendering/TilingFillOp.md) | class | Fills a region with a tiling pattern described for repetition rather than tile by tile: emitted when a fill needs more than 4,096 tiles (a fine hatch over a whole page). |
 | [TilingPatternOp](Rendering/TilingPatternOp.md) | class | Paints a tiling pattern (PatternType 1): the pattern cell's content, built once as `Cell` in pattern-cell space, repeated across the filled region. |
 | [TransformOp](Rendering/TransformOp.md) | class | Pushes or pops a graphics-state transformation matrix. |
+| [TransparencyGroup](Rendering/TransparencyGroup.md) | record | One transparency group on a page (3.31): a form XObject with `/Group /S /Transparency`, each time it is drawn. |
 | [Type3Font](Rendering/Type3Font.md) | class | A parsed Type 3 font: its FontMatrix, per-code glyph content streams, the font's own /Resources, and glyph-space widths. |
 | [Type3Glyph](Rendering/Type3Glyph.md) | record struct | A single Type 3 glyph: its content stream and glyph-space width. |
 | [Type3UseOp](Rendering/Type3UseOp.md) | class | Paints one Type 3 glyph: a cached glyph-space sub-display-list positioned by a composition transform (FontMatrix · text-scale · text matrix · CTM). |

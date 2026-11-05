@@ -48,9 +48,7 @@ double Y2
 
 Top edge (in PDF user space).
 
-## Methods
-
-### `Math.Abs`
+### `Width`
 
 ```csharp
 double Width => Math.Abs(X2 - X1)
@@ -58,7 +56,7 @@ double Width => Math.Abs(X2 - X1)
 
 Width in points.
 
-### `Math.Abs`
+### `Height`
 
 ```csharp
 double Height => Math.Abs(Y2 - Y1)

@@ -50,6 +50,14 @@ long ByteOffset
 
 Gets the byte offset in the underlying stream at which this token begins. Used for error reporting and xref validation.
 
+### `RawText`
+
+```csharp
+string RawText => Encoding.Latin1.GetString(RawBytes)
+```
+
+Returns the raw bytes decoded as a Latin-1 string. Useful for keyword tokens and for debugging.
+
 ### `IsEndOfStream`
 
 ```csharp
@@ -69,14 +77,6 @@ static readonly PdfToken EndOfStream = new(PdfTokenType.EndOfStream, [], -1)
 ```
 
 A sentinel token representing the end of the stream.
-
-### `Encoding.Latin1.GetString`
-
-```csharp
-string RawText => Encoding.Latin1.GetString(RawBytes)
-```
-
-Returns the raw bytes decoded as a Latin-1 string. Useful for keyword tokens and for debugging.
 
 ### `GetHashCode`
 

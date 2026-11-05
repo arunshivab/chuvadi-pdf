@@ -90,6 +90,14 @@ bool AutohintUnhintedFonts
 
 Gets or initialises whether fonts that carry no hinting programs are grid-fitted by the geometric autohinter (Y axis only) when hinting is enabled. Fonts with their own bytecode are unaffected. Default: true.
 
+### `AnnotationMode`
+
+```csharp
+Chuvadi.Pdf.Documents.AnnotationMode AnnotationMode
+```
+
+Gets or initialises which annotations are drawn (3.31): View (the default, as on screen), Print (the Print flag decides), FormFieldsOnly or None. Form fields without up-to-date appearances and comments without appearances are drawn from their own entries in every mode.
+
 ### `Scale`
 
 ```csharp

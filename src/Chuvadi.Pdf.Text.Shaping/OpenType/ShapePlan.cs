@@ -134,6 +134,8 @@ internal sealed class ShapePlan
 
     internal int NominalGlyph(int codepoint) => _face.Face.GetGlyphIndex(codepoint);
 
+    internal int VariantGlyph(int codepoint, int selector) => _face.Face.GetVariantGlyphIndex(codepoint, selector);
+
     internal bool Decompose(int ab, out int a, out int b) =>
         _indic is null ? UnicodeData.Decompose(ab, out a, out b) : IndicShaper.Decompose(ab, out a, out b);
 

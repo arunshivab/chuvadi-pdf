@@ -89,6 +89,7 @@ MEMBER_DECL = re.compile(
 # Enum value: an identifier optionally followed by = value, then comma or close brace
 ENUM_VALUE = re.compile(r'^\s*(?P<name>[A-Z][A-Za-z0-9_]*)\s*(?:=\s*[^,}]+)?\s*[,}]?\s*$')
 
+TYPE_ATTRIBUTE = re.compile(r'^\s*\[[A-Za-z_][A-Za-z0-9_.]*(\(.*\))?\]\s*$')
 NAMESPACE_DECL = re.compile(r'^\s*namespace\s+(?P<ns>[^;{]+)[;{]?\s*$')
 
 
@@ -197,6 +198,12 @@ def parse_file(path: Path) -> list[TypeDecl]:
         while i < len(lines) and DOC_LINE.match(lines[i]):
             doc_lines.append(lines[i])
             i += 1
+
+        # 3.31: attribute lines between the doc comment and the type
+        # declaration (for example [Obsolete(...)]) keep the doc comment.
+        if doc_lines:
+            while i < len(lines) and TYPE_ATTRIBUTE.match(lines[i]):
+                i += 1
 
         if i >= len(lines):
             break
@@ -396,7 +403,19 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
 
             # Determine member type
             ends_with_close_paren = terminator.strip().endswith(")")
-            if "(" in rest or ends_with_close_paren:
+            # 3.31: an expression-bodied property whose body calls a method
+            # ("Box => OwnBox(\"Trim\");") is a property, not a method: the
+            # name is the token before "=>", where no "(" appears.
+            head = rest.split("=>")[0]
+            if "=>" in rest and "(" not in head and terminator == ";":
+                members.append(Member(
+                    kind="property",
+                    name=head.strip().split()[-1],
+                    signature=sig.rstrip(";").strip(),
+                    summary=clean_xml_refs(doc["summary"]),
+                    is_static="static" in modifiers,
+                ))
+            elif "(" in rest or ends_with_close_paren:
                 # Method or constructor
                 # `rest` may not contain the closing paren if it landed in terminator;
                 # use the whole concatenation for parsing the name

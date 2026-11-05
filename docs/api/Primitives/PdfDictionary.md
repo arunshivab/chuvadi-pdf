@@ -52,6 +52,22 @@ IEnumerable<PdfPrimitive> Values => _entries.Values
 
 <inheritdoc/>
 
+### `Type`
+
+```csharp
+PdfName? Type => GetName(PdfName.Type)
+```
+
+Gets the `/Type` entry, or null if absent.
+
+### `Subtype`
+
+```csharp
+PdfName? Subtype => GetName(PdfName.Subtype)
+```
+
+Gets the `/Subtype` entry, or null if absent.
+
 ### `PrimitiveType`
 
 ```csharp
@@ -141,22 +157,6 @@ PdfArray? GetArray(PdfName key) => GetAs<PdfArray>(key)
 ```
 
 Gets the value as a `PdfArray`, or null if absent.
-
-### `GetName`
-
-```csharp
-PdfName? Type => GetName(PdfName.Type)
-```
-
-Gets the `/Type` entry, or null if absent.
-
-### `GetName`
-
-```csharp
-PdfName? Subtype => GetName(PdfName.Subtype)
-```
-
-Gets the `/Subtype` entry, or null if absent.
 
 ### `ToString`
 

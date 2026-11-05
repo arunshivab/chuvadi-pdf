@@ -49,6 +49,9 @@ Write-Host "  Version : $Version" -ForegroundColor Gray
 Write-Host "  Output  : $OutputDir" -ForegroundColor Gray
 Write-Host ""
 
+# Chuvadi.Fonts comes from the monorepo release, checked by SHA-256 (D-147).
+& (Join-Path $PSScriptRoot "fetch-fonts.ps1")
+
 # Clean build artifacts so nothing stale leaks into the packages.
 Write-Host "Cleaning bin/obj..." -ForegroundColor Gray
 Get-ChildItem -Recurse -Directory -Include bin, obj | Remove-Item -Recurse -Force
@@ -72,6 +75,10 @@ if (-not $NoTest) {
 Write-Host "Packing..." -ForegroundColor Gray
 dotnet pack Chuvadi.slnx -c Release -p:Version=$Version -o $OutputDir
 if ($LASTEXITCODE -ne 0) { throw "Pack failed." }
+
+# Consumers restore Chuvadi.Fonts from the same feed as the Chuvadi packages,
+# so the verified file is copied next to them (D-147).
+Copy-Item -Path (Join-Path $root ".fonts-feed\Chuvadi.Fonts.1.0.0.nupkg") -Destination $OutputDir -Force
 
 $packages = Get-ChildItem $OutputDir -Filter *.nupkg
 Write-Host ""

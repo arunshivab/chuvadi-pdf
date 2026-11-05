@@ -36,6 +36,62 @@ Initialises a display list with the given ops, page metadata, font dictionaries,
 
 ## Properties
 
+### `MediaBox`
+
+```csharp
+PdfRectangle MediaBox
+```
+
+The page's MediaBox (3.31). The default (all zeros) when the list was not built from a page.
+
+### `CropBox`
+
+```csharp
+PdfRectangle CropBox
+```
+
+The CropBox, the region a viewer shows and a printer prints (3.31), defaulting to the MediaBox. PDF 32000-1:2008 §14.11.2.
+
+### `BleedBox`
+
+```csharp
+PdfRectangle BleedBox
+```
+
+The BleedBox (3.31), defaulting to the CropBox.
+
+### `TrimBox`
+
+```csharp
+PdfRectangle TrimBox
+```
+
+The TrimBox (3.31), defaulting to the CropBox.
+
+### `ArtBox`
+
+```csharp
+PdfRectangle ArtBox
+```
+
+The ArtBox (3.31), defaulting to the CropBox.
+
+### `Fonts`
+
+```csharp
+IReadOnlyList<DisplayListFont> Fonts
+```
+
+Every font used by text on the page, once each, in first-use order (3.31). The same objects as `TextOp.Font`.
+
+### `TransparencyGroups`
+
+```csharp
+IReadOnlyList<TransparencyGroup> TransparencyGroups
+```
+
+The page's transparency groups (3.31, D-173), by id: entry `i` has `TransparencyGroup.Id` `i + 1`. Empty when there are none.
+
 ### `MediaWidth`
 
 ```csharp
