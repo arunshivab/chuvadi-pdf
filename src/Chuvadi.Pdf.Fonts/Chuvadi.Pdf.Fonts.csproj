@@ -21,7 +21,6 @@
       Phase 2 will add: full TrueType outline parsing for rendering,
         CFF charstring interpreter, hinting, subpixel rendering.
     </Description>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -7,10 +7,15 @@
 // (/DocTimeStamp via incremental update), and PdfLtvUpdater (VRI emission via
 // incremental update). Centralises the byte-range placeholder locating and
 // patching logic so the four call sites can stay in lockstep.
+// 3.31.2: the placeholders are located inside the signature dictionary's own
+// object, found through the written cross-reference table.
 
 using System;
 using System.Globalization;
+using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Objects;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Signatures.Signing;
 
@@ -21,55 +26,134 @@ internal static class SignatureContentsHelper
     internal const int ByteRangePlaceholderValue = 999_999_999;
 
     /// <summary>
-    /// Locates the position of the <c>/ByteRange</c> array's opening bracket
-    /// in a PDF byte stream that contains a single signature dictionary with
-    /// a placeholder byte range.
+    /// Returns the byte offset of indirect object <paramref name="objectNumber"/>
+    /// (generation 0) in <paramref name="bytes"/>, found through the file's last
+    /// classic cross-reference table, or -1 when it cannot be found.
     /// </summary>
-    internal static int LocateByteRangeArrayStart(byte[] bytes)
+    /// <remarks>
+    /// 3.31.2 (D-207 item 1): the signers find their own signature dictionary
+    /// this way. Before, they took the first <c>/ByteRange</c> and
+    /// <c>/Contents</c> in the file, which on any document whose pages have a
+    /// <c>/Contents</c> entry is a page, not the signature.
+    /// </remarks>
+    internal static int LocateObjectStart(byte[] bytes, int objectNumber)
     {
-        ReadOnlySpan<byte> needle = "/ByteRange"u8;
-        for (int i = 0; i <= bytes.Length - needle.Length; i++)
+        long xrefOffset = ReadLastStartXref(bytes);
+        if (xrefOffset < 0 || xrefOffset > bytes.Length - 4 || !StartsWith(bytes, (int)xrefOffset, "xref"u8))
         {
-            bool match = true;
-            for (int j = 0; j < needle.Length; j++)
-            {
-                if (bytes[i + j] != needle[j]) { match = false; break; }
-            }
-            if (!match) { continue; }
-            int k = i + needle.Length;
-            while (k < bytes.Length && bytes[k] != (byte)'[') { k++; }
-            if (k < bytes.Length) { return k; }
+            return -1;
         }
-        return -1;
+
+        XrefTable table;
+        try
+        {
+            using MemoryStream stream = new MemoryStream(bytes, writable: false);
+            stream.Position = xrefOffset + 4;
+            table = XrefTable.Parse(stream);
+        }
+        catch (PdfParseException)
+        {
+            return -1;
+        }
+
+        if (!table.TryGet(objectNumber, out XrefEntry entry)
+            || entry.Type != XrefEntryType.InUse
+            || entry.ByteOffset < 0
+            || entry.ByteOffset >= bytes.Length)
+        {
+            return -1;
+        }
+
+        int offset = (int)entry.ByteOffset;
+        byte[] header = Encoding.ASCII.GetBytes(
+            objectNumber.ToString(CultureInfo.InvariantCulture) + " " + entry.Generation.ToString(CultureInfo.InvariantCulture) + " obj");
+        return StartsWith(bytes, offset, header) ? offset : -1;
     }
 
     /// <summary>
-    /// Locates the position of the <c>/Contents</c> hex-string opening <c>&lt;</c>.
+    /// Locates the opening bracket of the <c>/ByteRange</c> array inside the
+    /// object that starts at <paramref name="objectStart"/>, or -1.
     /// </summary>
-    internal static int LocateContentsHexStart(byte[] bytes)
+    internal static int LocateByteRangeArrayStart(byte[] bytes, int objectStart) =>
+        LocateValueStart(bytes, objectStart, "/ByteRange"u8, (byte)'[');
+
+    /// <summary>
+    /// Locates the opening <c>&lt;</c> of the <c>/Contents</c> hex string inside
+    /// the object that starts at <paramref name="objectStart"/>, or -1.
+    /// </summary>
+    internal static int LocateContentsHexStart(byte[] bytes, int objectStart) =>
+        LocateValueStart(bytes, objectStart, "/Contents"u8, (byte)'<');
+
+    // Finds key inside [objectStart, endobj) and returns the position of the
+    // delimiter that opens its value, allowing only whitespace in between.
+    private static int LocateValueStart(byte[] bytes, int objectStart, ReadOnlySpan<byte> key, byte opener)
     {
-        ReadOnlySpan<byte> needle = "/Contents"u8;
-        for (int i = 0; i <= bytes.Length - needle.Length; i++)
+        if (objectStart < 0 || objectStart >= bytes.Length)
         {
-            bool match = true;
-            for (int j = 0; j < needle.Length; j++)
-            {
-                if (bytes[i + j] != needle[j]) { match = false; break; }
-            }
-            if (!match) { continue; }
-            int k = i + needle.Length;
-            while (k < bytes.Length && bytes[k] != (byte)'<') { k++; }
-            if (k < bytes.Length) { return k; }
+            return -1;
         }
+
+        ReadOnlySpan<byte> rest = bytes.AsSpan(objectStart);
+        int end = rest.IndexOf("endobj"u8);
+        ReadOnlySpan<byte> body = end < 0 ? rest : rest.Slice(0, end);
+        int idx = body.IndexOf(key);
+        if (idx < 0)
+        {
+            return -1;
+        }
+
+        for (int p = idx + key.Length; p < body.Length; p++)
+        {
+            byte b = body[p];
+            if (b == opener)
+            {
+                return objectStart + p;
+            }
+
+            if (b != (byte)' ' && b != (byte)'\t' && b != (byte)'\r' && b != (byte)'\n')
+            {
+                return -1;
+            }
+        }
+
         return -1;
     }
+
+    private static long ReadLastStartXref(byte[] bytes)
+    {
+        int idx = bytes.AsSpan().LastIndexOf("startxref"u8);
+        if (idx < 0)
+        {
+            return -1;
+        }
+
+        int p = idx + "startxref".Length;
+        while (p < bytes.Length && (bytes[p] == (byte)' ' || bytes[p] == (byte)'\t' || bytes[p] == (byte)'\r' || bytes[p] == (byte)'\n'))
+        {
+            p++;
+        }
+
+        long value = 0;
+        int digits = 0;
+        while (p < bytes.Length && bytes[p] >= (byte)'0' && bytes[p] <= (byte)'9' && digits < 18)
+        {
+            value = (value * 10) + (bytes[p] - (byte)'0');
+            p++;
+            digits++;
+        }
+
+        return digits == 0 ? -1 : value;
+    }
+
+    private static bool StartsWith(byte[] bytes, int offset, ReadOnlySpan<byte> prefix) =>
+        offset >= 0 && offset <= bytes.Length - prefix.Length && bytes.AsSpan(offset, prefix.Length).SequenceEqual(prefix);
 
     /// <summary>Replaces the four placeholder integers in the <c>/ByteRange</c> array.</summary>
     /// <remarks>
     /// Layout written by the array emitter: <c>[v0 v1 v2 v3]</c> where each
     /// vN is a zero-padded ByteRangeSlotWidth-character integer and the
     /// separators are single spaces. We assume the placeholder was emitted by
-    /// the array writer with <see cref="Chuvadi.Pdf.Primitives.PdfPaddedInteger"/>
+    /// the array writer with <see cref="PdfPaddedInteger"/>
     /// at this width.
     /// </remarks>
     internal static void PatchByteRange(

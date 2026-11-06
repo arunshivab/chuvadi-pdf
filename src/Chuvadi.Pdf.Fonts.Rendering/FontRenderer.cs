@@ -6,6 +6,7 @@
 // Public API: font bytes + text → glyph outlines ready for rasterization.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 
 namespace Chuvadi.Pdf.Fonts.Rendering;
@@ -34,8 +35,16 @@ namespace Chuvadi.Pdf.Fonts.Rendering;
 /// so <see cref="GetHintedGlyphOutline"/> returns <c>null</c> for them and
 /// callers fall back to the scaled unhinted outline.
 ///
-/// Glyph outlines are cached after first access to avoid repeated parsing.
-/// The cache is per-<see cref="FontRenderer"/> instance and is not thread-safe.
+/// Glyph outlines are cached per <see cref="FontRenderer"/> instance after
+/// first access to avoid repeated parsing.
+///
+/// Since 3.31.2 one instance is safe to share between threads, as LiPi does
+/// with its shared renderers: both caches are concurrent, and hinting, whose
+/// interpreter is reused between glyphs, runs one glyph at a time per
+/// instance. Two threads asking for the same uncached glyph may both build
+/// it; the outlines are equal and either may be kept. Before 3.31.2 the
+/// caches were plain dictionaries, and concurrent use could corrupt them or
+/// throw. See docs/THREAD-SAFETY.md.
 /// </remarks>
 public sealed class FontRenderer
 {
@@ -47,8 +56,12 @@ public sealed class FontRenderer
     // glyph-name map, which cannot name every glyph.
     private readonly TrueTypeLoader? _cffSfntCmap;
     private readonly Dictionary<int, int> _cffUnicodeToGid;
-    private readonly Dictionary<int, GlyphOutline> _cache;
-    private readonly Dictionary<long, GlyphOutline?> _hintedCache;
+    private readonly ConcurrentDictionary<int, GlyphOutline> _cache;
+    private readonly ConcurrentDictionary<long, GlyphOutline?> _hintedCache;
+
+    // 3.31.2 (D-210 B): TrueTypeLoader reuses one hinting interpreter between
+    // glyphs, so hinting on one instance runs one glyph at a time.
+    private readonly object _hintGate = new object();
 
     /// <summary>
     /// Initialises a <see cref="FontRenderer"/> from raw font bytes.
@@ -64,8 +77,8 @@ public sealed class FontRenderer
     {
         ArgumentNullException.ThrowIfNull(fontData);
 
-        _cache = new Dictionary<int, GlyphOutline>();
-        _hintedCache = new Dictionary<long, GlyphOutline?>();
+        _cache = new ConcurrentDictionary<int, GlyphOutline>();
+        _hintedCache = new ConcurrentDictionary<long, GlyphOutline?>();
         _cffUnicodeToGid = new Dictionary<int, int>();
 
         if (TryGetCffProgram(fontData, out byte[] cffBytes))
@@ -241,7 +254,12 @@ public sealed class FontRenderer
             return cached;
         }
 
-        GlyphOutline? outline = Loader.GetHintedGlyphOutline(glyphId, ppem, light, autohintFallback);
+        GlyphOutline? outline;
+        lock (_hintGate)
+        {
+            outline = Loader.GetHintedGlyphOutline(glyphId, ppem, light, autohintFallback);
+        }
+
         _hintedCache[key] = outline;
         return outline;
     }

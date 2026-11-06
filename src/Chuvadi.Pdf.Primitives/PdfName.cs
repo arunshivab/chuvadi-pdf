@@ -4,19 +4,45 @@
 using System;
 using System.Collections.Concurrent;
 using System.Text;
+using System.Threading;
 
 namespace Chuvadi.Pdf.Primitives;
 
 /// <summary>
 /// Represents a PDF name object (e.g. <c>/Type</c>, <c>/Page</c>).
-/// All instances are interned — the same name string always returns the
-/// same <see cref="PdfName"/> instance, making equality checks allocation-free.
+/// Names compare by value: two names are equal when their decoded values are
+/// equal (ordinal), whether or not they are the same instance.
 /// PDF 32000-1:2008 §7.3.5 — Name objects.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Since 3.31.2 (D-219) names are no longer kept for the life of the
+/// process. The names Chuvadi itself uses, and the first 4,096 other names of
+/// up to 64 characters, share one instance each, so
+/// common lookups never allocate. Any other name is a new instance, freed
+/// with the document that read it. Before 3.31.2 every name read from any
+/// file was interned forever and compared by reference, so a server's memory
+/// grew with every new name it saw.
+/// </para>
+/// <para>
+/// Use <c>==</c>, <see cref="Equals(PdfName?)"/> or a dictionary to compare
+/// names. <see cref="object.ReferenceEquals(object?, object?)"/> can be false
+/// for two equal names that are not in the shared table.
+/// </para>
+/// </remarks>
 public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
 {
-    private static readonly ConcurrentDictionary<string, PdfName> s_intern =
-        new(StringComparer.Ordinal);
+    // D-219: the most names, beyond the well-known ones, that are shared, and
+    // the longest such name in characters.
+    private const int MaxCachedNames = 4096;
+    private const int MaxCachedNameLength = 64;
+
+    // One table: the well-known names first, then up to MaxCachedNames others.
+    // It never holds more than that, whatever documents are read.
+    private static readonly ConcurrentDictionary<string, PdfName> s_table = CreateTable();
+    private static int s_cachedCount;
+
+    private readonly int _hash;
 
     // Common names cached as static fields for zero-allocation access.
     public static readonly PdfName Type = Intern("Type");
@@ -46,6 +72,7 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
     private PdfName(string value)
     {
         Value = value;
+        _hash = value.GetHashCode(StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -58,7 +85,9 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
     public override PdfPrimitiveType PrimitiveType => PdfPrimitiveType.Name;
 
     /// <summary>
-    /// Returns the interned <see cref="PdfName"/> for the given decoded value.
+    /// Returns the <see cref="PdfName"/> for the given decoded value: the
+    /// shared instance when the name is well known or cached, otherwise a new
+    /// instance that compares equal to every other instance with this value.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="value"/> is null or empty.
@@ -70,7 +99,24 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
             throw new ArgumentException("PDF name must not be null or empty.", nameof(value));
         }
 
-        return s_intern.GetOrAdd(value, static v => new PdfName(v));
+        if (s_table.TryGetValue(value, out PdfName? shared))
+        {
+            return shared;
+        }
+
+        if (value.Length <= MaxCachedNameLength && Volatile.Read(ref s_cachedCount) < MaxCachedNames)
+        {
+            PdfName created = new PdfName(value);
+            if (s_table.TryAdd(value, created))
+            {
+                Interlocked.Increment(ref s_cachedCount);
+                return created;
+            }
+
+            return s_table.TryGetValue(value, out shared) ? shared : created;
+        }
+
+        return new PdfName(value);
     }
 
     /// <summary>
@@ -114,12 +160,37 @@ public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
         return Intern(decoded);
     }
 
-    // Equality: reference equality is correct because all names are interned.
-    public bool Equals(PdfName? other) => ReferenceEquals(this, other);
-    public override bool Equals(object? obj) => ReferenceEquals(this, obj);
-    public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
-    public static bool operator ==(PdfName? left, PdfName? right) => ReferenceEquals(left, right);
-    public static bool operator !=(PdfName? left, PdfName? right) => !ReferenceEquals(left, right);
+    // Equality is by value (3.31.2); the shared instances make the common
+    // case a reference check. The hash is the ordinal hash of the value, as
+    // before, computed once.
+
+    /// <summary>Returns whether <paramref name="other"/> has the same decoded value.</summary>
+    public bool Equals(PdfName? other) =>
+        ReferenceEquals(this, other)
+        || (other is not null && _hash == other._hash && string.Equals(Value, other.Value, StringComparison.Ordinal));
+
+    /// <summary>Returns whether <paramref name="obj"/> is a name with the same decoded value.</summary>
+    public override bool Equals(object? obj) => obj is PdfName other && Equals(other);
+
+    /// <summary>Returns the ordinal hash of the decoded value.</summary>
+    public override int GetHashCode() => _hash;
+
+    /// <summary>Returns whether two names have the same decoded value.</summary>
+    public static bool operator ==(PdfName? left, PdfName? right) => left is null ? right is null : left.Equals(right);
+
+    /// <summary>Returns whether two names have different decoded values.</summary>
+    public static bool operator !=(PdfName? left, PdfName? right) => !(left == right);
+
+    private static ConcurrentDictionary<string, PdfName> CreateTable()
+    {
+        ConcurrentDictionary<string, PdfName> table = new ConcurrentDictionary<string, PdfName>(StringComparer.Ordinal);
+        foreach (string name in WellKnownPdfNames.Names)
+        {
+            table.TryAdd(name, new PdfName(name));
+        }
+
+        return table;
+    }
 
     /// <summary>
     /// Returns the PDF syntax representation including the leading solidus,

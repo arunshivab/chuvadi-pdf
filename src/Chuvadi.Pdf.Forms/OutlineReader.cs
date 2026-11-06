@@ -56,17 +56,16 @@ public static class OutlineReader
             return new List<OutlineItem>();
         }
 
-        // Page reference → index map and the named-destination table, both built
-        // once and shared across the whole walk.
-        Dictionary<int, int> pageRefToIndex = BuildPageReferenceMap(document);
-        Dictionary<string, PdfPrimitive> namedDests = BuildNamedDestinations(catalog, store);
+        // One resolver for the whole walk: the page map (from the page tree,
+        // since 3.31.2) and the named destinations are each built once.
+        DestinationResolver destinations = new DestinationResolver(document);
 
         List<OutlineItem> items = new List<OutlineItem>();
         HashSet<int> visited = new HashSet<int>();
 
         if (outlinesRoot.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstPrim))
         {
-            WalkSiblings(firstPrim, store, pageRefToIndex, namedDests, visited, items);
+            WalkSiblings(firstPrim, store, destinations, visited, items);
         }
 
         return items;
@@ -77,8 +76,7 @@ public static class OutlineReader
     private static void WalkSiblings(
         PdfPrimitive startPrim,
         PdfObjectStore store,
-        Dictionary<int, int> pageMap,
-        Dictionary<string, PdfPrimitive> namedDests,
+        DestinationResolver destinations,
         HashSet<int> visited,
         List<OutlineItem> result)
     {
@@ -101,14 +99,14 @@ public static class OutlineReader
             }
 
             string title = ExtractTitle(dict, store);
-            int pageIndex = ResolveDestinationPageIndex(dict, store, pageMap, namedDests);
+            int pageIndex = ResolveDestinationPageIndex(dict, store, destinations);
 
             // Recurse into children
             List<OutlineItem> children = new List<OutlineItem>();
 
             if (dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
             {
-                WalkSiblings(firstChild, store, pageMap, namedDests, visited, children);
+                WalkSiblings(firstChild, store, destinations, visited, children);
             }
 
             result.Add(new OutlineItem(title, pageIndex, children));
@@ -145,8 +143,7 @@ public static class OutlineReader
     private static int ResolveDestinationPageIndex(
         PdfDictionary outlineDict,
         PdfObjectStore store,
-        Dictionary<int, int> pageMap,
-        Dictionary<string, PdfPrimitive> namedDests)
+        DestinationResolver destinations)
     {
         // /Dest is an explicit destination ([pageRef /XYZ …]) or a named one (a
         // name/string keying the /Dests tables). /A is an action dictionary
@@ -168,178 +165,6 @@ public static class OutlineReader
             }
         }
 
-        if (destPrim is null)
-        {
-            return -1;
-        }
-
-        PdfPrimitive resolved = store.Resolve(destPrim);
-
-        // Named destination: a byte string keys the /Names /Dests name tree; a
-        // name keys the legacy catalog /Dests dictionary. Look the dest up and
-        // continue with the value it points at.
-        if (resolved is PdfString nameString)
-        {
-            string key = System.Text.Encoding.Latin1.GetString(nameString.Bytes);
-            if (!namedDests.TryGetValue(key, out PdfPrimitive? mapped))
-            {
-                return -1;
-            }
-            resolved = store.Resolve(mapped);
-        }
-        else if (resolved is PdfName name)
-        {
-            if (!namedDests.TryGetValue(name.Value, out PdfPrimitive? mapped))
-            {
-                return -1;
-            }
-            resolved = store.Resolve(mapped);
-        }
-
-        // A named destination may resolve to a dictionary that wraps the array
-        // under /D (PDF 32000-1:2008 §12.3.2.3).
-        if (resolved is PdfDictionary destDict &&
-            destDict.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? innerDest))
-        {
-            resolved = store.Resolve(innerDest);
-        }
-
-        if (resolved is PdfArray destArray && destArray.Count > 0)
-        {
-            return PageIndexFromDestArray(destArray, pageMap);
-        }
-
-        return -1;
-    }
-
-    // First element of a destination array is the target page: an indirect
-    // reference (local destination) or, for remote/embedded go-to, an integer
-    // page number.
-    private static int PageIndexFromDestArray(PdfArray destArray, Dictionary<int, int> pageMap)
-    {
-        PdfPrimitive first = destArray[0];
-
-        if (first is PdfReference pageRef &&
-            pageMap.TryGetValue(pageRef.ObjectId.ObjectNumber, out int idx))
-        {
-            return idx;
-        }
-
-        if (first is PdfInteger pageNumber && pageNumber.Value >= 0)
-        {
-            return pageNumber.Value;
-        }
-
-        return -1;
-    }
-
-    // Flattens the catalog's named destinations (modern /Names /Dests name tree
-    // and legacy /Dests dictionary) into a single name → destination map. Keys
-    // are compared as raw (Latin-1) byte identifiers, matching how they appear
-    // in /GoTo actions.
-    private static Dictionary<string, PdfPrimitive> BuildNamedDestinations(
-        PdfDictionary catalog, PdfObjectStore store)
-    {
-        Dictionary<string, PdfPrimitive> map = new Dictionary<string, PdfPrimitive>();
-
-        if (catalog.TryGetValue(PdfName.Intern("Names"), out PdfPrimitive? namesPrim)
-            && store.ResolveAs<PdfDictionary>(namesPrim) is PdfDictionary namesDict
-            && namesDict.TryGetValue(PdfName.Intern("Dests"), out PdfPrimitive? destsTreePrim)
-            && store.ResolveAs<PdfDictionary>(destsTreePrim) is PdfDictionary destsTree)
-        {
-            CollectNameTree(destsTree, store, map, 0);
-        }
-
-        if (catalog.TryGetValue(PdfName.Intern("Dests"), out PdfPrimitive? legacyPrim)
-            && store.ResolveAs<PdfDictionary>(legacyPrim) is PdfDictionary legacy)
-        {
-            foreach (PdfName key in legacy.Keys)
-            {
-                if (!map.ContainsKey(key.Value))
-                {
-                    map[key.Value] = legacy[key];
-                }
-            }
-        }
-
-        return map;
-    }
-
-    // Recursively collects (key → value) pairs from a name-tree node: leaf
-    // /Names arrays hold [key1 val1 key2 val2 …]; intermediate nodes hold /Kids.
-    private static void CollectNameTree(
-        PdfDictionary node,
-        PdfObjectStore store,
-        Dictionary<string, PdfPrimitive> map,
-        int depth)
-    {
-        if (depth > 64)
-        {
-            return; // guard against malformed/cyclic trees
-        }
-
-        if (node.TryGetValue(PdfName.Intern("Names"), out PdfPrimitive? namesArrPrim)
-            && store.ResolveAs<PdfArray>(namesArrPrim) is PdfArray namesArr)
-        {
-            for (int i = 0; i + 1 < namesArr.Count; i += 2)
-            {
-                if (store.Resolve(namesArr[i]) is PdfString keyStr)
-                {
-                    string key = System.Text.Encoding.Latin1.GetString(keyStr.Bytes);
-                    if (!map.ContainsKey(key))
-                    {
-                        map[key] = namesArr[i + 1];
-                    }
-                }
-            }
-        }
-
-        if (node.TryGetValue(PdfName.Intern("Kids"), out PdfPrimitive? kidsPrim)
-            && store.ResolveAs<PdfArray>(kidsPrim) is PdfArray kids)
-        {
-            foreach (PdfPrimitive kid in kids)
-            {
-                if (store.ResolveAs<PdfDictionary>(kid) is PdfDictionary kidDict)
-                {
-                    CollectNameTree(kidDict, store, map, depth + 1);
-                }
-            }
-        }
-    }
-
-    private static Dictionary<int, int> BuildPageReferenceMap(PdfDocument document)
-    {
-        Dictionary<int, int> map = new Dictionary<int, int>();
-        int pageCount = document.PageCount;
-
-        // Find the indirect object IDs for each page by walking the page tree
-        // We use the fact that PdfObjectStore.Objects contains all loaded Page objects
-        // (PreloadAllObjects must have been called previously, otherwise pages may be missing)
-        int idx = 0;
-
-        foreach (PdfIndirectObject obj in document.Objects.Objects)
-        {
-            if (obj.Value is not PdfDictionary dict)
-            {
-                continue;
-            }
-
-            if (!dict.TryGetValue(PdfName.Type, out PdfPrimitive? typePrim))
-            {
-                continue;
-            }
-
-            if (typePrim is PdfName typeName && typeName.Value == "Page")
-            {
-                map[obj.Id.ObjectNumber] = idx++;
-
-                if (idx >= pageCount)
-                {
-                    break;
-                }
-            }
-        }
-
-        return map;
+        return destPrim is null ? -1 : destinations.ResolvePageIndex(destPrim);
     }
 }

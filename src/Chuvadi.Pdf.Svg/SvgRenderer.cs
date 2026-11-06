@@ -251,7 +251,12 @@ public sealed class SvgRenderer
         // order clean.
         Dictionary<string, string> familyByBaseFont = BuildFontRegistry(list, w, resolver);
 
-        w.OpenPageFlip(list.MediaHeight);
+        // 3.31.2: translate by the MediaBox's lower-left corner (all zeros
+        // when the list was not built from a page, which changes nothing).
+        w.OpenPageFlip(
+            list.MediaHeight,
+            Math.Min(list.MediaBox.X1, list.MediaBox.X2),
+            Math.Min(list.MediaBox.Y1, list.MediaBox.Y2));
 
         RenderOpList(list, w, familyByBaseFont, resolver);
         w.CloseGroup();

@@ -20,14 +20,13 @@ public sealed class PdfDictionary : PdfPrimitive, IReadOnlyDictionary<PdfName, P
     /// <summary>Creates an empty <see cref="PdfDictionary"/>.</summary>
     public PdfDictionary()
     {
-        _entries = new Dictionary<PdfName, PdfPrimitive>(ReferenceEqualityComparer.Instance);
+        _entries = new Dictionary<PdfName, PdfPrimitive>();
     }
 
     /// <summary>Creates a <see cref="PdfDictionary"/> with the given initial capacity.</summary>
     public PdfDictionary(int capacity)
     {
-        _entries = new Dictionary<PdfName, PdfPrimitive>(
-            capacity, ReferenceEqualityComparer.Instance);
+        _entries = new Dictionary<PdfName, PdfPrimitive>(capacity);
     }
 
     /// <inheritdoc/>

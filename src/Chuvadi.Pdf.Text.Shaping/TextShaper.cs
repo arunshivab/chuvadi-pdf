@@ -23,6 +23,9 @@ namespace Chuvadi.Pdf.Text.Shaping;
 /// Khmer, Myanmar, Thai, Hangul and USE shapers (no LiPi script needs them),
 /// variation sequences (cmap format 14), the legacy 'kern' table, vertical
 /// text and variable-font instances other than the default.
+///
+/// Every method is safe to call from any number of threads at once: the
+/// caches are concurrent and keyed weakly. See docs/THREAD-SAFETY.md.
 /// </remarks>
 public static class TextShaper
 {
@@ -30,11 +33,25 @@ public static class TextShaper
     /// Shapes a run of text using the specified font and script.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The face loaded from <paramref name="ttf"/> is kept and reused for as
     /// long as that array is alive, so repeated calls with the same array cost
     /// the same as the <see cref="FontFace"/> overload. Changing the array's
     /// bytes after a call is not detected: pass a new array for a different
     /// font program.
+    /// </para>
+    /// <para>
+    /// The face is found again by the array instance, not by its bytes.
+    /// <c>FontPack.ReadAllBytes</c> returns a new copy on every call, so
+    /// <c>Shape(FontPack.ReadAllBytes(name), …)</c> in a loop loads the font
+    /// every time. Keep the array, or load a <see cref="FontFace"/> once and
+    /// use that overload.
+    /// </para>
+    /// <para>
+    /// Preferred over the <see cref="FontFace"/> overload when the call is
+    /// otherwise ambiguous (a bare <c>null</c> font), so code written before
+    /// 3.25 still binds here.
+    /// </para>
     /// </remarks>
     /// <param name="ttf">Raw TrueType/OpenType font bytes (sfnt).</param>
     /// <param name="text">The text to shape. Must be non-empty.</param>
@@ -50,12 +67,6 @@ public static class TextShaper
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="text"/> is empty.</exception>
     /// <exception cref="FontRenderingException">The font program could not be read.</exception>
-    /// <remarks>
-    /// Loads the face and builds the shaping plan on every call; in a loop use
-    /// the <see cref="FontFace"/> overload. Preferred over the <see cref="FontFace"/> overload when the call is
-    /// otherwise ambiguous (a bare <c>null</c> font), so code written before
-    /// 3.25 still binds here.
-    /// </remarks>
     [OverloadResolutionPriority(1)]
     public static IReadOnlyList<ShapedGlyph> Shape(
         byte[] ttf,

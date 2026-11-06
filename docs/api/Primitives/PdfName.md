@@ -2,11 +2,17 @@
 
 **Class** in `Chuvadi.Pdf.Primitives` (Primitives)
 
-Represents a PDF name object (e.g. `/Type`, `/Page`). All instances are interned — the same name string always returns the same `PdfName` instance, making equality checks allocation-free. PDF 32000-1:2008 §7.3.5 — Name objects.
+Represents a PDF name object (e.g. `/Type`, `/Page`). Names compare by value: two names are equal when their decoded values are equal (ordinal), whether or not they are the same instance. PDF 32000-1:2008 §7.3.5 — Name objects.
 
 ```csharp
 public sealed class PdfName : PdfPrimitive, IEquatable<PdfName>
 ```
+
+## Remarks
+
+Since 3.31.2 (D-219) names are no longer kept for the life of the process. The names Chuvadi itself uses, and the first 4,096 other names of up to 64 characters, share one instance each, so common lookups never allocate. Any other name is a new instance, freed with the document that read it. Before 3.31.2 every name read from any file was interned forever and compared by reference, so a server's memory grew with every new name it saw.  
+
+ Use `==`, `Equals(PdfName?)` or a dictionary to compare names. `object.ReferenceEquals(object?, object?)` can be false for two equal names that are not in the shared table.
 
 ## Constructors
 
@@ -226,7 +232,7 @@ __static__
 static PdfName Intern(string value)
 ```
 
-Returns the interned `PdfName` for the given decoded value. <exception cref="ArgumentException"> Thrown when `value` is null or empty. </exception>
+Returns the `PdfName` for the given decoded value: the shared instance when the name is well known or cached, otherwise a new instance that compares equal to every other instance with this value. <exception cref="ArgumentException"> Thrown when `value` is null or empty. </exception>
 
 ### `FromRawBytes`
 
@@ -247,36 +253,38 @@ Parses and interns a `PdfName` from raw PDF bytes, decoding `#XX` escape sequenc
 ### `Equals`
 
 ```csharp
-bool Equals(PdfName? other) => ReferenceEquals(this, other)
+override bool Equals(object? obj) => obj is PdfName other && Equals(other)
 ```
 
-### `Equals`
-
-```csharp
-override bool Equals(object? obj) => ReferenceEquals(this, obj)
-```
+Returns whether `obj` is a name with the same decoded value.
 
 ### `GetHashCode`
 
 ```csharp
-override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal)
+override int GetHashCode() => _hash
 ```
+
+Returns the ordinal hash of the decoded value.
 
 ### `==`
 
 __static__
 
 ```csharp
-static bool operator ==(PdfName? left, PdfName? right) => ReferenceEquals(left, right)
+static bool operator ==(PdfName? left, PdfName? right) => left is null ? right is null : left.Equals(right)
 ```
+
+Returns whether two names have the same decoded value.
 
 ### `!=`
 
 __static__
 
 ```csharp
-static bool operator !=(PdfName? left, PdfName? right) => !ReferenceEquals(left, right)
+static bool operator !=(PdfName? left, PdfName? right) => !(left == right)
 ```
+
+Returns whether two names have different decoded values.
 
 ### `ToString`
 

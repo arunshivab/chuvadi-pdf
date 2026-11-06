@@ -10,7 +10,7 @@ public sealed class FontFace
 
 ## Remarks
 
-All metrics are in font design units; divide by `UnitsPerEm` (or use `Scale`) to get ems or points. Signs follow the font tables: ascenders are positive, descenders negative — except `WinDescent`, which the OS/2 table stores as a positive distance below the baseline.
+All metrics are in font design units; divide by `UnitsPerEm` (or use `Scale`) to get ems or points. Signs follow the font tables: ascenders are positive, descenders negative — except `WinDescent`, which the OS/2 table stores as a positive distance below the baseline. One instance can serve any number of threads at once; see docs/THREAD-SAFETY.md.
 
 ## Properties
 

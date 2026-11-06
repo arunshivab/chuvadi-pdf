@@ -10,6 +10,107 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.31.2] - 2026-11-06
+
+Bug fixes (D-207, D-210, D-217, D-219, D-221, D-226): signing real documents,
+counter-signature appearances, links to named destinations, a bounded name
+table, a thread-safe `FontRenderer`, pages whose MediaBox does not start at
+0,0; plus the platform items C, D, E(a) and H and SDK package validation.
+
+### Fixed
+- **`PdfSigner.Sign` and `SignAsync` on real documents.** They took the first
+  `/ByteRange` and `/Contents` in the written file, which on any document
+  whose pages have a `/Contents` entry is a page, not the signature, so
+  signing failed ("Could not locate /Contents value") or patched the wrong
+  bytes. They now find the signature dictionary through the cross-reference
+  table they have just written and search only inside that object.
+- **`Sign` and `SignAsync` refuse a document that is already signed**, with
+  `InvalidOperationException`: "This document already has a signature; use
+  PdfCounterSigner.AddSignature to add another." Rewriting the file would
+  break the existing signature.
+- **`PdfCounterSigner.AddSignature` honours `PdfSigningOptions.Appearance`.**
+  It was silently ignored. The signature now gets a visible widget on the
+  given page, drawn as `PdfSigner` draws it (a border unless a
+  pre-rendered appearance is given), and the page is rewritten in the
+  incremental update so that its `/Annots` lists the widget. Earlier
+  signatures still verify. The counter-signer also finds its placeholders
+  inside its own signature object.
+- **`PdfSigner.SignAsync` honours `PdfSigningOptions.Appearance`** (D-226).
+  It skipped the widget step, so async signatures were always invisible
+  although its documentation said it behaved like `Sign`. It now uses the
+  same widget code as `Sign`.
+- **`Appearance` together with `LtvOptions` no longer loses an object**
+  (D-226). The appearance XObject and the first LTV stream were both
+  numbered right after the AcroForm, and only one was written, so the DSS
+  `/Certs` entry pointed at the appearance form. LTV objects are now numbered
+  after the widget objects. Without an appearance, the numbering is as
+  before.
+- **Links to named destinations.** `AnnotationReader` dropped a link whose
+  `/Dest` or `/GoTo` `/D` was a name or string; it now resolves it through
+  the `/Names /Dests` tree and the catalog's `/Dests`, as outlines already
+  did. On the 417-PDF corpus, links read go from 55 to 131.
+- **Page indexes from the page tree.** Links and outlines took a page's index
+  from the order of `/Page` objects in the object store, which need not be
+  the page order. Both now walk `/Pages` → `/Kids` by the same rule as
+  `PdfDocument.Pages`. No corpus file changes.
+- **The PDF name table is bounded.** Every name read from any file was
+  interned for the life of the process, so a long-running server grew with
+  every new name. Names now compare by value (`==`, `Equals`, hashing, and
+  `PdfDictionary` keys); the names Chuvadi uses and up to 4,096 others of up
+  to 64 characters share one instance each; any other name is freed with its
+  document. Output is identical; reference equality between two equal names
+  is no longer guaranteed.
+- **One `FontRenderer` can be shared between threads.** Its glyph caches
+  are concurrent and hinting runs one glyph at a time per instance. Before,
+  concurrent use (LiPi's shared renderers) could corrupt the caches or throw.
+- **Pages whose MediaBox does not start at 0,0** (every page cropped by
+  `PageCropper`, for example) are drawn where they are by the raster and SVG
+  output. Before, the content was shifted by the box's corner and such pages
+  could come out blank. Pages whose box starts at 0,0 are unchanged (no
+  corpus file has another origin). The WPF output has the same fault and is
+  not changed (backlog 38).
+- **Raster: spans thinner than the rasterizer's 1e-9 guard.** A span that
+  started on a pixel boundary and was thinner than the guard was treated as
+  two columns: at the left edge it indexed column -1 and the page failed
+  with `PdfCorruptionException`; elsewhere it added a whole pixel of
+  coverage to two columns. It now counts as the one column it is in. Pages
+  cropped with `PageCropMode.ClipOnly` hit this once P1 drew them from their
+  own corner (their clip edge falls exactly on x = 0). No corpus file
+  changes.
+
+### Changed
+- **`IsAotCompatible`** is set on every package under `src/` except
+  `Chuvadi.Pdf.Rendering.Wpf` (D-217 C), which turns on the trim, AOT and
+  single-file analyzers; there are no warnings.
+- **`AllowUnsafeBlocks` removed** from Filters, Fonts, IO and Primitives
+  (D-217 H). None of them has unsafe code; their DLLs no longer carry the
+  `UnverifiableCode` and `SkipVerification` markers.
+- **SDK package validation** (D-221). Every package is validated when packed.
+  `build\pack.ps1 -BaselineVersion 3.31.1 -BaselineDir <folder>` also
+  compares each package with that release and fails on any public API
+  removed or changed since; CI packs without a baseline.
+
+### Documentation
+- **`docs/THREAD-SAFETY.md`** (D-217 D): one `PdfDocument` per thread;
+  `FontFace`, `TextShaper`, `FontRenderer` (from 3.31.2) and `PdfName` are
+  safe to share. Remarks on `PdfDocument`, `FontFace`, `TextShaper` and
+  `FontRenderer` point to it.
+- **`TextShaper.Shape(byte[], …)`** (D-217 E(a)): the face is found again by
+  the array instance, and `FontPack.ReadAllBytes` returns a new array every
+  call, so keep the array or use the `FontFace` overload. Its two remarks
+  blocks are merged; the old second one, which said the face was loaded on
+  every call, was out of date since 3.26.
+- **`PageCropper`** (P5): `PageCropMode.Scrub` is the redaction-grade mode;
+  `PageCrop.CropBox` is in default user space (points, origin bottom left,
+  the MediaBox's space, before `/Rotate`).
+- **`PdfName`**: value equality and the bounded table.
+
+### Backlog
+- `docs/BACKLOG.md`: shipped 3.31.2; PDF-09 open with the P4 options;
+  PDF-13 retired as a duplicate of PDF-16; the 3.32.0 plan (D-208 items, P2,
+  P3); ticket 38 (WPF MediaBox origin).
+
+---
 ## [3.31.1] - 2026-11-06
 
 `FontFace.Load` speed (D-201). No output change.

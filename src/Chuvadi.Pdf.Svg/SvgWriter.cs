@@ -97,11 +97,15 @@ internal sealed class SvgWriter
     /// <summary>
     /// Emits the page-level coordinate flip (PDF bottom-left → SVG top-left)
     /// as an outer group. All subsequent content uses PDF-native coordinates.
+    /// Since 3.31.2 the flip also moves the MediaBox's lower-left corner
+    /// (<paramref name="originX"/>, <paramref name="originY"/>) to the SVG's
+    /// bottom-left, so a page whose box does not start at 0,0 stays inside
+    /// the viewBox.
     /// </summary>
-    internal void OpenPageFlip(double pageHeight)
+    internal void OpenPageFlip(double pageHeight, double originX = 0, double originY = 0)
     {
         _body.AppendFormat(CultureInfo.InvariantCulture,
-            "<g transform=\"matrix(1 0 0 -1 0 {0})\">", F(pageHeight));
+            "<g transform=\"matrix(1 0 0 -1 {0} {1})\">", F(originX == 0 ? 0 : -originX), F(originY + pageHeight));
         _openElements.Push("g");
     }
 

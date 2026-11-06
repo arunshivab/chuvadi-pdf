@@ -30,7 +30,9 @@ Counter-signs the document, returning the augmented bytes.
 
 - `signedPdfBytes` — The source document (must already carry at least one signature).
 - `signer` — The new signer.
-- `options` — Signing options (Reason, Location, TsaClient, etc.). LtvOptions on this options instance are ignored — use `PdfLtvUpdater` for LTV material on counter-signed documents.
+- `options` — Signing options (Reason, Location, TsaClient, etc.). LtvOptions on this options instance are ignored — use `PdfLtvUpdater` for LTV material on counter-signed documents. Since 3.31.2 `PdfSigningOptions.Appearance` is honoured: the signature gets a visible widget on the given page, drawn as `PdfSigner` draws it, and the page is rewritten in the update so that its `/Annots` lists the widget.
+
+**Returns:** The source bytes followed by one incremental update.
 
 ---
 

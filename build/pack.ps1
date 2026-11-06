@@ -21,13 +21,29 @@
 .PARAMETER NoTest
     Skip the test run. By default the full test suite must pass before packing.
 
+.PARAMETER BaselineVersion
+    The previous release, e.g. 3.31.1 (3.31.2, D-221). With -BaselineDir, the
+    SDK package validation compares every package against that release and
+    fails the pack on any public API removed or changed since. Both must be
+    given together.
+
+.PARAMETER BaselineDir
+    The folder holding the -BaselineVersion .nupkg files, normally
+    C:\Users\aruns\Documents\local-nuget. Every package being packed must
+    have its baseline there, or the script stops before building.
+
 .EXAMPLE
     .\build\pack.ps1 -Version 2.8.4
+
+.EXAMPLE
+    .\build\pack.ps1 -Version 3.31.2 -BaselineVersion 3.31.1 -BaselineDir C:\Users\aruns\Documents\local-nuget
 #>
 param(
     [Parameter(Mandatory = $true)] [string] $Version,
     [string] $OutputDir = "artifacts\nupkg",
-    [switch] $NoTest
+    [switch] $NoTest,
+    [string] $BaselineVersion = "",
+    [string] $BaselineDir = ""
 )
 
 Set-StrictMode -Version Latest
@@ -44,9 +60,38 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
     throw "Version '$Version' is not a valid SemVer (e.g. 2.8.4 or 2.9.0-rc1)."
 }
 
+if (($BaselineVersion -eq "") -ne ($BaselineDir -eq "")) {
+    throw "Give -BaselineVersion and -BaselineDir together, or neither."
+}
+
+$packArgs = @()
+if ($BaselineVersion -ne "") {
+    if ($BaselineVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+        throw "Baseline version '$BaselineVersion' is not a valid SemVer."
+    }
+    $BaselineDir = (Resolve-Path $BaselineDir).Path
+
+    # Every packable src/ project needs its baseline package; a missing one
+    # would otherwise skip that package's comparison without a word.
+    $missing = @()
+    foreach ($proj in Get-ChildItem (Join-Path $root "src") -Recurse -Filter *.csproj) {
+        $baseline = Join-Path $BaselineDir "$($proj.BaseName).$BaselineVersion.nupkg"
+        if (-not (Test-Path $baseline)) { $missing += $baseline }
+    }
+    if ($missing.Count -gt 0) {
+        throw "Baseline packages not found:`n  $($missing -join "`n  ")"
+    }
+    $packArgs = @("-p:ChuvadiBaselineDir=$BaselineDir", "-p:ChuvadiBaselineVersion=$BaselineVersion")
+}
+
 Write-Host "Chuvadi pack" -ForegroundColor Cyan
 Write-Host "  Version : $Version" -ForegroundColor Gray
 Write-Host "  Output  : $OutputDir" -ForegroundColor Gray
+if ($BaselineVersion -ne "") {
+    Write-Host "  Baseline: $BaselineVersion from $BaselineDir" -ForegroundColor Gray
+} else {
+    Write-Host "  Baseline: none (each package is validated on its own)" -ForegroundColor Gray
+}
 Write-Host ""
 
 # Chuvadi.Fonts comes from the monorepo release, checked by SHA-256 (D-147).
@@ -73,7 +118,7 @@ if (-not $NoTest) {
 }
 
 Write-Host "Packing..." -ForegroundColor Gray
-dotnet pack Chuvadi.slnx -c Release -p:Version=$Version -o $OutputDir
+dotnet pack Chuvadi.slnx -c Release -p:Version=$Version -o $OutputDir @packArgs
 if ($LASTEXITCODE -ne 0) { throw "Pack failed." }
 
 # Consumers restore Chuvadi.Fonts from the same feed as the Chuvadi packages,

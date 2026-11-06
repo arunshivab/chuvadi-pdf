@@ -30,8 +30,9 @@ namespace Chuvadi.Pdf.Signatures.Signing;
 ///         <c>/ByteRange</c> placeholder slots and a zero-byte <c>/Contents</c>
 ///         reservation of <see cref="PdfSigningOptions.ContentsPlaceholderSize"/>
 ///         bytes.</item>
-///   <item>Write the full PDF to memory; scan the output to locate the
-///         <c>/ByteRange</c> placeholder slots and the <c>/Contents</c> value.</item>
+///   <item>Write the full PDF to memory; find the signature dictionary through
+///         the written cross-reference table, and locate the <c>/ByteRange</c>
+///         placeholder slots and the <c>/Contents</c> value inside it.</item>
 ///   <item>Patch the <c>/ByteRange</c> slots with the actual byte positions, using
 ///         leading-zero padding to preserve their fixed widths so no downstream
 ///         positions shift.</item>
@@ -42,7 +43,9 @@ namespace Chuvadi.Pdf.Signatures.Signing;
 /// </list>
 /// <para>
 /// This is a full-rewrite signing flow: the output is a freshly-written PDF
-/// carrying the new signature. Incremental update support (preserving the
+/// carrying the new signature. A document that is already signed is refused,
+/// because rewriting it would break the existing signature; use
+/// <see cref="PdfCounterSigner.AddSignature"/> for it. Incremental update support (preserving the
 /// original byte stream and appending) is deferred to a future session.
 /// </para>
 /// </remarks>
@@ -63,11 +66,17 @@ public static class PdfSigner
     /// <param name="signer">The signer.</param>
     /// <param name="options">Signing options (signature field name, signing time, reason, etc.).</param>
     /// <returns>The signed PDF bytes.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="document"/> already has a signature (since
+    /// 3.31.2): rewriting it would break that signature. Use
+    /// <see cref="PdfCounterSigner.AddSignature"/> instead.
+    /// </exception>
     public static byte[] Sign(PdfDocument document, ISigner signer, PdfSigningOptions options)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(signer);
         ArgumentNullException.ThrowIfNull(options);
+        ThrowIfAlreadySigned(document);
 
         DateTimeOffset signingTime = options.SigningTime ?? DateTimeOffset.UtcNow;
 
@@ -165,10 +174,14 @@ public static class PdfSigner
         acroForm.Set(PdfName.Intern("SigFlags"), (PdfPrimitive)new PdfInteger(3));
 
         // ── Step 4b: build LTV objects (/DSS + /VRI) when requested ─────
-        // Allocate IDs from after acroFormId. We track the IDs into a helper that
-        // builds and returns the new indirect objects + the catalog's /DSS reference
-        // (or null when LTV isn't requested).
-        int nextLtvId = acroFormId.ObjectNumber + 1;
+        // Allocate IDs after acroFormId and after the appearance widget's
+        // objects, which start at acroFormId + 1. We track the IDs into a
+        // helper that builds and returns the new indirect objects + the
+        // catalog's /DSS reference (or null when LTV isn't requested).
+        // 3.31.2 (D-226): before, LTV also started at acroFormId + 1, so with
+        // an Appearance the first LTV stream and the appearance XObject shared
+        // an object number and one of them was lost.
+        int nextLtvId = acroFormId.ObjectNumber + 1 + widgetObjects.Count;
         List<PdfIndirectObject> ltvObjects = new();
         PdfReference? dssRef = null;
         if (options.LtvOptions is { HasMaterial: true } ltv)
@@ -216,24 +229,7 @@ public static class PdfSigner
         objects.Add(new PdfIndirectObject(acroFormId, acroForm));
         objects.AddRange(ltvObjects);
         objects.AddRange(widgetObjects);
-        if (targetPageId is PdfObjectId tpid && clonedPage is not null)
-        {
-            // Replace the page object's indirect entry.
-            bool pageReplaced = false;
-            for (int i = 0; i < objects.Count; i++)
-            {
-                if (objects[i].Id.Equals(tpid))
-                {
-                    objects[i] = new PdfIndirectObject(tpid, clonedPage);
-                    pageReplaced = true;
-                    break;
-                }
-            }
-            if (!pageReplaced)
-            {
-                objects.Add(new PdfIndirectObject(tpid, clonedPage));
-            }
-        }
+        ReplacePage(objects, targetPageId, clonedPage);
 
         PdfDictionary trailer = new();
         trailer.Set(PdfName.Root, new PdfReference(catalogId));
@@ -244,14 +240,18 @@ public static class PdfSigner
         byte[] pdfBytes = ms.ToArray();
 
         // ── Step 7: locate /ByteRange and /Contents in the output ────────
-        int byteRangeStart = LocateByteRangeArrayStart(pdfBytes);
+        // 3.31.2 (D-207 item 1): search only inside the signature dictionary's
+        // own object, found through the xref just written. Before, the first
+        // /Contents in the file was taken, which is a page's on any real document.
+        int sigObjectStart = SignatureContentsHelper.LocateObjectStart(pdfBytes, sigDictId.ObjectNumber);
+        int byteRangeStart = SignatureContentsHelper.LocateByteRangeArrayStart(pdfBytes, sigObjectStart);
         if (byteRangeStart < 0)
         {
             throw new InvalidOperationException(
                 "Could not locate /ByteRange in the signed PDF output.");
         }
 
-        int contentsValueStart = LocateContentsHexStart(pdfBytes);
+        int contentsValueStart = SignatureContentsHelper.LocateContentsHexStart(pdfBytes, sigObjectStart);
         if (contentsValueStart < 0)
         {
             throw new InvalidOperationException(
@@ -290,18 +290,24 @@ public static class PdfSigner
     }
 
     /// <summary>
-    /// Async variant of <see cref="Sign"/>: when <see cref="PdfSigningOptions.AsyncTsaClient"/> is set, the TSA fetch is awaited rather than blocked on. All other behavior is identical.
+    /// Async variant of <see cref="Sign"/>: when <see cref="PdfSigningOptions.AsyncTsaClient"/> is set, the TSA fetch is awaited rather than blocked on. All other behavior is identical to <see cref="Sign"/>, including the visible <see cref="PdfSigningOptions.Appearance"/> widget (honoured since 3.31.2; before, it was ignored here).
     /// </summary>
     /// <param name="cancellationToken">Propagated to the async TSA fetch.</param>
     /// <param name="document">The unsigned source document. Not modified.</param>
     /// <param name="signer">The signer.</param>
     /// <param name="options">Signing options (signature field name, signing time, reason, etc.).</param>
     /// <returns>The signed PDF bytes.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="document"/> already has a signature (since
+    /// 3.31.2): rewriting it would break that signature. Use
+    /// <see cref="PdfCounterSigner.AddSignature"/> instead.
+    /// </exception>
     public static async System.Threading.Tasks.Task<byte[]> SignAsync(PdfDocument document, ISigner signer, PdfSigningOptions options, System.Threading.CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(signer);
         ArgumentNullException.ThrowIfNull(options);
+        ThrowIfAlreadySigned(document);
 
         DateTimeOffset signingTime = options.SigningTime ?? DateTimeOffset.UtcNow;
 
@@ -362,6 +368,17 @@ public static class PdfSigner
         sigField.Set(PdfName.Intern("T"), new PdfString(options.SignatureFieldName));
         sigField.Set(PdfName.Intern("V"), new PdfReference(sigDictId));
 
+        // ── Step 3b: visible appearance widget (when requested) ─────────
+        // 3.31.2 (D-226): the same widget code as Sign. Before, SignAsync
+        // skipped this step and options.Appearance was silently ignored.
+        List<PdfIndirectObject> widgetObjects = new();
+        PdfObjectId? targetPageId = null;
+        PdfDictionary? clonedPage = null;
+        if (options.Appearance is SignatureAppearance ap)
+        {
+            (targetPageId, clonedPage) = BuildAppearanceWidget(document, ap, sigField, sigFieldId, widgetObjects, acroFormId);
+        }
+
         // ── Step 4: build (or extend) AcroForm ───────────────────────────
         PdfArray fields = new();
         // Preserve any existing AcroForm.Fields entries.
@@ -389,10 +406,14 @@ public static class PdfSigner
         acroForm.Set(PdfName.Intern("SigFlags"), (PdfPrimitive)new PdfInteger(3));
 
         // ── Step 4b: build LTV objects (/DSS + /VRI) when requested ─────
-        // Allocate IDs from after acroFormId. We track the IDs into a helper that
-        // builds and returns the new indirect objects + the catalog's /DSS reference
-        // (or null when LTV isn't requested).
-        int nextLtvId = acroFormId.ObjectNumber + 1;
+        // Allocate IDs after acroFormId and after the appearance widget's
+        // objects, which start at acroFormId + 1. We track the IDs into a
+        // helper that builds and returns the new indirect objects + the
+        // catalog's /DSS reference (or null when LTV isn't requested).
+        // 3.31.2 (D-226): before, LTV also started at acroFormId + 1, so with
+        // an Appearance the first LTV stream and the appearance XObject shared
+        // an object number and one of them was lost.
+        int nextLtvId = acroFormId.ObjectNumber + 1 + widgetObjects.Count;
         List<PdfIndirectObject> ltvObjects = new();
         PdfReference? dssRef = null;
         if (options.LtvOptions is { HasMaterial: true } ltv)
@@ -439,6 +460,8 @@ public static class PdfSigner
         objects.Add(new PdfIndirectObject(sigFieldId, sigField));
         objects.Add(new PdfIndirectObject(acroFormId, acroForm));
         objects.AddRange(ltvObjects);
+        objects.AddRange(widgetObjects);
+        ReplacePage(objects, targetPageId, clonedPage);
 
         PdfDictionary trailer = new();
         trailer.Set(PdfName.Root, new PdfReference(catalogId));
@@ -449,14 +472,18 @@ public static class PdfSigner
         byte[] pdfBytes = ms.ToArray();
 
         // ── Step 7: locate /ByteRange and /Contents in the output ────────
-        int byteRangeStart = LocateByteRangeArrayStart(pdfBytes);
+        // 3.31.2 (D-207 item 1): search only inside the signature dictionary's
+        // own object, found through the xref just written. Before, the first
+        // /Contents in the file was taken, which is a page's on any real document.
+        int sigObjectStart = SignatureContentsHelper.LocateObjectStart(pdfBytes, sigDictId.ObjectNumber);
+        int byteRangeStart = SignatureContentsHelper.LocateByteRangeArrayStart(pdfBytes, sigObjectStart);
         if (byteRangeStart < 0)
         {
             throw new InvalidOperationException(
                 "Could not locate /ByteRange in the signed PDF output.");
         }
 
-        int contentsValueStart = LocateContentsHexStart(pdfBytes);
+        int contentsValueStart = SignatureContentsHelper.LocateContentsHexStart(pdfBytes, sigObjectStart);
         if (contentsValueStart < 0)
         {
             throw new InvalidOperationException(
@@ -507,6 +534,27 @@ public static class PdfSigner
     }
 
     /// <summary>Walks the /Pages tree, collecting page object IDs in document order.</summary>
+    // Puts the cloned target page (the one that now lists the signature
+    // widget in /Annots) in place of the original page object, or adds it.
+    private static void ReplacePage(List<PdfIndirectObject> objects, PdfObjectId? pageId, PdfDictionary? clonedPage)
+    {
+        if (pageId is not PdfObjectId id || clonedPage is null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < objects.Count; i++)
+        {
+            if (objects[i].Id.Equals(id))
+            {
+                objects[i] = new PdfIndirectObject(id, clonedPage);
+                return;
+            }
+        }
+
+        objects.Add(new PdfIndirectObject(id, clonedPage));
+    }
+
     private static void CollectPageIds(
         PdfPrimitive node, Chuvadi.Pdf.Objects.PdfObjectStore objects, List<PdfObjectId> sink)
     {
@@ -533,9 +581,11 @@ public static class PdfSigner
     /// <summary>
     /// Mutates <paramref name="sigField"/> to act as a Widget annotation, and
     /// emits the supporting objects (Form XObject for the appearance, possibly
-    /// a cloned page with an extended /Annots).
+    /// a cloned page with an extended /Annots). The new objects are numbered
+    /// from <paramref name="acroFormId"/> + 1. Shared with
+    /// <see cref="PdfCounterSigner"/> since 3.31.2 (D-207 1b).
     /// </summary>
-    private static (PdfObjectId? pageId, PdfDictionary? clonedPage) BuildAppearanceWidget(
+    internal static (PdfObjectId? pageId, PdfDictionary? clonedPage) BuildAppearanceWidget(
         PdfDocument document,
         SignatureAppearance ap,
         PdfDictionary sigField,
@@ -729,57 +779,6 @@ public static class PdfSigner
         }
     }
 
-    private static int LocateByteRangeArrayStart(byte[] bytes)
-    {
-        // Scan for "/ByteRange" then the next '['.
-        byte[] needle = "/ByteRange"u8.ToArray();
-        int idx = IndexOf(bytes, needle, 0);
-        if (idx < 0) { return -1; }
-        for (int p = idx + needle.Length; p < bytes.Length; p++)
-        {
-            if (bytes[p] == (byte)'[') { return p; }
-            // Allow whitespace between /ByteRange and the array.
-            if (bytes[p] != (byte)' ' && bytes[p] != (byte)'\t'
-                && bytes[p] != (byte)'\r' && bytes[p] != (byte)'\n')
-            {
-                return -1;
-            }
-        }
-        return -1;
-    }
-
-    private static int LocateContentsHexStart(byte[] bytes)
-    {
-        // Scan for "/Contents" then the next '<' (hex-string delimiter).
-        byte[] needle = "/Contents"u8.ToArray();
-        int idx = IndexOf(bytes, needle, 0);
-        if (idx < 0) { return -1; }
-        for (int p = idx + needle.Length; p < bytes.Length; p++)
-        {
-            if (bytes[p] == (byte)'<') { return p; }
-            if (bytes[p] != (byte)' ' && bytes[p] != (byte)'\t'
-                && bytes[p] != (byte)'\r' && bytes[p] != (byte)'\n')
-            {
-                return -1;
-            }
-        }
-        return -1;
-    }
-
-    private static int IndexOf(byte[] haystack, byte[] needle, int start)
-    {
-        for (int i = start; i <= haystack.Length - needle.Length; i++)
-        {
-            bool match = true;
-            for (int j = 0; j < needle.Length; j++)
-            {
-                if (haystack[i + j] != needle[j]) { match = false; break; }
-            }
-            if (match) { return i; }
-        }
-        return -1;
-    }
-
     private static void WriteHexAt(byte[] bytes, int offset, byte[] data)
     {
         const string HexDigits = "0123456789ABCDEF";
@@ -789,6 +788,17 @@ public static class PdfSigner
             bytes[offset + i * 2 + 1] = (byte)HexDigits[data[i] & 0x0F];
         }
         // Trailing bytes in the placeholder remain '0' (the placeholder was zeroed).
+    }
+
+    // 3.31.2 (D-207 item 1): Sign rewrites the whole file, which would break
+    // every existing signature, so signed input is refused.
+    private static void ThrowIfAlreadySigned(PdfDocument document)
+    {
+        if (document.Signatures().Count > 0)
+        {
+            throw new InvalidOperationException(
+                "This document already has a signature; use PdfCounterSigner.AddSignature to add another.");
+        }
     }
 
     private static int ReadTrailerSize(PdfDocument document)

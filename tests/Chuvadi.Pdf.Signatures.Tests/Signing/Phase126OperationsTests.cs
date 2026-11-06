@@ -76,10 +76,10 @@ public sealed class Phase126OperationsTests
         "3312db2f93867ec28c1d982298d25090a3df33ca65b91bf7682047d796b8c76f1fd4abf7c1cd9ccf" +
         "0e61017c2bc53f7bbd30d00efce40ba96871fb467a1c8741057e7846";
 
-    private static readonly DateTimeOffset SigningTime
+    internal static readonly DateTimeOffset SigningTime
         = new(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
-    private static (ISigner Signer, X509Certificate Cert, TrustStore Trust) MakeFixture()
+    internal static (ISigner Signer, X509Certificate Cert, TrustStore Trust) MakeFixture()
     {
         RsaPrivateKey priv = RsaPrivateKey.FromPkcs8(Convert.FromHexString(Pkcs8Hex));
         X509Certificate cert = X509Certificate.Decode(Convert.FromHexString(CertDerHex));

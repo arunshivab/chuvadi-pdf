@@ -13,8 +13,6 @@
       This project has zero dependencies — not even on other Chuvadi projects.
       Everything in the library ultimately depends on this project.
     </Description>
-    <!-- Unsafe blocks: needed for Span/Memory hot paths in the tokenizer -->
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

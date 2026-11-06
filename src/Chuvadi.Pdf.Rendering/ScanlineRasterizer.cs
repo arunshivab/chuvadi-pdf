@@ -362,6 +362,17 @@ public sealed class ScanlineRasterizer
         int xStart = (int)Math.Floor(start);
         int xEnd = (int)Math.Floor(end - 1e-9);
 
+        // 3.31.2: a span thinner than the 1e-9 guard that starts on a pixel
+        // boundary gives xEnd = xStart - 1. It lies within one column. Before,
+        // it was treated as a two-column span: at x = 0 that indexed column -1
+        // and threw, elsewhere it added a whole pixel of coverage to two
+        // columns. Clip edges on the page edge make such spans (a page cropped
+        // with PageCropMode.ClipOnly, drawn from its own corner since P1).
+        if (xEnd < xStart)
+        {
+            xEnd = xStart;
+        }
+
         if (xStart == xEnd)
         {
             // Span lies within a single pixel column.
