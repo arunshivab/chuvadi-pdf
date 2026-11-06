@@ -10,7 +10,11 @@ public static class PageCropper
 
 ## Remarks
 
-This is a lossless, visual crop: in-box content is preserved byte-for-byte and the page is resized to the crop rectangle, but the bytes of off-box content remain in the file (clipped from view, not removed). For a redaction-grade crop that physically removes off-box content, a future scrubbing mode is required.
+Each `PageCrop` chooses its mode. `PageCropMode.ClipOnly` (the default) is a lossless, visual crop: in-box content is preserved byte-for-byte, but the bytes of off-box content remain in the file (clipped from view, not removed). `PageCropMode.Scrub` is the redaction-grade crop: off-box text, images and paths are removed from the content, and paths that cross the edge are cut at it. Use Scrub whenever off-box content must not be recoverable.  
+
+ `PageCrop.CropBox` is in the page's default user space: PDF points, origin at the bottom left, the same space as the page's `/MediaBox` (which need not start at 0,0), before the page's `/Rotate` is applied. Coordinates taken from a rendered or rotated view (top-left origin, pixels, rotation applied) must be converted back first, or a different region is cropped.  
+
+ A cropped page's `/MediaBox` starts at the crop rectangle's corner, not at 0,0. Chuvadi's raster and SVG output draw such pages correctly from 3.31.2; earlier versions drew them shifted, often blank.
 
 ## Methods
 

@@ -10,7 +10,7 @@ public sealed class PdfDocument : IDisposable
 
 ## Remarks
 
-`PdfDocument` wraps a `PdfReader` and exposes the document-level object model: pages, metadata, and the document catalog. Open a document with `Open(Stream, bool)` or `Open(string)` on desktop runtimes, or `OpenAsync(Stream, CancellationToken)` / `OpenAsync(string, CancellationToken)` on WebAssembly or any caller that needs to integrate with asynchronous I/O. Dispose the document when finished — it owns the underlying reader and stream. PDF 32000-1:2008 §7.7.2 — Document Catalog. PDF 32000-1:2008 §14.3.3 — Document information dictionary.
+`PdfDocument` wraps a `PdfReader` and exposes the document-level object model: pages, metadata, and the document catalog. Open a document with `Open(Stream, bool)` or `Open(string)` on desktop runtimes, or `OpenAsync(Stream, CancellationToken)` / `OpenAsync(string, CancellationToken)` on WebAssembly or any caller that needs to integrate with asynchronous I/O. Dispose the document when finished — it owns the underlying reader and stream. A `PdfDocument` is not safe for concurrent use: it loads objects and pages on demand into plain caches and reads through one stream. To work on one file from several threads, open one document per thread (from the same bytes if you like). Different documents on different threads are independent. See docs/THREAD-SAFETY.md. PDF 32000-1:2008 §7.7.2 — Document Catalog. PDF 32000-1:2008 §14.3.3 — Document information dictionary.
 
 ## Properties
 

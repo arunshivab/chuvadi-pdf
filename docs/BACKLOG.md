@@ -158,6 +158,21 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.31.2 (bug fixes, D-207 to D-221):
+- **Signing real documents** — `PdfSigner.Sign` and `SignAsync` find their
+  own signature dictionary through the written xref (they took a page's
+  `/Contents` before); already-signed input is refused with a pointer to
+  `PdfCounterSigner.AddSignature`. `AddSignature` honours `Appearance`.
+- **Links to named destinations** and page indexes from the page tree for
+  links and outlines.
+- **Bounded name table** — names compare by value; the shared table holds the
+  well-known names plus at most 4,096 others of up to 64 characters.
+- **Shared `FontRenderer`** is safe between threads.
+- **Pages whose MediaBox does not start at 0,0** render in raster and SVG (P1).
+- **Platform** — `IsAotCompatible` on every src package except Rendering.Wpf,
+  `docs/THREAD-SAFETY.md`, no unused `AllowUnsafeBlocks`, SDK package
+  validation against the previous release.
+
 Shipped in v3.31.1:
 - **`FontFace.Load` speed** (D-201): only the full-repertoire character map
   subtable that is chosen is read; output unchanged.
@@ -261,6 +276,42 @@ Shipped in v3.22.0 (backlog scope A):
 Status verified against code at v3.26.0. Items are independent and may be
 re-ordered.
 
+### Planned for 3.32.0 (D-208, D-221)
+After 3.31.2, each as its own Rule 5 change:
+- **1c.** Signature appearance through the Forms appearance-text code, with
+  the LiPi fallback and an optional JPEG or PNG; the caller's XObject stays
+  as an advanced option.
+- **2.** `EncryptionOptions` take the existing `PdfPermissions` flags;
+  `EncryptionInfo.Flags` for reading.
+- **3 (PDF-16).** `EncryptionInfo.OpenedWith` (NoPassword, User, Owner),
+  trying the owner password first as the specification says.
+- **4.** Destination kind and coordinates on `OutlineItem`, `LinkAnnotation`
+  and named destinations.
+- **5.** Layers get `IsLocked`, `Id` and id-keyed overrides.
+- **6.** Viewports cached once per page, and documented.
+- **P2.** The CropBox becomes the default display area of the raster and SVG
+  output (option (a)). This takes the CropBox part of item 3 below.
+- **P3.** Redaction cuts curves exactly at the box edges by splitting the
+  Béziers, as it already cuts rectangles and lines; paths whose fill rule
+  makes the cut doubtful are still dropped whole.
+
+### Reader asks (open)
+**PDF-09. Compress vector-only PDFs to a target byte budget (D-218).**
+`CompressToTarget` with the rasterising fallback does not always meet the
+target on vector-only drawings. Options (P4, D-221): the fallback also
+lowers JPEG quality; grayscale rasterisation; a DPI floor below 72. First
+measure on the Reader's CAD file, which the Reader is sending.
+
+**PDF-13.** Retired as a duplicate of PDF-16, which is 3.32.0 item 3 above
+(D-218).
+
+### Rendering (3.31.2 follow-up)
+**38. WPF output ignores the MediaBox origin.** `WpfRenderer` flips with
+`new Matrix(1, 0, 0, -1, 0, list.MediaHeight)`, the same mistake 3.31.2 fixed
+in the raster and SVG output (P1): a page whose MediaBox does not start at
+0,0 is drawn shifted by the box's corner. Not changed in 3.31.2 because WPF
+cannot be built or checked on the Linux sandbox; fix and check on Windows.
+
 ### Text shaping
 **25. Shapers not ported (3.26 scope note).** `TextShaper` ports HarfBuzz's
 Indic and default shapers only. Not ported: Arabic, Hebrew, Thai/Lao,
@@ -342,7 +393,9 @@ through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
 MediaBox in unrotated user space; `/Rotate` is applied only with the opt-in
 `ApplyPageRotation` (3.19), and the CropBox is not used to bound the output.
 A default switch would change every existing caller's output, so it waits for
-a major version.
+a major version. Since D-221 the CropBox part is planned for 3.32.0 (P2,
+above); the `/Rotate` default still waits. Since 3.31.2 a MediaBox that does
+not start at 0,0 is drawn correctly (P1).
 
 ### Accessibility / archival
 **5. Tagged-PDF structure generation.** PDF/A *output* ships

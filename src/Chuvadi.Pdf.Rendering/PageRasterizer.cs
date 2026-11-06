@@ -205,8 +205,15 @@ public sealed class PageRasterizer
             return buffer;
         }
 
+        // 3.31.2: the MediaBox's lower-left corner maps to the bottom-left
+        // pixel, so a page whose box does not start at 0,0 (every cropped
+        // page, for example) is drawn where it is, as RenderRegion already
+        // does for a region. Before, content was drawn shifted by the box's
+        // origin, and pages such as [50 450 400 770] came out blank.
+        PdfRectangle media = page.MediaBox;
+        Transform outer = Transform.CreateTranslation(-Math.Min(media.X1, media.X2), -Math.Min(media.Y1, media.Y2));
         PageRasterizer painter = new PageRasterizer(_objects, options);
-        painter.PaintDisplayList(list, buffer, pageH, Transform.Identity);
+        painter.PaintDisplayList(list, buffer, pageH, outer);
         return buffer;
     }
 

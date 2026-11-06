@@ -45,7 +45,11 @@ public static class PdfCounterSigner
     /// <param name="options">Signing options (Reason, Location, TsaClient, etc.).
     /// LtvOptions on this options instance are ignored — use
     /// <see cref="PdfLtvUpdater"/> for LTV material on counter-signed
-    /// documents.</param>
+    /// documents. Since 3.31.2 <see cref="PdfSigningOptions.Appearance"/> is
+    /// honoured: the signature gets a visible widget on the given page, drawn
+    /// as <see cref="PdfSigner"/> draws it, and the page is rewritten in the
+    /// update so that its <c>/Annots</c> lists the widget.</param>
+    /// <returns>The source bytes followed by one incremental update.</returns>
     public static byte[] AddSignature(byte[] signedPdfBytes, ISigner signer, PdfSigningOptions options)
     {
         ArgumentNullException.ThrowIfNull(signedPdfBytes);
@@ -118,6 +122,19 @@ public static class PdfCounterSigner
         sigField.Set(PdfName.Intern("T"), new PdfString(fieldName));
         sigField.Set(PdfName.Intern("V"), new PdfReference(sigDictId));
 
+        // 3.31.2 (D-207 1b): a visible appearance, as PdfSigner draws it. The
+        // field becomes a widget on the target page, and the page is rewritten
+        // in the update with the widget added to /Annots. Before 3.31.2,
+        // options.Appearance was silently ignored here.
+        List<PdfIndirectObject> widgetObjects = new();
+        PdfObjectId? targetPageId = null;
+        PdfDictionary? clonedPage = null;
+        if (options.Appearance is SignatureAppearance appearance)
+        {
+            (targetPageId, clonedPage) = PdfSigner.BuildAppearanceWidget(
+                doc, appearance, sigField, sigFieldId, widgetObjects, acroFormId);
+        }
+
         // Extended AcroForm.
         PdfArray fields = new();
         if (doc.Catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? acroFormVal))
@@ -154,24 +171,34 @@ public static class PdfCounterSigner
             new PdfIndirectObject(sigFieldId, sigField),
             new PdfIndirectObject(acroFormId, acroForm),
         };
+        newObjects.AddRange(widgetObjects);
+        if (targetPageId is PdfObjectId pageId && clonedPage is not null)
+        {
+            newObjects.Add(new PdfIndirectObject(pageId, clonedPage));
+        }
 
         byte[] withPlaceholders = PdfWriter.WriteIncrementalUpdate(signedPdfBytes, newObjects);
 
-        // Find the new sig dict's /ByteRange + /Contents in the appended section.
-        int searchFrom = signedPdfBytes.Length;
-        int byteRangeStart = SignatureContentsHelper.LocateByteRangeArrayStart(withPlaceholders.AsSpan(searchFrom).ToArray());
+        // Find the new sig dict's /ByteRange + /Contents inside its own object,
+        // through the update's xref (3.31.2). The update can now hold a page,
+        // whose /Contents must not be taken for the signature's.
+        int sigObjectStart = SignatureContentsHelper.LocateObjectStart(withPlaceholders, sigDictId.ObjectNumber);
+        if (sigObjectStart < signedPdfBytes.Length)
+        {
+            sigObjectStart = -1;
+        }
+
+        int byteRangeStart = SignatureContentsHelper.LocateByteRangeArrayStart(withPlaceholders, sigObjectStart);
         if (byteRangeStart < 0)
         {
             throw new InvalidOperationException("Could not locate /ByteRange in the appended section.");
         }
-        byteRangeStart += searchFrom;
 
-        int contentsValueStart = SignatureContentsHelper.LocateContentsHexStart(withPlaceholders.AsSpan(searchFrom).ToArray());
+        int contentsValueStart = SignatureContentsHelper.LocateContentsHexStart(withPlaceholders, sigObjectStart);
         if (contentsValueStart < 0)
         {
             throw new InvalidOperationException("Could not locate /Contents in the appended section.");
         }
-        contentsValueStart += searchFrom;
         int contentsValueEnd = contentsValueStart + 1 + (options.ContentsPlaceholderSize * 2) + 1;
 
         int firstLen = contentsValueStart;

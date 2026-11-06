@@ -14,7 +14,6 @@
       Phase 2 will add: CCITTFaxDecode, JBIG2Decode, DCTDecode, JPXDecode.
       Phase 3 will add: Crypt filter (encryption integration).
     </Description>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

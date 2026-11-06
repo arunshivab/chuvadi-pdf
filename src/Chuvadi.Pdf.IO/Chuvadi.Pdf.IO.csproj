@@ -14,7 +14,6 @@
       Supports classic xref tables and PDF 1.5+ cross-reference streams.
       Memory-streaming throughout — large PDFs never fully loaded into RAM.
     </Description>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

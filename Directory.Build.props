@@ -57,6 +57,27 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 
+  <!-- 3.31.2 (D-217 C): every shipped package under src/ declares itself
+       trimming- and Native AOT-compatible, which turns on the trim, AOT and
+       single-file analyzers; their warnings are errors like any other.
+       Rendering.Wpf is left out (WPF does not support trimming), and so are
+       tests, examples and tools. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' != 'Chuvadi.Pdf.Rendering.Wpf' and $([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').Replace('\', '/').StartsWith('src/'))">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <!-- 3.31.2 (D-221): SDK package validation on every package under src/.
+       Without a baseline it checks each package on its own. With a baseline,
+       which build\pack.ps1 passes as ChuvadiBaselineDir and
+       ChuvadiBaselineVersion (the folder holding the previous release's
+       .nupkg files, normally local-nuget), pack fails on any public API that
+       was removed or changed since that release. CI packs without a
+       baseline, because the previous release is not on any feed it can reach. -->
+  <PropertyGroup Condition="$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').Replace('\', '/').StartsWith('src/'))">
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselinePath Condition="'$(ChuvadiBaselineDir)' != '' and '$(ChuvadiBaselineVersion)' != ''">$([System.IO.Path]::Combine('$(ChuvadiBaselineDir)', '$(MSBuildProjectName).$(ChuvadiBaselineVersion).nupkg'))</PackageValidationBaselinePath>
+  </PropertyGroup>
+
   <!-- Version: controlled by build, not hardcoded here.
        Pass /p:Version=x.y.z on the dotnet pack command.
        Default to 0.1.0 during development. -->

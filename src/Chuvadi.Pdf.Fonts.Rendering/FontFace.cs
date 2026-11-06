@@ -41,6 +41,9 @@ public readonly record struct FontBox(int XMin, int YMin, int XMax, int YMax)
 /// tables: ascenders are positive, descenders negative — except
 /// <see cref="WinDescent"/>, which the OS/2 table stores as a positive
 /// distance below the baseline.
+///
+/// One instance can serve any number of threads at once; see
+/// docs/THREAD-SAFETY.md.
 /// </remarks>
 public sealed class FontFace
 {

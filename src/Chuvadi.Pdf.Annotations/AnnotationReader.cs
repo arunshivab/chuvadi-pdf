@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Forms;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -43,6 +44,14 @@ public static class AnnotationReader
             throw new ArgumentOutOfRangeException(nameof(pageIndex));
         }
 
+        return GetAnnotations(document, pageIndex, new DestinationResolver(document));
+    }
+
+    // One resolver per read: the page map and named destinations are built
+    // once, on the first link that needs them (3.31.2).
+    private static IReadOnlyList<PdfAnnotation> GetAnnotations(
+        PdfDocument document, int pageIndex, DestinationResolver destinations)
+    {
         PdfPage page = document.Pages[pageIndex];
         PdfObjectStore store = document.Objects;
 
@@ -69,7 +78,7 @@ public static class AnnotationReader
                 continue;
             }
 
-            PdfAnnotation? annotation = DecodeAnnotation(annotDict, store, pageIndex, document);
+            PdfAnnotation? annotation = DecodeAnnotation(annotDict, store, pageIndex, destinations);
 
             if (annotation is not null)
             {
@@ -91,10 +100,11 @@ public static class AnnotationReader
         }
 
         List<PdfAnnotation> all = new List<PdfAnnotation>();
+        DestinationResolver destinations = new DestinationResolver(document);
 
         for (int i = 0; i < document.PageCount; i++)
         {
-            all.AddRange(GetAnnotations(document, i));
+            all.AddRange(GetAnnotations(document, i, destinations));
         }
 
         return all;
@@ -103,7 +113,7 @@ public static class AnnotationReader
     // ── Subtype dispatch ──────────────────────────────────────────────────
 
     private static PdfAnnotation? DecodeAnnotation(
-        PdfDictionary dict, PdfObjectStore store, int pageIndex, PdfDocument document)
+        PdfDictionary dict, PdfObjectStore store, int pageIndex, DestinationResolver destinations)
     {
         // Common fields
         RectangleF rect = ReadRect(dict);
@@ -122,7 +132,7 @@ public static class AnnotationReader
         return subName.Value switch
         {
             "Text" => ReadText(pageIndex, rect, contents, color, author, opacity, dict),
-            "Link" => ReadLink(pageIndex, rect, contents, dict, store, document),
+            "Link" => ReadLink(pageIndex, rect, contents, dict, store, destinations),
             "FreeText" => ReadFreeText(pageIndex, rect, contents, color, author, opacity, dict),
             "Highlight" => ReadMarkup(AnnotationType.Highlight, pageIndex, rect, contents, color, author, opacity, dict),
             "Underline" => ReadMarkup(AnnotationType.Underline, pageIndex, rect, contents, color, author, opacity, dict),
@@ -160,7 +170,7 @@ public static class AnnotationReader
 
     private static LinkAnnotation? ReadLink(
         int pageIndex, RectangleF rect, string? contents,
-        PdfDictionary dict, PdfObjectStore store, PdfDocument document)
+        PdfDictionary dict, PdfObjectStore store, DestinationResolver destinations)
     {
         // /A action dictionary may contain a URI or GoTo destination
         if (dict.TryGetValue(PdfName.Intern("A"), out PdfPrimitive? actionPrim))
@@ -184,7 +194,7 @@ public static class AnnotationReader
                 if (actionType is not null && actionType.Value == "GoTo" &&
                     actionDict.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? destPrim))
                 {
-                    int dest = ResolveDestinationPage(destPrim, store, document);
+                    int dest = destinations.ResolvePageIndex(destPrim);
 
                     if (dest >= 0)
                     {
@@ -194,10 +204,10 @@ public static class AnnotationReader
             }
         }
 
-        // /Dest explicit destination
+        // /Dest: an explicit destination or, since 3.31.2, a named one
         if (dict.TryGetValue(PdfName.Intern("Dest"), out PdfPrimitive? directDest))
         {
-            int dest = ResolveDestinationPage(directDest, store, document);
+            int dest = destinations.ResolvePageIndex(directDest);
 
             if (dest >= 0)
             {
@@ -551,35 +561,5 @@ public static class AnnotationReader
             PdfReal r => r.Value,
             _ => 0,
         };
-    }
-
-    private static int ResolveDestinationPage(PdfPrimitive destPrim, PdfObjectStore store, PdfDocument document)
-    {
-        PdfPrimitive resolved = store.Resolve(destPrim);
-
-        if (resolved is PdfArray destArray && destArray.Count > 0 &&
-            destArray[0] is PdfReference pageRef)
-        {
-            int idx = 0;
-
-            foreach (PdfIndirectObject obj in document.Objects.Objects)
-            {
-                if (obj.Value is not PdfDictionary d ||
-                    !d.TryGetValue(PdfName.Type, out PdfPrimitive? t) ||
-                    t is not PdfName tn || tn.Value != "Page")
-                {
-                    continue;
-                }
-
-                if (obj.Id.ObjectNumber == pageRef.ObjectId.ObjectNumber)
-                {
-                    return idx;
-                }
-
-                idx++;
-            }
-        }
-
-        return -1;
     }
 }

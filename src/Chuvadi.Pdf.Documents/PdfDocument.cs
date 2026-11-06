@@ -34,6 +34,12 @@ namespace Chuvadi.Pdf.Documents;
 /// any caller that needs to integrate with asynchronous I/O. Dispose the
 /// document when finished — it owns the underlying reader and stream.
 ///
+/// A <see cref="PdfDocument"/> is not safe for concurrent use: it loads
+/// objects and pages on demand into plain caches and reads through one
+/// stream. To work on one file from several threads, open one document per
+/// thread (from the same bytes if you like). Different documents on
+/// different threads are independent. See docs/THREAD-SAFETY.md.
+///
 /// PDF 32000-1:2008 §7.7.2 — Document Catalog.
 /// PDF 32000-1:2008 §14.3.3 — Document information dictionary.
 /// </remarks>
