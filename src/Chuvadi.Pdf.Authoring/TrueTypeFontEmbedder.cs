@@ -125,9 +125,10 @@ public static class TrueTypeFontEmbedder
     internal readonly struct SfntMetrics
     {
         private SfntMetrics(int flags, int xMin, int yMin, int xMax, int yMax,
-            double italicAngle, int ascent, int descent, int capHeight)
+            double italicAngle, int ascent, int descent, int capHeight, int stemV)
         {
             Flags = flags;
+            StemV = stemV;
             BBoxXMin = xMin;
             BBoxYMin = yMin;
             BBoxXMax = xMax;
@@ -139,6 +140,9 @@ public static class TrueTypeFontEmbedder
         }
 
         public int Flags { get; }
+
+        // 3.32.0 (D-244): estimated from the OS/2 weight class.
+        public int StemV { get; }
 
         public int BBoxXMin { get; }
 
@@ -188,15 +192,17 @@ public static class TrueTypeFontEmbedder
             // ItalicAngle from post (Fixed 16.16 at offset 4), else 0.
             double italicAngle = post >= 0 ? S32(ttf, post + 4) / 65536.0 : 0.0;
 
-            // Flags: Symbolic (4) for Identity-encoded composite fonts; add Italic (64).
-            int flags = 4;
-            if ((macStyle & 0x2) != 0 || italicAngle != 0.0)
-            {
-                flags |= 64;
-            }
+            // Flags (3.32.0, D-245): Symbolic (4) for Identity-encoded composite
+            // fonts, plus Italic, FixedPitch and Serif from the font's tables.
+            FontDescriptorPolicy.Inputs inputs = FontDescriptorPolicy.Read(ttf);
+            int flags = FontDescriptorPolicy.Flags(
+                symbolic: true,
+                italic: (macStyle & 0x2) != 0 || italicAngle != 0.0,
+                fixedPitch: inputs.FixedPitch,
+                familyClass: inputs.FamilyClass);
 
             return new SfntMetrics(flags, xMin, yMin, xMax, yMax,
-                italicAngle, ascent, descent, capHeight);
+                italicAngle, ascent, descent, capHeight, FontDescriptorPolicy.StemV(inputs.WeightClass));
         }
 
         private static Dictionary<string, int> ReadTableDirectory(byte[] ttf)

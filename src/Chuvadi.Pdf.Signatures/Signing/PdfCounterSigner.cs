@@ -132,7 +132,7 @@ public static class PdfCounterSigner
         if (options.Appearance is SignatureAppearance appearance)
         {
             (targetPageId, clonedPage) = PdfSigner.BuildAppearanceWidget(
-                doc, appearance, sigField, sigFieldId, widgetObjects, acroFormId);
+                doc, appearance, sigField, sigFieldId, widgetObjects, acroFormId, signer.Certificate.Subject.CommonName, signingTime);
         }
 
         // Extended AcroForm.

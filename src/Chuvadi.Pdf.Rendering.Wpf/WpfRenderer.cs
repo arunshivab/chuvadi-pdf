@@ -29,19 +29,50 @@ namespace Chuvadi.Pdf.Rendering.Wpf;
 /// </para>
 /// <para>
 /// Coordinate handling: the renderer applies an outer
-/// <c>(1, 0, 0, -1, 0, pageHeight)</c> transform so PDF coordinates flow
-/// through directly. Text runs receive a local counter-flip so glyphs read
-/// upright.
+/// <c>(1, 0, 0, -1, -x0, y0 + height)</c> transform, where <c>x0</c>, <c>y0</c>,
+/// <c>height</c> are the shown page box's corner and height, so PDF
+/// coordinates flow through directly and the box's lower-left corner lands at
+/// the visual's bottom-left. Text runs receive a local counter-flip so glyphs
+/// read upright. Since 3.32.0 the shown box is the CropBox by default (see
+/// <see cref="DisplayBox"/>), the visual is clipped to it, and a box that does
+/// not start at 0,0 is drawn where it is (backlog 38).
 /// </para>
 /// </remarks>
 public sealed class WpfRenderer
 {
+    /// <summary>
+    /// Gets or initialises which page box is shown (3.32.0, P2): the CropBox
+    /// intersected with the MediaBox by default, or the whole MediaBox as
+    /// before 3.32.0. The visual is clipped to the box, which spans
+    /// 0..width by 0..height.
+    /// </summary>
+    public PdfDisplayBox DisplayBox { get; init; }
+
     /// <summary>Renders a page to a <see cref="DrawingVisual"/>.</summary>
     public DrawingVisual RenderPage(PdfDocument document, int pageIndex)
     {
         ArgumentNullException.ThrowIfNull(document);
         PageDisplayList list = DisplayListBuilder.Build(document, pageIndex);
         return Render(list);
+    }
+
+    // The shown page box as (x, y, width, height): the CropBox (already
+    // intersected with the MediaBox) unless DisplayBox is MediaBox; a list
+    // with no boxes uses MediaWidth and MediaHeight at the origin.
+    private (double X, double Y, double W, double H) DisplayRect(PageDisplayList list)
+    {
+        PdfRectangle box = DisplayBox == PdfDisplayBox.MediaBox ? list.MediaBox : list.CropBox;
+        if (!(box.Width > 0) || !(box.Height > 0))
+        {
+            box = list.MediaBox;
+        }
+
+        if (!(box.Width > 0) || !(box.Height > 0))
+        {
+            return (0, 0, list.MediaWidth, list.MediaHeight);
+        }
+
+        return (Math.Min(box.X1, box.X2), Math.Min(box.Y1, box.Y2), box.Width, box.Height);
     }
 
     /// <summary>Renders a pre-built display list to a <see cref="DrawingVisual"/>.</summary>
@@ -51,12 +82,18 @@ public sealed class WpfRenderer
         DrawingVisual visual = new();
         using DrawingContext dc = visual.RenderOpen();
 
-        // Page flip
-        MatrixTransform pageFlip = new(new Matrix(1, 0, 0, -1, 0, list.MediaHeight));
+        // Clip to the shown box, then flip so its lower-left corner is the
+        // bottom-left of the visual (3.32.0: P2 and backlog 38; before, the
+        // flip ignored the box's corner and the whole MediaBox was shown).
+        (double boxX, double boxY, double boxW, double boxH) = DisplayRect(list);
+        dc.PushClip(new RectangleGeometry(new System.Windows.Rect(0, 0, boxW, boxH)));
+        MatrixTransform pageFlip = new(new Matrix(1, 0, 0, -1, -boxX, boxY + boxH));
         dc.PushTransform(pageFlip);
 
+        // The clip and the page flip are the two base pushes; ops never pop them.
+        const int BaseDepth = 2;
         Stack<int> pushDepth = new();
-        int currentDepth = 1;   // for the pageFlip we just pushed
+        int currentDepth = BaseDepth;
 
         foreach (RenderOp op in list)
         {
@@ -67,11 +104,11 @@ public sealed class WpfRenderer
                 case ImageOp i: DrawImage(dc, i); break;
                 case TransformOp xf:
                     if (xf.Push) { dc.PushTransform(Transform.Identity); pushDepth.Push(currentDepth); currentDepth++; }
-                    else if (currentDepth > 1) { dc.Pop(); currentDepth--; }
+                    else if (currentDepth > BaseDepth) { dc.Pop(); currentDepth--; }
                     break;
                 case OpacityOp op2:
                     if (op2.Push) { dc.PushOpacity(op2.Alpha); currentDepth++; }
-                    else if (currentDepth > 1) { dc.Pop(); currentDepth--; }
+                    else if (currentDepth > BaseDepth) { dc.Pop(); currentDepth--; }
                     break;
                 case ClipOp:
                     // Not implemented in v1 — clipping mid-frame requires Geometry-based

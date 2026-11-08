@@ -2,7 +2,7 @@
 
 **Record** in `Chuvadi.Pdf.Operations` (Operations)
 
-Options controlling `PdfCompressor.Compress`.
+Options controlling `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)`.
 
 ```csharp
 public sealed record CompressionOptions
@@ -128,7 +128,7 @@ Drop page annotations (the page /Annots array): links, comments, and form field 
 bool AllowSignedRewrite
 ```
 
-When false (the default), a digitally signed document is not rewritten: `PdfCompressor.Compress` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Signed` and writes nothing, because a full rewrite invalidates the signature byte ranges. Set to true to rewrite anyway, accepting that existing signatures will break.
+When false (the default), a digitally signed document is not rewritten: `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Signed` and writes nothing, because a full rewrite invalidates the signature byte ranges. Set to true to rewrite anyway, accepting that existing signatures will break.
 
 ### `AllowEncryptedRewrite`
 
@@ -136,7 +136,7 @@ When false (the default), a digitally signed document is not rewritten: `PdfComp
 bool AllowEncryptedRewrite
 ```
 
-When false (the default), an encrypted document is not rewritten: `PdfCompressor.Compress` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Encrypted` and writes nothing, because the reader exposes decrypted content and the rewrite would emit the document without encryption. Set to true to rewrite the decrypted content anyway.
+When false (the default), an encrypted document is not rewritten: `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Encrypted` and writes nothing, because the reader exposes decrypted content and the rewrite would emit the document without encryption. Set to true to rewrite the decrypted content anyway.
 
 ### `MaxDeflateStreams`
 

@@ -188,11 +188,32 @@ public sealed class RenderOptions
     /// </summary>
     public IReadOnlyDictionary<string, bool>? LayerVisibility { get; init; }
 
+    /// <summary>
+    /// Gets or initialises per-layer visibility overrides by layer id (3.32.0):
+    /// <see cref="OptionalContentGroup.Id"/> → visible. They win over
+    /// <see cref="LayerVisibility"/> for the same group, and set apart layers
+    /// that share a name. Ignored when <see cref="IgnoreOptionalContent"/> is
+    /// true. Default: null.
+    /// </summary>
+    public IReadOnlyDictionary<int, bool>? LayerVisibilityById { get; init; }
+
+    /// <summary>
+    /// Gets or initialises which page box is rendered (3.32.0, P2). Default:
+    /// <see cref="PdfDisplayBox.CropBox"/> — the CropBox intersected with the
+    /// MediaBox, what a viewer shows; content outside it is not drawn, and the
+    /// output is the box's size with its lower-left corner at the bottom-left
+    /// pixel. <see cref="PdfDisplayBox.MediaBox"/> renders the whole MediaBox,
+    /// as before 3.32.0. Pages whose CropBox is absent or equals the MediaBox
+    /// render the same either way. <c>PageRasterizer.RenderRegion</c>
+    /// is not affected: its region is in absolute user space.
+    /// </summary>
+    public PdfDisplayBox DisplayBox { get; init; }
+
     // The layer visibility these options select for a page.
     internal OptionalContentVisibility VisibilityFor(PdfPage page) =>
         IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
-            : page.OptionalContent.WithOverrides(LayerVisibility);
+            : page.OptionalContent.WithOverrides(LayerVisibility).WithOverridesById(LayerVisibilityById);
 
     internal static int NormalizeRotation(int value, string name)
     {

@@ -129,6 +129,12 @@ public sealed class SvgRenderer
     // Simplification tolerance in effect for the current render: the explicit
     // option, raised to AutoSimplifyTolerance when the op budget is exceeded.
     // 0 disables simplification.
+    // The shown page box (x, y, width, height) of the page being rendered.
+    private (double X, double Y, double W, double H) _box;
+
+    // The page's own display list; nested lists (groups, masks, glyphs) differ.
+    private PageDisplayList? _pageList;
+
     private double _activeSimplifyTolerance;
 
     // v2.1.3 — peephole merge tolerance for adjacent same-fill rectangles.
@@ -165,7 +171,7 @@ public sealed class SvgRenderer
 
         OptionalContentVisibility visibility = _opts.IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
-            : document.Pages[pageIndex].OptionalContent.WithOverrides(_opts.LayerVisibility);
+            : document.Pages[pageIndex].OptionalContent.WithOverrides(_opts.LayerVisibility).WithOverridesById(_opts.LayerVisibilityById);
         PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, visibility, _opts.AnnotationMode);
 
         if (_opts.MaxVectorOps > 0
@@ -233,14 +239,17 @@ public sealed class SvgRenderer
         }
 
         SvgWriter w = new(_opts.Precision);
-        w.StartSvg(list.MediaWidth, list.MediaHeight, EffectiveRotation(list));
+        (double boxX, double boxY, double boxW, double boxH) = DisplayRect(list);
+        _box = (boxX, boxY, boxW, boxH);
+        _pageList = list;
+        w.StartSvg(boxW, boxH, EffectiveRotation(list));
 
         // Opaque page sheet behind all content (unflipped coordinates), so the
         // SVG matches the rasteriser's white paper and composites consistently
         // across viewers. Skipped when Background is null (transparent export).
         if (_opts.Background is ColorF background)
         {
-            w.EmitPageBackground(list.MediaWidth, list.MediaHeight, ToHexColor(background));
+            w.EmitPageBackground(boxW, boxH, ToHexColor(background));
         }
 
         // Build the per-page font-embedding registry BEFORE the page-flip
@@ -251,16 +260,34 @@ public sealed class SvgRenderer
         // order clean.
         Dictionary<string, string> familyByBaseFont = BuildFontRegistry(list, w, resolver);
 
-        // 3.31.2: translate by the MediaBox's lower-left corner (all zeros
-        // when the list was not built from a page, which changes nothing).
-        w.OpenPageFlip(
-            list.MediaHeight,
-            Math.Min(list.MediaBox.X1, list.MediaBox.X2),
-            Math.Min(list.MediaBox.Y1, list.MediaBox.Y2));
+        // 3.31.2: translate by the box's lower-left corner (all zeros when the
+        // list was not built from a page, which changes nothing). 3.32.0 (P2):
+        // the box is the display box, the CropBox by default.
+        w.OpenPageFlip(boxH, boxX, boxY);
 
         RenderOpList(list, w, familyByBaseFont, resolver);
         w.CloseGroup();
         return w.ToSvgString();
+    }
+
+    // The shown page box as (x, y, width, height) in user space: the
+    // CropBox (already intersected with the MediaBox by the display list
+    // builder) unless DisplayBox is MediaBox; a list with no boxes uses its
+    // MediaWidth and MediaHeight at the origin.
+    private (double X, double Y, double W, double H) DisplayRect(PageDisplayList list)
+    {
+        PdfRectangle box = _opts.DisplayBox == PdfDisplayBox.MediaBox ? list.MediaBox : list.CropBox;
+        if (!(box.Width > 0) || !(box.Height > 0))
+        {
+            box = list.MediaBox;
+        }
+
+        if (!(box.Width > 0) || !(box.Height > 0))
+        {
+            return (0, 0, list.MediaWidth, list.MediaHeight);
+        }
+
+        return (Math.Min(box.X1, box.X2), Math.Min(box.Y1, box.Y2), box.Width, box.Height);
     }
 
     // The clockwise view rotation for this page: the requested rotation, plus
@@ -306,20 +333,24 @@ public sealed class SvgRenderer
                 Dpi = _opts.RasterFallbackDpi,
                 IgnoreOptionalContent = _opts.IgnoreOptionalContent,
                 LayerVisibility = _opts.LayerVisibility,
+                LayerVisibilityById = _opts.LayerVisibilityById,
+                DisplayBox = _opts.DisplayBox,
+                AnnotationMode = _opts.AnnotationMode,
             });
         byte[] png = rasterizer.RasterizeToPng(document.Pages[pageIndex]);
         string dataUrl = "data:image/png;base64," + Convert.ToBase64String(png);
 
         SvgWriter w = new(_opts.Precision);
-        w.StartSvg(list.MediaWidth, list.MediaHeight, EffectiveRotation(list));
+        (_, _, double boxW, double boxH) = DisplayRect(list);
+        w.StartSvg(boxW, boxH, EffectiveRotation(list));
         if (_opts.Background is ColorF background)
         {
-            w.EmitPageBackground(list.MediaWidth, list.MediaHeight, ToHexColor(background));
+            w.EmitPageBackground(boxW, boxH, ToHexColor(background));
         }
 
         // The raster is top-down, matching SVG's y-down coordinates: no page
         // flip is opened, and the image covers the page box exactly.
-        w.EmitImage(dataUrl, 0, 0, list.MediaWidth, list.MediaHeight, preserveAspectRatio: "none");
+        w.EmitImage(dataUrl, 0, 0, boxW, boxH, preserveAspectRatio: "none");
         return w.ToSvgString();
     }
 
@@ -448,7 +479,7 @@ public sealed class SvgRenderer
                     FlushPendingFillRect(ref pendingFillRect, w);
                     FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapSh = OpenOpWrappers(sh, w, familyByBaseFont, resolver);
-                    EmitShading(sh, w, list.MediaWidth, list.MediaHeight);
+                    EmitShading(sh, w, list);
                     CloseWrappers(w, wrapSh);
                     break;
                 case TilingPatternOp tp:
@@ -584,7 +615,7 @@ public sealed class SvgRenderer
     // region (bounded by any open clip-path groups) with it. Geometry is in page
     // space; the page-flip group applies equally to the rect and the gradient
     // coordinates, so they stay aligned.
-    private void EmitShading(ShadingOp s, SvgWriter w, double pageWidth, double pageHeight)
+    private void EmitShading(ShadingOp s, SvgWriter w, PageDisplayList list)
     {
         if (s.Stops.Count == 0)
         {
@@ -627,8 +658,16 @@ public sealed class SvgRenderer
         def.Append(s.IsRadial ? "</radialGradient>" : "</linearGradient>");
         w.AddGradientDef(def.ToString());
 
+        // On the page itself the shading paints the whole shown page box (3.32.0:
+        // from the box's own corner, so pages whose box does not start at 0,0 are
+        // covered). Nested lists (transparency groups, soft masks, Type3 glyphs)
+        // keep their own size, as before 3.32.0: SVG does not yet apply those
+        // groups' masks to a shading, and painting it there would darken the page.
+        (double bx, double by, double bw, double bh) = ReferenceEquals(list, _pageList)
+            ? _box
+            : (0, 0, list.MediaWidth, list.MediaHeight);
         string rect = string.Format(CultureInfo.InvariantCulture,
-            "M 0 0 L {0} 0 L {0} {1} L 0 {1} Z", Num(pageWidth), Num(pageHeight));
+            "M {0} {1} L {2} {1} L {2} {3} L {0} {3} Z", Num(bx), Num(by), Num(bx + bw), Num(by + bh));
         w.EmitPath(rect, "url(#" + id + ")", null, 0);
     }
 

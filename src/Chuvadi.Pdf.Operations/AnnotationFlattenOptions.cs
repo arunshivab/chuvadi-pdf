@@ -3,6 +3,8 @@
 // SPEC:  PDF 32000-1:2008 §12.5.5 (appearance streams), §12.7.2 (AcroForm)
 // PHASE: Document operations — annotation/form flattening.
 
+using Chuvadi.Pdf.Documents;
+
 namespace Chuvadi.Pdf.Operations;
 
 /// <summary>
@@ -31,6 +33,33 @@ public sealed class AnnotationFlattenOptions
     /// removes them from the page's <c>/Annots</c>. Defaults to <c>true</c>.
     /// </summary>
     public bool SkipHiddenAndNoView { get; init; } = true;
+
+    /// <summary>
+    /// Bakes only the annotations a viewer or a printer would show (3.32.0).
+    /// Null (the default) keeps the rule of <see cref="SkipHiddenAndNoView"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="AnnotationMode.Print"/>: only annotations with the Print flag
+    /// are baked, as <see cref="AnnotationMode.Print"/> renders them. Hidden and
+    /// Popup annotations are not; NoView is ignored, so print-only stamps are
+    /// baked. <see cref="AnnotationMode.View"/>: every annotation except Hidden,
+    /// NoView and Popup annotations, as the page shows on screen.
+    /// </para>
+    /// <para>
+    /// Annotations of a selected <see cref="Kinds"/> that the mode leaves out are
+    /// removed from the page, so the output holds only what was baked. A form
+    /// field removed this way loses its value with it. When set, this replaces
+    /// <see cref="SkipHiddenAndNoView"/>, which is then ignored.
+    /// </para>
+    /// <para>
+    /// <see cref="AnnotationMode.FormFieldsOnly"/> and
+    /// <see cref="AnnotationMode.None"/> have no meaning for flattening;
+    /// <see cref="AnnotationFlattener.Flatten(System.IO.Stream, PdfDocument, AnnotationFlattenOptions)"/>
+    /// throws <see cref="System.ArgumentException"/> for them.
+    /// </para>
+    /// </remarks>
+    public AnnotationMode? Mode { get; init; }
 
     /// <summary>
     /// After baking, removes every annotation still live — unselected kinds and

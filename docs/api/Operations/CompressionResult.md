@@ -2,7 +2,7 @@
 
 **Record** in `Chuvadi.Pdf.Operations` (Operations)
 
-Statistics describing what `PdfCompressor.Compress` did.
+Statistics describing what `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` did.
 
 ```csharp
 public sealed record CompressionResult
@@ -65,6 +65,30 @@ bool Skipped => SkipReason != CompressionSkipReason.None
 ```
 
 True when the document was left untouched and nothing was written to the output stream because a safety guard fired (see `SkipReason`).
+
+### `Level`
+
+```csharp
+PdfCompressionLevel? Level
+```
+
+The level used when the document was compressed by level (3.32.0), or null for the options-based `PdfCompressor.Compress(PdfDocument, Stream, CompressionOptions?)`.
+
+### `ImageDpi`
+
+```csharp
+double ImageDpi
+```
+
+The resolution of the page images at an image level (3.32.0), or zero at the other levels.
+
+### `BelowReadableResolution`
+
+```csharp
+bool BelowReadableResolution
+```
+
+True when the page images are below `ImageLevelOptions.ReadableDpi` (only possible with `ImageLevelOptions.AllowBelowReadableResolution`), so small text may be hard to read (3.32.0, D-265).
 
 ---
 

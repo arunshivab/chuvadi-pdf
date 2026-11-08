@@ -130,6 +130,22 @@ IReadOnlyDictionary<string, bool>? LayerVisibility
 
 Gets or initialises per-layer visibility overrides (layer name → visible), applied on top of the document's default configuration — for example to drive a layers panel. Ignored when `IgnoreOptionalContent` is true. Default: null (no overrides).
 
+### `LayerVisibilityById`
+
+```csharp
+IReadOnlyDictionary<int, bool>? LayerVisibilityById
+```
+
+Gets or initialises per-layer visibility overrides by layer id (3.32.0): `OptionalContentGroup.Id` → visible. They win over `LayerVisibility` for the same group, and set apart layers that share a name. Ignored when `IgnoreOptionalContent` is true. Default: null.
+
+### `DisplayBox`
+
+```csharp
+PdfDisplayBox DisplayBox
+```
+
+Gets or initialises which page box is rendered (3.32.0, P2). Default: `PdfDisplayBox.CropBox` — the CropBox intersected with the MediaBox, what a viewer shows; content outside it is not drawn, and the output is the box's size with its lower-left corner at the bottom-left pixel. `PdfDisplayBox.MediaBox` renders the whole MediaBox, as before 3.32.0. Pages whose CropBox is absent or equals the MediaBox render the same either way. `PageRasterizer.RenderRegion` is not affected: its region is in absolute user space.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering/RenderOptions.cs`](../../../src/Chuvadi.Pdf.Rendering/RenderOptions.cs)_

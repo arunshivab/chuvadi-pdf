@@ -2948,15 +2948,17 @@ public static class DisplayListBuilder
             // the index bytes would be misread as direct DeviceRGB samples (a
             // third of the data the encoder expects). Expand 8-bit indices to
             // DeviceRGB here so soft-mask compositing and the SVG PNG encoder see
-            // real colour. Sub-8-bit images are not encoded downstream, so only
-            // the 8-bit case needs handling.
+            // real colour. 3.32.0 (D-268): 1, 2 and 4 bits per sample too
+            // (unpacked to one index per pixel first, honouring /Decode);
+            // before, those images were misread. The expanded image is 8-bit.
             byte[]? indexSamples = null;
-            if (format == ImageFormat.Raw && bpc == 8
-                && TryExpandIndexed(stream.Dictionary, pixelData, width, height, out byte[] expandedRgb))
+            if (format == ImageFormat.Raw && bpc is 1 or 2 or 4 or 8
+                && TryExpandIndexed(stream.Dictionary, pixelData, width, height, bpc, out byte[] expandedRgb, out byte[] indices))
             {
-                indexSamples = pixelData;
+                indexSamples = indices;
                 pixelData = expandedRgb;
                 cs = PdfColorSpace.DeviceRgb;
+                bpc = 8;
             }
 
             byte[]? softMaskAlpha = null;
@@ -3296,9 +3298,10 @@ public static class DisplayListBuilder
         // index byte is looked up through the palette's base space and written
         // as a DeviceRGB triple, so the result is width*height*3 bytes.
         private bool TryExpandIndexed(
-            PdfDictionary dict, byte[] indices, int width, int height, out byte[] rgb)
+            PdfDictionary dict, byte[] samples, int width, int height, int bpc, out byte[] rgb, out byte[] indices)
         {
             rgb = Array.Empty<byte>();
+            indices = Array.Empty<byte>();
 
             if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csValue))
             {
@@ -3322,9 +3325,33 @@ public static class DisplayListBuilder
             }
 
             long pixelCount = (long)width * height;
-            if (pixelCount <= 0 || indices.Length < pixelCount)
+            if (pixelCount <= 0)
             {
                 return false;
+            }
+
+            // 8-bit samples without /Decode are the indices themselves (as
+            // before 3.32.0); otherwise unpack and apply /Decode.
+            if (bpc == 8 && !dict.ContainsKey(PdfName.Intern("Decode")))
+            {
+                if (samples.Length < pixelCount)
+                {
+                    return false;
+                }
+
+                indices = samples;
+            }
+            else
+            {
+                int hival = array.Count >= 3 && _doc.Objects.Resolve(array[2]) is PdfInteger hi ? hi.Value : 255;
+                dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? decode);
+                byte[]? unpacked = IndexedSamples.ToIndices(samples, width, height, bpc, decode, _doc.Objects, hival);
+                if (unpacked is null)
+                {
+                    return false;
+                }
+
+                indices = unpacked;
             }
 
             byte[] outRgb = new byte[pixelCount * 3];

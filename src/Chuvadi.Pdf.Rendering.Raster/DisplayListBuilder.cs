@@ -2973,6 +2973,9 @@ public static class DisplayListBuilder
 
         // ── XObject Do ────────────────────────────────────────────────────
 
+        // The XObject being drawn, for example "Im0 12 0 R", or null.
+        private string? _xobjectSubject;
+
         /// <inheritdoc />
         public void InvokeXObject(string name)
         {
@@ -3015,13 +3018,23 @@ public static class DisplayListBuilder
                 return;
             }
 
-            if (subtype.Value == "Image")
+            // 3.32.0 (D-271): names the XObject in a StreamDamaged warning.
+            string? outerSubject = _xobjectSubject;
+            _xobjectSubject = WarningReporter.Describe(name, xobjRef ?? PdfNull.Value);
+            try
             {
-                EmitImageXObject(xobjStream);
+                if (subtype.Value == "Image")
+                {
+                    EmitImageXObject(xobjStream);
+                }
+                else if (subtype.Value == "Form")
+                {
+                    EmitFormXObject(xobjStream, _resources);
+                }
             }
-            else if (subtype.Value == "Form")
+            finally
             {
-                EmitFormXObject(xobjStream, _resources);
+                _xobjectSubject = outerSubject;
             }
         }
 
@@ -3064,6 +3077,12 @@ public static class DisplayListBuilder
             try
             {
                 imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream, _objects);
+            }
+            catch (FilterException damaged)
+            {
+                // 3.32.0 (D-271): say why the image is missing.
+                _reporter.Report(PdfWarningKind.StreamDamaged, "image " + (_xobjectSubject ?? "(direct)"), damaged.Message + " The image is skipped.");
+                return;
             }
             catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
@@ -3148,6 +3167,13 @@ public static class DisplayListBuilder
             if (width <= 0 || height <= 0)
             {
                 return null;
+            }
+
+            // 3.32.0 (D-268): Indexed (palette) images of 1, 2, 4 or 8 bits
+            // per sample. Before, they were skipped (nothing drawn).
+            if (IndexedSpace(dict) is ResolvedColorSpace palette)
+            {
+                return IndexedFrame(dict, palette, samples, width, height, bpc);
             }
 
             int components = ResolveComponentCount(dict);
@@ -3381,6 +3407,67 @@ public static class DisplayListBuilder
         // Number of colour components implied by /ColorSpace: DeviceGray and
         // CalGray are 1, DeviceRGB and CalRGB are 3, and ICCBased defers to
         // its stream's /N. Unsupported spaces return 0.
+        // The image's colour space when it is /Indexed and parses, else null.
+        private ResolvedColorSpace? IndexedSpace(PdfDictionary dict)
+        {
+            if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csRef)
+                || _objects.Resolve(csRef) is not PdfArray array
+                || array.Count == 0
+                || _objects.Resolve(array[0]) is not PdfName family
+                || family.Value != "Indexed")
+            {
+                return null;
+            }
+
+            ResolvedColorSpace? space = ResolvedColorSpace.Parse(array, _objects);
+            return space is not null && space.Kind == ResolvedColorSpace.Family.Indexed ? space : null;
+        }
+
+        // Expands a palette image through its colour space into an RGB frame.
+        private ImageFrame? IndexedFrame(PdfDictionary dict, ResolvedColorSpace palette, byte[] samples, int width, int height, int bpc)
+        {
+            dict.TryGetValue(PdfName.Intern("Decode"), out PdfPrimitive? decode);
+            int hival = (1 << Math.Clamp(bpc, 1, 8)) - 1;
+            if (dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csRef)
+                && _objects.Resolve(csRef) is PdfArray array && array.Count >= 3
+                && _objects.Resolve(array[2]) is PdfInteger hi)
+            {
+                hival = hi.Value;
+            }
+
+            byte[]? indices = IndexedSamples.ToIndices(samples, width, height, bpc, decode, _objects, hival);
+            if (indices is null)
+            {
+                return null;
+            }
+
+            byte[] table = new byte[256 * 3];
+            double[] component = new double[1];
+            for (int i = 0; i < 256; i++)
+            {
+                component[0] = i;
+                double[] rgb = palette.ToRgb(component);
+                table[i * 3] = ToByte(rgb.Length > 0 ? rgb[0] : 0);
+                table[(i * 3) + 1] = ToByte(rgb.Length > 1 ? rgb[1] : 0);
+                table[(i * 3) + 2] = ToByte(rgb.Length > 2 ? rgb[2] : 0);
+            }
+
+            ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
+            for (int y = 0; y < height; y++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                for (int x = 0; x < width; x++)
+                {
+                    int t = indices[((long)y * width) + x] * 3;
+                    frame.Pixels.SetPixelBgra(x, y, table[t + 2], table[t + 1], table[t], 255);
+                }
+            }
+
+            return frame;
+        }
+
+        private static byte ToByte(double value) => (byte)Math.Clamp((int)Math.Round(value * 255.0), 0, 255);
+
         private int ResolveComponentCount(PdfDictionary dict)
         {
             if (!dict.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? csRef))
@@ -3544,19 +3631,38 @@ public static class DisplayListBuilder
             sub._nestingDepth = _nestingDepth + 1;
             sub._reporter = _reporter;
 
-            // A non-group form XObject inherits the graphics state in effect at
-            // the Do, including the constant alpha (ExtGState /ca and /CA). The
-            // fresh worker starts fully opaque, so carry the current alpha over;
-            // otherwise content faded by an enclosing `gs` (e.g. PageOverlay) is
-            // rasterized opaque even though it is correct in the saved PDF.
-            sub._state.FillAlpha = _state.FillAlpha;
-            sub._state.StrokeAlpha = _state.StrokeAlpha;
+            // A form XObject inherits the graphics state in effect at the Do
+            // (PDF 32000-1:2008 §8.10.1), not the defaults: since 3.32.0
+            // (D-259) colours and colour spaces, line style, text state,
+            // constant alpha and blend mode all carry over. Before, only the
+            // alpha did, so a form that paints without setting a colour (as
+            // LibreOffice watermarks do) painted black. Not carried over:
+            //  - the CTM: the form draws in its own space, and the placement
+            //    composes when the nested list is drawn;
+            //  - the clip: it is applied to the nested list (SnapshotClips);
+            //  - fill and stroke patterns: a pattern is defined in the space it
+            //    was set in, so inside a form with its own matrix it would be
+            //    misplaced (unchanged: such a form paints its default colour);
+            //  - the soft mask (unchanged; not applied to forms yet).
+            BuilderGraphicsState inherited = _state.Clone();
+            inherited.Ctm = Transform.Identity;
+            inherited.ActiveClips = new List<ClipPath>();
+            inherited.FillPattern = null;
+            inherited.StrokePattern = null;
+            inherited.SoftMask = null;
+            sub._state = inherited;
 
             byte[] formContent;
 
             try
             {
                 formContent = ContentStreamLoader.Decode(xobjStream);
+            }
+            catch (FilterException damaged)
+            {
+                // 3.32.0 (D-271): say why the form is missing.
+                _reporter.Report(PdfWarningKind.StreamDamaged, "form " + (_xobjectSubject ?? "(appearance)"), damaged.Message + " The form is skipped.");
+                return;
             }
             catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {

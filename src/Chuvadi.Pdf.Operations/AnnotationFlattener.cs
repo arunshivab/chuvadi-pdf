@@ -39,15 +39,44 @@ public static class AnnotationFlattener
     public static void Flatten(Stream output, PdfDocument document) => Flatten(output, document, AnnotationFlattenOptions.Default);
 
     /// <summary>Flattens the document using <paramref name="options"/> and writes the result to <paramref name="output"/>.</summary>
+    /// <exception cref="ArgumentException">
+    /// <see cref="AnnotationFlattenOptions.Mode"/> is not null, <see cref="AnnotationMode.View"/> or <see cref="AnnotationMode.Print"/>.
+    /// </exception>
     public static void Flatten(Stream output, PdfDocument document, AnnotationFlattenOptions options)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
+        if (options.Mode is AnnotationMode mode && mode is not (AnnotationMode.View or AnnotationMode.Print))
+        {
+            throw new ArgumentException(
+                $"AnnotationFlattenOptions.Mode must be View or Print, or null; {mode} has no meaning for flattening.",
+                nameof(options));
+        }
+
         new Worker(document, options).Write(output);
     }
 
     // ── Implementation ────────────────────────────────────────────────────
+
+    // Annotation flags, ISO 32000-1 §12.5.3 Table 165.
+    private const int FlagHidden = 0x2;
+    private const int FlagPrint = 0x4;
+    private const int FlagNoView = 0x20;
+
+    // Whether a viewer (View) or printer (Print) shows an annotation; the same
+    // rule as AnnotationMode in the renderers (3.32.0, D-234).
+    private static bool Shown(AnnotationMode mode, int flags, string? subtype)
+    {
+        if ((flags & FlagHidden) != 0 || subtype == "Popup")
+        {
+            return false;
+        }
+
+        return mode == AnnotationMode.Print
+            ? (flags & FlagPrint) != 0
+            : (flags & FlagNoView) == 0;
+    }
 
     private sealed class Worker
     {
@@ -60,6 +89,10 @@ public static class AnnotationFlattener
 
         private int _nextObjectNumber;
         private bool _flattenedAnyWidget;
+
+        // 3.32.0: a widget that Mode left out counts as handled, so a form
+        // whose widgets were all left out loses its AcroForm too.
+        private bool _removedWidgetByMode;
         private bool _keptWidgetLive;
 
         internal Worker(PdfDocument document, AnnotationFlattenOptions options)
@@ -308,7 +341,7 @@ public static class AnnotationFlattener
         {
             return (_options.Kinds & AnnotationFlattenKinds.FormFields) != 0
                 && _options.RemoveAcroForm
-                && _flattenedAnyWidget
+                && (_flattenedAnyWidget || _removedWidgetByMode)
                 && !_keptWidgetLive
                 && _document.Catalog.ContainsKey(PdfName.Intern("AcroForm"));
         }
@@ -374,9 +407,16 @@ public static class AnnotationFlattener
                 }
 
                 int flags = annot.GetInteger(PdfName.Intern("F"), 0);
-                bool invisible = (flags & 0x2) != 0 || (flags & 0x20) != 0;
-                if (_options.SkipHiddenAndNoView && invisible)
+                bool leaveOut = _options.Mode is AnnotationMode mode
+                    ? !Shown(mode, flags, subtype?.Value)
+                    : _options.SkipHiddenAndNoView && ((flags & FlagHidden) != 0 || (flags & FlagNoView) != 0);
+                if (leaveOut)
                 {
+                    if (isWidget && _options.Mode is not null)
+                    {
+                        _removedWidgetByMode = true;
+                    }
+
                     changed = true;
                     continue;
                 }

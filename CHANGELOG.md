@@ -10,6 +10,177 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.32.0] - 2026-11-09
+
+New API from the Reader and Print asks (D-208, D-221, D-234, D-243,
+D-268 to D-276): signature appearances with text and images, permissions as
+flags, how a file was opened, destination details, layer ids and locks,
+CropBox display, curved-stroke redaction, flatten by print setting, named
+compression levels with colour and black-and-white image levels, and a
+font-descriptor rule. Also fixes to Indexed images, form XObject state,
+Deflate, and rotated pages in the rasterize fallback.
+
+### Added
+- **Signature appearances with text and an image** (1c). Without a
+  pre-rendered stream, a visible signature now shows "Digitally signed by
+  {CN}" and "Date: {UTC time}", sized to fit, inside the 0.5 pt border.
+  - `SignatureAppearance.Text` replaces those lines.
+  - `SignatureAppearance.Image` (JPEG or PNG) is drawn on the left third,
+    or fills the box when there is no text.
+  - Scripts the standard fonts cannot write use the matching LiPi Sans face,
+    embedded as a subset.
+  - `PreRenderedAppearanceStream` still wins when given.
+  - Applies to `Sign`, `SignAsync` and `PdfCounterSigner.AddSignature`.
+  - Any other image format throws `ArgumentException`.
+  - `Chuvadi.Pdf.Signatures` now depends on Forms and Authoring.
+- **Permissions as flags** (2):
+  - `EncryptionInfo.Flags` (`PdfPermissions`), decoded from `/P`;
+  - `EncryptionOptions.PermissionMask(PdfPermissions)`;
+  - `EncryptionOptions.WithPermissions(PdfPermissions)`;
+  - `EncryptionOptions.WithEncryptMetadata(bool)`, so metadata can be left
+    unencrypted.
+- **`EncryptionInfo.EffectiveFlags`** (D-279): `All` when the file was
+  opened with the owner password, otherwise `Flags`. The owner password gives
+  full access, so an app should check this before allowing printing, copying
+  or editing.
+- **How a file was opened** (3, PDF-16): `EncryptionInfo.OpenedWith`
+  (`PdfPasswordKind`: `NoPassword`, `User`, `Owner`). Also
+  `Decryptor.OpenedWith`, `PdfReader.OpenedWith`, and a
+  `StandardSecurityHandler.ValidatePasswordR6` overload that says which
+  password matched.
+- **Destination details** (4):
+  - a new `PdfDestination` type (page index, `PdfDestinationKind`, left, top,
+    right, bottom, zoom);
+  - `OutlineItem.Destination` and `LinkAnnotation.Destination`;
+  - `DestinationReader.GetNamedDestinations(PdfDocument)`.
+- **Layers** (5):
+  - `OptionalContentGroup.IsLocked` and `.Id` (the object number);
+  - `OptionalContentVisibility.WithOverridesById`;
+  - `RenderOptions.LayerVisibilityById` and `SvgExportOptions.LayerVisibilityById`.
+  - Id overrides beat name overrides, and they apply to locked layers too.
+- **`RenderOptions.DisplayBox`, `SvgExportOptions.DisplayBox` and
+  `WpfRenderer.DisplayBox`** (`PdfDisplayBox`: `CropBox`, the default, or
+  `MediaBox`). See Changed.
+- **`AnnotationFlattenOptions.Mode`** (M2). `View` or `Print` flattens what
+  that mode shows and removes the rest; any other value throws
+  `ArgumentException`. Null keeps the 3.31.2 rule.
+- **Named compression levels** (P4, D-243, D-268 to D-274):
+  - `PdfCompressor.Compress(PdfDocument, Stream, PdfCompressionLevel,
+    ImageLevelOptions?, CompressionOptions?)`.
+  - `PdfCompressionLevel`:
+    - `Lossless`;
+    - `Medium` (JPEG 75, 150 dpi);
+    - `High` (JPEG 50, 100 dpi);
+    - three image levels that make every page one image:
+      - `ReducedColor`: up to 16 colours; dark greys become black so thin
+        text stays dark;
+      - `BlackAndWhiteWithColor`: colour marks kept, the rest black and
+        white;
+      - `BlackAndWhite`: 1-bit.
+  - Medium and High also re-encode JPEG images already in the file, and keep
+    the result when it is smaller.
+  - `ImageLevelOptions`:
+    - `Dpi`: 150 by default, 50 to 300 accepted;
+    - `Fills` (`BlackAndWhiteFills.DotPattern` or `Solid`);
+    - `AllowBelowReadableResolution`: below 130 dpi only when set; the result
+      is then flagged in `BelowReadableResolution`.
+  - `CompressionResult.Level`, `.ImageDpi` and `.BelowReadableResolution`.
+- **Target mode by level:**
+  - `CompressToTargetOptions.MaxLevel` and `.ImageOptions`;
+  - `CompressToTargetResult.LevelUsed`, `.ImageDpiUsed` and
+    `.BelowReadableResolution`.
+  - The steps, in order: Lossless, Medium, High, ReducedColor 150,
+    BlackAndWhiteWithColor 150, ReducedColor 130, BlackAndWhiteWithColor 130,
+    BlackAndWhite 150, BlackAndWhite 130. It writes the first output that
+    fits, and never goes below 130 dpi unless allowed.
+  - Each page is rendered once per resolution.
+  - Without `MaxLevel`, target mode is unchanged.
+- **`PdfWarningKind.StreamDamaged`** (D-271). Reported for:
+  - an object stream that cannot be decoded (its objects are missing);
+  - an image or form XObject the raster renderer skips because its data
+    cannot be decoded.
+- **`build/release-assets.ps1`** attaches a release's packages and
+  `SHA256SUMS.txt` to its GitHub release (D-234, D-240). `pack.ps1` now
+  points to it.
+
+### Changed
+- **The CropBox is the shown page** (P2). Raster, SVG and WPF output show
+  the CropBox intersected with the MediaBox, from its own corner.
+  - Pages without a CropBox, or with one equal to the MediaBox, are
+    unchanged; that is every page of the 417-file corpus.
+  - `DisplayBox = PdfDisplayBox.MediaBox` gives the old output.
+  - `RenderRegion`, text extraction and `PdfPage.Width` and `Height` are
+    unchanged.
+- **Redaction cuts curved strokes at the box edges** (P3). Before, a curved
+  stroke crossing a box was removed whole; now the parts outside are kept.
+  - Pieces are kept only when their control hull provably clears every box,
+    so no ink is kept inside a box.
+  - Curved fills crossing a box are still removed whole.
+- **Passwords are tried as owner first** (3). This does not change
+  decryption. A file whose user and owner passwords are the same reports
+  `Owner`.
+- **`PdfPage.Viewports` is read once per page** (6). Repeated calls return
+  the same list.
+- **Font descriptors** (D-244, D-245, D-263, D-275). Every font Chuvadi
+  embeds (`AddTrueTypeFont`, PDF/A substitutes, the LiPi fallback in form
+  fields and signatures) now follows one rule:
+  - `/StemV` is 50 + (weight / 65)², for example 88 for regular and 166 for
+    bold. It was always 80.
+  - `/Flags` add FixedPitch and Serif from the font's own tables.
+  - The LiPi fallback (Identity-H) is Symbolic (4), not Nonsymbolic (32).
+  - `Chuvadi.Pdf.Forms` now depends on `Chuvadi.Pdf.Authoring`.
+- **Invalid Flate streams are rejected** (D-271).
+  - The inflater refuses an over-subscribed Huffman code set, as zlib does.
+    Before, such a stream decoded silently to wrong bytes.
+  - A damaged object stream adds a line to `PdfDocument.Warnings` saying why,
+    and its objects are missing as before. The file still opens unless that
+    stream holds the catalog.
+  - Damaged page content still throws `FilterException` for that page.
+
+### Fixed
+- **Integers outside the 32-bit range** (D-278). One made the whole object
+  fail to parse, so pypdf files with an unsigned `/P` (for example
+  4294966228) did not open. Such a value is now read as a real, and `/P` is
+  taken from its low 32 bits. `PdfWriter` also no longer writes large or
+  tiny reals with an exponent (`4.29497E+09`), which is not PDF syntax.
+- **Indexed (palette) images.** The raster renderer skipped every Indexed
+  image, and SVG misread 1, 2 and 4-bit ones. Both now draw them, honouring
+  `/Decode`. In the corpus, 31 GHS pictograms that were blank now match
+  poppler.
+- **Form XObjects inherit the graphics state at the `Do`** in the raster
+  renderer (D-259): colours, line and text state, alpha and blend mode. For
+  example, a 75% grey LibreOffice "DRAFT" watermark at half transparency
+  printed as dark grey 128 and now prints as about 223.
+- **The Deflate encoder could write a corrupt stream** on very large,
+  skewed input of about 9 MB and up, such as big page PNGs (D-266). Code
+  lengths are now limited correctly. Output is unchanged wherever it was
+  already valid.
+- **`CompressToTarget`'s rasterize fallback kept rotated pages sideways**
+  (R1). They now come out upright.
+- **`AnnotationMode` was dropped** by supersampling, `RenderRegion`,
+  `RenderClipped` and the SVG raster fallback (R2). `RenderRegion` and
+  `RenderClipped` now also keep `LayerVisibilityById`, `DisplayBox` and
+  `ApplyPageRotation`.
+- **`WpfRenderer` ignored the box's corner** (backlog 38). A page whose box
+  does not start at 0,0 is drawn where it is, clipped to the box.
+
+### Tooling
+- `tools/check_style.py`: a member named `Flags` no longer counts as the
+  `[Flags]` attribute (no `using System;` needed).
+
+### Backlog
+- `docs/BACKLOG.md`:
+  - shipped the 3.32.0 plan, PDF-09 and 38;
+  - new tickets:
+    - WPF clipping (Q10);
+    - curved fills in redaction;
+    - SVG shading inside groups;
+    - Indic `ToUnicode` in generated appearances;
+    - the soft mask in effect at a form's `Do`;
+    - annotation `/OC` and print-state layers;
+    - damaged page content drawn blank with a warning (D-276).
+
+---
 ## [3.31.2] - 2026-11-06
 
 Bug fixes (D-207, D-210, D-217, D-219, D-221, D-226): signing real documents,

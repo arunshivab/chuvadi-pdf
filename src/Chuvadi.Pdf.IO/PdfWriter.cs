@@ -667,6 +667,19 @@ public static class PdfWriter
         // Use up to 6 significant digits, no trailing zeros, no scientific notation.
         string formatted = value.ToString("G6", CultureInfo.InvariantCulture);
 
+        // 3.32.0 (D-278): G6 switches to an exponent (1E+06, 4.29496E+09,
+        // 1E-05) for large and tiny values, which is not PDF syntax. Such
+        // values are written in plain digits instead: whole numbers in full
+        // with ".0" (a 32-bit-overflowing integer read as a real round-trips
+        // exactly),
+        // others to 6 decimal places.
+        if (formatted.Contains('E') || formatted.Contains('e'))
+        {
+            formatted = Math.Abs(value) >= 1 && value == Math.Floor(value) && Math.Abs(value) < 1e15
+                ? value.ToString("0", CultureInfo.InvariantCulture)
+                : value.ToString("0.######", CultureInfo.InvariantCulture);
+        }
+
         // Ensure a decimal point is present (PDF requires reals to have one).
         if (!formatted.Contains('.') && !formatted.Contains('E') && !formatted.Contains('e'))
         {

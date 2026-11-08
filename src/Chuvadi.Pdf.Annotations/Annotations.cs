@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Forms;
 using Chuvadi.Pdf.Graphics;
 
 namespace Chuvadi.Pdf.Annotations;
@@ -132,6 +133,14 @@ public sealed class LinkAnnotation : PdfAnnotation
     /// or -1 when the link is external.
     /// </summary>
     public int DestinationPageIndex { get; }
+
+    /// <summary>
+    /// Gets where an internal link goes (3.32.0): the page, and how it is
+    /// shown. Null for an external link, and for a link built with a page
+    /// index only. <see cref="PdfDestination.PageIndex"/> equals
+    /// <see cref="DestinationPageIndex"/> whenever this is set.
+    /// </summary>
+    public PdfDestination? Destination { get; init; }
 }
 
 /// <summary>Free-text annotation drawn directly on the page (§12.5.6.6).</summary>

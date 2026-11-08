@@ -229,6 +229,7 @@ python tools/gen_api_docs.py
 | [OptionalContentVisibility](Documents/OptionalContentVisibility.md) | class | Decides whether optional content (layers) is visible: the document's default configuration (`/OCProperties /D`: `/BaseState`, `/ON`, `/OFF`, and the `/AS` auto-state for viewing), optionally overridden per layer name. |
 | [OptionalContentWriter](Documents/OptionalContentWriter.md) | class | Writes optional-content (layer) visibility changes to a PDF document. |
 | [PageAnnotationAppearances](Documents/PageAnnotationAppearances.md) | class | Collects the drawable annotation appearances of a page: every annotation with a resolvable normal appearance stream that is not hidden and not a popup, together with its §12.5.5 placement. |
+| [PdfDisplayBox](Documents/PdfDisplayBox.md) | enum | Which page box the raster, SVG and WPF renderers show (3.32.0). |
 | [PdfDocument](Documents/PdfDocument.md) | class | Represents an opened PDF document. |
 | [PdfDocumentAsync](Documents/PdfDocumentAsync.md) | class | Async-capable entry points for `PdfDocument`. |
 | [PdfFractionFormat](Documents/PdfFractionFormat.md) | enum | How a number format displays fractional values (Table 261 `/F`). |
@@ -256,6 +257,7 @@ python tools/gen_api_docs.py
 | [EncryptionDictionary](Encryption/EncryptionDictionary.md) | class | Parsed view of a PDF's /Encrypt trailer entry. |
 | [Encryptor](Encryption/Encryptor.md) | class | Encrypts individual strings and streams for writing an encrypted PDF. |
 | [PdfEncryption](Encryption/PdfEncryption.md) | class | Top-level helper for decrypting an encrypted PDF. |
+| [PdfPasswordKind](Encryption/PdfPasswordKind.md) | enum | Which password opened an encrypted document (3.32.0). |
 | [Rc4](Encryption/Rc4.md) | class | RC4 stream cipher. |
 | [StandardSecurityHandler](Encryption/StandardSecurityHandler.md) | class | Standard security handler: derives a file encryption key from a user/owner password and the document's /Encrypt dictionary. |
 
@@ -316,6 +318,7 @@ python tools/gen_api_docs.py
 
 | Type | Kind | Description |
 |---|---|---|
+| [DestinationReader](Forms/DestinationReader.md) | class | Reads a document's named destinations (3.32.0). |
 | [FieldAppearanceGenerator](Forms/FieldAppearanceGenerator.md) | class | Makes a widget's normal appearance stream from the field's value and its `/DA`, `/Q`, `/MK` and flags: text fields (single line, multiline, comb, password), check boxes and radio buttons, combo and list boxes, and push-button captions. |
 | [FormException](Forms/FormException.md) | class | Thrown when an AcroForm or outline operation fails. |
 | [FormField](Forms/FormField.md) | class | A single AcroForm field, read from a PDF document. |
@@ -324,6 +327,8 @@ python tools/gen_api_docs.py
 | [FormReader](Forms/FormReader.md) | class | Reads AcroForm interactive form fields from a PDF document. |
 | [OutlineItem](Forms/OutlineItem.md) | class | A single bookmark in the document outline tree. |
 | [OutlineReader](Forms/OutlineReader.md) | class | Reads the document outline (bookmark) tree from a PDF. |
+| [PdfDestination](Forms/PdfDestination.md) | class | A resolved destination: the target page, and how the page is shown (3.32.0). |
+| [PdfDestinationKind](Forms/PdfDestinationKind.md) | enum | How a destination positions the page in the window (PDF 32000-1:2008 Table 151). |
 
 ## Chuvadi.Pdf.Graphics
 
@@ -402,18 +407,20 @@ python tools/gen_api_docs.py
 | [AnnotationFlattenOptions](Operations/AnnotationFlattenOptions.md) | class | Options controlling `AnnotationFlattener`: which annotation kinds to bake, whether to strip the AcroForm field tree once its widgets are baked, whether to skip invisible annotations, and whether to drop any annotations left live after baking. |
 | [AnnotationFlattener](Operations/AnnotationFlattener.md) | class | Flattens annotations and AcroForm field widgets by baking each annotation's normal appearance stream (`/AP /N`) into the page content as a form XObject, then removing the live annotation. |
 | [BandText](Operations/BandText.md) | class | The left, centre, and right text segments of a header or footer band. |
+| [BlackAndWhiteFills](Operations/BlackAndWhiteFills.md) | enum | How `PdfCompressionLevel.BlackAndWhite` and `PdfCompressionLevel.BlackAndWhiteWithColor` draw large grey fills (3.32.0). |
 | [BookletOptions](Operations/BookletOptions.md) | class | Options for `Imposition.Booklet(System.IO.Stream, Chuvadi.Pdf.Documents.PdfDocument, BookletOptions)`: the size of each source-page slot (the output sheet is twice this width) and the margin around each slot. |
 | [CompressToTargetOptions](Operations/CompressToTargetOptions.md) | record | Options for `PdfCompressor.CompressToTarget`. |
 | [CompressToTargetResult](Operations/CompressToTargetResult.md) | record | The outcome of a `PdfCompressor.CompressToTarget` call. |
-| [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress`. |
-| [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress` did. |
-| [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress` declined to rewrite a document. |
+| [CompressionOptions](Operations/CompressionOptions.md) | record | Options controlling `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)`. |
+| [CompressionResult](Operations/CompressionResult.md) | record | Statistics describing what `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` did. |
+| [CompressionSkipReason](Operations/CompressionSkipReason.md) | enum | Why `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` declined to rewrite a document. |
 | [DocumentInfo](Operations/DocumentInfo.md) | class | Sets document-information metadata (Title, Author, Subject, Keywords) on an existing document and writes the result. |
 | [HeaderFooter](Operations/HeaderFooter.md) | class | Adds running headers and/or footers to a document, with three strategies for how the bands interact with existing content (see `PageContentFit`): overlay in the margins, always reserve-and-scale, or scale only when content intrudes. |
 | [HeaderFooterAlignment](Operations/HeaderFooterAlignment.md) | enum | Horizontal alignment of a header/footer segment within its band. |
 | [HeaderFooterBand](Operations/HeaderFooterBand.md) | enum | Which running band a header/footer segment belongs to. |
 | [HeaderFooterOptions](Operations/HeaderFooterOptions.md) | class | Options controlling header/footer content, geometry, and the content-fit strategy. |
 | [HeaderFooterSegment](Operations/HeaderFooterSegment.md) | class | One header/footer segment exactly as `HeaderFooter.Apply` draws it on a page: token-substituted text plus placement in PDF page coordinates (origin bottom-left, points). |
+| [ImageLevelOptions](Operations/ImageLevelOptions.md) | record | Settings for the image levels (`PdfCompressionLevel.ReducedColor`, `PdfCompressionLevel.BlackAndWhiteWithColor` and `PdfCompressionLevel.BlackAndWhite`), 3.32.0 (D-270). |
 | [Imposition](Operations/Imposition.md) | class | Composes the pages of a source document onto larger sheets: N-up grids and 2-up saddle-stitch booklets. |
 | [ImpositionPlacement](Operations/ImpositionPlacement.md) | class | Where one source page lands on an imposition sheet. |
 | [ImpositionSheet](Operations/ImpositionSheet.md) | class | One output sheet (or booklet sheet side) in an imposition plan. |
@@ -432,6 +439,7 @@ python tools/gen_api_docs.py
 | [PageOverlay](Operations/PageOverlay.md) | class | Recolours existing pages by drawing a solid background fill behind the page content and/or rendering the existing content at reduced opacity. |
 | [PageSelector](Operations/PageSelector.md) | struct | Identifies a single source page for `PageOperations.Assemble(System.IO.Stream, System.Collections.Generic.IReadOnlyList{PageSelector})`: a source document paired with a zero-based page index. |
 | [PageStamper](Operations/PageStamper.md) | class | Stamps a source page onto one or more existing pages of a target document under an affine transform, preserving the rest of the document. |
+| [PdfCompressionLevel](Operations/PdfCompressionLevel.md) | enum | A named compression level, lightest first (3.32.0). |
 | [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | Rewrites a PDF document to a smaller equivalent. |
 | [PdfCompressor](Operations/PdfCompressor.Operations.md) | class | — |
 | [PdfSanitizer](Operations/PdfSanitizer.md) | class | Writes a disarmed copy of a document: no JavaScript, no actions that run on open or on any event, no launch, import, submit or remote actions, no embedded files, no XFA scripts and no multimedia — only what is needed to show the pages. |

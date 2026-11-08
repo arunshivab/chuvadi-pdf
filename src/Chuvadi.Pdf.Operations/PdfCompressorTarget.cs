@@ -4,6 +4,7 @@
 // LA-27 — fold the descending-quality compression loop into one call.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
@@ -35,6 +36,11 @@ public static partial class PdfCompressor
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(output);
         options ??= new CompressToTargetOptions();
+
+        if (options.MaxLevel is PdfCompressionLevel maxLevel)
+        {
+            return CompressToTargetByLevel(document, output, targetBytes, options, maxLevel);
+        }
 
         int low = Math.Clamp(options.MinQuality, 1, 100);
         int high = Math.Clamp(options.MaxQuality, low, 100);
@@ -202,6 +208,9 @@ public static partial class PdfCompressor
 
     // Builds an image-only PDF: each page of the source rasterized at the
     // given DPI and embedded as a JPEG filling a page of the same point size.
+    // 3.32.0 (D-240 R1): the page's /Rotate is applied to the raster, so a
+    // rotated page shows the same way up as in the source (the new page has no
+    // /Rotate of its own and takes the rotated size).
     private static byte[] BuildRasterPdf(PdfDocument document, double dpi, int quality)
     {
         PageRasterizer rasterizer = new PageRasterizer(
@@ -209,6 +218,7 @@ public static partial class PdfCompressor
             new RenderOptions
             {
                 Dpi = dpi,
+                ApplyPageRotation = true,
             });
 
         PdfDocumentBuilder builder = PdfDocumentBuilder.Create();
@@ -248,6 +258,164 @@ public static partial class PdfCompressor
             ? (Array.Empty<byte>(), result.SkipReason)
             : (buffer.ToArray(), CompressionSkipReason.None);
     }
+
+    // 3.32.0 (D-243, D-269, D-274): tries Lossless, Medium, High, reduced
+    // colour 150, black and white with colour 150, reduced colour 130, black
+    // and white with colour 130, black and white 150, black and white 130,
+    // up to maxLevel, and writes the first output that fits; when none fits,
+    // the smallest one. Below 130 dpi only black and white, and only with
+    // leave (D-265).
+    private static CompressToTargetResult CompressToTargetByLevel(
+        PdfDocument document, Stream output, long targetBytes, CompressToTargetOptions options, PdfCompressionLevel maxLevel)
+    {
+        if (!Enum.IsDefined(maxLevel))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), maxLevel, "Unknown compression level in CompressToTargetOptions.MaxLevel.");
+        }
+
+        ImageLevelOptions imageOptions = options.ImageOptions ?? new ImageLevelOptions();
+        imageOptions.Validate(nameof(options));
+
+        byte[]? smallest = null;
+        PdfCompressionLevel smallestLevel = PdfCompressionLevel.Lossless;
+        double smallestDpi = 0;
+
+        CompressToTargetResult Write(byte[] bytes, PdfCompressionLevel level, double dpi)
+        {
+            output.Write(bytes, 0, bytes.Length);
+            return new CompressToTargetResult
+            {
+                FinalSize = bytes.Length,
+                QualityUsed = QualityOf(level),
+                TargetMet = bytes.Length <= targetBytes,
+                SkipReason = CompressionSkipReason.None,
+                LevelUsed = level,
+                ImageDpiUsed = dpi,
+                BelowReadableResolution = dpi > 0 && dpi < ImageLevelOptions.ReadableDpi,
+            };
+        }
+
+        void Track(byte[] bytes, PdfCompressionLevel level, double dpi)
+        {
+            if (smallest is null || bytes.Length < smallest.Length)
+            {
+                smallest = bytes;
+                smallestLevel = level;
+                smallestDpi = dpi;
+            }
+        }
+
+        // Each page is rendered once per resolution: the first image step at a
+        // resolution builds every image level up to maxLevel at it.
+        Dictionary<(PdfCompressionLevel Level, double Dpi), byte[]> built = new Dictionary<(PdfCompressionLevel Level, double Dpi), byte[]>();
+        foreach ((PdfCompressionLevel level, double dpi) in LevelSteps(maxLevel, imageOptions))
+        {
+            byte[] bytes;
+            if (IsImageLevel(level))
+            {
+                if (!built.TryGetValue((level, dpi), out byte[]? cached))
+                {
+                    PdfCompressionLevel[] levels = ImageLevelsFrom(level, maxLevel, dpi);
+                    byte[][] outputs = BuildImageLevels(document, levels, dpi, imageOptions.Fills);
+                    for (int i = 0; i < levels.Length; i++)
+                    {
+                        built[(levels[i], dpi)] = outputs[i];
+                    }
+
+                    cached = built[(level, dpi)];
+                }
+
+                bytes = cached;
+                built.Remove((level, dpi));
+            }
+            else
+            {
+                using MemoryStream buffer = new MemoryStream();
+                CompressionResult result = Compress(document, buffer, OptionsFor(level, options.BaseOptions));
+                if (result.Skipped)
+                {
+                    return WriteOriginal(document, output, targetBytes, result.SkipReason);
+                }
+
+                bytes = buffer.ToArray();
+            }
+
+            if (bytes.Length <= targetBytes)
+            {
+                return Write(bytes, level, dpi);
+            }
+
+            Track(bytes, level, dpi);
+        }
+
+        return Write(smallest!, smallestLevel, smallestDpi);
+    }
+
+    // The image levels from `level` up to maxLevel; below 130 dpi only black
+    // and white is tried.
+    private static PdfCompressionLevel[] ImageLevelsFrom(PdfCompressionLevel level, PdfCompressionLevel maxLevel, double dpi)
+    {
+        if (dpi < ImageLevelOptions.ReadableDpi)
+        {
+            return new[] { level };
+        }
+
+        List<PdfCompressionLevel> levels = new List<PdfCompressionLevel>();
+        for (PdfCompressionLevel l = level; l <= maxLevel; l++)
+        {
+            levels.Add(l);
+        }
+
+        return levels.ToArray();
+    }
+
+    // The level search's steps, in order, up to and including maxLevel. The
+    // rewrite levels carry dpi 0.
+    internal static IEnumerable<(PdfCompressionLevel Level, double Dpi)> LevelSteps(PdfCompressionLevel maxLevel, ImageLevelOptions imageOptions)
+    {
+        for (PdfCompressionLevel level = PdfCompressionLevel.Lossless; level <= maxLevel && !IsImageLevel(level); level++)
+        {
+            yield return (level, 0);
+        }
+
+        // D-274: the colour image levels resolution first (both at 150 dpi,
+        // then both at 130), so the sharper black-and-white-with-colour at
+        // 150 dpi is tried before reduced colour at 130; black and white last.
+        PdfCompressionLevel lastColor = maxLevel < PdfCompressionLevel.BlackAndWhiteWithColor ? maxLevel : PdfCompressionLevel.BlackAndWhiteWithColor;
+        foreach (double resolution in new[] { ImageLevelDpi, ImageLevelOptions.ReadableDpi })
+        {
+            for (PdfCompressionLevel level = PdfCompressionLevel.ReducedColor; level <= lastColor; level++)
+            {
+                yield return (level, resolution);
+            }
+        }
+
+        if (maxLevel >= PdfCompressionLevel.BlackAndWhite)
+        {
+            yield return (PdfCompressionLevel.BlackAndWhite, ImageLevelDpi);
+            yield return (PdfCompressionLevel.BlackAndWhite, ImageLevelOptions.ReadableDpi);
+        }
+
+        if (maxLevel == PdfCompressionLevel.BlackAndWhite
+            && imageOptions.AllowBelowReadableResolution
+            && imageOptions.Dpi < ImageLevelOptions.ReadableDpi)
+        {
+            double floor = imageOptions.Dpi;
+            double dpi = ImageLevelOptions.ReadableDpi;
+            while (dpi > floor)
+            {
+                dpi = Math.Max(Math.Round(dpi * 0.85, 1), floor);
+                yield return (PdfCompressionLevel.BlackAndWhite, dpi);
+            }
+        }
+    }
+
+    private static int QualityOf(PdfCompressionLevel level) => level switch
+    {
+        PdfCompressionLevel.Medium => 75,
+        PdfCompressionLevel.High => 50,
+        _ => 0,
+    };
 
     private static CompressToTargetResult WriteOriginal(
         PdfDocument document, Stream output, long targetBytes, CompressionSkipReason skip)

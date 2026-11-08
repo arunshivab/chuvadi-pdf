@@ -34,6 +34,14 @@ bool SkipHiddenAndNoView
 
 Skips baking annotations flagged Hidden or NoView (they paint nothing), and removes them from the page's `/Annots`. Defaults to `true`.
 
+### `Mode`
+
+```csharp
+AnnotationMode? Mode
+```
+
+Bakes only the annotations a viewer or a printer would show (3.32.0). Null (the default) keeps the rule of `SkipHiddenAndNoView`.
+
 ### `DropRemainingAnnotations`
 
 ```csharp

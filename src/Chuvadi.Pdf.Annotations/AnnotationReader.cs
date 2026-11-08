@@ -194,11 +194,12 @@ public static class AnnotationReader
                 if (actionType is not null && actionType.Value == "GoTo" &&
                     actionDict.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? destPrim))
                 {
-                    int dest = destinations.ResolvePageIndex(destPrim);
-
-                    if (dest >= 0)
+                    if (destinations.ResolveDestination(destPrim) is PdfDestination dest)
                     {
-                        return new LinkAnnotation(pageIndex, rect, dest, contents);
+                        return new LinkAnnotation(pageIndex, rect, dest.PageIndex, contents)
+                        {
+                            Destination = dest,
+                        };
                     }
                 }
             }
@@ -207,11 +208,12 @@ public static class AnnotationReader
         // /Dest: an explicit destination or, since 3.31.2, a named one
         if (dict.TryGetValue(PdfName.Intern("Dest"), out PdfPrimitive? directDest))
         {
-            int dest = destinations.ResolvePageIndex(directDest);
-
-            if (dest >= 0)
+            if (destinations.ResolveDestination(directDest) is PdfDestination dest)
             {
-                return new LinkAnnotation(pageIndex, rect, dest, contents);
+                return new LinkAnnotation(pageIndex, rect, dest.PageIndex, contents)
+                {
+                    Destination = dest,
+                };
             }
         }
 

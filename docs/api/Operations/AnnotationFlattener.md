@@ -32,7 +32,7 @@ __static__
 static void Flatten(Stream output, PdfDocument document, AnnotationFlattenOptions options)
 ```
 
-Flattens the document using `options` and writes the result to `output`.
+Flattens the document using `options` and writes the result to `output`. <exception cref="ArgumentException"> `AnnotationFlattenOptions.Mode` is not null, `AnnotationMode.View` or `AnnotationMode.Print`. </exception>
 
 ---
 

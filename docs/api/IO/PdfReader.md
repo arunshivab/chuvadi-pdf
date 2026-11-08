@@ -10,6 +10,14 @@ public sealed class PdfReader : IDisposable
 
 ## Properties
 
+### `OpenedWith`
+
+```csharp
+PdfPasswordKind? OpenedWith
+```
+
+Gets which password opened the document (3.32.0), or null when the document is not encrypted.
+
 ### `Trailer`
 
 ```csharp

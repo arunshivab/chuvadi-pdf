@@ -13,6 +13,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Filters;
+using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
@@ -21,7 +22,7 @@ using Chuvadi.Pdf.Primitives;
 namespace Chuvadi.Pdf.Operations;
 
 /// <summary>
-/// Options controlling <see cref="PdfCompressor.Compress"/>.
+/// Options controlling <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/>.
 /// </summary>
 public sealed record CompressionOptions
 {
@@ -115,7 +116,7 @@ public sealed record CompressionOptions
 
     /// <summary>
     /// When false (the default), a digitally signed document is not rewritten:
-    /// <see cref="PdfCompressor.Compress"/> returns a result whose
+    /// <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/> returns a result whose
     /// <see cref="CompressionResult.SkipReason"/> is
     /// <see cref="CompressionSkipReason.Signed"/> and writes nothing, because a
     /// full rewrite invalidates the signature byte ranges. Set to true to
@@ -125,7 +126,7 @@ public sealed record CompressionOptions
 
     /// <summary>
     /// When false (the default), an encrypted document is not rewritten:
-    /// <see cref="PdfCompressor.Compress"/> returns a result whose
+    /// <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/> returns a result whose
     /// <see cref="CompressionResult.SkipReason"/> is
     /// <see cref="CompressionSkipReason.Encrypted"/> and writes nothing, because
     /// the reader exposes decrypted content and the rewrite would emit the
@@ -142,10 +143,15 @@ public sealed record CompressionOptions
     /// cost of compression speed. Default false (fast greedy parse).
     /// </summary>
     public bool MaxDeflateStreams { get; init; }
+
+    // 3.32.0 (D-243): also re-encode images already stored as JPEG (single
+    // DCTDecode, gray or RGB, no /Decode), keeping the result only when it is
+    // smaller. Set only by the Medium and High levels; not public.
+    internal bool RecompressJpegImages { get; init; }
 }
 
 /// <summary>
-/// Why <see cref="PdfCompressor.Compress"/> declined to rewrite a document.
+/// Why <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/> declined to rewrite a document.
 /// </summary>
 public enum CompressionSkipReason
 {
@@ -166,7 +172,7 @@ public enum CompressionSkipReason
 }
 
 /// <summary>
-/// Statistics describing what <see cref="PdfCompressor.Compress"/> did.
+/// Statistics describing what <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/> did.
 /// </summary>
 public sealed record CompressionResult
 {
@@ -196,6 +202,25 @@ public sealed record CompressionResult
     /// output stream because a safety guard fired (see <see cref="SkipReason"/>).
     /// </summary>
     public bool Skipped => SkipReason != CompressionSkipReason.None;
+
+    /// <summary>
+    /// The level used when the document was compressed by level (3.32.0), or
+    /// null for the options-based <see cref="PdfCompressor.Compress(PdfDocument, Stream, CompressionOptions?)"/>.
+    /// </summary>
+    public PdfCompressionLevel? Level { get; init; }
+
+    /// <summary>
+    /// The resolution of the page images at an image level (3.32.0), or zero
+    /// at the other levels.
+    /// </summary>
+    public double ImageDpi { get; init; }
+
+    /// <summary>
+    /// True when the page images are below <see cref="ImageLevelOptions.ReadableDpi"/>
+    /// (only possible with <see cref="ImageLevelOptions.AllowBelowReadableResolution"/>),
+    /// so small text may be hard to read (3.32.0, D-265).
+    /// </summary>
+    public bool BelowReadableResolution { get; init; }
 }
 
 /// <summary>
@@ -226,6 +251,120 @@ public sealed record CompressionResult
 /// </remarks>
 public static partial class PdfCompressor
 {
+    /// <summary>
+    /// Compresses <paramref name="document"/> at a named level and writes the
+    /// result to <paramref name="output"/> (3.32.0, D-243, D-268).
+    /// </summary>
+    /// <param name="document">The source document.</param>
+    /// <param name="output">The writable stream receiving the new PDF.</param>
+    /// <param name="level">The level; see <see cref="PdfCompressionLevel"/>.</param>
+    /// <param name="imageOptions">
+    /// Resolution and fills for the image levels; null uses the defaults
+    /// (150 dpi, dot-pattern fills). Ignored at the other levels.
+    /// </param>
+    /// <param name="baseOptions">
+    /// Stripping flags and rewrite-hazard opt-ins; null uses defaults. The image
+    /// settings (<see cref="CompressionOptions.RecompressImages"/>,
+    /// <see cref="CompressionOptions.JpegQuality"/>,
+    /// <see cref="CompressionOptions.DownsampleImagesToDpi"/>) are set by the level.
+    /// </param>
+    /// <returns>
+    /// Statistics about the rewrite, with <see cref="CompressionResult.Level"/> set.
+    /// At an image level the counts are zero (the output is a new image-only
+    /// document) and <see cref="CompressionResult.ImageDpi"/> and
+    /// <see cref="CompressionResult.BelowReadableResolution"/> are set.
+    /// </returns>
+    /// <remarks>
+    /// A signed or encrypted document is skipped exactly as by
+    /// <see cref="Compress(PdfDocument, Stream, CompressionOptions?)"/>, unless
+    /// <paramref name="baseOptions"/> opts in; the image levels drop
+    /// signatures and encryption like any rewrite.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// An unknown level, or an image resolution outside 50 to 300 dpi, or below
+    /// 130 dpi without <see cref="ImageLevelOptions.AllowBelowReadableResolution"/>.
+    /// </exception>
+    public static CompressionResult Compress(
+        PdfDocument document,
+        Stream output,
+        PdfCompressionLevel level,
+        ImageLevelOptions? imageOptions = null,
+        CompressionOptions? baseOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(output);
+        baseOptions ??= new CompressionOptions();
+        imageOptions ??= new ImageLevelOptions();
+        if (!Enum.IsDefined(level))
+        {
+            throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level.");
+        }
+
+        if (IsImageLevel(level))
+        {
+            imageOptions.Validate(nameof(imageOptions));
+            CompressionSkipReason skip = EvaluateGuard(document, baseOptions);
+            if (skip != CompressionSkipReason.None)
+            {
+                return new CompressionResult { SkipReason = skip, Level = level };
+            }
+
+            byte[] pages = BuildImageLevel(document, level, imageOptions.Dpi, imageOptions.Fills);
+            output.Write(pages, 0, pages.Length);
+            return new CompressionResult
+            {
+                Level = level,
+                ImageDpi = imageOptions.Dpi,
+                BelowReadableResolution = imageOptions.Dpi < ImageLevelOptions.ReadableDpi,
+            };
+        }
+
+        CompressionResult result = Compress(document, output, OptionsFor(level, baseOptions));
+        return result with { Level = level };
+    }
+
+    // The image levels' default resolution, and the first rung of each in
+    // target mode (D-243, D-269).
+    internal const double ImageLevelDpi = 150;
+
+    internal static bool IsImageLevel(PdfCompressionLevel level) => level >= PdfCompressionLevel.ReducedColor;
+
+    // Writes the image-only document for an image level.
+    internal static byte[] BuildImageLevel(PdfDocument document, PdfCompressionLevel level, double dpi, BlackAndWhiteFills fills) =>
+        BilevelPageWriter.BuildPages(document, dpi, ImageEncoder(level, fills));
+
+    // Writes the image-only documents for several image levels at one
+    // resolution, rendering each page once.
+    internal static byte[][] BuildImageLevels(PdfDocument document, PdfCompressionLevel[] levels, double dpi, BlackAndWhiteFills fills)
+    {
+        Func<PixelBuffer, PdfStream>[] encoders = new Func<PixelBuffer, PdfStream>[levels.Length];
+        for (int i = 0; i < levels.Length; i++)
+        {
+            encoders[i] = ImageEncoder(levels[i], fills);
+        }
+
+        return BilevelPageWriter.BuildPages(document, dpi, encoders);
+    }
+
+    private static Func<PixelBuffer, PdfStream> ImageEncoder(PdfCompressionLevel level, BlackAndWhiteFills fills)
+    {
+        bool dots = fills == BlackAndWhiteFills.DotPattern;
+        return level switch
+        {
+            PdfCompressionLevel.ReducedColor => PalettePageWriter.ReducedColorImage,
+            PdfCompressionLevel.BlackAndWhiteWithColor => buffer => PalettePageWriter.BlackAndWhiteWithColorImage(buffer, dots),
+            _ => buffer => BilevelPageWriter.BilevelImage(buffer, BilevelPageWriter.ToBits(buffer, dots)),
+        };
+    }
+
+    internal static CompressionOptions OptionsFor(PdfCompressionLevel level, CompressionOptions baseOptions) => level switch
+    {
+        PdfCompressionLevel.Lossless => baseOptions with { RecompressImages = false, RecompressJpegImages = false },
+        PdfCompressionLevel.Medium => baseOptions with { RecompressImages = true, JpegQuality = 75, DownsampleImagesToDpi = 150, SmartCodecSelection = false, RecompressJpegImages = true },
+        PdfCompressionLevel.High => baseOptions with { RecompressImages = true, JpegQuality = 50, DownsampleImagesToDpi = 100, SmartCodecSelection = false, RecompressJpegImages = true },
+        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Not a rewrite level."),
+    };
+
     /// <summary>
     /// Compresses <paramref name="document"/> and writes the result to
     /// <paramref name="output"/>.
@@ -1302,6 +1441,49 @@ public static partial class PdfCompressor
 
     private static readonly Dictionary<int, int> EmptyRemap = new();
 
+    // Decodes a baseline or progressive JPEG to interleaved 8-bit samples
+    // (gray or RGB), or null when it cannot be decoded or does not match the
+    // image dictionary.
+    private static byte[]? DecodeJpegSamples(byte[] jpeg, int width, int height, int components)
+    {
+        ImageFrame frame;
+        try
+        {
+            frame = JpegDecoder.Decode(jpeg);
+        }
+        catch (ImageException)
+        {
+            return null;
+        }
+
+        if (frame.Width != width || frame.Height != height)
+        {
+            return null;
+        }
+
+        byte[] samples = new byte[width * height * components];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                (byte b, byte g, byte r, _) = frame.Pixels.GetPixelBgra(x, y);
+                int i = ((y * width) + x) * components;
+                if (components == 1)
+                {
+                    samples[i] = r;
+                }
+                else
+                {
+                    samples[i] = r;
+                    samples[i + 1] = g;
+                    samples[i + 2] = b;
+                }
+            }
+        }
+
+        return samples;
+    }
+
     // Re-encodes an eligible 8-bit RGB/grayscale image as baseline JPEG.
     // Returns null when the image isn't eligible or JPEG doesn't shrink it.
     private static PdfStream? TryRecompressImage(
@@ -1333,8 +1515,10 @@ public static partial class PdfCompressor
         }
 
         // Only raw or single-Flate sample storage qualifies; everything else
-        // (DCT, CCITT, filter chains) is already compressed or out of scope.
+        // (DCT, CCITT, filter chains) is already compressed or out of scope —
+        // except single-DCT images when RecompressJpegImages is set (3.32.0).
         byte[] samples;
+        bool fromJpeg = false;
         if (!stream.IsFiltered)
         {
             samples = stream.RawBytes;
@@ -1355,6 +1539,23 @@ public static partial class PdfCompressor
             {
                 return null;
             }
+        }
+        else if (options.RecompressJpegImages
+                 && !options.SmartCodecSelection
+                 && stream.Filter is PdfName dct
+                 && FilterRegistry.ResolveAlias(dct.Value) == "DCTDecode"
+                 && !dict.ContainsKey(PdfName.Intern("Decode")))
+        {
+            // 3.32.0 (D-243): the Medium and High levels also re-encode images
+            // already stored as JPEG; the result is kept only when smaller.
+            byte[]? decoded = DecodeJpegSamples(stream.RawBytes, width, height, components);
+            if (decoded is null)
+            {
+                return null;
+            }
+
+            samples = decoded;
+            fromJpeg = true;
         }
         else
         {
@@ -1434,7 +1635,7 @@ public static partial class PdfCompressor
             return null;
         }
 
-        if (!downsampled && jpeg.Length >= stream.RawBytes.Length)
+        if ((fromJpeg || !downsampled) && jpeg.Length >= stream.RawBytes.Length)
         {
             return null;
         }

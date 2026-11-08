@@ -57,13 +57,29 @@ Builds the visibility of `document`'s default configuration, optionally overridi
 OptionalContentVisibility WithOverrides(IReadOnlyDictionary<string, bool>? layerVisibility)
 ```
 
-Returns a copy with layers overridden by name (null or empty keeps this visibility). Overrides replace any earlier ones.
+Returns a copy with layers overridden by name (null or empty keeps this visibility). Overrides replace any earlier name overrides; id overrides (`WithOverridesById`) are kept and win for their groups. Overrides apply to locked layers too.
 
 **Parameters**
 
 - `layerVisibility` — Layer name → visible.
 
 **Returns:** The visibility with the overrides applied.
+
+### `WithOverridesById`
+
+```csharp
+OptionalContentVisibility WithOverridesById(IReadOnlyDictionary<int, bool>? layerVisibility)
+```
+
+Returns a copy with layers overridden by id (3.32.0): the `OptionalContentGroup.Id`, the group's object number. Use it to set apart layers that share a name. Null or empty keeps this visibility. Id overrides replace any earlier id overrides, keep the name overrides, and win over a name override for the same group.
+
+**Parameters**
+
+- `layerVisibility` — Layer id → visible.
+
+**Returns:** The visibility with the overrides applied.
+
+**Remarks:** Overrides apply to locked layers too (`OptionalContentGroup.IsLocked`): the lock stops a viewer's user, not the program (D-230).
 
 ### `IsLayerVisible`
 

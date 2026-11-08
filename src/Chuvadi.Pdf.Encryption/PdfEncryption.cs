@@ -43,22 +43,28 @@ public static class PdfEncryption
                 "Unsupported /Encrypt dictionary (not a standard security handler).");
 
         byte[]? fileKey;
+        PdfPasswordKind openedWith;
 
         if (meta.R == 6)
         {
-            // AES-256 path
+            // AES-256 path. 3.32.0: the owner password is tested first, as
+            // ISO 32000-2 Algorithm 2.A orders it; the file key is the same
+            // either way.
             fileKey = StandardSecurityHandler.ValidatePasswordR6(
                 password,
                 meta.U,
                 meta.UE,
                 meta.O,
                 meta.OE,
-                tryOwnerPassword: true);
+                tryOwnerPassword: true,
+                out bool owner);
 
             if (fileKey is null)
             {
                 return null;
             }
+
+            openedWith = Kind(owner, password);
         }
         else if (meta.R >= 2 && meta.R <= 4)
         {
@@ -68,40 +74,60 @@ public static class PdfEncryption
                 throw new PdfEncryptionException($"Invalid encryption key /Length {meta.KeyBits} bits for /R {meta.R}.");
             }
 
-            // R=2/3/4 path
-            byte[] derived = StandardSecurityHandler.DeriveKeyR4(
-                password,
-                meta.O,
-                meta.Permissions,
-                firstFileId,
-                meta.R,
-                meta.KeyBytes,
-                meta.EncryptMetadata);
+            // R=2/3/4 path. 3.32.0: a non-empty password is tried as the owner
+            // password first (the order ISO 32000-2 gives for R6; PDF 32000-1
+            // gives none for R2–4), then as the user password. Both give the
+            // same file key; only OpenedWith sees the order. The empty
+            // password is tried as the user password only, as before.
+            byte[]? derived = null;
+            bool owner = false;
 
-            bool ok = StandardSecurityHandler.ValidateUserPasswordR4(
-                derived, meta.U, firstFileId, meta.R);
-
-            if (!ok && !string.IsNullOrEmpty(password))
+            if (!string.IsNullOrEmpty(password))
             {
-                // Not the user password: try it as the owner password.
                 string user = StandardSecurityHandler.RecoverUserPasswordR4(password, meta.O, meta.R, meta.KeyBytes);
-                derived = StandardSecurityHandler.DeriveKeyR4(
+                byte[] candidate = StandardSecurityHandler.DeriveKeyR4(
                     user, meta.O, meta.Permissions, firstFileId, meta.R, meta.KeyBytes, meta.EncryptMetadata);
-                ok = StandardSecurityHandler.ValidateUserPasswordR4(derived, meta.U, firstFileId, meta.R);
+                if (StandardSecurityHandler.ValidateUserPasswordR4(candidate, meta.U, firstFileId, meta.R))
+                {
+                    derived = candidate;
+                    owner = true;
+                }
             }
 
-            if (!ok)
+            if (derived is null)
+            {
+                byte[] candidate = StandardSecurityHandler.DeriveKeyR4(
+                    password,
+                    meta.O,
+                    meta.Permissions,
+                    firstFileId,
+                    meta.R,
+                    meta.KeyBytes,
+                    meta.EncryptMetadata);
+                if (StandardSecurityHandler.ValidateUserPasswordR4(candidate, meta.U, firstFileId, meta.R))
+                {
+                    derived = candidate;
+                }
+            }
+
+            if (derived is null)
             {
                 return null;
             }
 
             fileKey = derived;
+            openedWith = Kind(owner, password);
         }
         else
         {
             throw new PdfEncryptionException($"Unsupported encryption revision /R = {meta.R}.");
         }
 
-        return new Decryptor(fileKey, meta.Algorithm);
+        return new Decryptor(fileKey, meta.Algorithm) { OpenedWith = openedWith };
     }
+
+    private static PdfPasswordKind Kind(bool owner, string password) =>
+        owner ? PdfPasswordKind.Owner
+        : string.IsNullOrEmpty(password) ? PdfPasswordKind.NoPassword
+        : PdfPasswordKind.User;
 }

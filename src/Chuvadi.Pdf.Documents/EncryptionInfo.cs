@@ -5,6 +5,7 @@
 // PHASE: v2.0.0 — read-side encryption introspection
 
 using Chuvadi.Pdf.Encryption;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Documents;
 
@@ -101,6 +102,48 @@ public sealed class EncryptionInfo
 
     /// <summary>Bit 12 — Print the document at high quality (R≥3).</summary>
     public bool AllowPrintHighQuality => (Permissions & PrintHighQualityBit) != 0;
+
+    /// <summary>
+    /// Gets which password opened the document (3.32.0, D-208 item 3), or
+    /// null when this instance was not made by <see cref="PdfDocument"/>.
+    /// </summary>
+    /// <remarks>
+    /// A password is tested as the owner password first, then as the user
+    /// password, so one that is both reports
+    /// <see cref="PdfPasswordKind.Owner"/>. The owner password lifts the
+    /// <see cref="Permissions"/> restrictions for whoever holds it.
+    /// </remarks>
+    public PdfPasswordKind? OpenedWith { get; init; }
+
+    /// <summary>
+    /// Gets the allowed actions as flags (3.32.0): the same eight answers as
+    /// the <c>Allow…</c> properties, decoded from <see cref="Permissions"/>.
+    /// </summary>
+    public PdfPermissions Flags =>
+        (AllowPrint ? PdfPermissions.Print : PdfPermissions.None)
+        | (AllowModify ? PdfPermissions.ModifyContents : PdfPermissions.None)
+        | (AllowCopy ? PdfPermissions.CopyContents : PdfPermissions.None)
+        | (AllowAnnotate ? PdfPermissions.ModifyAnnotations : PdfPermissions.None)
+        | (AllowFillForms ? PdfPermissions.FillForms : PdfPermissions.None)
+        | (AllowAccessibilityExtract ? PdfPermissions.ExtractAccessibility : PdfPermissions.None)
+        | (AllowAssemble ? PdfPermissions.Assemble : PdfPermissions.None)
+        | (AllowPrintHighQuality ? PdfPermissions.PrintHighQuality : PdfPermissions.None);
+
+    /// <summary>
+    /// Gets what whoever opened the document may do (3.32.0, D-279):
+    /// <see cref="PdfPermissions.All"/> when it was opened with the owner
+    /// password, otherwise <see cref="Flags"/>.
+    /// </summary>
+    /// <remarks>
+    /// The permissions in <see cref="Permissions"/> restrict a user who opens
+    /// the document with the user password (or with none); the owner password
+    /// gives full access (PDF 32000-1:2008 §7.6.3.1). So an app that offers
+    /// printing, copying or editing should check this property, not
+    /// <see cref="Flags"/> or the <c>Allow…</c> properties, which report what
+    /// the file states whichever password was used. When
+    /// <see cref="OpenedWith"/> is null this is <see cref="Flags"/>.
+    /// </remarks>
+    public PdfPermissions EffectiveFlags => OpenedWith == PdfPasswordKind.Owner ? PdfPermissions.All : Flags;
 
     // ── Permission-bit constants ──────────────────────────────────────────
     // PDF spec uses 1-indexed bit positions; the constant is (1 << (N - 1)).

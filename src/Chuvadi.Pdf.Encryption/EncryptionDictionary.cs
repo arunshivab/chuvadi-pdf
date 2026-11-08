@@ -80,7 +80,7 @@ public sealed class EncryptionDictionary
         e.V = GetInt(dict, "V", 0);
         e.R = GetInt(dict, "R", 0);
         e.KeyBits = GetInt(dict, "Length", 40);
-        e.Permissions = GetInt(dict, "P", -3904);
+        e.Permissions = GetPermissions(dict);
         e.O = GetBytes(dict, "O");
         e.U = GetBytes(dict, "U");
         e.OE = GetBytes(dict, "OE");
@@ -138,6 +138,27 @@ public sealed class EncryptionDictionary
             "AESV2" => EncryptionAlgorithm.Aes_128,
             _ => EncryptionAlgorithm.None,
         };
+    }
+
+    // /P is a 32-bit field. A writer that stores it unsigned (pypdf writes
+    // 4294963392 for -3904) gives a number above the 32-bit range, which the
+    // parser keeps as a real (3.32.0, D-278); its low 32 bits are the field.
+    private static int GetPermissions(PdfDictionary dict)
+    {
+        if (dict.TryGetValue(PdfName.Intern("P"), out PdfPrimitive? p))
+        {
+            if (p is PdfInteger i)
+            {
+                return i.Value;
+            }
+
+            if (p is PdfReal r && double.IsFinite(r.Value) && Math.Abs(r.Value) < 9.2e18 && r.Value == Math.Floor(r.Value))
+            {
+                return unchecked((int)(long)r.Value);
+            }
+        }
+
+        return -3904;
     }
 
     private static int GetInt(PdfDictionary dict, string key, int defaultValue)

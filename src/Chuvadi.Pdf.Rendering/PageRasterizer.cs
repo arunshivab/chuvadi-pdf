@@ -141,7 +141,8 @@ public sealed class PageRasterizer
             throw new PdfCorruptionException("The page has an empty or invalid MediaBox.");
         }
 
-        (int finalW, int finalH) = _options.PixelSize(page.Width, page.Height);
+        PdfRectangle box = DisplayRect(page, _options.DisplayBox);
+        (int finalW, int finalH) = _options.PixelSize(box.Width, box.Height);
         PdfWorkScope.CheckOutputPixels(finalW, finalH);
         int rotation = _options.Rotation;
         if (_options.ApplyPageRotation)
@@ -178,17 +179,22 @@ public sealed class PageRasterizer
             AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
             IgnoreOptionalContent = _options.IgnoreOptionalContent,
             LayerVisibility = _options.LayerVisibility,
+            LayerVisibilityById = _options.LayerVisibilityById,
+            DisplayBox = _options.DisplayBox,
+            AnnotationMode = _options.AnnotationMode,
         };
 
         PixelBuffer big = RasterizeInternal(page, hi);
-        (int dstW, int dstH) = _options.PixelSize(page.Width, page.Height);
+        PdfRectangle box = DisplayRect(page, _options.DisplayBox);
+        (int dstW, int dstH) = _options.PixelSize(box.Width, box.Height);
         return Downsample(big, dstW, dstH, s);
     }
 
     private PixelBuffer RasterizeInternal(PdfPage page, RenderOptions options)
     {
-        double pageW = page.Width;
-        double pageH = page.Height;
+        PdfRectangle box = DisplayRect(page, options.DisplayBox);
+        double pageW = box.Width;
+        double pageH = box.Height;
 
         (int pixW, int pixH) = options.PixelSize(pageW, pageH);
         PdfWorkScope.ChargeMemory((long)pixW * pixH * 4);
@@ -205,17 +211,38 @@ public sealed class PageRasterizer
             return buffer;
         }
 
-        // 3.31.2: the MediaBox's lower-left corner maps to the bottom-left
-        // pixel, so a page whose box does not start at 0,0 (every cropped
-        // page, for example) is drawn where it is, as RenderRegion already
-        // does for a region. Before, content was drawn shifted by the box's
-        // origin, and pages such as [50 450 400 770] came out blank.
-        PdfRectangle media = page.MediaBox;
-        Transform outer = Transform.CreateTranslation(-Math.Min(media.X1, media.X2), -Math.Min(media.Y1, media.Y2));
+        // 3.31.2: the box's lower-left corner maps to the bottom-left pixel, so
+        // a page whose box does not start at 0,0 (every cropped page, for
+        // example) is drawn where it is, as RenderRegion already does for a
+        // region. 3.32.0 (P2): the box is the display box, the CropBox by
+        // default; content outside it falls outside the buffer.
+        Transform outer = Transform.CreateTranslation(-box.X1, -box.Y1);
         PageRasterizer painter = new PageRasterizer(_objects, options);
         painter.PaintDisplayList(list, buffer, pageH, outer);
         return buffer;
     }
+
+    // The rendered page box, normalised (X1/Y1 the lower-left corner). For
+    // CropBox: the CropBox intersected with the MediaBox (PDF 32000-1:2008
+    // §14.11.2); when they do not overlap, the MediaBox.
+    internal static PdfRectangle DisplayRect(PdfPage page, PdfDisplayBox which)
+    {
+        PdfRectangle media = Normalised(page.MediaBox);
+        if (which == PdfDisplayBox.MediaBox)
+        {
+            return media;
+        }
+
+        PdfRectangle crop = Normalised(page.CropBox);
+        double x1 = Math.Max(media.X1, crop.X1);
+        double y1 = Math.Max(media.Y1, crop.Y1);
+        double x2 = Math.Min(media.X2, crop.X2);
+        double y2 = Math.Min(media.Y2, crop.Y2);
+        return x2 > x1 && y2 > y1 ? new PdfRectangle(x1, y1, x2, y2) : media;
+    }
+
+    private static PdfRectangle Normalised(PdfRectangle r) =>
+        new PdfRectangle(Math.Min(r.X1, r.X2), Math.Min(r.Y1, r.Y2), Math.Max(r.X1, r.X2), Math.Max(r.Y1, r.Y2));
 
     // Exact pixel rotation (no resampling) for the clockwise view rotation.
     private static PixelBuffer RotateClockwise(PixelBuffer src, int rotation)
@@ -527,6 +554,10 @@ public sealed class PageRasterizer
             AutohintUnhintedFonts = _options.AutohintUnhintedFonts,
             IgnoreOptionalContent = _options.IgnoreOptionalContent,
             LayerVisibility = _options.LayerVisibility,
+            LayerVisibilityById = _options.LayerVisibilityById,
+            AnnotationMode = _options.AnnotationMode,
+            ApplyPageRotation = _options.ApplyPageRotation,
+            DisplayBox = _options.DisplayBox,
         };
     }
 

@@ -32,6 +32,14 @@ int DestinationPageIndex
 
 Gets the zero-based page index the bookmark points to, or -1 when the destination cannot be resolved to a page.
 
+### `Destination`
+
+```csharp
+PdfDestination? Destination
+```
+
+Gets where the bookmark goes (3.32.0): the page, and how it is shown, or null when the destination cannot be resolved to a page. `PdfDestination.PageIndex` equals `DestinationPageIndex` whenever this is set.
+
 ### `Children`
 
 ```csharp

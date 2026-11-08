@@ -2,7 +2,7 @@
 
 **Enum** in `Chuvadi.Pdf.Operations` (Operations)
 
-Why `PdfCompressor.Compress` declined to rewrite a document.
+Why `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` declined to rewrite a document.
 
 ```csharp
 public enum CompressionSkipReason

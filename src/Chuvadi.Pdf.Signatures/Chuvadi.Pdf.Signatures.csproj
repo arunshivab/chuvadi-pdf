@@ -20,6 +20,10 @@
     <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
     <ProjectReference Include="..\Chuvadi.Cryptography\Chuvadi.Cryptography.csproj" />
+    <!-- 3.32.0 (D-230 Q1): the default signature appearance draws text with the
+         form-field appearance code and embeds JPEG/PNG images. -->
+    <ProjectReference Include="..\Chuvadi.Pdf.Forms\Chuvadi.Pdf.Forms.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
   </ItemGroup>
 
 </Project>

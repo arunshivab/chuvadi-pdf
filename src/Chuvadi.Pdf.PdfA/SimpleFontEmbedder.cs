@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -72,7 +73,7 @@ internal static class SimpleFontEmbedder
         descriptor.Set(PdfName.Intern("Ascent"), metrics.Ascent);
         descriptor.Set(PdfName.Intern("Descent"), metrics.Descent);
         descriptor.Set(PdfName.Intern("CapHeight"), metrics.CapHeight);
-        descriptor.Set(PdfName.Intern("StemV"), 80);
+        descriptor.Set(PdfName.Intern("StemV"), metrics.StemV);
         descriptor.Set(PdfName.Intern("MissingWidth"), 0);
         descriptor.Set(PdfName.Intern("FontFile2"), new PdfReference(fontFileId));
         PdfIndirectObject descriptorObj = new PdfIndirectObject(descriptorId, descriptor);
@@ -119,7 +120,7 @@ internal static class SimpleFontEmbedder
 
     private sealed record DescriptorMetrics(
         int Flags, int XMin, int YMin, int XMax, int YMax,
-        double ItalicAngle, int Ascent, int Descent, int CapHeight)
+        double ItalicAngle, int Ascent, int Descent, int CapHeight, int StemV)
     {
         internal static DescriptorMetrics Read(byte[] ttf, int unitsPerEm, bool serif)
         {
@@ -152,19 +153,22 @@ internal static class SimpleFontEmbedder
 
             double italicAngle = post >= 0 ? S32(ttf, post + 4) / 65536.0 : 0.0;
 
-            // Nonsymbolic (32); add Serif (2) and Italic (64) as applicable.
-            int flags = 32;
+            // 3.32.0 (D-244, D-245): the shared policy. Nonsymbolic (32), plus
+            // Italic, FixedPitch and Serif from the font's tables; the
+            // substitute's serif choice still sets Serif as before.
+            FontDescriptorPolicy.Inputs inputs = FontDescriptorPolicy.Read(ttf);
+            int flags = FontDescriptorPolicy.Flags(
+                symbolic: false,
+                italic: (macStyle & 0x2) != 0 || italicAngle != 0.0,
+                fixedPitch: inputs.FixedPitch,
+                familyClass: inputs.FamilyClass);
             if (serif)
             {
-                flags |= 2;
+                flags |= FontDescriptorPolicy.Serif;
             }
 
-            if ((macStyle & 0x2) != 0 || italicAngle != 0.0)
-            {
-                flags |= 64;
-            }
-
-            return new DescriptorMetrics(flags, xMin, yMin, xMax, yMax, italicAngle, ascent, descent, capHeight);
+            return new DescriptorMetrics(flags, xMin, yMin, xMax, yMax, italicAngle, ascent, descent, capHeight,
+                FontDescriptorPolicy.StemV(inputs.WeightClass));
         }
 
         private static Dictionary<string, int> ReadTableDirectory(byte[] ttf)

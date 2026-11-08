@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using Chuvadi.Fonts;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Fonts;
 using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.Objects;
@@ -411,7 +412,11 @@ internal sealed class AppearanceText
                 PdfDictionary fd = new PdfDictionary();
                 fd.Set(PdfName.Intern("Type"), PdfName.Intern("FontDescriptor"));
                 fd.Set(PdfName.Intern("FontName"), PdfName.Intern(psName));
-                fd.Set(PdfName.Intern("Flags"), 32);
+                // 3.32.0 (D-245, D-263, D-275): one descriptor rule for every
+                // font Chuvadi embeds. Identity-H makes this font Symbolic.
+                FontDescriptorPolicy.Inputs metrics = FontDescriptorPolicy.Read(face.FontProgram);
+                bool italic = metrics.MacStyleItalic || metrics.ItalicAngle != 0;
+                fd.Set(PdfName.Intern("Flags"), FontDescriptorPolicy.Flags(symbolic: true, italic, metrics.FixedPitch, metrics.FamilyClass));
                 fd.Set(PdfName.Intern("FontBBox"), new PdfArray(new PdfPrimitive[]
                 {
                     new PdfReal(face.FontBounds.XMin * k), new PdfReal(face.FontBounds.YMin * k),
@@ -421,7 +426,7 @@ internal sealed class AppearanceText
                 fd.Set(PdfName.Intern("Ascent"), new PdfReal(face.HheaAscender * k));
                 fd.Set(PdfName.Intern("Descent"), new PdfReal(face.HheaDescender * k));
                 fd.Set(PdfName.Intern("CapHeight"), new PdfReal(face.HheaAscender * k));
-                fd.Set(PdfName.Intern("StemV"), 80);
+                fd.Set(PdfName.Intern("StemV"), FontDescriptorPolicy.StemV(metrics.WeightClass));
                 PdfDictionary ff = new PdfDictionary();
                 ff.Set(PdfName.Intern("Length"), face.FontProgram.Length);
                 ff.Set(PdfName.Intern("Length1"), face.FontProgram.Length);

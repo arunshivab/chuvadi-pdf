@@ -3,7 +3,8 @@
 // SPEC:  PDF 32000-1:2008 §12.3.2 — Destinations
 //        PDF 32000-1:2008 §7.7.3  — Page tree
 //        PDF 32000-1:2008 §7.9.6  — Name trees (named destinations)
-// PHASE: 3.31.2 (D-207, D-219) — shared by outlines and link annotations
+// PHASE: 3.31.2 (D-207, D-219) — shared by outlines and link annotations;
+//        3.32.0 (D-208 item 4) — kind and coordinates too
 //
 // Resolves a destination (explicit array, named destination, or a dictionary
 // wrapping either under /D) to a zero-based page index. Page indexes come from
@@ -55,7 +56,16 @@ internal sealed class DestinationResolver
     /// Returns the zero-based page index <paramref name="destination"/> points
     /// at, or -1 when it cannot be resolved.
     /// </summary>
-    internal int ResolvePageIndex(PdfPrimitive destination)
+    internal int ResolvePageIndex(PdfPrimitive destination) =>
+        ResolveDestination(destination)?.PageIndex ?? -1;
+
+    /// <summary>
+    /// Resolves <paramref name="destination"/> (an explicit array, a named
+    /// destination, or a dictionary wrapping either under <c>/D</c>) to its
+    /// page, kind and coordinates (3.32.0), or null when the page cannot be
+    /// resolved.
+    /// </summary>
+    internal PdfDestination? ResolveDestination(PdfPrimitive destination)
     {
         PdfPrimitive resolved = _store.Resolve(destination);
 
@@ -66,7 +76,7 @@ internal sealed class DestinationResolver
             string key = System.Text.Encoding.Latin1.GetString(nameString.Bytes);
             if (!NamedDestinations.TryGetValue(key, out PdfPrimitive? mapped))
             {
-                return -1;
+                return null;
             }
 
             resolved = _store.Resolve(mapped);
@@ -75,7 +85,7 @@ internal sealed class DestinationResolver
         {
             if (!NamedDestinations.TryGetValue(name.Value, out PdfPrimitive? mapped))
             {
-                return -1;
+                return null;
             }
 
             resolved = _store.Resolve(mapped);
@@ -91,10 +101,58 @@ internal sealed class DestinationResolver
 
         if (resolved is PdfArray destArray && destArray.Count > 0)
         {
-            return PageIndexFromDestArray(destArray);
+            int pageIndex = PageIndexFromDestArray(destArray);
+            return pageIndex < 0 ? null : ReadView(destArray, pageIndex);
         }
 
-        return -1;
+        return null;
+    }
+
+    // Reads the kind and its operands (PDF 32000-1:2008 Table 151). A missing
+    // or unknown kind reads as /XYZ with every value null: keep the view.
+    private PdfDestination ReadView(PdfArray dest, int pageIndex)
+    {
+        string kind = dest.Count > 1 && _store.Resolve(dest[1]) is PdfName n ? n.Value : string.Empty;
+        return kind switch
+        {
+            "Fit" => new PdfDestination(pageIndex, PdfDestinationKind.Fit),
+            "FitB" => new PdfDestination(pageIndex, PdfDestinationKind.FitB),
+            "FitH" => new PdfDestination(pageIndex, PdfDestinationKind.FitH) { Top = Number(dest, 2) },
+            "FitBH" => new PdfDestination(pageIndex, PdfDestinationKind.FitBH) { Top = Number(dest, 2) },
+            "FitV" => new PdfDestination(pageIndex, PdfDestinationKind.FitV) { Left = Number(dest, 2) },
+            "FitBV" => new PdfDestination(pageIndex, PdfDestinationKind.FitBV) { Left = Number(dest, 2) },
+            "FitR" => new PdfDestination(pageIndex, PdfDestinationKind.FitR)
+            {
+                Left = Number(dest, 2),
+                Bottom = Number(dest, 3),
+                Right = Number(dest, 4),
+                Top = Number(dest, 5),
+            },
+            "XYZ" => new PdfDestination(pageIndex, PdfDestinationKind.XYZ)
+            {
+                Left = Number(dest, 2),
+                Top = Number(dest, 3),
+                Zoom = Number(dest, 4) is double z && z != 0 ? z : null,
+            },
+            _ => new PdfDestination(pageIndex, PdfDestinationKind.XYZ),
+        };
+    }
+
+    // A number operand, or null for null, a missing operand or a non-number.
+    private double? Number(PdfArray dest, int index)
+    {
+        if (index >= dest.Count)
+        {
+            return null;
+        }
+
+        double? value = _store.Resolve(dest[index]) switch
+        {
+            PdfInteger i => i.Value,
+            PdfReal r => r.Value,
+            _ => null,
+        };
+        return value is double v && double.IsFinite(v) ? v : null;
     }
 
     // First element of a destination array is the target page: an indirect

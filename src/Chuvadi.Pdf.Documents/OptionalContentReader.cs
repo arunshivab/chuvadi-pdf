@@ -57,6 +57,7 @@ public static class OptionalContentReader
         // Default config /D — drives initial visibility.
         HashSet<int> onSet = new HashSet<int>();
         HashSet<int> offSet = new HashSet<int>();
+        HashSet<int> lockedSet = new HashSet<int>();
         string baseState = "ON";
 
         if (ocProps.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? dPrim))
@@ -66,6 +67,7 @@ public static class OptionalContentReader
             {
                 CollectStateReferences(defaultConfig, store, PdfName.Intern("ON"), onSet);
                 CollectStateReferences(defaultConfig, store, PdfName.Intern("OFF"), offSet);
+                CollectStateReferences(defaultConfig, store, PdfName.Intern("Locked"), lockedSet);
 
                 PdfName? bs = defaultConfig.GetName(PdfName.Intern("BaseState"));
                 if (bs is not null)
@@ -133,7 +135,11 @@ public static class OptionalContentReader
                 }
             }
 
-            result.Add(new OptionalContentGroup(name, visible, intents));
+            result.Add(new OptionalContentGroup(name, visible, intents)
+            {
+                Id = objectNum,
+                IsLocked = objectNum >= 0 && lockedSet.Contains(objectNum),
+            });
         }
 
         return result;

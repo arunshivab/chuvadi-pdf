@@ -143,6 +143,22 @@ bool AllowPrintHighQuality => (Permissions & PrintHighQualityBit) != 0
 
 Bit 12 — Print the document at high quality (R≥3).
 
+### `OpenedWith`
+
+```csharp
+PdfPasswordKind? OpenedWith
+```
+
+Gets which password opened the document (3.32.0, D-208 item 3), or null when this instance was not made by `PdfDocument`.
+
+### `EffectiveFlags`
+
+```csharp
+PdfPermissions EffectiveFlags => OpenedWith == PdfPasswordKind.Owner ? PdfPermissions.All : Flags
+```
+
+Gets what whoever opened the document may do (3.32.0, D-279): `PdfPermissions.All` when it was opened with the owner password, otherwise `Flags`.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/EncryptionInfo.cs`](../../../src/Chuvadi.Pdf.Documents/EncryptionInfo.cs)_

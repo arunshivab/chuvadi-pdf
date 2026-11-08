@@ -204,7 +204,7 @@ public static class FontEmbedder
         descriptor.Set(PdfName.Intern("Ascent"), metrics.Ascent);
         descriptor.Set(PdfName.Intern("Descent"), metrics.Descent);
         descriptor.Set(PdfName.Intern("CapHeight"), metrics.CapHeight);
-        descriptor.Set(PdfName.Intern("StemV"), 80);
+        descriptor.Set(PdfName.Intern("StemV"), metrics.StemV);
         descriptor.Set(PdfName.Intern(isCff ? "FontFile3" : "FontFile2"), new PdfReference(fontFileId));
         objects.Add(new PdfIndirectObject(descriptorId, descriptor));
 
