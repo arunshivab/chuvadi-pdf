@@ -9,3 +9,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Chuvadi.Pdf.IO.Tests")]
+
+// 3.32.1 (D-280): PdfDocument.Open uses PdfReader.OpenRepaired for
+// PdfOpenOptions.RepairIfDamaged.
+[assembly: InternalsVisibleTo("Chuvadi.Pdf.Documents")]

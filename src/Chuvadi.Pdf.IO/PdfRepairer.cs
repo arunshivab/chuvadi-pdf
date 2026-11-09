@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §7.5 — File structure, §7.5.7 — Object streams,
 //        §7.5.8 — Cross-reference streams
-// PHASE: Phase 1 — Chuvadi.Pdf.IO
+// PHASE: Phase 1 — Chuvadi.Pdf.IO; 3.32.1 (D-280) — the repair used by
+//        PdfOpenOptions.RepairIfDamaged keeps the encryption entries and adds
+//        no metadata.
 // Reconstructs a damaged PDF by scanning the raw bytes for every object,
 // rebuilding the trailer, and re-emitting a clean classic-xref file.
 
@@ -44,7 +46,19 @@ public static class PdfRepairer
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
+        return Repair(input, output, forOpening: false);
+    }
 
+    /// <summary>
+    /// The repair behind <see cref="Repair(Stream, Stream)"/>. With
+    /// <paramref name="forOpening"/> (3.32.1, D-280: the in-memory repair of
+    /// <c>PdfOpenOptions.RepairIfDamaged</c>) the rebuilt trailer keeps the
+    /// file's <c>/Encrypt</c> and <c>/ID</c>, so an encrypted file can still be
+    /// decrypted, and no <c>/Info</c> or XMP metadata is added, so the document
+    /// opened shows the file's own metadata.
+    /// </summary>
+    internal static RepairReport Repair(Stream input, Stream output, bool forOpening)
+    {
         byte[] bytes = ReadAllBytes(input);
         List<string> warnings = new List<string>();
 
@@ -103,12 +117,12 @@ public static class PdfRepairer
 
         // Recover candidate /Root and /Info from any classic trailer and from any
         // cross-reference stream dictionary.
-        PdfPrimitive? rootCandidate = null;
-        PdfPrimitive? infoCandidate = null;
-        ScanClassicTrailers(bytes, ref rootCandidate, ref infoCandidate);
+        TrailerCandidates candidates = new TrailerCandidates();
+        ScanClassicTrailers(bytes, candidates);
 
         // Pull objects out of object streams; capture xref-stream /Root and /Info.
         int fromObjectStreams = 0;
+        int objectStreamCount = 0;
         List<PdfIndirectObject> extracted = new List<PdfIndirectObject>();
         List<int> containerNumbers = new List<int>();
         foreach (KeyValuePair<int, PdfIndirectObject> entry in objects)
@@ -124,12 +138,13 @@ public static class PdfRepairer
             if (string.Equals(typeName, "ObjStm", StringComparison.Ordinal))
             {
                 containerNumbers.Add(entry.Key);
+                objectStreamCount++;
                 ExtractObjectStream(stream, extracted, warnings);
             }
             else if (string.Equals(typeName, "XRef", StringComparison.Ordinal))
             {
                 containerNumbers.Add(entry.Key);
-                CaptureRootInfo(stream.Dictionary, ref rootCandidate, ref infoCandidate);
+                candidates.Capture(stream.Dictionary);
             }
         }
 
@@ -151,7 +166,7 @@ public static class PdfRepairer
         }
 
         // Resolve the document catalog.
-        bool rootFromCandidate = TryResolveCatalog(rootCandidate, objects, out int rootNumber);
+        bool rootFromCandidate = TryResolveCatalog(candidates.Root, objects, out int rootNumber);
         bool rootRecovered = false;
         if (!rootFromCandidate)
         {
@@ -174,9 +189,30 @@ public static class PdfRepairer
         }
 
         PdfName infoKey = PdfName.Intern("Info");
-        if (infoCandidate is PdfReference infoRef && objects.ContainsKey(infoRef.ObjectId.ObjectNumber))
+        if (candidates.Info is PdfReference infoRef && objects.ContainsKey(infoRef.ObjectId.ObjectNumber))
         {
             trailer.Set(infoKey, new PdfReference(new PdfObjectId(infoRef.ObjectId.ObjectNumber, 0)));
+        }
+
+        if (forOpening)
+        {
+            // Keep the encryption so the objects, copied as they are, can
+            // still be decrypted. The /Encrypt dictionary is either direct or
+            // an object that was recovered with the rest.
+            if (candidates.Encrypt is PdfDictionary
+                || (candidates.Encrypt is PdfReference encryptRef && objects.ContainsKey(encryptRef.ObjectId.ObjectNumber)))
+            {
+                trailer.Set(PdfName.Intern("Encrypt"), candidates.Encrypt);
+                if (objectStreamCount > 0)
+                {
+                    warnings.Add("The file is encrypted; objects stored in its object streams could not be recovered.");
+                }
+            }
+
+            if (candidates.Id is PdfArray id)
+            {
+                trailer.Set(PdfName.Intern("ID"), id);
+            }
         }
 
         List<PdfIndirectObject> finalObjects = new List<PdfIndirectObject>(objects.Values);
@@ -185,7 +221,7 @@ public static class PdfRepairer
         bool wrote = false;
         if (finalObjects.Count > 0)
         {
-            PdfWriter.Write(output, finalObjects, trailer, null, SynthesizedMetadata.All);
+            PdfWriter.Write(output, finalObjects, trailer, null, forOpening ? SynthesizedMetadata.None : SynthesizedMetadata.All);
             wrote = true;
         }
         else
@@ -436,7 +472,7 @@ public static class PdfRepairer
 
     // ── Trailer / catalog recovery ────────────────────────────────────────
 
-    private static void ScanClassicTrailers(byte[] bytes, ref PdfPrimitive? root, ref PdfPrimitive? info)
+    private static void ScanClassicTrailers(byte[] bytes, TrailerCandidates candidates)
     {
         int from = 0;
         using MemoryStream view = new MemoryStream(bytes, writable: false);
@@ -455,7 +491,7 @@ public static class PdfRepairer
                 PdfPrimitive value = parser.ReadValue();
                 if (value is PdfDictionary dict)
                 {
-                    CaptureRootInfo(dict, ref root, ref info);
+                    candidates.Capture(dict);
                 }
             }
             catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
@@ -465,15 +501,39 @@ public static class PdfRepairer
         }
     }
 
-    private static void CaptureRootInfo(PdfDictionary dict, ref PdfPrimitive? root, ref PdfPrimitive? info)
+    // The last /Root, /Info, /Encrypt and /ID seen in any trailer or
+    // cross-reference stream dictionary.
+    private sealed class TrailerCandidates
     {
-        if (dict.TryGetValue(PdfName.Root, out PdfPrimitive? rootValue) && rootValue is PdfReference)
+        internal PdfPrimitive? Root { get; private set; }
+
+        internal PdfPrimitive? Info { get; private set; }
+
+        internal PdfPrimitive? Encrypt { get; private set; }
+
+        internal PdfPrimitive? Id { get; private set; }
+
+        internal void Capture(PdfDictionary dict)
         {
-            root = rootValue;
-        }
-        if (dict.TryGetValue(PdfName.Intern("Info"), out PdfPrimitive? infoValue) && infoValue is PdfReference)
-        {
-            info = infoValue;
+            if (dict.TryGetValue(PdfName.Root, out PdfPrimitive? rootValue) && rootValue is PdfReference)
+            {
+                Root = rootValue;
+            }
+
+            if (dict.TryGetValue(PdfName.Intern("Info"), out PdfPrimitive? infoValue) && infoValue is PdfReference)
+            {
+                Info = infoValue;
+            }
+
+            if (dict.TryGetValue(PdfName.Intern("Encrypt"), out PdfPrimitive? encryptValue) && encryptValue is PdfReference or PdfDictionary)
+            {
+                Encrypt = encryptValue;
+            }
+
+            if (dict.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? idValue) && idValue is PdfArray)
+            {
+                Id = idValue;
+            }
         }
     }
 

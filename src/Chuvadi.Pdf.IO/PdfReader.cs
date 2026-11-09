@@ -232,6 +232,86 @@ public sealed class PdfReader : IDisposable
         }
     }
 
+    // ── Repair and open (3.32.1, D-280) ───────────────────────────────────
+
+    /// <summary>
+    /// Repairs the PDF in <paramref name="stream"/> in memory with
+    /// <see cref="PdfRepairer"/> and opens the result, for
+    /// <c>PdfOpenOptions.RepairIfDamaged</c>. The whole stream is read from
+    /// its start; the caller's stream is not disposed. The reader owns the
+    /// repaired copy. <see cref="Warnings"/> starts with a line saying the
+    /// file was repaired, why, and what was recovered.
+    /// </summary>
+    /// <param name="stream">The damaged PDF; readable and seekable.</param>
+    /// <param name="password">The password, or null.</param>
+    /// <param name="reason">Why the normal open failed (the exception message).</param>
+    /// <exception cref="PdfParseException">Nothing usable could be recovered.</exception>
+    internal static PdfReader OpenRepaired(Stream stream, string? password, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(reason);
+
+        stream.Position = 0;
+        MemoryStream repaired = new MemoryStream();
+        try
+        {
+            RepairReport report = PdfRepairer.Repair(stream, repaired, forOpening: true);
+            if (!report.Repaired || !report.CatalogFound)
+            {
+                throw new PdfParseException(
+                    "The file could not be read (" + reason + ") and could not be repaired: "
+                    + (report.Warnings.Count > 0 ? string.Join(" ", report.Warnings) : "no document catalog was found."));
+            }
+
+            repaired.Position = 0;
+            PdfReader reader = OpenInternal(repaired, password, leaveOpen: false);
+            reader._recoveryLog.Add(DescribeRepair(reason, report));
+            return reader;
+        }
+        catch
+        {
+            repaired.Dispose();
+            throw;
+        }
+    }
+
+    private static string DescribeRepair(string reason, RepairReport report)
+    {
+        StringBuilder text = new StringBuilder();
+        text.Append("The file's structure could not be read (").Append(reason)
+            .Append("); it was repaired in memory and opened: ")
+            .Append(report.ObjectsRecovered.ToString(CultureInfo.InvariantCulture))
+            .Append(" objects recovered");
+        if (report.ObjectsFromObjectStreams > 0)
+        {
+            text.Append(" (").Append(report.ObjectsFromObjectStreams.ToString(CultureInfo.InvariantCulture))
+                .Append(" from object streams)");
+        }
+
+        if (report.RootRecovered)
+        {
+            text.Append(", the document catalog found by scanning");
+        }
+
+        if (report.TruncationDetected)
+        {
+            text.Append(", the file is truncated");
+        }
+
+        if (report.HeaderRelocated)
+        {
+            text.Append(", junk before the header skipped");
+        }
+
+        text.Append('.');
+        foreach (string warning in report.Warnings)
+        {
+            text.Append(' ').Append(warning);
+        }
+
+        return text.ToString();
+    }
+
     // ── Internal open ─────────────────────────────────────────────────────
 
     private static PdfReader OpenInternal(Stream stream, string? password, bool leaveOpen)

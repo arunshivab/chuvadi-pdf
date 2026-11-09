@@ -182,9 +182,7 @@ public sealed class PdfDocument : IDisposable
         using PdfWorkScope? scope = options.Limits is null ? null : PdfWorkScope.Enter(options.Limits);
         try
         {
-            PdfReader reader = string.IsNullOrEmpty(options.Password)
-                ? PdfReader.Open(stream, options.LeaveOpen)
-                : PdfReader.Open(stream, options.Password, options.LeaveOpen);
+            PdfReader reader = OpenReader(stream, options);
             PdfDocument document = new PdfDocument(reader);
             reader.Objects.OnWarning = options.OnWarning;
             return WithLimits(document, options.Limits);
@@ -213,7 +211,7 @@ public sealed class PdfDocument : IDisposable
         FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
-            return Open(stream, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning });
+            return Open(stream, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning, RepairIfDamaged = options.RepairIfDamaged });
         }
         catch
         {
@@ -248,6 +246,46 @@ public sealed class PdfDocument : IDisposable
         using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         return PdfReader.RequiresPassword(stream);
     }
+
+    // Opens the reader; with RepairIfDamaged, a file whose structure cannot be
+    // read is repaired in memory and the repaired copy opened (3.32.1, D-280).
+    private static PdfReader OpenReader(Stream stream, PdfOpenOptions options)
+    {
+        string? password = string.IsNullOrEmpty(options.Password) ? null : options.Password;
+        if (!options.RepairIfDamaged)
+        {
+            return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+        }
+
+        string reason;
+        try
+        {
+            return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+        }
+        catch (Exception ex) when (IsStructureFailure(ex))
+        {
+            reason = ex.Message;
+        }
+
+        PdfReader repaired = PdfReader.OpenRepaired(stream, password, reason);
+        if (!options.LeaveOpen)
+        {
+            stream.Dispose();
+        }
+
+        return repaired;
+    }
+
+    // A failure to read the file's structure, which a repair may fix. A
+    // password, limit, security-handler or cancellation failure is not.
+    private static bool IsStructureFailure(Exception ex) => ex switch
+    {
+        PdfPasswordRequiredException => false,
+        PdfParseException or PdfCorruptionException => true,
+        PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException => false,
+        IOException and not EndOfStreamException => false,
+        _ => true,
+    };
 
     // Applies the open-time limits (page count) and keeps the rest for
     // rendering and extraction.
@@ -361,7 +399,7 @@ public sealed class PdfDocument : IDisposable
             }
 
             buffer.Position = 0;
-            return Open(buffer, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning });
+            return Open(buffer, new PdfOpenOptions { Password = options.Password, Limits = options.Limits, LeaveOpen = false, OnWarning = options.OnWarning, RepairIfDamaged = options.RepairIfDamaged });
         }
         catch
         {
