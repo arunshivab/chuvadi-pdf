@@ -770,7 +770,10 @@ public sealed class PdfDocument : IDisposable
                 revision: parsed.R,
                 version: parsed.V,
                 permissions: parsed.Permissions,
-                encryptMetadata: parsed.EncryptMetadata);
+                encryptMetadata: parsed.EncryptMetadata)
+            {
+                OpenedWith = _reader.OpenedWith,
+            };
         }
     }
 

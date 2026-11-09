@@ -37,6 +37,7 @@ public sealed class OptionalContentVisibility
     private readonly Dictionary<int, bool> _groupStates;
     private readonly Dictionary<int, string> _groupNames;
     private readonly IReadOnlyDictionary<string, bool>? _overrides;
+    private readonly IReadOnlyDictionary<int, bool>? _idOverrides;
     private readonly bool _all;
 
     private OptionalContentVisibility(
@@ -44,12 +45,14 @@ public sealed class OptionalContentVisibility
         Dictionary<int, bool> groupStates,
         Dictionary<int, string> groupNames,
         IReadOnlyDictionary<string, bool>? overrides,
-        bool all)
+        bool all,
+        IReadOnlyDictionary<int, bool>? idOverrides = null)
     {
         _store = store;
         _groupStates = groupStates;
         _groupNames = groupNames;
         _overrides = overrides;
+        _idOverrides = idOverrides;
         _all = all;
     }
 
@@ -80,7 +83,9 @@ public sealed class OptionalContentVisibility
 
     /// <summary>
     /// Returns a copy with layers overridden by name (null or empty keeps this
-    /// visibility). Overrides replace any earlier ones.
+    /// visibility). Overrides replace any earlier name overrides; id overrides
+    /// (<see cref="WithOverridesById"/>) are kept and win for their groups.
+    /// Overrides apply to locked layers too.
     /// </summary>
     /// <param name="layerVisibility">Layer name → visible.</param>
     /// <returns>The visibility with the overrides applied.</returns>
@@ -91,7 +96,30 @@ public sealed class OptionalContentVisibility
             return this;
         }
 
-        return new OptionalContentVisibility(_store, _groupStates, _groupNames, layerVisibility, all: false);
+        return new OptionalContentVisibility(_store, _groupStates, _groupNames, layerVisibility, all: false, _idOverrides);
+    }
+
+    /// <summary>
+    /// Returns a copy with layers overridden by id (3.32.0): the
+    /// <see cref="OptionalContentGroup.Id"/>, the group's object number. Use it
+    /// to set apart layers that share a name. Null or empty keeps this
+    /// visibility. Id overrides replace any earlier id overrides, keep the
+    /// name overrides, and win over a name override for the same group.
+    /// </summary>
+    /// <param name="layerVisibility">Layer id → visible.</param>
+    /// <returns>The visibility with the overrides applied.</returns>
+    /// <remarks>
+    /// Overrides apply to locked layers too (<see cref="OptionalContentGroup.IsLocked"/>):
+    /// the lock stops a viewer's user, not the program (D-230).
+    /// </remarks>
+    public OptionalContentVisibility WithOverridesById(IReadOnlyDictionary<int, bool>? layerVisibility)
+    {
+        if (_all || layerVisibility is null || layerVisibility.Count == 0)
+        {
+            return this;
+        }
+
+        return new OptionalContentVisibility(_store, _groupStates, _groupNames, _overrides, all: false, layerVisibility);
     }
 
     /// <summary>
@@ -372,6 +400,11 @@ public sealed class OptionalContentVisibility
 
     private bool GroupState(int objectNumber)
     {
+        if (_idOverrides is not null && _idOverrides.TryGetValue(objectNumber, out bool byId))
+        {
+            return byId;
+        }
+
         if (_overrides is not null
             && _groupNames.TryGetValue(objectNumber, out string? name)
             && _overrides.TryGetValue(name, out bool forced))

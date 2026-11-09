@@ -667,8 +667,7 @@ internal sealed class PdfObjectParser
 
         if (next.Type != PdfTokenType.Integer)
         {
-            int v = ParseInt32(intToken, NumberStyles.AllowLeadingSign, "integer");
-            return new PdfInteger(v);
+            return ParseIntegerValue(intToken);
         }
 
         PdfToken next2 = PeekToken2();
@@ -682,8 +681,30 @@ internal sealed class PdfObjectParser
             return new PdfReference(new PdfObjectId(objNum, gen));
         }
 
-        int value = ParseInt32(intToken, NumberStyles.AllowLeadingSign, "integer");
-        return new PdfInteger(value);
+        return ParseIntegerValue(intToken);
+    }
+
+    /// <summary>
+    /// Parses an integer value. One that does not fit in 32 bits is kept as a
+    /// <see cref="PdfReal"/> (3.32.0, D-278), as other readers do, instead of
+    /// failing the whole object: pypdf, for example, writes the encryption
+    /// <c>/P</c> as an unsigned number such as 4294963392. Object and
+    /// generation numbers stay strict 32-bit integers.
+    /// </summary>
+    private static PdfPrimitive ParseIntegerValue(PdfToken token)
+    {
+        if (int.TryParse(token.RawText, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int value))
+        {
+            return new PdfInteger(value);
+        }
+
+        if (double.TryParse(token.RawText, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out double large)
+            && double.IsFinite(large))
+        {
+            return new PdfReal(large);
+        }
+
+        return new PdfInteger(ParseInt32(token, NumberStyles.AllowLeadingSign, "integer"));
     }
 
     /// <summary>

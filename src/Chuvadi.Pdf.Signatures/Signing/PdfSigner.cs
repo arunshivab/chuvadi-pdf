@@ -143,7 +143,8 @@ public static class PdfSigner
         PdfDictionary? clonedPage = null;
         if (options.Appearance is SignatureAppearance ap)
         {
-            (targetPageId, clonedPage) = BuildAppearanceWidget(document, ap, sigField, sigFieldId, widgetObjects, acroFormId);
+            (targetPageId, clonedPage) = BuildAppearanceWidget(
+                document, ap, sigField, sigFieldId, widgetObjects, acroFormId, signer.Certificate.Subject.CommonName, signingTime);
         }
 
 
@@ -376,7 +377,8 @@ public static class PdfSigner
         PdfDictionary? clonedPage = null;
         if (options.Appearance is SignatureAppearance ap)
         {
-            (targetPageId, clonedPage) = BuildAppearanceWidget(document, ap, sigField, sigFieldId, widgetObjects, acroFormId);
+            (targetPageId, clonedPage) = BuildAppearanceWidget(
+                document, ap, sigField, sigFieldId, widgetObjects, acroFormId, signer.Certificate.Subject.CommonName, signingTime);
         }
 
         // ── Step 4: build (or extend) AcroForm ───────────────────────────
@@ -591,7 +593,9 @@ public static class PdfSigner
         PdfDictionary sigField,
         PdfObjectId sigFieldId,
         List<PdfIndirectObject> widgetObjects,
-        PdfObjectId acroFormId)
+        PdfObjectId acroFormId,
+        string? signerName,
+        DateTimeOffset signingTime)
     {
         // Resolve target page by walking the /Pages tree.
         List<PdfObjectId> pageIds = new();
@@ -610,27 +614,37 @@ public static class PdfSigner
         PdfDictionary page = document.Objects.ResolveAs<PdfDictionary>(new PdfReference(pageId))
             ?? throw new InvalidOperationException($"Could not resolve page {pageId}.");
 
-        // Build appearance content stream.
+        // Build appearance content stream. The appearance XObject is the first
+        // new object (acroFormId + 1); any objects the default appearance
+        // needs (fonts, image) follow it.
+        int nextIdSeed = acroFormId.ObjectNumber + 1;
+        PdfObjectId apnId = new(nextIdSeed++, 0);
         byte[] content;
+        PdfDictionary apResources;
+        IReadOnlyList<PdfIndirectObject> apObjects = Array.Empty<PdfIndirectObject>();
         if (ap.PreRenderedAppearanceStream is byte[] supplied)
         {
             content = supplied;
+            apResources = new PdfDictionary();
         }
         else
         {
-            // Default: black border around the rectangle, no text. Caller-supplied
-            // PreRenderedAppearanceStream is the path for richer appearances.
-            double w = ap.Rectangle[2] - ap.Rectangle[0];
-            double h = ap.Rectangle[3] - ap.Rectangle[1];
-            string s = string.Format(
-                System.Globalization.CultureInfo.InvariantCulture,
-                "q 0.5 w 0 0 {0:0.##} {1:0.##} re S Q\n", w, h);
-            content = System.Text.Encoding.ASCII.GetBytes(s);
+            // 3.32.0 (D-208 1c): text, an optional image and the border.
+            // Before, the default was the border alone.
+            SignatureAppearanceBuilder.Result built = SignatureAppearanceBuilder.Build(
+                document.Objects,
+                ap,
+                signerName,
+                signingTime,
+                ap.Rectangle[2] - ap.Rectangle[0],
+                ap.Rectangle[3] - ap.Rectangle[1],
+                nextIdSeed);
+            content = built.Content;
+            apResources = built.Resources;
+            apObjects = built.Objects;
         }
 
         // Form XObject for the appearance.
-        int nextIdSeed = acroFormId.ObjectNumber + 1;
-        PdfObjectId apnId = new(nextIdSeed++, 0);
         PdfDictionary apnDict = new();
         apnDict.Set(PdfName.Type, PdfName.Intern("XObject"));
         apnDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Form"));
@@ -641,9 +655,10 @@ public static class PdfSigner
         bbox.Add(new PdfReal(ap.Rectangle[2] - ap.Rectangle[0]));
         bbox.Add(new PdfReal(ap.Rectangle[3] - ap.Rectangle[1]));
         apnDict.Set(PdfName.Intern("BBox"), bbox);
-        apnDict.Set(PdfName.Intern("Resources"), new PdfDictionary());
+        apnDict.Set(PdfName.Intern("Resources"), apResources);
         apnDict.Set(PdfName.Length, content.Length);
         widgetObjects.Add(new PdfIndirectObject(apnId, new PdfStream(apnDict, content)));
+        widgetObjects.AddRange(apObjects);
 
         // /AP dictionary referencing /N.
         PdfDictionary apDict = new();

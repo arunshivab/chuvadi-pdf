@@ -239,14 +239,42 @@ public static class StandardSecurityHandler
     /// Validates a password against an R=6 /U value (ISO 32000-2 Algorithm 2.B).
     /// Returns the derived file encryption key on success, or null on failure.
     /// </summary>
+    /// <remarks>
+    /// Since 3.32.0 the password is tested as the owner password first (when
+    /// <paramref name="tryOwnerPassword"/> is set), as ISO 32000-2 Algorithm
+    /// 2.A orders it. The key returned is the same either way.
+    /// </remarks>
     public static byte[]? ValidatePasswordR6(
         string password,
         byte[] uValue,      // 48 bytes: 32-byte hash, 8-byte validation salt, 8-byte key salt
         byte[] ueValue,     // 32 bytes: encrypted file key
         byte[] oValue,
         byte[] oeValue,
-        bool tryOwnerPassword)
+        bool tryOwnerPassword) =>
+        ValidatePasswordR6(password, uValue, ueValue, oValue, oeValue, tryOwnerPassword, out _);
+
+    /// <summary>
+    /// Validates a password against an R=6 file (ISO 32000-2 Algorithm 2.A)
+    /// and reports whether it was the owner password (3.32.0).
+    /// </summary>
+    /// <param name="password">The password to test.</param>
+    /// <param name="uValue">The 48-byte /U value.</param>
+    /// <param name="ueValue">The 32-byte /UE value.</param>
+    /// <param name="oValue">The 48-byte /O value.</param>
+    /// <param name="oeValue">The 32-byte /OE value.</param>
+    /// <param name="tryOwnerPassword">Whether to test it as the owner password.</param>
+    /// <param name="isOwnerPassword">True when it opened as the owner password.</param>
+    /// <returns>The file encryption key, or null when the password is wrong.</returns>
+    public static byte[]? ValidatePasswordR6(
+        string password,
+        byte[] uValue,
+        byte[] ueValue,
+        byte[] oValue,
+        byte[] oeValue,
+        bool tryOwnerPassword,
+        out bool isOwnerPassword)
     {
+        isOwnerPassword = false;
         ArgumentNullException.ThrowIfNull(uValue);
         ArgumentNullException.ThrowIfNull(ueValue);
         ArgumentNullException.ThrowIfNull(oValue);
@@ -263,60 +291,51 @@ public static class StandardSecurityHandler
             return null;
         }
 
-        // Try user password first
         byte[] validationSalt = new byte[8];
         byte[] keySalt = new byte[8];
-        Array.Copy(uValue, 32, validationSalt, 0, 8);
-        Array.Copy(uValue, 40, keySalt, 0, 8);
 
-        byte[] expectedHash = ComputeHashR6(pwd, validationSalt, Array.Empty<byte>());
-
-        bool matches = true;
-        for (int i = 0; i < 32; i++)
+        // Owner password first (ISO 32000-2 Algorithm 2.A): its hash covers
+        // the first 48 bytes of /U as well.
+        if (tryOwnerPassword && oValue.Length >= 48 && oeValue.Length >= 32)
         {
-            if (expectedHash[i] != uValue[i])
+            Array.Copy(oValue, 32, validationSalt, 0, 8);
+            Array.Copy(oValue, 40, keySalt, 0, 8);
+
+            byte[] uFirst48 = new byte[48];
+            Array.Copy(uValue, uFirst48, 48);
+
+            if (HashMatches(ComputeHashR6(pwd, validationSalt, uFirst48), oValue))
             {
-                matches = false;
-                break;
+                isOwnerPassword = true;
+                byte[] ownerIntermediate = ComputeHashR6(pwd, keySalt, uFirst48);
+                return DecryptFileKeyR6(ownerIntermediate, oeValue);
             }
         }
 
-        if (matches)
+        // Then the user password.
+        Array.Copy(uValue, 32, validationSalt, 0, 8);
+        Array.Copy(uValue, 40, keySalt, 0, 8);
+
+        if (HashMatches(ComputeHashR6(pwd, validationSalt, Array.Empty<byte>()), uValue))
         {
             byte[] intermediate = ComputeHashR6(pwd, keySalt, Array.Empty<byte>());
             return DecryptFileKeyR6(intermediate, ueValue);
         }
 
-        if (!tryOwnerPassword)
-        {
-            return null;
-        }
+        return null;
+    }
 
-        // Owner password path requires the user value as additional input
-        Array.Copy(oValue, 32, validationSalt, 0, 8);
-        Array.Copy(oValue, 40, keySalt, 0, 8);
-
-        byte[] uFirst48 = new byte[48];
-        Array.Copy(uValue, uFirst48, 48);
-
-        expectedHash = ComputeHashR6(pwd, validationSalt, uFirst48);
-        matches = true;
+    private static bool HashMatches(byte[] hash, byte[] stored)
+    {
         for (int i = 0; i < 32; i++)
         {
-            if (expectedHash[i] != oValue[i])
+            if (hash[i] != stored[i])
             {
-                matches = false;
-                break;
+                return false;
             }
         }
 
-        if (matches)
-        {
-            byte[] intermediate = ComputeHashR6(pwd, keySalt, uFirst48);
-            return DecryptFileKeyR6(intermediate, oeValue);
-        }
-
-        return null;
+        return true;
     }
 
     private static byte[] ComputeHashR6(byte[] password, byte[] salt, byte[] uData)

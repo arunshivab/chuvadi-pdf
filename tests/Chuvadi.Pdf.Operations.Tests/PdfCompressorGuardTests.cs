@@ -15,7 +15,7 @@ using Xunit;
 namespace Chuvadi.Pdf.Operations.Tests;
 
 /// <summary>
-/// Tests the safety guard that stops <see cref="PdfCompressor.Compress"/> from
+/// Tests the safety guard that stops <see cref="PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)"/> from
 /// silently breaking digital signatures or stripping encryption. The default is
 /// batch-friendly: a hazardous document is skipped (nothing written) and the
 /// reason is reported, rather than throwing. Callers opt in per hazard.
@@ -105,7 +105,7 @@ public sealed class PdfCompressorGuardTests
 
     // ── builders ──────────────────────────────────────────────────────────
 
-    private static byte[] BuildSignedPdf()
+    internal static byte[] BuildSignedPdf()
     {
         List<PdfIndirectObject> objects =
             BuildOnePageObjects(out PdfObjectId catalogId, out PdfDictionary catalog);
@@ -121,7 +121,7 @@ public sealed class PdfCompressorGuardTests
         return WritePlain(objects, catalogId);
     }
 
-    private static byte[] BuildEncryptedPdf()
+    internal static byte[] BuildEncryptedPdf()
     {
         List<PdfIndirectObject> objects = BuildOnePageObjects(out PdfObjectId catalogId, out _);
         PdfDictionary trailer = new PdfDictionary();

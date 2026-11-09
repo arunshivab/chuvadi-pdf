@@ -18,6 +18,16 @@ For R≤4 the per-object key is derived from the file key plus the indirect obje
 
 Constructs a decryptor for the given file key and algorithm.
 
+## Properties
+
+### `OpenedWith`
+
+```csharp
+PdfPasswordKind OpenedWith
+```
+
+Gets which password opened the document (3.32.0); set by `PdfEncryption.TryOpen`. A decryptor built directly from a file key reports `PdfPasswordKind.NoPassword`.
+
 ## Methods
 
 ### `Decrypt`

@@ -261,7 +261,7 @@ public sealed class Signing3312Tests
         return PdfSigner.Sign(d, signer, Options());
     }
 
-    private static void AssertAllVerify(byte[] pdf, TrustStore trust, int expectedCount)
+    internal static void AssertAllVerify(byte[] pdf, TrustStore trust, int expectedCount)
     {
         using PdfDocument doc = PdfDocument.Open(new MemoryStream(pdf), leaveOpen: false);
         doc.Signatures().Should().HaveCount(expectedCount);
@@ -279,7 +279,7 @@ public sealed class Signing3312Tests
     // One page whose /Contents is a stream, written before the signature
     // dictionary: the layout every real document has, and the one Sign used
     // to fail on, because it took the page's /Contents for the signature's.
-    private static byte[] BuildPageWithContents()
+    internal static byte[] BuildPageWithContents()
     {
         PdfObjectId catalogId = new(1, 0);
         PdfObjectId pagesId = new(2, 0);

@@ -20,5 +20,8 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Forms" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Signatures" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Authoring.Tests" />
   </ItemGroup>
 </Project>

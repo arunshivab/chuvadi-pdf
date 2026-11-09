@@ -38,6 +38,10 @@ internal sealed class ObjectStreamReader
     // Cache of decoded object streams, keyed by container object number.
     private readonly Dictionary<int, ObjectStream> _cache = new();
 
+    // 3.32.0 (D-271): containers already reported as undecodable, so each
+    // damaged object stream is reported once, not once per object in it.
+    private readonly HashSet<int> _reported = new();
+
     /// <summary>
     /// Materialises the object stored at <paramref name="indexInStream"/>
     /// inside the object stream identified by
@@ -59,21 +63,49 @@ internal sealed class ObjectStreamReader
     /// hard dependency on <c>PdfReader</c> internals from this class.
     /// Must return null if the container does not exist.
     /// </param>
+    /// <param name="log">
+    /// Receives one warning per container whose stream data cannot be
+    /// decoded (3.32.0, D-271); null records nothing.
+    /// </param>
+    /// <param name="onWarning">Also receives that warning, as a <see cref="PdfWarningKind.StreamDamaged"/> warning; may be null.</param>
     internal PdfPrimitive? TryRead(
         int streamObjectNumber,
         int indexInStream,
-        Func<int, PdfIndirectObject?> containerLoader)
+        Func<int, PdfIndirectObject?> containerLoader,
+        RecoveryLog? log = null,
+        Action<PdfWarning>? onWarning = null)
     {
         ArgumentNullException.ThrowIfNull(containerLoader);
 
         if (!_cache.TryGetValue(streamObjectNumber, out ObjectStream? objStm))
         {
-            objStm = TryParse(streamObjectNumber, containerLoader);
+            objStm = TryParse(streamObjectNumber, containerLoader, reason => Report(streamObjectNumber, reason, log, onWarning));
             if (objStm is null) { return null; }
             _cache[streamObjectNumber] = objStm;
         }
 
         return objStm.GetByIndex(indexInStream);
+    }
+
+    private void Report(int streamObjectNumber, string reason, RecoveryLog? log, Action<PdfWarning>? onWarning)
+    {
+        if (log is null && onWarning is null)
+        {
+            return;
+        }
+
+        lock (_reported)
+        {
+            if (!_reported.Add(streamObjectNumber))
+            {
+                return;
+            }
+        }
+
+        string subject = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"object stream {streamObjectNumber} 0 R");
+        log?.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"Object stream {streamObjectNumber} 0 R could not be decoded and is treated as damaged; the objects stored in it are treated as missing. {reason}"));
+        onWarning?.Invoke(new PdfWarning(PdfWarningKind.StreamDamaged, null, subject, reason + " The objects stored in it are treated as missing."));
     }
 
     /// <summary>
@@ -82,7 +114,8 @@ internal sealed class ObjectStreamReader
     /// </summary>
     private static ObjectStream? TryParse(
         int streamObjectNumber,
-        Func<int, PdfIndirectObject?> containerLoader)
+        Func<int, PdfIndirectObject?> containerLoader,
+        Action<string> decodeFailed)
     {
         PdfIndirectObject? container = containerLoader(streamObjectNumber);
         if (container is null) { return null; }
@@ -116,6 +149,7 @@ internal sealed class ObjectStreamReader
         }
         catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
         {
+            decodeFailed(abortCheck.Message);
             return null;
         }
 

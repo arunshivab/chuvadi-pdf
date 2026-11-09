@@ -260,6 +260,11 @@ def check_file(path):
                 if (not re.search(r'\bStream\s+[A-Za-z_]', code_no_strings)
                         and not re.search(r'\(\s*Stream\s*\)', code_no_strings)):
                     continue
+            # Skip "Flags" unless it is the [Flags] attribute: a property or
+            # member named Flags (EncryptionInfo.Flags) needs no using.
+            if type_name == "Flags":
+                if not re.search(r'\[\s*Flags\s*[\],(]', code_no_strings):
+                    continue
             issues.append(
                 f"  CS0246 possible: '{type_name}' used but '{required_using}' not declared")
 

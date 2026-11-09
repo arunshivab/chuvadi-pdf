@@ -8,9 +8,11 @@
 // decision is made only when the kept geometry's ink provably misses every
 // redaction rectangle (stroke ink allowance = half line width scaled by the
 // miter limit, curve extents bounded by their control hulls); every doubtful
-// construct — curves crossing a region, fill-rule interactions between
+// construct — curved fills crossing a region, fill-rule interactions between
 // subpaths, non-invertible matrices, unexpected operands — falls back to
-// removal, never to retention. Removal is byte-level: subtracted geometry does
+// removal, never to retention. Since 3.32.0 (D-221 P3, D-230 Q9) stroked
+// curves crossing a region are cut: split where they cross a widened region
+// edge, and each piece kept only once its control hull clears every region. Removal is byte-level: subtracted geometry does
 // not survive anywhere in the output stream.
 
 using System;
@@ -25,15 +27,28 @@ namespace Chuvadi.Pdf.Redaction;
 /// <summary>
 /// Subtracts redaction regions from a buffered painted path at the finest
 /// granularity that is provably safe: whole subpaths are kept when their ink
-/// cannot touch any redaction rectangle, straight stroked segments are split
-/// at region boundaries, and axis-aligned rectangle fills are decomposed into
-/// the surviving sub-rectangles. Everything else is removed (over-redaction in
+/// cannot touch any redaction rectangle, stroked segments (straight and, since
+/// 3.32.0, curved) are split at region boundaries, and axis-aligned rectangle
+/// fills are decomposed into the surviving sub-rectangles. Everything else is removed (over-redaction in
 /// doubt, per the library's conservative redaction principle).
 /// </summary>
 internal static class VectorSubtractor
 {
     private const double Epsilon = 1e-9;
     private const double MinPieceLength = 1e-6;
+
+    // 3.32.0 (P3): curve cutting. A piece whose hull still touches a region is
+    // halved at most this many times (a parameter span of 2^-18 of the span
+    // between two edge crossings) before it is dropped.
+    private const int MaxCurveDepth = 18;
+
+    // Samples per curve when looking for the parameters where it crosses a
+    // region edge; each sign change is then refined by bisection.
+    private const int CrossingSamples = 64;
+
+    // Hull boxes are widened by this much (user space) so the 6-decimal output
+    // rounding of a kept piece can never move it back onto a region.
+    private const double HullSafety = 1e-4;
 
     /// <summary>
     /// Attempts a precise subtraction of the redaction regions from the
@@ -336,14 +351,9 @@ internal static class VectorSubtractor
                 continue;
             }
 
-            // Partial: curves crossing a region cannot be split safely — the
-            // whole subpath is removed (over-redaction in doubt).
-            if (subpath.HasCurves)
-            {
-                continue;
-            }
-
-            emittedAny |= EmitClippedPolyline(sb, subpath, expandedQuads);
+            // Partial: straight segments are clipped exactly, curves are cut
+            // into pieces whose hulls provably clear every region (3.32.0).
+            emittedAny |= EmitClippedPath(sb, subpath, expandedQuads);
         }
 
         if (!emittedAny)
@@ -357,7 +367,7 @@ internal static class VectorSubtractor
         return sb.ToString();
     }
 
-    private static bool EmitClippedPolyline(
+    private static bool EmitClippedPath(
         StringBuilder sb, Subpath subpath, List<PointF[]> expandedQuads)
     {
         bool emitted = false;
@@ -366,14 +376,31 @@ internal static class VectorSubtractor
 
         foreach (PathSegment seg in subpath.Segments)
         {
-            List<(double A, double B)> kept = KeptIntervals(seg.P0, seg.P1, expandedQuads);
+            List<(double A, double B)> kept = seg.IsCurve
+                ? KeptCurveIntervals(seg, expandedQuads)
+                : KeptIntervals(seg.P0, seg.P1, expandedQuads);
             foreach ((double A, double B) interval in kept)
             {
-                PointF a = Lerp(seg.P0, seg.P1, interval.A);
-                PointF b = Lerp(seg.P0, seg.P1, interval.B);
-                if (a.DistanceTo(b) < MinPieceLength)
+                PointF a;
+                PointF b;
+                PointF c1 = default;
+                PointF c2 = default;
+                if (seg.IsCurve)
                 {
-                    continue;
+                    (a, c1, c2, b) = SubCurve(seg, interval.A, interval.B);
+                    if (a.DistanceTo(c1) + c1.DistanceTo(c2) + c2.DistanceTo(b) < MinPieceLength)
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    a = Lerp(seg.P0, seg.P1, interval.A);
+                    b = Lerp(seg.P0, seg.P1, interval.B);
+                    if (a.DistanceTo(b) < MinPieceLength)
+                    {
+                        continue;
+                    }
                 }
 
                 if (!penDown || penAt.DistanceTo(a) > Epsilon)
@@ -381,7 +408,17 @@ internal static class VectorSubtractor
                     sb.Append(Num(a.X)).Append(' ').Append(Num(a.Y)).Append(" m\n");
                 }
 
-                sb.Append(Num(b.X)).Append(' ').Append(Num(b.Y)).Append(" l\n");
+                if (seg.IsCurve)
+                {
+                    sb.Append(Num(c1.X)).Append(' ').Append(Num(c1.Y)).Append(' ')
+                        .Append(Num(c2.X)).Append(' ').Append(Num(c2.Y)).Append(' ')
+                        .Append(Num(b.X)).Append(' ').Append(Num(b.Y)).Append(" c\n");
+                }
+                else
+                {
+                    sb.Append(Num(b.X)).Append(' ').Append(Num(b.Y)).Append(" l\n");
+                }
+
                 penDown = true;
                 penAt = b;
                 emitted = true;
@@ -441,6 +478,233 @@ internal static class VectorSubtractor
         }
 
         return kept;
+    }
+
+    // ── Curve cutting (3.32.0, P3) ─────────────────────────────────────────
+
+    // The parameter intervals of a cubic whose ink provably misses every
+    // (stroke-widened) region. The curve is first split where it crosses a
+    // region edge line; each piece is kept when its control hull clears every
+    // region, dropped when its hull lies inside one, and otherwise halved until
+    // it clears or reaches MaxCurveDepth, when it is dropped.
+    private static List<(double A, double B)> KeptCurveIntervals(PathSegment seg, List<PointF[]> quads)
+    {
+        List<double> cuts = new List<double> { 0.0, 1.0 };
+        foreach (PointF[] quad in quads)
+        {
+            for (int i = 0; i < quad.Length; i++)
+            {
+                AddEdgeCrossings(seg, quad[i], quad[(i + 1) % quad.Length], cuts);
+            }
+        }
+
+        cuts.Sort();
+        List<(double A, double B)> kept = new List<(double A, double B)>();
+        for (int i = 0; i + 1 < cuts.Count; i++)
+        {
+            if (cuts[i + 1] - cuts[i] > Epsilon)
+            {
+                KeepPieces(seg, cuts[i], cuts[i + 1], 0, quads, kept);
+            }
+        }
+
+        // Pieces are not merged: each emitted piece is one whose own control
+        // hull was proven clear, so the output never carries a hull that
+        // reaches into a region. Adjacent pieces join without a new m.
+        return kept;
+    }
+
+    private static void KeepPieces(
+        PathSegment seg, double t0, double t1, int depth, List<PointF[]> quads, List<(double A, double B)> kept)
+    {
+        (PointF p0, PointF c1, PointF c2, PointF p1) = SubCurve(seg, t0, t1);
+        PointF[] hull = { p0, c1, c2, p1 };
+
+        bool touches = false;
+        foreach (PointF[] quad in quads)
+        {
+            if (HullMayTouchQuad(hull, quad))
+            {
+                touches = true;
+                break;
+            }
+        }
+
+        if (!touches)
+        {
+            kept.Add((t0, t1));
+            return;
+        }
+
+        foreach (PointF[] quad in quads)
+        {
+            if (PointInConvex(p0, quad) && PointInConvex(c1, quad) && PointInConvex(c2, quad) && PointInConvex(p1, quad))
+            {
+                return;
+            }
+        }
+
+        if (depth >= MaxCurveDepth)
+        {
+            return;
+        }
+
+        double mid = (t0 + t1) / 2.0;
+        KeepPieces(seg, t0, mid, depth + 1, quads, kept);
+        KeepPieces(seg, mid, t1, depth + 1, quads, kept);
+    }
+
+    // False only when the control points provably miss the quad: their
+    // widened bounding box misses it, or all four lie outside one quad edge.
+    // The curve lies in the control hull, so false means the curve misses too.
+    private static bool HullMayTouchQuad(PointF[] hull, PointF[] quad)
+    {
+        double minX = double.MaxValue;
+        double minY = double.MaxValue;
+        double maxX = double.MinValue;
+        double maxY = double.MinValue;
+        foreach (PointF p in hull)
+        {
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+
+        if (!BoxOverlapsQuad(minX - HullSafety, minY - HullSafety, maxX + HullSafety, maxY + HullSafety, quad))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < quad.Length; i++)
+        {
+            PointF v0 = quad[i];
+            PointF v1 = quad[(i + 1) % quad.Length];
+            double ex = v1.X - v0.X;
+            double ey = v1.Y - v0.Y;
+            double len = Math.Sqrt((ex * ex) + (ey * ey));
+            bool allOutside = true;
+            foreach (PointF p in hull)
+            {
+                // Signed distance to the inside (left of a CCW edge); outside
+                // needs more than the safety distance.
+                double inside = ((ex * (p.Y - v0.Y)) - (ey * (p.X - v0.X))) / len;
+                if (inside > -HullSafety)
+                {
+                    allOutside = false;
+                    break;
+                }
+            }
+
+            if (allOutside)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Adds the parameters in (0, 1) where the cubic crosses the line through
+    // v0 and v1: sign changes of the signed distance, refined by bisection.
+    // A missed crossing (a tangency) only means fewer cuts; the hull test
+    // still decides what is kept.
+    private static void AddEdgeCrossings(PathSegment seg, PointF v0, PointF v1, List<double> cuts)
+    {
+        double ex = v1.X - v0.X;
+        double ey = v1.Y - v0.Y;
+
+        double Side(double t)
+        {
+            PointF p = CurvePoint(seg, t);
+            return (ex * (p.Y - v0.Y)) - (ey * (p.X - v0.X));
+        }
+
+        double prevT = 0.0;
+        double prev = Side(0.0);
+        for (int i = 1; i <= CrossingSamples; i++)
+        {
+            double t = (double)i / CrossingSamples;
+            double value = Side(t);
+            if ((prev < 0 && value > 0) || (prev > 0 && value < 0))
+            {
+                double lo = prevT;
+                double hi = t;
+                double loValue = prev;
+                for (int k = 0; k < 50; k++)
+                {
+                    double mid = (lo + hi) / 2.0;
+                    double midValue = Side(mid);
+                    if ((loValue < 0) == (midValue < 0))
+                    {
+                        lo = mid;
+                        loValue = midValue;
+                    }
+                    else
+                    {
+                        hi = mid;
+                    }
+                }
+
+                double root = (lo + hi) / 2.0;
+                if (root > Epsilon && root < 1.0 - Epsilon)
+                {
+                    cuts.Add(root);
+                }
+            }
+
+            prevT = t;
+            prev = value;
+        }
+    }
+
+    private static PointF CurvePoint(PathSegment seg, double t)
+    {
+        double u = 1.0 - t;
+        double a = u * u * u;
+        double b = 3 * u * u * t;
+        double c = 3 * u * t * t;
+        double d = t * t * t;
+        return new PointF(
+            (a * seg.P0.X) + (b * seg.C1.X) + (c * seg.C2.X) + (d * seg.P1.X),
+            (a * seg.P0.Y) + (b * seg.C1.Y) + (c * seg.C2.Y) + (d * seg.P1.Y));
+    }
+
+    // The control points of the part of the cubic between t0 and t1
+    // (de Casteljau: split at t1, then split the first part at t0 / t1).
+    private static (PointF P0, PointF C1, PointF C2, PointF P1) SubCurve(PathSegment seg, double t0, double t1)
+    {
+        (PointF a0, PointF a1, PointF a2, PointF a3) = SplitLeft(seg.P0, seg.C1, seg.C2, seg.P1, t1);
+        if (t0 <= 0.0)
+        {
+            return (a0, a1, a2, a3);
+        }
+
+        double s = t1 <= 0.0 ? 0.0 : t0 / t1;
+        (PointF b0, PointF b1, PointF b2, PointF b3) = SplitRight(a0, a1, a2, a3, s);
+        return (b0, b1, b2, b3);
+    }
+
+    private static (PointF, PointF, PointF, PointF) SplitLeft(PointF p0, PointF p1, PointF p2, PointF p3, double t)
+    {
+        PointF q0 = Lerp(p0, p1, t);
+        PointF q1 = Lerp(p1, p2, t);
+        PointF q2 = Lerp(p2, p3, t);
+        PointF r0 = Lerp(q0, q1, t);
+        PointF r1 = Lerp(q1, q2, t);
+        PointF s0 = Lerp(r0, r1, t);
+        return (p0, q0, r0, s0);
+    }
+
+    private static (PointF, PointF, PointF, PointF) SplitRight(PointF p0, PointF p1, PointF p2, PointF p3, double t)
+    {
+        PointF q0 = Lerp(p0, p1, t);
+        PointF q1 = Lerp(p1, p2, t);
+        PointF q2 = Lerp(p2, p3, t);
+        PointF r0 = Lerp(q0, q1, t);
+        PointF r1 = Lerp(q1, q2, t);
+        PointF s0 = Lerp(r0, r1, t);
+        return (s0, r1, q2, p3);
     }
 
     // ── Geometry primitives ────────────────────────────────────────────────
@@ -826,8 +1090,6 @@ internal static class VectorSubtractor
 
         public bool Closed { get; private set; }
 
-        public bool HasCurves { get; set; }
-
         public bool IsRect { get; set; }
 
         public double RectX { get; set; }
@@ -868,7 +1130,6 @@ internal static class VectorSubtractor
         public void AddCurve(PointF c1, PointF c2, PointF to)
         {
             Segments.Add(new PathSegment(Current, c1, c2, to));
-            HasCurves = true;
             Current = to;
             Grow(c1);
             Grow(c2);

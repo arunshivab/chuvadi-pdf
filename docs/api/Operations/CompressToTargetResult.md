@@ -58,6 +58,30 @@ double RasterizeDpiUsed
 
 The resolution of the written rasterize-fallback output, or zero when the fallback was not used.
 
+### `LevelUsed`
+
+```csharp
+PdfCompressionLevel? LevelUsed
+```
+
+The level of the written output when `CompressToTargetOptions.MaxLevel` was set (3.32.0), or null for the JPEG-quality search.
+
+### `ImageDpiUsed`
+
+```csharp
+double ImageDpiUsed
+```
+
+The resolution of the written output when `LevelUsed` is an image level (3.32.0), otherwise zero.
+
+### `BelowReadableResolution`
+
+```csharp
+bool BelowReadableResolution
+```
+
+True when the written output's page images are below `ImageLevelOptions.ReadableDpi` (only possible with `ImageLevelOptions.AllowBelowReadableResolution`), so small text may be hard to read (3.32.0, D-265).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/CompressToTargetResult.cs`](../../../src/Chuvadi.Pdf.Operations/CompressToTargetResult.cs)_

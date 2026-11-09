@@ -58,6 +58,22 @@ double MinRasterizeDpi
 
 The floor of the rasterize fallback's DPI descent. Default 72 DPI.
 
+### `MaxLevel`
+
+```csharp
+PdfCompressionLevel? MaxLevel
+```
+
+Switches the target mode to named levels (3.32.0, D-243, D-269): when set, the steps up to and including this level are tried in order and the first output at or below the target is written. Null (the default) keeps the JPEG-quality search described on this type, unchanged.
+
+### `ImageOptions`
+
+```csharp
+ImageLevelOptions? ImageOptions
+```
+
+Fills and the below-130-dpi leave for the image levels in the level search (3.32.0, D-270); null uses the defaults (dot-pattern fills, never below 130 dpi). See `MaxLevel` for how `ImageLevelOptions.Dpi` is used here.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/CompressToTargetOptions.cs`](../../../src/Chuvadi.Pdf.Operations/CompressToTargetOptions.cs)_

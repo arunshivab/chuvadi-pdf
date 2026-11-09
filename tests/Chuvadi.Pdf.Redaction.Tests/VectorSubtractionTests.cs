@@ -9,7 +9,7 @@
 // geometry whose ink provably misses every region: untouched subpaths survive
 // verbatim, straight stroked segments are split at (expanded) region
 // boundaries, and axis-aligned rectangle fills decompose into the surviving
-// sub-rectangles. Every doubtful construct (curves crossing a region,
+// sub-rectangles. Every doubtful construct (curved fills crossing a region,
 // unresolvable ExtGState line width, rotated regions over rectangle fills)
 // still drops — over-redaction in doubt, never retention.
 //
@@ -94,15 +94,19 @@ public sealed class VectorSubtractionTests
     }
 
     [Fact]
-    public void CurvedStrokeCrossingRegion_DropsThatSubpathOnly()
+    public void CurvedStrokeCrossingRegion_IsCutAndItsSiblingSurvives()
     {
         // A Bézier through the region plus a straight line far below it.
+        // 3.32.0 (P3): the curve is cut, not dropped whole; the original
+        // control points do not survive (the kept pieces have their own), and
+        // VectorCurveCut3320Tests checks the cut by rendering.
         string redacted = Redact(
             "50 700 m\n150 800 250 600 350 700 c\n50 100 m\n400 100 l\nS\n");
 
-        redacted.Should().NotContain("150 800",
-            "a curve crossing a region cannot be split safely and is removed whole");
-        redacted.Should().NotContain("250 600");
+        redacted.Should().NotContain("150 800 250 600 350 700 c",
+            "the curve crosses the region, so it is not kept verbatim");
+        redacted.Should().Contain("50 700 m",
+            "the piece before the region survives from the curve's start");
         redacted.Should().Contain("50 100 m",
             "the untouched straight subpath still survives");
     }

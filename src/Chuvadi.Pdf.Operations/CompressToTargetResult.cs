@@ -44,4 +44,24 @@ public sealed record CompressToTargetResult
     /// the fallback was not used.
     /// </summary>
     public double RasterizeDpiUsed { get; init; }
+
+    /// <summary>
+    /// The level of the written output when <see cref="CompressToTargetOptions.MaxLevel"/>
+    /// was set (3.32.0), or null for the JPEG-quality search.
+    /// </summary>
+    public PdfCompressionLevel? LevelUsed { get; init; }
+
+    /// <summary>
+    /// The resolution of the written output when <see cref="LevelUsed"/> is
+    /// an image level (3.32.0), otherwise zero.
+    /// </summary>
+    public double ImageDpiUsed { get; init; }
+
+    /// <summary>
+    /// True when the written output's page images are below
+    /// <see cref="ImageLevelOptions.ReadableDpi"/> (only possible with
+    /// <see cref="ImageLevelOptions.AllowBelowReadableResolution"/>), so small
+    /// text may be hard to read (3.32.0, D-265).
+    /// </summary>
+    public bool BelowReadableResolution { get; init; }
 }

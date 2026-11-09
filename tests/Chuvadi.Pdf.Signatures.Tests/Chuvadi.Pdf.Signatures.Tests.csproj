@@ -20,6 +20,10 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Cryptography\Chuvadi.Cryptography.csproj" />
+    <!-- 3.32.0: the signature appearance tests render and extract the widget. -->
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Images\Chuvadi.Pdf.Images.csproj" />
   </ItemGroup>
 
 </Project>

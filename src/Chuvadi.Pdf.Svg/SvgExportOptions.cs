@@ -175,5 +175,26 @@ public sealed class SvgExportOptions
     /// </summary>
     public IReadOnlyDictionary<string, bool>? LayerVisibility { get; init; }
 
+    /// <summary>
+    /// Gets or initialises per-layer visibility overrides by layer id (3.32.0):
+    /// <see cref="Chuvadi.Pdf.Documents.OptionalContentGroup.Id"/> → visible. They win over
+    /// <see cref="LayerVisibility"/> for the same group, and set apart layers
+    /// that share a name. Ignored when <see cref="IgnoreOptionalContent"/> is
+    /// true. Default: null.
+    /// </summary>
+    public IReadOnlyDictionary<int, bool>? LayerVisibilityById { get; init; }
+
+    /// <summary>
+    /// Gets or initialises which page box the SVG shows (3.32.0, P2). Default:
+    /// <see cref="Chuvadi.Pdf.Documents.PdfDisplayBox.CropBox"/> — the CropBox
+    /// intersected with the MediaBox, what a viewer shows: the SVG is that
+    /// box's size and its viewBox starts at the box's corner, so content
+    /// outside it is not shown.
+    /// <see cref="Chuvadi.Pdf.Documents.PdfDisplayBox.MediaBox"/> shows the
+    /// whole MediaBox, as before 3.32.0. A display list not built from a page
+    /// (no boxes) uses its MediaWidth and MediaHeight either way.
+    /// </summary>
+    public Chuvadi.Pdf.Documents.PdfDisplayBox DisplayBox { get; init; }
+
     private readonly int _rotation;
 }

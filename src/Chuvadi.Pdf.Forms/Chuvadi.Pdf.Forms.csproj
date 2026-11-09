@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts\Chuvadi.Pdf.Fonts.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Text.Shaping\Chuvadi.Pdf.Text.Shaping.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,5 +28,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.Annotations" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Signatures" />
   </ItemGroup>
 </Project>

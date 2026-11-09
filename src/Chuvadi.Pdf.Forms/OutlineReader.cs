@@ -99,7 +99,7 @@ public static class OutlineReader
             }
 
             string title = ExtractTitle(dict, store);
-            int pageIndex = ResolveDestinationPageIndex(dict, store, destinations);
+            PdfDestination? destination = ResolveDestination(dict, store, destinations);
 
             // Recurse into children
             List<OutlineItem> children = new List<OutlineItem>();
@@ -109,7 +109,10 @@ public static class OutlineReader
                 WalkSiblings(firstChild, store, destinations, visited, children);
             }
 
-            result.Add(new OutlineItem(title, pageIndex, children));
+            result.Add(new OutlineItem(title, destination?.PageIndex ?? -1, children)
+            {
+                Destination = destination,
+            });
 
             if (!dict.TryGetValue(PdfName.Intern("Next"), out PdfPrimitive? nextPrim))
             {
@@ -140,7 +143,7 @@ public static class OutlineReader
         return string.Empty;
     }
 
-    private static int ResolveDestinationPageIndex(
+    private static PdfDestination? ResolveDestination(
         PdfDictionary outlineDict,
         PdfObjectStore store,
         DestinationResolver destinations)
@@ -165,6 +168,6 @@ public static class OutlineReader
             }
         }
 
-        return destPrim is null ? -1 : destinations.ResolvePageIndex(destPrim);
+        return destPrim is null ? null : destinations.ResolveDestination(destPrim);
     }
 }

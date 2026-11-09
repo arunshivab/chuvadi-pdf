@@ -158,6 +158,25 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.32.0 (Reader and Print asks, D-208 to D-276):
+- **The 3.32.0 plan** — items 1c (signature appearance with text, image and
+  LiPi fallback), 2 (permissions as flags), 3 (`OpenedWith`, PDF-16),
+  4 (destination details), 5 (layer ids, locks, id overrides), 6 (viewports
+  cached), P2 (CropBox shown by default, `DisplayBox` opt-out), P3 (curved
+  strokes cut at redaction box edges).
+- **PDF-09** — named compression levels (Lossless, Medium, High,
+  ReducedColor, BlackAndWhiteWithColor, BlackAndWhite) and target mode by
+  level with a 130 dpi readable floor; the rasterize fallback keeps rotation.
+- **38** — `WpfRenderer` draws a box that does not start at 0,0 where it is.
+- **M2** — `AnnotationFlattenOptions.Mode` (View or Print).
+- **Indexed images** drawn by the raster renderer (they were skipped; the
+  "Indexed lookup" above held for fills and strokes only) and read at 1, 2
+  and 4 bits in SVG.
+- **Form XObjects inherit the graphics state** in raster; **Deflate encoder**
+  code-length limit; **inflater rejects over-subscribed codes** with a
+  `StreamDamaged` warning; **one font-descriptor rule** for `/StemV` and
+  `/Flags`.
+
 Shipped in v3.31.2 (bug fixes, D-207 to D-221):
 - **Signing real documents** — `PdfSigner.Sign` and `SignAsync` find their
   own signature dictionary through the written xref (they took a page's
@@ -276,43 +295,52 @@ Shipped in v3.22.0 (backlog scope A):
 Status verified against code at v3.26.0. Items are independent and may be
 re-ordered.
 
-### Planned for 3.32.0 (D-208, D-221)
-After 3.31.2, each as its own Rule 5 change:
-- **1c.** Signature appearance through the Forms appearance-text code, with
-  the LiPi fallback and an optional JPEG or PNG; the caller's XObject stays
-  as an advanced option.
-- **2.** `EncryptionOptions` take the existing `PdfPermissions` flags;
-  `EncryptionInfo.Flags` for reading.
-- **3 (PDF-16).** `EncryptionInfo.OpenedWith` (NoPassword, User, Owner),
-  trying the owner password first as the specification says.
-- **4.** Destination kind and coordinates on `OutlineItem`, `LinkAnnotation`
-  and named destinations.
-- **5.** Layers get `IsLocked`, `Id` and id-keyed overrides.
-- **6.** Viewports cached once per page, and documented.
-- **P2.** The CropBox becomes the default display area of the raster and SVG
-  output (option (a)). This takes the CropBox part of item 3 below.
-- **P3.** Redaction cuts curves exactly at the box edges by splitting the
-  Béziers, as it already cuts rectangles and lines; paths whose fill rule
-  makes the cut doubtful are still dropped whole.
+### Planned for 3.33.0 (D-234, D-240)
+**M1. Embed the standard 14 fonts.** One embedding engine shared with
+`PdfAWriter`, which moves onto it (its own Rule 5 line). The font files move
+to a shared fonts package. Liberation faces are embedded; Symbol and
+ZapfDingbats are reported, not embedded, until the URW font exception is
+confirmed.
 
 ### Reader asks (open)
-**PDF-09. Compress vector-only PDFs to a target byte budget (D-218).**
-`CompressToTarget` with the rasterising fallback does not always meet the
-target on vector-only drawings. Options (P4, D-221): the fallback also
-lowers JPEG quality; grayscale rasterisation; a DPI floor below 72. First
-measure on the Reader's CAD file, which the Reader is sending.
+**39. Damaged page content drawn blank with a warning (D-276).** Since 3.32.0
+an invalid Flate stream is rejected. When it is a page's content, rendering
+and text extraction of that page throw `FilterException`, as for any damaged
+page content. Option: draw the page blank (or what decoded) and report
+`PdfWarningKind.StreamDamaged`, as images and forms already do. A behaviour
+change for every damaged file; measure on the corpus first.
 
-**PDF-13.** Retired as a duplicate of PDF-16, which is 3.32.0 item 3 above
-(D-218).
+### Rendering (3.32.0 findings)
+**40. WPF clipping (Q10, D-231).** `WpfRenderer` ignores `ClipOp` (not
+implemented since v1). The Reader does not draw through WPF; needed if
+Windows printing later goes vector through `Chuvadi.Pdf.Rendering.Wpf`.
 
-### Rendering (3.31.2 follow-up)
-**38. WPF output ignores the MediaBox origin.** `WpfRenderer` flips with
-`new Matrix(1, 0, 0, -1, 0, list.MediaHeight)`, the same mistake 3.31.2 fixed
-in the raster and SVG output (P1): a page whose MediaBox does not start at
-0,0 is drawn shifted by the box's corner. Not changed in 3.31.2 because WPF
-cannot be built or checked on the Linux sandbox; fix and check on Windows.
+**41. SVG shading inside a group, soft mask or Type3 glyph.** A `sh` in a
+nested display list paints nothing (a 0 by 0 rect); 12 corpus pages, mostly
+colour emoji. Filling the page box instead improved 9 pages but made 2 worse,
+because SVG does not apply the group's soft mask to the shading. Fix: apply
+the group's mask and clip to the shading.
+
+**42. Soft mask in effect at a form's `Do` (D-264).** The raster renderer
+does not apply an ExtGState soft mask set before `Do` to the form's content.
+
+**43. Annotation `/OC` and print-state layers.** An annotation's own `/OC`
+layer and a layer's `/Usage /Print /PrintState` are honoured by neither the
+renderer nor `AnnotationFlattener`.
+
+### Redaction
+**44. Curved fills crossing a redaction box (Q9).** 3.32.0 cuts curved
+strokes; a single-subpath curved fill (a filled circle or rounded panel)
+crossing a box is still removed whole. Cutting it is a region boolean with
+curves and needs its own proof set.
 
 ### Text shaping
+**45. `ToUnicode` for Indic text in generated appearances.** Form-field and
+signature appearances (since 3.31) map only the first glyph of each shaped
+cluster, so copying or searching Indic text gives stray characters (for
+example ")" from glyph 41). Drawing is correct. The warning belongs in
+Pdf's own warnings (D-246).
+
 **25. Shapers not ported (3.26 scope note).** `TextShaper` ports HarfBuzz's
 Indic and default shapers only. Not ported: Arabic, Hebrew, Thai/Lao,
 Hangul, Khmer, Myanmar and USE (a font with only `dev3`-style tags is shaped
@@ -393,8 +421,8 @@ through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
 MediaBox in unrotated user space; `/Rotate` is applied only with the opt-in
 `ApplyPageRotation` (3.19), and the CropBox is not used to bound the output.
 A default switch would change every existing caller's output, so it waits for
-a major version. Since D-221 the CropBox part is planned for 3.32.0 (P2,
-above); the `/Rotate` default still waits. Since 3.31.2 a MediaBox that does
+a major version. The CropBox part shipped in 3.32.0 (P2); the `/Rotate`
+default still waits. Since 3.31.2 a MediaBox that does
 not start at 0,0 is drawn correctly (P1).
 
 ### Accessibility / archival

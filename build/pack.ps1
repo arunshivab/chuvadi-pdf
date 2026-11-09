@@ -130,4 +130,4 @@ Write-Host ""
 Write-Host "Produced $($packages.Count) package(s):" -ForegroundColor Green
 $packages | ForEach-Object { Write-Host "  $($_.Name)" -ForegroundColor White }
 Write-Host ""
-Write-Host "Next: .\build\publish.ps1 -ApiKey <nuget-api-key>" -ForegroundColor Cyan
+Write-Host "Next: copy the packages to local-nuget, push the signed tag v$Version, then run .\build\release-assets.ps1 -Version $Version (D-240)." -ForegroundColor Cyan

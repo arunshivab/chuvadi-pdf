@@ -1314,7 +1314,7 @@ internal sealed class DeflateDeflater
     // frequencies. Unused symbols get length 0. Uses a Huffman tree for the
     // initial lengths, the zlib bit-length overflow redistribution to enforce
     // the limit, then assigns shortest codes to the most frequent symbols.
-    private static int[] BuildCodeLengths(int[] freqs, int maxBits)
+    internal static int[] BuildCodeLengths(int[] freqs, int maxBits)
     {
         int n = freqs.Length;
         int[] lengths = new int[n];
@@ -1368,34 +1368,31 @@ internal sealed class DeflateDeflater
         int[] depth = new int[count];
         ComputeDepths(count - 1, left, right, depth);
 
-        int[] blCount = new int[maxBits + 1];
-        int overflow = 0;
+        // 3.32.0: a tree deeper than maxBits is rebuilt from halved counts
+        // (every used symbol keeps at least 1) until it fits. Before, the
+        // over-long codes were capped and rebalanced with zlib's adjustment
+        // loop, which assumes zlib's own way of counting and could leave an
+        // over-subscribed code set: a stream that zlib and other inflaters
+        // reject ("invalid literal/lengths set"). Seen on large, skewed
+        // inputs (from about 9 MB). Trees that already fit are unchanged.
         for (int i = 0; i < m; i++)
         {
-            int d = depth[i];
-            if (d > maxBits)
+            if (depth[i] > maxBits)
             {
-                d = maxBits;
-                overflow++;
+                int[] halved = new int[n];
+                for (int s = 0; s < n; s++)
+                {
+                    halved[s] = freqs[s] > 0 ? Math.Max(1, freqs[s] / 2) : 0;
+                }
+
+                return BuildCodeLengths(halved, maxBits);
             }
-            blCount[d]++;
         }
 
-        if (overflow > 0)
+        int[] blCount = new int[maxBits + 1];
+        for (int i = 0; i < m; i++)
         {
-            do
-            {
-                int bits = maxBits - 1;
-                while (blCount[bits] == 0)
-                {
-                    bits--;
-                }
-                blCount[bits]--;
-                blCount[bits + 1] += 2;
-                blCount[maxBits]--;
-                overflow -= 2;
-            }
-            while (overflow > 0);
+            blCount[depth[i]]++;
         }
 
         // Least frequent symbols receive the longest codes.
@@ -1927,6 +1924,22 @@ internal sealed class HuffmanTree
             if (l > 0)
             {
                 blCount[l]++;
+            }
+        }
+
+        // 3.32.0 (D-271): reject an over-subscribed set (more codes of some
+        // lengths than a prefix code can hold, Kraft sum above 1). Such a set
+        // has no valid decoding; zlib rejects it too ("invalid literal/lengths
+        // set"). Before 3.32.0 it decoded silently to the wrong bytes.
+        // Incomplete sets are still accepted, as before.
+        long left = 1;
+        for (int bits = 1; bits <= maxLength; bits++)
+        {
+            left = (left << 1) - blCount[bits];
+            if (left < 0)
+            {
+                throw new FilterException("FlateDecode",
+                    "Invalid Flate stream: the Huffman code lengths of a block are over-subscribed (more codes than a prefix code can hold). The stream is damaged or was written by a faulty encoder.");
             }
         }
 

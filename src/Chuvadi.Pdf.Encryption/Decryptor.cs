@@ -35,6 +35,13 @@ public sealed class Decryptor
         _algorithm = algorithm;
     }
 
+    /// <summary>
+    /// Gets which password opened the document (3.32.0); set by
+    /// <see cref="PdfEncryption.TryOpen"/>. A decryptor built directly from a
+    /// file key reports <see cref="PdfPasswordKind.NoPassword"/>.
+    /// </summary>
+    public PdfPasswordKind OpenedWith { get; init; }
+
     /// <summary>Decrypts data belonging to a specific indirect object.</summary>
     /// <param name="data">Encrypted bytes (string contents or stream payload).</param>
     /// <param name="objectNumber">/N field of the indirect object.</param>

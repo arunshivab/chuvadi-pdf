@@ -64,6 +64,24 @@ Gets or initialises whether /Metadata streams should be encrypted. Default: true
 
 ## Methods
 
+### `PermissionMask`
+
+__static__
+
+```csharp
+static int PermissionMask(PdfPermissions allowed)
+```
+
+Returns the `/P` value that grants exactly `allowed`, for `Permissions` (3.32.0, D-230). `WithPermissions` sets it for you.
+
+**Parameters**
+
+- `allowed` — The actions a user-password holder may take.
+
+**Returns:** The permission mask: the bits for the allowed actions set, the other permission bits clear, bits 1 and 2 clear and every reserved bit set, as PDF 32000-1:2008 Table 22 requires. `PdfPermissions.All` gives `AllPermissionsAllowed`.
+
+**Remarks:** `PdfPermissions.PrintHighQuality` also sets the print bit, because the specification gives bit 12 meaning only together with bit 3.
+
 ### `Aes128`
 
 __static__

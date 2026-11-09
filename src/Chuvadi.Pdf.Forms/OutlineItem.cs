@@ -34,6 +34,14 @@ public sealed class OutlineItem
     /// </summary>
     public int DestinationPageIndex { get; }
 
+    /// <summary>
+    /// Gets where the bookmark goes (3.32.0): the page, and how it is shown,
+    /// or null when the destination cannot be resolved to a page.
+    /// <see cref="PdfDestination.PageIndex"/> equals
+    /// <see cref="DestinationPageIndex"/> whenever this is set.
+    /// </summary>
+    public PdfDestination? Destination { get; init; }
+
     /// <summary>Gets the nested child bookmarks, if any.</summary>
     public IReadOnlyList<OutlineItem> Children { get; }
 }

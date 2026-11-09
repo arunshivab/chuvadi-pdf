@@ -268,24 +268,22 @@ public sealed class PdfWriterTests
     // ── PdfReader — malformed input handling ──────────────────────────────
 
     [Fact]
-    public void Open_OversizedIntegerInDictionary_ThrowsPdfParseException()
+    public void Open_OversizedIntegerInDictionary_OpensWithTheValueAsAReal()
     {
-        // Build a structurally valid minimal PDF where the pages dict has a
-        // /Count value that exceeds Int32.MaxValue. Previously caused an
-        // unhandled OverflowException from int.Parse in PdfObjectParser;
-        // now caught and re-thrown as PdfParseException. Surfaced by the
-        // pdf-open fuzz target.
+        // A structurally valid minimal PDF whose pages dict has a /Count value
+        // that exceeds Int32.MaxValue. It once caused an unhandled
+        // OverflowException (found by the pdf-open fuzz target); up to 3.31.2
+        // it threw PdfParseException. Since 3.32.0 (D-278) an integer
+        // outside the 32-bit range is kept as a real, as other readers do, so
+        // the file opens; the page tree is read from /Kids, which is empty.
         byte[] pdf = BuildPdfWithOversizedInteger();
 
-        Action act = () =>
-        {
-            using MemoryStream ms = new MemoryStream(pdf);
-            using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: false);
-            // Force eager parse of the pages dict if Open is lazy.
-            _ = doc.PageCount;
-        };
+        using MemoryStream ms = new MemoryStream(pdf);
+        using PdfDocument doc = PdfDocument.Open(ms, leaveOpen: false);
 
-        act.Should().Throw<PdfParseException>();
+        doc.PageCount.Should().Be(0);
+        PdfDictionary pages = (PdfDictionary)doc.Objects.Resolve(new PdfReference(2, 0));
+        pages[PdfName.Intern("Count")].Should().BeOfType<PdfReal>().Which.Value.Should().Be(9999999999d);
     }
 
     private static byte[] BuildPdfWithOversizedInteger()

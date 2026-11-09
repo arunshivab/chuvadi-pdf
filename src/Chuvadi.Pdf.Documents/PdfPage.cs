@@ -34,6 +34,7 @@ public sealed class PdfPage
     private readonly Func<OptionalContentVisibility>? _optionalContent;
     private readonly Func<PdfDictionary?>? _structTreeRoot;
     private readonly Func<PdfDictionary?>? _acroForm;
+    private IReadOnlyList<PdfViewport>? _viewports;
 
     internal PdfPage(
         PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex,
@@ -182,8 +183,17 @@ public sealed class PdfPage
     /// and measurement scale, for example each drawing on a sheet. Empty when
     /// the page has none. PDF 32000-1:2008 §12.9.2.
     /// </summary>
+    /// <remarks>
+    /// Since 3.32.0 the <c>/VP</c> array is read once, on first use, and the
+    /// same list is returned on every call, so <see cref="FindViewport"/> and
+    /// <see cref="MeasureDistance"/> no longer parse it each time. A change
+    /// made to the page's <c>/VP</c> entry through the low-level dictionary
+    /// after the first call is not seen. Like the rest of the page, the list
+    /// belongs to one <see cref="PdfDocument"/>, which is not for concurrent
+    /// use (see docs/THREAD-SAFETY.md).
+    /// </remarks>
     public IReadOnlyList<PdfViewport> Viewports =>
-        PdfViewport.ReadArray(_dict.TryGetValue(PdfName.Intern("VP"), out PdfPrimitive? vp) ? vp : null, _resolver);
+        _viewports ??= PdfViewport.ReadArray(_dict.TryGetValue(PdfName.Intern("VP"), out PdfPrimitive? vp) ? vp : null, _resolver);
 
     /// <summary>
     /// Returns the viewport that governs a point (default user space): the

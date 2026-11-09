@@ -31,6 +31,12 @@ public sealed class PdfReader : IDisposable
     private readonly RecoveryLog _recoveryLog;
     private bool _disposed;
 
+    /// <summary>
+    /// Gets which password opened the document (3.32.0), or null when the
+    /// document is not encrypted.
+    /// </summary>
+    public PdfPasswordKind? OpenedWith { get; private init; }
+
     private PdfReader(
         Stream stream,
         bool leaveOpen,
@@ -318,7 +324,10 @@ public sealed class PdfReader : IDisposable
 
         storeHolder[0] = objects;
 
-        return new PdfReader(stream, leaveOpen, trailer, objects, recoveryLog);
+        return new PdfReader(stream, leaveOpen, trailer, objects, recoveryLog)
+        {
+            OpenedWith = finalDecryptor?.OpenedWith,
+        };
     }
 
     /// <summary>
@@ -929,7 +938,9 @@ public sealed class PdfReader : IDisposable
             PdfPrimitive? value = streamReader.TryRead(
                 entry.StreamObjectNumber,
                 entry.IndexInStream,
-                containerObjNum => ResolveContainerAsIndirect(store, containerObjNum));
+                containerObjNum => ResolveContainerAsIndirect(store, containerObjNum),
+                recoveryLog,
+                store.OnWarning);
 
             if (value is null) { return null; }
 

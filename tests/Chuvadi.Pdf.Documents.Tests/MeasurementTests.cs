@@ -45,6 +45,19 @@ public sealed class MeasurementTests
     }
 
     [Fact]
+    public void Viewports_AreReadOnce_AndTheSameListIsReturned()
+    {
+        // 3.32.0 (D-208 item 6): the /VP array is parsed on first use only.
+        using PdfDocument doc = Open(Viewport("0 0 300 300", "Plan", "(1 in = 10 ft)", "[" + FeetScale + "]"));
+        PdfPage page = doc.Pages[0];
+
+        IReadOnlyList<PdfViewport> first = page.Viewports;
+
+        page.Viewports.Should().BeSameAs(first);
+        page.FindViewport(10, 10).Should().BeSameAs(first[0]);
+    }
+
+    [Fact]
     public void Distance_ConvertsUserSpaceToDrawingUnits()
     {
         using PdfDocument doc = Open(Viewport("0 0 300 300", "Plan", "(1 in = 10 ft)", "[" + FeetScale + "]"));

@@ -44,6 +44,22 @@ IReadOnlyList<string> Intents
 
 Gets the layer's intents (e.g., "View", "Design"). Empty when unspecified.
 
+### `Id`
+
+```csharp
+int Id
+```
+
+Gets the layer's id (3.32.0): its object number, unique within the document, so layers with the same name can be told apart; -1 for a group written directly in `/OCGs` instead of by reference. Use it with `OptionalContentVisibility.WithOverridesById`. It identifies the layer in this opened document; another tool rewriting the file may renumber it.
+
+### `IsLocked`
+
+```csharp
+bool IsLocked
+```
+
+Gets whether the default configuration locks the layer (3.32.0): it is in `/OCProperties /D /Locked`, so a viewer does not let its user change the layer's state (PDF 32000-1:2008 §8.11.4.3). Chuvadi's overrides still apply to it.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/OptionalContentGroup.cs`](../../../src/Chuvadi.Pdf.Documents/OptionalContentGroup.cs)_

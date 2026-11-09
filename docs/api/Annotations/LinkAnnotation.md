@@ -36,6 +36,14 @@ int DestinationPageIndex
 
 Gets the zero-based destination page index for an internal link, or -1 when the link is external.
 
+### `Destination`
+
+```csharp
+PdfDestination? Destination
+```
+
+Gets where an internal link goes (3.32.0): the page, and how it is shown. Null for an external link, and for a link built with a page index only. `PdfDestination.PageIndex` equals `DestinationPageIndex` whenever this is set.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Annotations/Annotations.cs`](../../../src/Chuvadi.Pdf.Annotations/Annotations.cs)_

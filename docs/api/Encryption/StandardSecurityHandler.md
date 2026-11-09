@@ -73,6 +73,30 @@ static byte[]? ValidatePasswordR6(string password, byte[] uValue, // 48 bytes: 3
 
 Validates a password against an R=6 /U value (ISO 32000-2 Algorithm 2.B). Returns the derived file encryption key on success, or null on failure.
 
+**Remarks:** Since 3.32.0 the password is tested as the owner password first (when `tryOwnerPassword` is set), as ISO 32000-2 Algorithm 2.A orders it. The key returned is the same either way.
+
+### `ValidatePasswordR6`
+
+__static__
+
+```csharp
+static byte[]? ValidatePasswordR6(string password, byte[] uValue, byte[] ueValue, byte[] oValue, byte[] oeValue, bool tryOwnerPassword, out bool isOwnerPassword)
+```
+
+Validates a password against an R=6 file (ISO 32000-2 Algorithm 2.A) and reports whether it was the owner password (3.32.0).
+
+**Parameters**
+
+- `password` — The password to test.
+- `uValue` — The 48-byte /U value.
+- `ueValue` — The 32-byte /UE value.
+- `oValue` — The 48-byte /O value.
+- `oeValue` — The 32-byte /OE value.
+- `tryOwnerPassword` — Whether to test it as the owner password.
+- `isOwnerPassword` — True when it opened as the owner password.
+
+**Returns:** The file encryption key, or null when the password is wrong.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Encryption/StandardSecurityHandler.cs`](../../../src/Chuvadi.Pdf.Encryption/StandardSecurityHandler.cs)_

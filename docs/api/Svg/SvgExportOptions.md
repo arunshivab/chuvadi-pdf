@@ -122,6 +122,22 @@ IReadOnlyDictionary<string, bool>? LayerVisibility
 
 Per-layer visibility overrides (layer name → visible) on top of the document's default configuration. Ignored when `IgnoreOptionalContent` is true. Default: null.
 
+### `LayerVisibilityById`
+
+```csharp
+IReadOnlyDictionary<int, bool>? LayerVisibilityById
+```
+
+Gets or initialises per-layer visibility overrides by layer id (3.32.0): `Chuvadi.Pdf.Documents.OptionalContentGroup.Id` → visible. They win over `LayerVisibility` for the same group, and set apart layers that share a name. Ignored when `IgnoreOptionalContent` is true. Default: null.
+
+### `DisplayBox`
+
+```csharp
+Chuvadi.Pdf.Documents.PdfDisplayBox DisplayBox
+```
+
+Gets or initialises which page box the SVG shows (3.32.0, P2). Default: `Chuvadi.Pdf.Documents.PdfDisplayBox.CropBox` — the CropBox intersected with the MediaBox, what a viewer shows: the SVG is that box's size and its viewBox starts at the box's corner, so content outside it is not shown. `Chuvadi.Pdf.Documents.PdfDisplayBox.MediaBox` shows the whole MediaBox, as before 3.32.0. A display list not built from a page (no boxes) uses its MediaWidth and MediaHeight either way.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Svg/SvgExportOptions.cs`](../../../src/Chuvadi.Pdf.Svg/SvgExportOptions.cs)_

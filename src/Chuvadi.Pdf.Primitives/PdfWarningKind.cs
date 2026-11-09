@@ -26,4 +26,12 @@ public enum PdfWarningKind
     /// (3.31).
     /// </summary>
     AppearanceNotGenerated,
+
+    /// <summary>
+    /// A stream's data could not be decoded (for example an invalid Flate
+    /// stream); it is treated as damaged and what it holds (an image, a form,
+    /// the objects of an object stream) is skipped. The reason says why
+    /// (3.32.0).
+    /// </summary>
+    StreamDamaged,
 }
