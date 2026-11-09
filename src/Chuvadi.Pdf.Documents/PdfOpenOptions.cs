@@ -42,4 +42,34 @@ public sealed class PdfOpenOptions
     /// are not reported.
     /// </summary>
     public System.Action<PdfWarning>? OnWarning { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether to repair a damaged file while opening
+    /// it (3.32.1, D-280). When true and the file's structure cannot be read
+    /// (a wrong <c>startxref</c>, a broken cross-reference table or trailer,
+    /// junk before the header, a truncated file), the file is repaired in
+    /// memory with <c>PdfRepairer</c> and the repaired copy is opened. The
+    /// file on disk is not changed. <see cref="PdfDocument.Warnings"/> then
+    /// starts with a line saying the file was repaired, why, and what was
+    /// recovered (so <see cref="PdfDocument.IsRecovered"/> is true). Default
+    /// false: such a file throws <see cref="PdfParseException"/>, as before.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only a structure failure triggers the repair. A wrong or missing
+    /// password (<see cref="PdfPasswordRequiredException"/>), a limit
+    /// (<see cref="PdfLimitExceededException"/>), an unsupported security
+    /// handler and cancellation are thrown as before. When the repair cannot
+    /// find a document catalog, <see cref="PdfParseException"/> is thrown with
+    /// both reasons.
+    /// </para>
+    /// <para>
+    /// The repaired copy is held in memory (about the size of the file). The
+    /// caller's stream is read from its start and, unless
+    /// <see cref="LeaveOpen"/> is set, disposed once the repaired copy is open.
+    /// An encrypted file keeps its encryption, but objects stored inside its
+    /// object streams cannot be recovered.
+    /// </para>
+    /// </remarks>
+    public bool RepairIfDamaged { get; init; }
 }

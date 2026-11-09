@@ -158,6 +158,11 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.32.1 (D-280):
+- **24** — damaged cross-reference recovery: opt-in
+  `PdfOpenOptions.RepairIfDamaged` repairs in memory with `PdfRepairer` and
+  opens the result, saying so in `Warnings` (see 48 for a limit).
+
 Shipped in v3.32.0 (Reader and Print asks, D-208 to D-276):
 - **The 3.32.0 plan** — items 1c (signature appearance with text, image and
   LiPi fallback), 2 (permissions as flags), 3 (`OpenedWith`, PDF-16),
@@ -302,6 +307,42 @@ to a shared fonts package. Liberation faces are embedded; Symbol and
 ZapfDingbats are reported, not embedded, until the URW font exception is
 confirmed.
 
+**46. PDF/A font substitution ignores the original font's encoding.** When
+`PdfAWriter` embeds a Liberation substitute for a non-embedded Standard 14
+font (`FontSubstitution`), the new font is always WinAnsi-encoded. It replaces
+the original font dictionary whatever that font's `/Encoding` was.
+
+**Effect:** a byte in the page content is drawn as its WinAnsi glyph, not as
+the glyph the original encoding named.
+- **No `/Encoding`:** a Type 1 Standard 14 text font's built-in encoding is
+  StandardEncoding, which differs from WinAnsi in many places:
+  - `'` (0x27) is quoteright in StandardEncoding but quotesingle in WinAnsi;
+  - `` ` `` (0x60) is quoteleft but grave;
+  - most of 0xA1–0xFE differ, for example 0xE1 is AE but aacute.
+- **`/Differences`:** any custom array (common in TeX output and old drivers)
+  is lost.
+- **`/MacRomanEncoding`:** also lost.
+- **Several encodings at once:** the substitute is cached per face, so all
+  fonts mapped to one face share one WinAnsi font object.
+
+The output shows wrong glyphs, and text extracted from it follows the same
+wrong mapping. A PDF/A validator can also flag codes with no glyph in the
+subset. Symbol and ZapfDingbats
+(built-in encodings) are reported, not embedded (M1).
+
+**Fix (with M1, 3.33.0):** build the substitute from the original encoding:
+1. Resolve the original encoding: base encoding plus `/Differences`, with
+   StandardEncoding when it is absent for a non-symbolic Type 1 font.
+2. Subset the glyphs for those code-to-glyph-name mappings.
+3. Write a matching `/Encoding` (`/Differences` over WinAnsi) with `/Widths`.
+4. Cache by face *and* encoding.
+
+**Tests:**
+- StandardEncoding quotes;
+- a TeX-style `/Differences` font;
+- two fonts on one face with different encodings;
+- veraPDF-style checks that every used code has a glyph.
+
 ### Reader asks (open)
 **39. Damaged page content drawn blank with a warning (D-276).** Since 3.32.0
 an invalid Flate stream is rejected. When it is a page's content, rendering
@@ -407,10 +448,16 @@ and square caps and dotted lines are done, 3.25).
 the whole stroke); a true elliptical pen needs stroking in user space.
 
 ### Reading
-**24. Damaged cross-reference recovery.** A file whose `startxref` is
-missing or wrong fails to open (`PdfParseException`); MuPDF rebuilds the
-table by scanning for `obj` keywords. A scan-and-rebuild fallback would
-open many truncated or hand-edited files.
+**48. Repair picks an older revision of an incrementally updated file.**
+`PdfRepairer` keeps the last definition of each object by file position, but
+an object found in an object stream loses to any direct definition of the
+same number, even an older one. A file saved incrementally with object
+streams can therefore come back with an older object. In the 3.32.1 check,
+1 of 57 distinct damaged files was affected: a filled XFA certificate's page
+text went from 2,032 to 976 characters. This applies to `PdfRepairer.Repair`
+and to `RepairIfDamaged` alike. The fix is to follow the surviving
+cross-reference sections (`/Prev` chain) where they still parse, and fall
+back to file order only for objects they do not cover.
 
 ### Image codecs (rendering)
 **1. JPXDecode (JPEG 2000).** Recognised but not decoded; JPX image bytes fall
@@ -440,6 +487,24 @@ depends on Walking) with `[assembly: TypeForwardedTo(...)]` shims left in
 DisplayList for binary compatibility, after which Raster can drop its
 DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
+
+### Tooling
+**47. `tools/check_style.py` applies its `var` rule only to absolute paths.**
+It treats a file as being under `src` when `/src/` (or `\src\`) appears in
+its path. CI passes relative paths (`src/...`), so the rule never fires
+there. Run on Windows with full paths (9 Nov), it flags 8 lines in two files
+that are not part of 3.32.0:
+- `BrotliSimplePrefixCode.cs` line 108, a genuine `var` holding a tuple
+  array;
+- `XfaJavaScriptEngine.cs`, 7 false alarms: the JavaScript parser's `"var"`
+  keyword strings and a pattern variable named `var`.
+
+Fix:
+- match `src` as the first path part too;
+- skip string literals and identifiers;
+- type the Brotli `var`.
+
+Then CI checks what the rule says.
 
 ### Scrub-crop residuals
 **17. Remaining Scrub residuals (after 3.23).** Kept whole under Scrub:

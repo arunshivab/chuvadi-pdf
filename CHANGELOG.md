@@ -10,6 +10,42 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.32.1] - 2026-11-09
+
+Opt-in repair of damaged files while opening (D-280, Chuvadi Reader).
+
+### Added
+- **`PdfOpenOptions.RepairIfDamaged`** (default false). When set, a file
+  whose structure cannot be read is repaired in memory with `PdfRepairer`
+  and the repaired copy is opened. This covers a wrong `startxref`, a broken
+  cross-reference table or trailer, junk before the header, or a truncated
+  file.
+  - **Warnings:** `PdfDocument.Warnings` starts with a line saying the file
+    was repaired, why, and what was recovered, so `IsRecovered` is true.
+  - **What still throws:** a wrong or missing password, a limit, an
+    unsupported security handler and cancellation throw as before. When
+    nothing usable is recovered, `PdfParseException` carries both reasons.
+  - **Stream ownership:** the caller's stream is read from its start. Unless
+    `LeaveOpen` is set, it is disposed once the repaired copy is open. The
+    file on disk is not changed.
+  - **Encryption and metadata:** an encrypted file keeps its `/Encrypt` and
+    `/ID`. Objects stored inside its object streams cannot be recovered. The
+    repaired copy gets no added `/Info` or XMP metadata.
+  - **Overloads:** works through `Open(Stream, PdfOpenOptions)`,
+    `Open(string, PdfOpenOptions)` and `OpenAsync(Stream, PdfOpenOptions)`.
+
+### Unchanged
+- `PdfRepairer.Repair` writes exactly the same bytes as in 3.32.0. Checked on
+  64 damaged files, including two encrypted ones.
+
+### Backlog
+- 24 shipped (opt-in). New tickets:
+  - 46: PDF/A font substitution ignores the original font's encoding.
+  - 47: the style checker's `var` rule and paths.
+  - 48: repair can pick an older revision of an incrementally updated file
+    that uses object streams.
+
+---
 ## [3.32.0] - 2026-11-09
 
 New API from the Reader and Print asks (D-208, D-221, D-234, D-243,
