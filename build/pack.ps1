@@ -94,7 +94,8 @@ if ($BaselineVersion -ne "") {
 }
 Write-Host ""
 
-# Chuvadi.Fonts comes from the monorepo release, checked by SHA-256 (D-147).
+# Chuvadi.Fonts and Chuvadi.Fonts.Liberation come from the monorepo releases,
+# checked by SHA-256 (D-147, D-311).
 & (Join-Path $PSScriptRoot "fetch-fonts.ps1")
 
 # Clean build artifacts so nothing stale leaks into the packages.
@@ -121,9 +122,10 @@ Write-Host "Packing..." -ForegroundColor Gray
 dotnet pack Chuvadi.slnx -c Release -p:Version=$Version -o $OutputDir @packArgs
 if ($LASTEXITCODE -ne 0) { throw "Pack failed." }
 
-# Consumers restore Chuvadi.Fonts from the same feed as the Chuvadi packages,
-# so the verified file is copied next to them (D-147).
-Copy-Item -Path (Join-Path $root ".fonts-feed\Chuvadi.Fonts.1.0.0.nupkg") -Destination $OutputDir -Force
+# Consumers restore the font packages from the same feed as the Chuvadi
+# packages, so the verified files are copied next to them (D-147, D-311).
+Copy-Item -Path (Join-Path $root ".fonts-feed\Chuvadi.Fonts.1.1.0.nupkg") -Destination $OutputDir -Force
+Copy-Item -Path (Join-Path $root ".fonts-feed\Chuvadi.Fonts.Liberation.1.0.0.nupkg") -Destination $OutputDir -Force
 
 $packages = Get-ChildItem $OutputDir -Filter *.nupkg
 Write-Host ""

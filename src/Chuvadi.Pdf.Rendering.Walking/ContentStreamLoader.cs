@@ -6,6 +6,7 @@
 // Loads and filter-decodes a page's content stream(s) into one byte buffer.
 
 using System;
+using System.Globalization;
 using System.IO;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Objects;
@@ -26,7 +27,19 @@ internal static class ContentStreamLoader
     /// Loads and decodes the content bytes for a /Contents value; empty when
     /// the entry is missing, null, or not a stream/array.
     /// </summary>
-    internal static byte[] Load(PdfPrimitive? contents, PdfObjectStore objects)
+    /// <remarks>
+    /// 3.33.0 (ticket 39, D-325): a content stream that a filter finds damaged
+    /// gives what decoded before the damage (cut back to the last whitespace),
+    /// or nothing, and a <see cref="PdfWarningKind.StreamDamaged"/> warning
+    /// goes to <see cref="PdfObjectStore.OnWarning"/>. Before, the
+    /// <see cref="FilterException"/> was thrown and the page could not be
+    /// drawn at all.
+    /// </remarks>
+    /// <param name="contents">The page's /Contents value.</param>
+    /// <param name="objects">The document's objects.</param>
+    /// <param name="pageNumber">The 1-based page number for the warning, or null.</param>
+    /// <returns>The decoded content bytes.</returns>
+    internal static byte[] Load(PdfPrimitive? contents, PdfObjectStore objects, int? pageNumber = null)
     {
         ArgumentNullException.ThrowIfNull(objects);
 
@@ -39,7 +52,7 @@ internal static class ContentStreamLoader
 
         if (resolved is PdfStream single)
         {
-            return Decode(single);
+            return DecodePageContent(single, contents, objects, pageNumber);
         }
 
         if (resolved is PdfArray array)
@@ -49,7 +62,7 @@ internal static class ContentStreamLoader
             {
                 if (objects.Resolve(array[i]) is PdfStream part)
                 {
-                    byte[] decoded = Decode(part);
+                    byte[] decoded = DecodePageContent(part, array[i], objects, pageNumber);
                     merged.Write(decoded, 0, decoded.Length);
                     if (i < array.Count - 1)
                     {
@@ -61,6 +74,24 @@ internal static class ContentStreamLoader
         }
 
         return Array.Empty<byte>();
+    }
+
+    // One page content stream: decoded, or on damage what decoded before it,
+    // with a warning.
+    private static byte[] DecodePageContent(PdfStream stream, PdfPrimitive? reference, PdfObjectStore objects, int? pageNumber)
+    {
+        try
+        {
+            return Decode(stream);
+        }
+        catch (FilterException damage)
+        {
+            string subject = reference is PdfReference r
+                ? "page content " + r.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " " + r.Generation.ToString(CultureInfo.InvariantCulture) + " R"
+                : "page content (direct)";
+            objects.OnWarning?.Invoke(new PdfWarning(PdfWarningKind.StreamDamaged, pageNumber, subject, DamagedContent.Reason(damage)));
+            return DamagedContent.UsablePrefix(damage);
+        }
     }
 
     /// <summary>

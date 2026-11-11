@@ -9,16 +9,16 @@
 using System;
 using System.Collections.Generic;
 
-namespace Chuvadi.Pdf.PdfA;
+namespace Chuvadi.Pdf.Authoring;
 
 /// <summary>A Liberation substitute for a Standard-14 base font.</summary>
 /// <param name="Face">The Liberation face key, e.g. "LiberationSans-Regular".</param>
 /// <param name="Serif">Whether the face is serif (for the descriptor flag).</param>
-internal sealed record Standard14Substitute(string Face, bool Serif);
+internal sealed record LiberationSubstitute(string Face, bool Serif);
 
 internal static class Standard14Map
 {
-    private static readonly Dictionary<string, Standard14Substitute> Map = Build();
+    private static readonly Dictionary<string, LiberationSubstitute> Map = Build();
 
     /// <summary>
     /// Resolves a base-font name (subset prefix and style suffixes tolerated) to
@@ -27,11 +27,25 @@ internal static class Standard14Map
     /// </summary>
     /// <param name="baseFont">The /BaseFont name from the font dictionary.</param>
     /// <returns>The substitute, or null when unmapped.</returns>
-    internal static Standard14Substitute? Lookup(string baseFont)
+    internal static LiberationSubstitute? Lookup(string baseFont)
     {
         ArgumentNullException.ThrowIfNull(baseFont);
         string name = Normalize(baseFont);
-        return Map.TryGetValue(name, out Standard14Substitute? sub) ? sub : null;
+        return Map.TryGetValue(name, out LiberationSubstitute? sub) ? sub : null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="baseFont"/> is one of the twelve standard 14
+    /// text font names (subset prefix tolerated), not an alias such as Arial.
+    /// </summary>
+    /// <param name="baseFont">The /BaseFont name from the font dictionary.</param>
+    /// <returns>True for a standard 14 text font name.</returns>
+    internal static bool IsStandard14Name(string baseFont)
+    {
+        ArgumentNullException.ThrowIfNull(baseFont);
+        return Normalize(baseFont) is "helvetica" or "helvetica-bold" or "helvetica-oblique" or "helvetica-boldoblique"
+            or "times-roman" or "times-bold" or "times-italic" or "times-bolditalic"
+            or "courier" or "courier-bold" or "courier-oblique" or "courier-boldoblique";
     }
 
     // Strip a 6-uppercase-letter subset prefix ("ABCDEF+") and lowercase.
@@ -59,22 +73,22 @@ internal static class Standard14Map
         return name.Replace(" ", string.Empty).Replace(",", "-").ToLowerInvariant();
     }
 
-    private static Dictionary<string, Standard14Substitute> Build()
+    private static Dictionary<string, LiberationSubstitute> Build()
     {
-        Standard14Substitute sans = new Standard14Substitute("LiberationSans-Regular", false);
-        Standard14Substitute sansB = new Standard14Substitute("LiberationSans-Bold", false);
-        Standard14Substitute sansI = new Standard14Substitute("LiberationSans-Italic", false);
-        Standard14Substitute sansBI = new Standard14Substitute("LiberationSans-BoldItalic", false);
-        Standard14Substitute serif = new Standard14Substitute("LiberationSerif-Regular", true);
-        Standard14Substitute serifB = new Standard14Substitute("LiberationSerif-Bold", true);
-        Standard14Substitute serifI = new Standard14Substitute("LiberationSerif-Italic", true);
-        Standard14Substitute serifBI = new Standard14Substitute("LiberationSerif-BoldItalic", true);
-        Standard14Substitute mono = new Standard14Substitute("LiberationMono-Regular", false);
-        Standard14Substitute monoB = new Standard14Substitute("LiberationMono-Bold", false);
-        Standard14Substitute monoI = new Standard14Substitute("LiberationMono-Italic", false);
-        Standard14Substitute monoBI = new Standard14Substitute("LiberationMono-BoldItalic", false);
+        LiberationSubstitute sans = new LiberationSubstitute("LiberationSans-Regular", false);
+        LiberationSubstitute sansB = new LiberationSubstitute("LiberationSans-Bold", false);
+        LiberationSubstitute sansI = new LiberationSubstitute("LiberationSans-Italic", false);
+        LiberationSubstitute sansBI = new LiberationSubstitute("LiberationSans-BoldItalic", false);
+        LiberationSubstitute serif = new LiberationSubstitute("LiberationSerif-Regular", true);
+        LiberationSubstitute serifB = new LiberationSubstitute("LiberationSerif-Bold", true);
+        LiberationSubstitute serifI = new LiberationSubstitute("LiberationSerif-Italic", true);
+        LiberationSubstitute serifBI = new LiberationSubstitute("LiberationSerif-BoldItalic", true);
+        LiberationSubstitute mono = new LiberationSubstitute("LiberationMono-Regular", false);
+        LiberationSubstitute monoB = new LiberationSubstitute("LiberationMono-Bold", false);
+        LiberationSubstitute monoI = new LiberationSubstitute("LiberationMono-Italic", false);
+        LiberationSubstitute monoBI = new LiberationSubstitute("LiberationMono-BoldItalic", false);
 
-        return new Dictionary<string, Standard14Substitute>(StringComparer.Ordinal)
+        return new Dictionary<string, LiberationSubstitute>(StringComparer.Ordinal)
         {
             ["helvetica"] = sans,
             ["helvetica-bold"] = sansB,

@@ -455,6 +455,9 @@ python tools/gen_api_docs.py
 | [StampPlacement](Operations/StampPlacement.md) | enum | Whether a stamp is drawn over or under the existing page content. |
 | [StampRequest](Operations/StampRequest.md) | class | One stamp for `PageStamper.PlaceMany`: a source page drawn onto a target page under an affine transform, over or under the existing content, at a constant opacity. |
 | [StampTokens](Operations/StampTokens.md) | class | Resolves stamp templates against a `StampContext`. |
+| [StandardFontEmbedOptions](Operations/StandardFontEmbedOptions.md) | class | Options for `StandardFontEmbedder`. |
+| [StandardFontEmbedResult](Operations/StandardFontEmbedResult.md) | class | What `StandardFontEmbedder.Embed` did. |
+| [StandardFontEmbedder](Operations/StandardFontEmbedder.md) | class | Embeds the standard 14 text fonts (Helvetica, Times, Courier) that a document names but does not embed, as subsetted Liberation fonts with the same metrics, so the document looks the same in every viewer (3.33.0). |
 | [TextStamper](Operations/TextStamper.md) | class | Draws a single line of text at one of twelve anchor positions on selected pages, with template-token substitution (page numbers in several styles, file name/path, caller-supplied date/time, literal text). |
 
 ## Chuvadi.Pdf.PdfA

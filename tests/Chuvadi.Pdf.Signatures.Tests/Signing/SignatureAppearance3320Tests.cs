@@ -107,10 +107,8 @@ public sealed class SignatureAppearance3320Tests
 
         Signing3312Tests.AssertAllVerify(signed, trust, expectedCount: 1);
 
-        // Not checked here: the extracted text. The form-field appearance code
-        // this shares (since 3.31) writes ToUnicode only for the first glyph of
-        // each shaped cluster, so extraction gives stray characters for Indic
-        // text; reported separately as its own ticket.
+        // 3.33.0 (ticket 45): the shaped clusters carry their source text.
+        WidgetText(signed).Should().Contain(TamilName);
         using PdfDocument doc = PdfDocument.Open(new MemoryStream(signed), leaveOpen: false);
         PdfDictionary type0 = FallbackFont(doc);
         string baseFont = doc.Objects.ResolveAs<PdfName>(type0[PdfName.Intern("BaseFont")])!.Value;

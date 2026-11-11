@@ -66,4 +66,9 @@ public sealed class FilterException : PdfException
     /// Returns null when the filter name was not provided.
     /// </summary>
     public string? FilterName { get; }
+
+    // 3.33.0 (ticket 39, D-325): the bytes a filter decoded before it found
+    // the damage, when it can tell (FlateDecode without a predictor); null
+    // otherwise. Used to draw what a damaged page content stream holds.
+    internal byte[]? PartialOutput { get; set; }
 }

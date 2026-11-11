@@ -36,8 +36,11 @@ namespace Chuvadi.Pdf.IO;
 /// </remarks>
 public static class PdfWriter
 {
+    // 3.33.0 (D-318): the binary comment on line 2 is written as Latin-1, so
+    // its four bytes are above 127 (PDF 32000-1:2008 §7.5.2; ISO 19005-1
+    // §6.1.2). Before, ASCII turned them into "????".
     private static readonly byte[] PdfHeader =
-        Encoding.ASCII.GetBytes("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        Encoding.Latin1.GetBytes("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
 
     // ── Public API ────────────────────────────────────────────────────────
 

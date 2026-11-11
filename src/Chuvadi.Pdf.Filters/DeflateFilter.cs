@@ -138,7 +138,17 @@ public sealed class DeflateFilter : IStreamFilter
         // and ignores whatever follows it.
         DeflateInflater inflater = new DeflateInflater(
             compressed, payloadStart, compressed.Length - payloadStart);
-        byte[] decompressed = inflater.Inflate();
+        byte[] decompressed;
+        try
+        {
+            decompressed = inflater.Inflate();
+        }
+        catch (FilterException damaged) when (decodeParms is not null && decodeParms.Predictor != 1)
+        {
+            // With a predictor the partial bytes are not the data yet.
+            damaged.PartialOutput = null;
+            throw;
+        }
 
         // Apply predictor reversal if specified.
         byte[] result = ApplyPredictorReversal(decompressed, decodeParms);
@@ -548,28 +558,37 @@ internal sealed class DeflateInflater
         System.Collections.Generic.List<byte> output = new System.Collections.Generic.List<byte>(Math.Max(_length * 4, 256));
         bool isFinalBlock;
 
-        do
+        try
         {
-            isFinalBlock = ReadBits(1) == 1;
-            int blockType = ReadBits(2);
-
-            switch (blockType)
+            do
             {
-                case 0:
-                    InflateStoredBlock(output);
-                    break;
-                case 1:
-                    InflateHuffmanBlock(output, FixedLiteralTree, FixedDistanceTree);
-                    break;
-                case 2:
-                    InflateDynamicBlock(output);
-                    break;
-                default:
-                    throw new FilterException("FlateDecode",
-                        $"Invalid DEFLATE block type {blockType}.");
+                isFinalBlock = ReadBits(1) == 1;
+                int blockType = ReadBits(2);
+
+                switch (blockType)
+                {
+                    case 0:
+                        InflateStoredBlock(output);
+                        break;
+                    case 1:
+                        InflateHuffmanBlock(output, FixedLiteralTree, FixedDistanceTree);
+                        break;
+                    case 2:
+                        InflateDynamicBlock(output);
+                        break;
+                    default:
+                        throw new FilterException("FlateDecode",
+                            $"Invalid DEFLATE block type {blockType}.");
+                }
             }
+            while (!isFinalBlock);
         }
-        while (!isFinalBlock);
+        catch (FilterException damaged)
+        {
+            // 3.33.0 (ticket 39): keep what decoded before the damage.
+            damaged.PartialOutput = [.. output];
+            throw;
+        }
 
         return [.. output];
     }

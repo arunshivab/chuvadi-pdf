@@ -149,7 +149,11 @@ REQUIRED_USINGS = {
 
 def check_file(path):
     issues = []
-    is_src = os.sep + "src" + os.sep in path or "/src/" in path
+    # A file is under src when "src" is one of its path parts, so relative
+    # paths (CI passes src/...) and absolute paths are treated alike (3.33.0,
+    # ticket 47; before, only paths with a part before src were checked).
+    parts = [part for part in path.replace("\\", "/").split("/") if part not in ("", ".")]
+    is_src = "src" in parts
 
     with open(path, encoding="utf-8") as f:
         lines = f.readlines()
@@ -175,11 +179,15 @@ def check_file(path):
             stripped = line.strip()
             if stripped.startswith("//"):
                 continue
-            # IDE0008 targets implicit-typed locals. Tuple deconstruction
-            # (`var (a, b) = ...` / `foreach (var (x, y) in ...)`) is legal and
-            # not flagged by Roslyn IDE0008, so exempt `var` immediately
-            # followed by `(`.
-            if re.search(r'(?<!using )\bvar\b(?!\s*\()', line):
+            # IDE0008 targets implicit-typed locals: `var name =`, `foreach (var
+            # name in`, `out var name`. Tuple deconstruction (`var (a, b) = ...`)
+            # is legal and not flagged by Roslyn IDE0008, `using var` stays exempt
+            # as before, and `var` inside a
+            # string or comment, or used as a name (`case X var:`, `var.Name`),
+            # is not a declaration (3.33.0, ticket 47).
+            code_only = re.sub(r'@"(?:[^"]|"")*"|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])+\'', '""', line)
+            code_only = code_only.split("//", 1)[0]
+            if re.search(r'(?<![\w.@])(?<!using )var\s+@?[A-Za-z_][A-Za-z0-9_]*\s*(?:=|\bin\b|[;,)])', code_only):
                 issues.append(f"  IDE0008 L{i}: 'var' in src/ file: {stripped[:70]}")
 
     # Rule 2: duplicate using directives

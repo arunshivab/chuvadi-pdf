@@ -10,10 +10,9 @@
 
 using System;
 using System.Collections.Generic;
-using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Fonts.Rendering;
 
-namespace Chuvadi.Pdf.PdfA;
+namespace Chuvadi.Pdf.Authoring;
 
 /// <summary>The result of building an embeddable simple-font program.</summary>
 /// <param name="Sfnt">The subsetted sfnt with an injected Unicode cmap.</param>
@@ -33,6 +32,22 @@ internal static class SimpleFontProgram
     /// <returns>The subsetted program plus the per-code glyph map and units-per-em.</returns>
     /// <exception cref="ArgumentNullException">A parameter is null.</exception>
     internal static EmbeddableFont Build(byte[] sourceTtf, IReadOnlyList<int> unicodeByCode)
+        => Build(sourceTtf, unicodeByCode, symbolic: false);
+
+    /// <summary>
+    /// Builds an embeddable simple-font program (3.33.0, ticket 46). With
+    /// <paramref name="symbolic"/> false the program gets a (3,1) Unicode cmap
+    /// (a non-symbolic font, glyphs reached through the encoding's names);
+    /// with true it gets one (3,0) Symbol cmap mapping each character code to
+    /// its glyph (a symbolic font with no /Encoding, as PDF/A-1 requires for
+    /// any encoding other than WinAnsi or MacRoman).
+    /// </summary>
+    /// <param name="sourceTtf">The source TrueType font (already a static sfnt).</param>
+    /// <param name="unicodeByCode">Code-to-Unicode map (index = character code, 0 = unmapped).</param>
+    /// <param name="symbolic">Whether to build the symbolic form.</param>
+    /// <returns>The subsetted program plus the per-code glyph map and units-per-em.</returns>
+    /// <exception cref="ArgumentNullException">A parameter is null.</exception>
+    internal static EmbeddableFont Build(byte[] sourceTtf, IReadOnlyList<int> unicodeByCode, bool symbolic)
     {
         ArgumentNullException.ThrowIfNull(sourceTtf);
         ArgumentNullException.ThrowIfNull(unicodeByCode);
@@ -66,7 +81,18 @@ internal static class SimpleFontProgram
 
         byte[] subset = TrueTypeSubsetter.Subset(sourceTtf, usedGlyphs);
         List<SfntAssembler.TableEntry> tables = ParseTables(subset);
-        byte[] cmap = CmapSubtableBuilder.BuildCmapTable(unicodeToGid);
+        Dictionary<int, int> codeToGid = new Dictionary<int, int>();
+        for (int code = 0; code < gidByCode.Length; code++)
+        {
+            if (gidByCode[code] > 0)
+            {
+                codeToGid[code] = gidByCode[code];
+            }
+        }
+
+        byte[] cmap = symbolic
+            ? CmapSubtableBuilder.BuildSymbolCmapTable(codeToGid)
+            : CmapSubtableBuilder.BuildCmapTable(unicodeToGid);
         tables.Add(new SfntAssembler.TableEntry(TagOf("cmap"), cmap));
         byte[] sfnt = SfntAssembler.Assemble(0x00010000u, tables);
 

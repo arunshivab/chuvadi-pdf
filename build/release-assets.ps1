@@ -19,8 +19,10 @@
     reads), creates the release with --verify-tag (so it never makes a new
     tag), and downloads SHA256SUMS.txt again to check the upload.
 
-    Chuvadi.Fonts is not attached: it belongs to the monorepo's own
-    fonts-v1.0.0 release. nuget.org is not touched (that is publish.ps1).
+    The font packages are not attached: Chuvadi.Fonts belongs to the
+    monorepo's own fonts-v1.1.0 release and Chuvadi.Fonts.Liberation to its
+    fonts-liberation-v1.0.0 release. nuget.org is not touched (that is
+    publish.ps1).
 
     Needs the GitHub CLI (gh), signed in with the repo scope. Works in
     Windows PowerShell 5 and in PowerShell 7.
@@ -144,7 +146,7 @@ if ($DryRun) {
 }
 
 # 6. Create the release on the existing tag.
-$notes = "chuvadi-pdf $Version packages for the monorepo release runner. Verify with SHA256SUMS.txt. Chuvadi.Fonts is in the monorepo's fonts-v1.0.0 release."
+$notes = "chuvadi-pdf $Version packages for the monorepo release runner. Verify with SHA256SUMS.txt. Chuvadi.Fonts is in the monorepo's fonts-v1.1.0 release and Chuvadi.Fonts.Liberation in its fonts-liberation-v1.0.0 release."
 $createArgs = @('release', 'create', $tag) + $files + @($sums, '--verify-tag', '--title', $tag, '--notes', $notes)
 & gh @createArgs
 if ($LASTEXITCODE -ne 0) {

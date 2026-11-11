@@ -31,6 +31,7 @@ public sealed class PdfDocumentBuilder
     private readonly List<PageBuilder> _pages = new();
     private readonly CustomFontRegistry _customFonts = new();
     private LipiFontSet? _lipi;
+    private bool _embedStandardFonts;
     private Action<PageBuilder, int, int>? _header;
     private Action<PageBuilder, int, int>? _footer;
     private string? _title;
@@ -141,6 +142,28 @@ public sealed class PdfDocumentBuilder
         return this;
     }
 
+    /// <summary>
+    /// Embeds the standard 14 text fonts (Helvetica, Times and Courier, in
+    /// all four styles) used by the document as subsetted Liberation fonts,
+    /// which have the same metrics, so the document looks the same in every
+    /// viewer and needs no fonts on the reader's system (3.33.0). Off by
+    /// default: without it the fonts are named only, as before.
+    /// </summary>
+    /// <remarks>
+    /// Each face used is embedded once, as a TrueType font with
+    /// <c>/WinAnsiEncoding</c> covering the whole WinAnsi character set, and
+    /// shared by every page. Symbol and ZapfDingbats are never embedded: their
+    /// substitute fonts' licence is not confirmed. A font added with
+    /// <see cref="AddFont(string, byte[], int)"/> under a standard font's name
+    /// is embedded as before.
+    /// </remarks>
+    /// <returns>This builder.</returns>
+    public PdfDocumentBuilder EmbedStandardFonts()
+    {
+        _embedStandardFonts = true;
+        return this;
+    }
+
     /// <summary>Adds a page of the given size and returns its builder.</summary>
     public PageBuilder AddPage(PageSize size)
     {
@@ -234,6 +257,13 @@ public sealed class PdfDocumentBuilder
             customFontIds[entry.Key] = embedded.Type0FontId;
         }
 
+        // 3.33.0 (M1): with EmbedStandardFonts, one embedded substitute per
+        // standard 14 face, shared by every page.
+        PdfObjectStore? standardStore = _embedStandardFonts ? new PdfObjectStore() : null;
+        StandardFontSubstitution? standardFonts = standardStore is null
+            ? null
+            : new StandardFontSubstitution(standardStore, () => new PdfObjectId(nextId++, 0));
+
         // Per-page content stream + resources + annotations.
         for (int i = 0; i < _pages.Count; i++)
         {
@@ -255,6 +285,12 @@ public sealed class PdfDocumentBuilder
                 {
                     fontDict.Set(
                         PdfName.Intern(p.KeyFor(fontName)), new PdfReference(customId));
+                    continue;
+                }
+
+                if (standardFonts?.SubstituteWinAnsi(fontName) is PdfObjectId embeddedId)
+                {
+                    fontDict.Set(PdfName.Intern(p.KeyFor(fontName)), new PdfReference(embeddedId));
                     continue;
                 }
 
@@ -380,6 +416,12 @@ public sealed class PdfDocumentBuilder
             page.Set(PdfName.Intern("Contents"), new PdfReference(contentId));
             if (p.Hyperlinks.Count > 0) { page.Set(PdfName.Intern("Annots"), annots); }
             objects.Add(new PdfIndirectObject(pageIds[i], page));
+        }
+
+        // The embedded standard 14 substitutes (EmbedStandardFonts).
+        if (standardStore is not null)
+        {
+            objects.AddRange(standardStore.Objects);
         }
 
         // Pages root

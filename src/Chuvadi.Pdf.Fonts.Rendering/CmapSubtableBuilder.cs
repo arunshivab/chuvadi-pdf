@@ -86,6 +86,41 @@ internal static class CmapSubtableBuilder
     }
 
     /// <summary>
+    /// Builds a <c>cmap</c> table with one (3,0) Microsoft Symbol subtable that
+    /// maps each single-byte character code <c>c</c> (as <c>0xF000 + c</c>) to a
+    /// glyph index: the one cmap a symbolic simple TrueType font in PDF/A-1
+    /// may carry (ISO 19005-1 §6.3.7; PDF 32000-1:2008 §9.6.6.4). 3.33.0.
+    /// </summary>
+    /// <param name="codeToGid">Map from character code (0-255) to glyph index.</param>
+    /// <returns>The complete <c>cmap</c> table bytes.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="codeToGid"/> is null.</exception>
+    internal static byte[] BuildSymbolCmapTable(IReadOnlyDictionary<int, int> codeToGid)
+    {
+        ArgumentNullException.ThrowIfNull(codeToGid);
+
+        SortedDictionary<int, int> mappings = new();
+        foreach (KeyValuePair<int, int> kv in codeToGid)
+        {
+            if (kv.Key < 0 || kv.Key > 0xFF || kv.Value <= 0 || kv.Value > 0xFFFF)
+            {
+                continue;
+            }
+
+            mappings[0xF000 + kv.Key] = kv.Value;
+        }
+
+        byte[] subtable = BuildFormat4Subtable(mappings);
+        using MemoryStream ms = new();
+        WriteUInt16BE(ms, 0);                 // version
+        WriteUInt16BE(ms, 1);                 // numTables
+        WriteUInt16BE(ms, 3);                 // platformID = Windows
+        WriteUInt16BE(ms, 0);                 // encodingID = Symbol
+        WriteUInt32BE(ms, 12u);               // subtableOffset (4 header + 8 record)
+        ms.Write(subtable, 0, subtable.Length);
+        return ms.ToArray();
+    }
+
+    /// <summary>
     /// Builds a cmap format-4 (segment mapping to delta values) subtable.
     /// One single-codepoint segment per mapping plus the mandatory 0xFFFF
     /// sentinel. Verbose but minimal and correct.

@@ -25,9 +25,44 @@ internal static class XmpMetadata
     /// <returns>The XMP packet bytes (UTF-8, no BOM).</returns>
     /// <exception cref="ArgumentNullException"><paramref name="conformance"/> or <paramref name="producer"/> is null.</exception>
     internal static byte[] Build(int part, string conformance, string? title, string? author, string producer)
+        => Build(part, conformance, title, author, producer, producer);
+
+    /// <summary>
+    /// Builds the XMP packet with a separate <c>xmp:CreatorTool</c> (3.33.0,
+    /// D-318): PDF/A-1b requires <c>pdf:Producer</c> and <c>xmp:CreatorTool</c>
+    /// to equal the document information dictionary's /Producer and /Creator
+    /// (ISO 19005-1 §6.7.3).
+    /// </summary>
+    /// <param name="part">The PDF/A part (1 or 2).</param>
+    /// <param name="conformance">The conformance level, e.g. "B".</param>
+    /// <param name="title">The dc:title, or null.</param>
+    /// <param name="author">The dc:creator, or null.</param>
+    /// <param name="producer">The pdf:Producer.</param>
+    /// <param name="creatorTool">The xmp:CreatorTool.</param>
+    /// <returns>The XMP packet bytes (UTF-8).</returns>
+    internal static byte[] Build(int part, string conformance, string? title, string? author, string producer, string creatorTool)
+        => Build(part, conformance, title, author, null, producer, creatorTool);
+
+    /// <summary>
+    /// Builds the XMP packet with a <c>dc:description</c> too (3.33.0, D-325):
+    /// PDF/A-1b requires dc:title, dc:creator and dc:description to equal the
+    /// document information dictionary's /Title, /Author and /Subject
+    /// (ISO 19005-1 §6.7.3).
+    /// </summary>
+    /// <param name="part">The PDF/A part (1 or 2).</param>
+    /// <param name="conformance">The conformance level, e.g. "B".</param>
+    /// <param name="title">The dc:title, or null.</param>
+    /// <param name="author">The dc:creator, or null.</param>
+    /// <param name="subject">The dc:description, or null.</param>
+    /// <param name="producer">The pdf:Producer.</param>
+    /// <param name="creatorTool">The xmp:CreatorTool.</param>
+    /// <returns>The XMP packet bytes (UTF-8).</returns>
+    internal static byte[] Build(
+        int part, string conformance, string? title, string? author, string? subject, string producer, string creatorTool)
     {
         ArgumentNullException.ThrowIfNull(conformance);
         ArgumentNullException.ThrowIfNull(producer);
+        ArgumentNullException.ThrowIfNull(creatorTool);
 
         StringBuilder sb = new StringBuilder();
         sb.Append("<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
@@ -39,7 +74,7 @@ internal static class XmpMetadata
         sb.Append("   <pdfaid:conformance>").Append(Escape(conformance)).Append("</pdfaid:conformance>\n");
         sb.Append("  </rdf:Description>\n");
 
-        if (title is not null || author is not null)
+        if (title is not null || author is not null || subject is not null)
         {
             sb.Append("  <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n");
             if (title is not null)
@@ -54,11 +89,17 @@ internal static class XmpMetadata
                   .Append(Escape(author)).Append("</rdf:li></rdf:Seq></dc:creator>\n");
             }
 
+            if (subject is not null)
+            {
+                sb.Append("   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">")
+                  .Append(Escape(subject)).Append("</rdf:li></rdf:Alt></dc:description>\n");
+            }
+
             sb.Append("  </rdf:Description>\n");
         }
 
         sb.Append("  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n");
-        sb.Append("   <xmp:CreatorTool>").Append(Escape(producer)).Append("</xmp:CreatorTool>\n");
+        sb.Append("   <xmp:CreatorTool>").Append(Escape(creatorTool)).Append("</xmp:CreatorTool>\n");
         sb.Append("  </rdf:Description>\n");
 
         sb.Append("  <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\n");
@@ -70,6 +111,34 @@ internal static class XmpMetadata
         sb.Append("<?xpacket end=\"w\"?>");
 
         return new UTF8Encoding(false).GetBytes(sb.ToString());
+    }
+
+    /// <summary>
+    /// True when every character of <paramref name="value"/> may appear in
+    /// XML 1.0 (tab, line feed, carriage return, and U+0020 and above apart
+    /// from U+FFFE and U+FFFF; surrogate pairs allowed).
+    /// </summary>
+    /// <param name="value">The text.</param>
+    /// <returns>True when the text can be written into the XMP packet.</returns>
+    internal static bool IsXmlText(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+                continue;
+            }
+
+            if (char.IsSurrogate(c) || c == '\uFFFE' || c == '\uFFFF' || (c < 0x20 && c != '\t' && c != '\n' && c != '\r'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string Escape(string value)

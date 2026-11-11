@@ -71,8 +71,11 @@ public static class PdfRepairer
         }
 
         // Scan for every object definition and parse it; the latest definition of
-        // a given number wins, which flattens incremental updates.
+        // a given number wins, which flattens incremental updates. 3.33.0
+        // (ticket 48, D-307): positions are kept, so an object inside an object
+        // stream also counts at its stream's position (below).
         Dictionary<int, PdfIndirectObject> objects = new Dictionary<int, PdfIndirectObject>();
+        Dictionary<int, long> positions = new Dictionary<int, long>();
         int duplicates = 0;
         bool truncated = false;
 
@@ -98,6 +101,7 @@ public static class PdfRepairer
                         duplicates++;
                     }
                     objects[number] = obj;
+                    positions[number] = start;
                 }
             }
             catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck))
@@ -124,6 +128,7 @@ public static class PdfRepairer
         int fromObjectStreams = 0;
         int objectStreamCount = 0;
         List<PdfIndirectObject> extracted = new List<PdfIndirectObject>();
+        List<long> extractedPositions = new List<long>();
         List<int> containerNumbers = new List<int>();
         foreach (KeyValuePair<int, PdfIndirectObject> entry in objects)
         {
@@ -139,7 +144,13 @@ public static class PdfRepairer
             {
                 containerNumbers.Add(entry.Key);
                 objectStreamCount++;
+                int before = extracted.Count;
                 ExtractObjectStream(stream, extracted, warnings);
+                long containerPosition = positions.TryGetValue(entry.Key, out long p) ? p : 0;
+                for (int k = before; k < extracted.Count; k++)
+                {
+                    extractedPositions.Add(containerPosition);
+                }
             }
             else if (string.Equals(typeName, "XRef", StringComparison.Ordinal))
             {
@@ -154,13 +165,37 @@ public static class PdfRepairer
             objects.Remove(containerNumbers[i]);
         }
 
-        // Merge extracted objects, preferring any direct definition already present.
+        // Merge extracted objects. 3.33.0 (ticket 48, D-307): every definition
+        // is ranked by its position in the file (a compressed object at its
+        // object stream's position) and the latest wins, as for direct
+        // objects. Incremental updates are appended, so the latest definition
+        // is the newest, whether it is direct or compressed. Before 3.33.0 a
+        // direct definition always won, even an older one. Within one object
+        // stream a later entry wins.
+        for (int i = 0; i < containerNumbers.Count; i++)
+        {
+            positions.Remove(containerNumbers[i]);
+        }
+
+        HashSet<int> compressed = new HashSet<int>();
         for (int i = 0; i < extracted.Count; i++)
         {
             int number = extracted[i].Id.ObjectNumber;
-            if (!objects.ContainsKey(number))
+            long position = extractedPositions[i];
+            if (!positions.TryGetValue(number, out long have)
+                || position > have
+                || (position == have && compressed.Contains(number)))
             {
                 objects[number] = extracted[i];
+                positions[number] = position;
+                compressed.Add(number);
+            }
+        }
+
+        foreach (int number in compressed)
+        {
+            if (objects.ContainsKey(number))
+            {
                 fromObjectStreams++;
             }
         }

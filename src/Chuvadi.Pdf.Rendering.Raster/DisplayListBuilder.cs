@@ -120,7 +120,7 @@ public static class DisplayListBuilder
         ArgumentNullException.ThrowIfNull(optionalContent);
 
         Worker worker = new Worker(objects, hintingScale, lightHinting, autohintFallback, optionalContent) { Annotations = annotations };
-        byte[] content = annotations == AnnotationMode.FormFieldsOnly ? Array.Empty<byte>() : ContentStreamLoader.Load(page.Contents, objects);
+        byte[] content = annotations == AnnotationMode.FormFieldsOnly ? Array.Empty<byte>() : ContentStreamLoader.Load(page.Contents, objects, page.PageNumber);
         return worker.BuildFromPage(content, page);
     }
 
@@ -212,6 +212,12 @@ public static class DisplayListBuilder
 
         // Path construction (pre-CTM, user-space coords)
         private Path _currentPath;
+
+        // The start of the current subpath (the last m or re), where a path
+        // closed by h continues, and whether the last path operator closed
+        // it (Path then has no current point) (ticket 39, D-332).
+        private PointF _subpathStart;
+        private bool _subpathClosed;
 
         // Text state (NOT in q/Q stack — these reset on BT)
         private Transform _textMatrix;
@@ -679,6 +685,8 @@ public static class DisplayListBuilder
         public void MoveTo(double x, double y)
         {
             _currentPath.MoveTo(x, y);
+            _subpathStart = new PointF(x, y);
+            _subpathClosed = false;
         }
 
         /// <inheritdoc />
@@ -689,9 +697,12 @@ public static class DisplayListBuilder
             if (_currentPath.IsEmpty)
             {
                 _currentPath.MoveTo(x, y);
+                _subpathStart = new PointF(x, y);
+                _subpathClosed = false;
                 return;
             }
 
+            ContinueAfterClose();
             _currentPath.LineTo(x, y);
         }
 
@@ -699,6 +710,7 @@ public static class DisplayListBuilder
         public void ClosePath()
         {
             _currentPath.ClosePath();
+            _subpathClosed = true;
         }
 
         /// <inheritdoc />
@@ -706,9 +718,11 @@ public static class DisplayListBuilder
         {
             if (_currentPath.IsEmpty)
             {
-                return; // Malformed — c requires a current point
+                SkipWithoutCurrentPoint("c");
+                return;
             }
 
+            ContinueAfterClose();
             _currentPath.CubicBezierTo(
                 new PointF(x1, y1),
                 new PointF(x2, y2),
@@ -721,22 +735,13 @@ public static class DisplayListBuilder
             // v x2 y2 x3 y3 — Bezier with initial point as first control
             if (_currentPath.IsEmpty)
             {
+                SkipWithoutCurrentPoint("v");
                 return;
             }
 
-            PointF current;
-
-            try
-            {
-                current = _currentPath.CurrentPoint;
-            }
-            catch (InvalidOperationException)
-            {
-                return;
-            }
-
+            ContinueAfterClose();
             _currentPath.CubicBezierTo(
-                current,
+                _currentPath.CurrentPoint,
                 new PointF(x2, y2),
                 new PointF(x3, y3));
         }
@@ -747,9 +752,11 @@ public static class DisplayListBuilder
             // y x1 y1 x3 y3 — Bezier with final point as second control
             if (_currentPath.IsEmpty)
             {
+                SkipWithoutCurrentPoint("y");
                 return;
             }
 
+            ContinueAfterClose();
             PointF endPt = new PointF(x3, y3);
             _currentPath.CubicBezierTo(
                 new PointF(x1, y1),
@@ -765,7 +772,31 @@ public static class DisplayListBuilder
             _currentPath.LineTo(x + w, y + h);
             _currentPath.LineTo(x, y + h);
             _currentPath.ClosePath();
+            _subpathStart = new PointF(x, y);
+            _subpathClosed = true;
         }
+
+        // 3.33.0 (ticket 39, D-332): after h (or re) the current point is the
+        // start of the closed subpath (PDF 32000-1:2008 §8.5.2.1, as in
+        // PostScript and Poppler), so a following l, c, v or y starts a new
+        // subpath there. Path clears its current point on ClosePath, and
+        // LineTo/CubicBezierTo then threw "requires a current point".
+        private void ContinueAfterClose()
+        {
+            if (_subpathClosed)
+            {
+                _currentPath.MoveTo(_subpathStart.X, _subpathStart.Y);
+                _subpathClosed = false;
+            }
+        }
+
+        // A curve operator with no current point at all (no m before it):
+        // skipped, as Poppler does ("No current point"), now with a warning.
+        private void SkipWithoutCurrentPoint(string op) =>
+            _reporter.Report(
+                PdfWarningKind.ContentOperatorSkipped,
+                "path operator " + op,
+                "A path operator '" + op + "' has no current point (no m before it); it is skipped.");
 
         // ── Path painting ─────────────────────────────────────────────────
 

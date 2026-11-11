@@ -34,4 +34,11 @@ public enum PdfWarningKind
     /// (3.32.0).
     /// </summary>
     StreamDamaged,
+
+    /// <summary>
+    /// A content stream operator could not be used and is skipped, for
+    /// example a path operator with no current point (no <c>m</c> before
+    /// it); the subject names the operator (3.33.0).
+    /// </summary>
+    ContentOperatorSkipped,
 }

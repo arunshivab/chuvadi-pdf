@@ -262,7 +262,7 @@ public static class DisplayListBuilder
             _resources = page.Resources;
             if (_annotationMode != AnnotationMode.FormFieldsOnly)
             {
-                byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects);
+                byte[] content = ContentStreamLoader.Load(page.Contents, _doc.Objects, page.PageNumber);
                 ContentStreamWalker.Walk(content, this);
             }
 
