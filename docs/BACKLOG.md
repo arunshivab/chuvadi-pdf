@@ -158,6 +158,47 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.33.0 (D-302, D-307, D-308, D-325):
+- **M1** — one standard-14 embedding engine (`Chuvadi.Pdf.Authoring`),
+  used by `PdfAWriter` (output unchanged for WinAnsi fonts), by the opt-in
+  `PdfDocumentBuilder.EmbedStandardFonts()` and by the new
+  `StandardFontEmbedder.Embed` operation. Liberation faces; Symbol and
+  ZapfDingbats stay reported, not embedded (URW licence not confirmed).
+- **46** — a PDF/A substitute keeps the characters the original encoding
+  named (D-314): `/Differences` over WinAnsi for PDF/A-2b and the embed
+  operation, a symbolic font with a (3,0) cmap and `/ToUnicode` for
+  PDF/A-1b. WinAnsi fonts unchanged.
+- **Bug fixes found on the way (D-318):** `MacRomanEncoding` was missing
+  `ã` and `õ` (115 codes shifted); the binary header comment was written as
+  `%????`; PDF/A-1b XMP Producer and CreatorTool now follow `/Info`.
+- **PDF-17 (Reader ask, D-322)** — `OutlineWriter` keeps a bookmark's
+  target, colour, style and open state (`OutlineEntry` from its source
+  `OutlineItem`), and writes exact destinations (`OutlineEntry` with a
+  `PdfDestination`).
+- **48** — repair keeps the newest definition of an object, ranked by file
+  position, an object inside an object stream at its stream's position.
+- **47** — the style checker's `var` rule runs on relative paths (as in CI)
+  and ignores `var` in strings and names; the one real `var` in
+  `BrotliSimplePrefixCode` is typed.
+- **32** — already fixed in 3.31.0: SVG ids come from a stable hash, so the
+  same page renders to the same SVG text (checked on 173 pages in two
+  processes). Closed.
+- **45** — shaped Indic text in generated form-field, comment and signature
+  appearances copies and searches as written: a glyph that alone shows a
+  cluster gets the text through ToUnicode when that cannot contradict
+  another use, any other cluster is wrapped in `/ActualText`, as
+  `DrawShapedRun` does. Text extraction also keeps the measured width of
+  annotation text (a false space inside a word before).
+- **39** — a page whose content stream is damaged shows and extracts what
+  decoded before the damage (cut back to the last whitespace) and reports
+  `StreamDamaged`; nothing when nothing decoded (option A, D-325). A path
+  continued after `h`/`re` starts at the closed subpath's start instead of
+  throwing; a curve with no current point is skipped with
+  `ContentOperatorSkipped` (D-332). Damaged set of 50: text 50/50 (was
+  20), drawing 50/50 (was 13); originals and corpus unchanged.
+- **49, the small part** — PDF/A-1b XMP `dc:title`, `dc:creator` and
+  `dc:description` follow `/Info` `/Title`, `/Author` and `/Subject`.
+
 Shipped in v3.32.1 (D-280):
 - **24** — damaged cross-reference recovery: opt-in
   `PdfOpenOptions.RepairIfDamaged` repairs in memory with `PdfRepairer` and
@@ -300,56 +341,8 @@ Shipped in v3.22.0 (backlog scope A):
 Status verified against code at v3.26.0. Items are independent and may be
 re-ordered.
 
-### Planned for 3.33.0 (D-234, D-240)
-**M1. Embed the standard 14 fonts.** One embedding engine shared with
-`PdfAWriter`, which moves onto it (its own Rule 5 line). The font files move
-to a shared fonts package. Liberation faces are embedded; Symbol and
-ZapfDingbats are reported, not embedded, until the URW font exception is
-confirmed.
-
-**46. PDF/A font substitution ignores the original font's encoding.** When
-`PdfAWriter` embeds a Liberation substitute for a non-embedded Standard 14
-font (`FontSubstitution`), the new font is always WinAnsi-encoded. It replaces
-the original font dictionary whatever that font's `/Encoding` was.
-
-**Effect:** a byte in the page content is drawn as its WinAnsi glyph, not as
-the glyph the original encoding named.
-- **No `/Encoding`:** a Type 1 Standard 14 text font's built-in encoding is
-  StandardEncoding, which differs from WinAnsi in many places:
-  - `'` (0x27) is quoteright in StandardEncoding but quotesingle in WinAnsi;
-  - `` ` `` (0x60) is quoteleft but grave;
-  - most of 0xA1–0xFE differ, for example 0xE1 is AE but aacute.
-- **`/Differences`:** any custom array (common in TeX output and old drivers)
-  is lost.
-- **`/MacRomanEncoding`:** also lost.
-- **Several encodings at once:** the substitute is cached per face, so all
-  fonts mapped to one face share one WinAnsi font object.
-
-The output shows wrong glyphs, and text extracted from it follows the same
-wrong mapping. A PDF/A validator can also flag codes with no glyph in the
-subset. Symbol and ZapfDingbats
-(built-in encodings) are reported, not embedded (M1).
-
-**Fix (with M1, 3.33.0):** build the substitute from the original encoding:
-1. Resolve the original encoding: base encoding plus `/Differences`, with
-   StandardEncoding when it is absent for a non-symbolic Type 1 font.
-2. Subset the glyphs for those code-to-glyph-name mappings.
-3. Write a matching `/Encoding` (`/Differences` over WinAnsi) with `/Widths`.
-4. Cache by face *and* encoding.
-
-**Tests:**
-- StandardEncoding quotes;
-- a TeX-style `/Differences` font;
-- two fonts on one face with different encodings;
-- veraPDF-style checks that every used code has a glyph.
-
 ### Reader asks (open)
-**39. Damaged page content drawn blank with a warning (D-276).** Since 3.32.0
-an invalid Flate stream is rejected. When it is a page's content, rendering
-and text extraction of that page throw `FilterException`, as for any damaged
-page content. Option: draw the page blank (or what decoded) and report
-`PdfWarningKind.StreamDamaged`, as images and forms already do. A behaviour
-change for every damaged file; measure on the corpus first.
+None open (39 shipped in 3.33.0).
 
 ### Rendering (3.32.0 findings)
 **40. WPF clipping (Q10, D-231).** `WpfRenderer` ignores `ClipOp` (not
@@ -376,12 +369,6 @@ crossing a box is still removed whole. Cutting it is a region boolean with
 curves and needs its own proof set.
 
 ### Text shaping
-**45. `ToUnicode` for Indic text in generated appearances.** Form-field and
-signature appearances (since 3.31) map only the first glyph of each shaped
-cluster, so copying or searching Indic text gives stray characters (for
-example ")" from glyph 41). Drawing is correct. The warning belongs in
-Pdf's own warnings (D-246).
-
 **25. Shapers not ported (3.26 scope note).** `TextShaper` ports HarfBuzz's
 Indic and default shapers only. Not ported: Arabic, Hebrew, Thai/Lao,
 Hangul, Khmer, Myanmar and USE (a font with only `dev3`-style tags is shaped
@@ -417,10 +404,6 @@ still chooses glyphs from the decoded text, not from the encoding's glyph
 names. On the O9 Courier fixture Chuvadi draws "BBBB" where MuPDF draws
 "AAAA". Measure on the corpus before choosing a fix.
 
-**32. Deterministic SVG ids.** `SvgRenderer` gives clip paths and masks a
-random suffix, so the same page renders to different SVG text each time.
-Harmless to viewers, but it makes output comparison and caching harder.
-
 ### Hinting provenance (D-106)
 **33. Clean-room TrueType interpreter.** Rewrite `HintingInterpreter` from
 the Apple and Microsoft TrueType instruction-set specifications only, with a
@@ -447,18 +430,6 @@ and square caps and dotted lines are done, 3.25).
 **23. Line width under a non-uniform CTM** uses sqrt(|det|) (one width for
 the whole stroke); a true elliptical pen needs stroking in user space.
 
-### Reading
-**48. Repair picks an older revision of an incrementally updated file.**
-`PdfRepairer` keeps the last definition of each object by file position, but
-an object found in an object stream loses to any direct definition of the
-same number, even an older one. A file saved incrementally with object
-streams can therefore come back with an older object. In the 3.32.1 check,
-1 of 57 distinct damaged files was affected: a filled XFA certificate's page
-text went from 2,032 to 976 characters. This applies to `PdfRepairer.Repair`
-and to `RepairIfDamaged` alike. The fix is to follow the surviving
-cross-reference sections (`/Prev` chain) where they still parse, and fall
-back to file order only for objects they do not cover.
-
 ### Image codecs (rendering)
 **1. JPXDecode (JPEG 2000).** Recognised but not decoded; JPX image bytes fall
 through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
@@ -473,6 +444,26 @@ default still waits. Since 3.31.2 a MediaBox that does
 not start at 0,0 is drawn correctly (P1).
 
 ### Accessibility / archival
+**49. `PdfAWriter`: what still fails veraPDF (3.33.0 measurement).** veraPDF
+1.28.2 (a test tool, never shipped) over the PDF/A output of 413 corpus files:
+3.33.0 passes 286 of 413 at PDF/A-1b and 373 of 413 at PDF/A-2b (main: 0 and
+0, because of the header comment and the Producer metadata, both fixed in
+3.33.0, D-318). No file fails a rule it passed before. What still fails comes
+from the source files, which `PdfAWriter` does not yet convert:
+- **PDF/A-1b:** transparency groups in forms (69 files) and `CA`/`ca`/`SMask`
+  in ExtGState (12-23); DeviceCMYK without a CMYK output intent (23);
+  annotations without the Print flag (10); Type 1 subsets without
+  `/CharSet` (9); `/Info` Keywords not matched by XMP `pdf:Keywords`
+  (6). `/Info` Title, Author and Subject now
+  follow into XMP (the small part, D-325): 302 of 413 pass PDF/A-1b, and
+  39 files lose their 6.7.3 failures; none gains a failure.
+- **PDF/A-2b:** DeviceCMYK without a DefaultCMYK (23); fonts used outside
+  page resources (annotation appearances, Type 3 glyphs) not embedded (9);
+  `NeedAppearances` in the form (9); `.notdef` glyphs used (7); annotation
+  flags (4-6); `TR` in ExtGState (4); signatures (4).
+Take up per item; the rest of Info-to-XMP (Keywords, dates) is small and
+follows the D-318 Producer fix.
+
 **5. Tagged-PDF structure generation.** PDF/A *output* ships
 (`Chuvadi.Pdf.PdfA`), and hybrid `/StructTreeRoot` on real files resolves, but
 generating a `/StructTreeRoot` during page creation (PDF/UA-1 tagging) is not
@@ -487,24 +478,6 @@ depends on Walking) with `[assembly: TypeForwardedTo(...)]` shims left in
 DisplayList for binary compatibility, after which Raster can drop its
 DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
-
-### Tooling
-**47. `tools/check_style.py` applies its `var` rule only to absolute paths.**
-It treats a file as being under `src` when `/src/` (or `\src\`) appears in
-its path. CI passes relative paths (`src/...`), so the rule never fires
-there. Run on Windows with full paths (9 Nov), it flags 8 lines in two files
-that are not part of 3.32.0:
-- `BrotliSimplePrefixCode.cs` line 108, a genuine `var` holding a tuple
-  array;
-- `XfaJavaScriptEngine.cs`, 7 false alarms: the JavaScript parser's `"var"`
-  keyword strings and a pattern variable named `var`.
-
-Fix:
-- match `src` as the first path part too;
-- skip string literals and identifiers;
-- type the Brotli `var`.
-
-Then CI checks what the rule says.
 
 ### Scrub-crop residuals
 **17. Remaining Scrub residuals (after 3.23).** Kept whole under Scrub:

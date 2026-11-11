@@ -5,7 +5,7 @@
 //        character's script (Chuvadi.Fonts, matching weight and style) for the
 //        rest, with a FontSubstituted warning.
 // SPEC:  PDF 32000-1:2008 §12.7.3.3 (variable text, /DA), §9.7 (Type 0 fonts),
-//        §9.10.3 (ToUnicode CMaps).
+//        §9.10.3 (ToUnicode CMaps), §14.9.4 (/ActualText).
 
 using System;
 using System.Collections.Concurrent;
@@ -179,12 +179,7 @@ internal sealed class AppearanceText
             }
 
             content.Raw(AppearanceContent.Name(seg.Fallback.ResourceName) + " " + AppearanceContent.Num(Size) + " Tf\n");
-            foreach (ShapedGlyph g in seg.Glyphs!)
-            {
-                content.Op("Tm", 1, 0, 0, 1, pen + (g.XOffset * Size / 1000.0), baseline + (g.YOffset * Size / 1000.0));
-                content.ShowHex(new[] { (byte)(g.GlyphId >> 8), (byte)g.GlyphId });
-                pen += g.XAdvance * Size / 1000.0;
-            }
+            pen = seg.Fallback.Draw(content, seg.Glyphs!, seg.Text, pen, baseline, Size);
         }
 
         content.Op("ET");
@@ -200,7 +195,7 @@ internal sealed class AppearanceText
     }
 
     // One run of text in one font.
-    private sealed record Segment(Fallback? Fallback, byte[] Codes, IReadOnlyList<ShapedGlyph>? Glyphs, double Width);
+    private sealed record Segment(Fallback? Fallback, byte[] Codes, IReadOnlyList<ShapedGlyph>? Glyphs, string Text, double Width);
 
     private IEnumerable<Segment> Segments(string text)
     {
@@ -227,7 +222,7 @@ internal sealed class AppearanceText
                 w += PrimaryWidth(code);
             }
 
-            result.Add(new Segment(null, codes.ToArray(), null, w));
+            result.Add(new Segment(null, codes.ToArray(), null, s, w));
             primary.Clear();
         }
 
@@ -247,7 +242,7 @@ internal sealed class AppearanceText
                 w += g.XAdvance * Size / 1000.0;
             }
 
-            result.Add(new Segment(fb, Array.Empty<byte>(), glyphs, w));
+            result.Add(new Segment(fb, Array.Empty<byte>(), glyphs, s, w));
             other.Clear();
         }
 
@@ -378,9 +373,17 @@ internal sealed class AppearanceText
     };
 
     // A LiPi Sans face as an in-memory Type 0 font (Identity-H, glyph ids as CIDs).
+    // 3.33.0 (ticket 45): each shaped cluster carries its source text, the
+    // way PageBuilder.DrawShapedRun does: a glyph that alone shows a cluster
+    // gets the text through ToUnicode when that cannot contradict another use
+    // of the glyph; any other run is wrapped in /ActualText.
     private sealed class Fallback
     {
+        // A ToUnicode destination holds at most 512 bytes (256 UTF-16 units).
+        private const int MaxToUnicodeText = 256;
+
         private readonly FontFace? _face;
+        private Dictionary<int, int>? _cmapGlyphs;
         private readonly AppearanceText _owner;
         private readonly SortedDictionary<int, string> _toUnicode = new SortedDictionary<int, string>();
         private readonly SortedSet<int> _used = new SortedSet<int>();
@@ -461,31 +464,12 @@ internal sealed class AppearanceText
             }
 
             bool missing = false;
-            for (int i = 0; i < glyphs.Count; i++)
+            foreach (ShapedGlyph g in glyphs)
             {
-                ShapedGlyph g = glyphs[i];
                 _used.Add(g.GlyphId);
                 if (g.GlyphId == 0)
                 {
                     missing = true;
-                }
-
-                if (!_toUnicode.ContainsKey(g.GlyphId) && g.GlyphId != 0 && (i == 0 || glyphs[i - 1].Cluster != g.Cluster))
-                {
-                    int end = text.Length;
-                    for (int j = i + 1; j < glyphs.Count; j++)
-                    {
-                        if (glyphs[j].Cluster > g.Cluster)
-                        {
-                            end = glyphs[j].Cluster;
-                            break;
-                        }
-                    }
-
-                    if (g.Cluster < end && g.Cluster < text.Length)
-                    {
-                        _toUnicode[g.GlyphId] = text[g.Cluster..end];
-                    }
                 }
             }
 
@@ -495,6 +479,121 @@ internal sealed class AppearanceText
             }
 
             return glyphs;
+        }
+
+        // Writes the glyphs of one shaped segment from `pen` and returns the
+        // pen after them. Each run of glyphs from one cluster is either one
+        // glyph whose ToUnicode entry is the cluster's text, or is wrapped in
+        // /ActualText (empty for a later run of a cluster already given).
+        internal double Draw(AppearanceContent content, IReadOnlyList<ShapedGlyph> glyphs, string text, double pen, double baseline, double size)
+        {
+            SortedSet<int> starts = new SortedSet<int>();
+            foreach (ShapedGlyph g in glyphs)
+            {
+                starts.Add(Math.Clamp(g.Cluster, 0, text.Length));
+            }
+
+            HashSet<int> emitted = new HashSet<int>();
+            int i = 0;
+            while (i < glyphs.Count)
+            {
+                int start = Math.Clamp(glyphs[i].Cluster, 0, text.Length);
+                int j = i + 1;
+                while (j < glyphs.Count && Math.Clamp(glyphs[j].Cluster, 0, text.Length) == start)
+                {
+                    j++;
+                }
+
+                string clusterText = text[start..ClusterEnd(starts, start, text.Length)];
+                bool first = emitted.Add(start);
+                bool plain = first && j - i == 1 && ClaimGlyphText(glyphs[i].GlyphId, clusterText);
+                if (!plain)
+                {
+                    content.BeginActualText(first ? clusterText : string.Empty);
+                }
+
+                for (int k = i; k < j; k++)
+                {
+                    ShapedGlyph g = glyphs[k];
+                    content.Op("Tm", 1, 0, 0, 1, pen + (g.XOffset * size / 1000.0), baseline + (g.YOffset * size / 1000.0));
+                    content.ShowHex(new[] { (byte)(g.GlyphId >> 8), (byte)g.GlyphId });
+                    pen += g.XAdvance * size / 1000.0;
+                }
+
+                if (!plain)
+                {
+                    content.Op("EMC");
+                }
+
+                i = j;
+            }
+
+            return pen;
+        }
+
+        private static int ClusterEnd(SortedSet<int> starts, int start, int textLength)
+        {
+            foreach (int s in starts.GetViewBetween(start, textLength))
+            {
+                if (s > start)
+                {
+                    return s;
+                }
+            }
+
+            return textLength;
+        }
+
+        // Gives a single glyph the cluster's text through ToUnicode when that
+        // cannot contradict another use of the glyph: the glyph is the cmap
+        // glyph of the cluster's one code point and no other code point maps
+        // to it, or a glyph no code point reaches whose text is unclaimed or
+        // the same. Returns false when /ActualText is needed.
+        private bool ClaimGlyphText(int gid, string clusterText)
+        {
+            if (_face is null || gid <= 0 || clusterText.Length == 0 || clusterText.Length > MaxToUnicodeText)
+            {
+                return false;
+            }
+
+            int codepoint = char.ConvertToUtf32(clusterText, 0);
+            bool singleCodepoint = clusterText.Length == (codepoint > 0xFFFF ? 2 : 1);
+            int cmapCodePoints = CmapCodePointCount(gid);
+            if (cmapCodePoints > 0)
+            {
+                if (!singleCodepoint || cmapCodePoints != 1 || _face.GetGlyphIndex(codepoint) != gid)
+                {
+                    return false;
+                }
+
+                _toUnicode[gid] = clusterText;
+                return true;
+            }
+
+            if (_toUnicode.TryGetValue(gid, out string? claimed))
+            {
+                return string.Equals(claimed, clusterText, StringComparison.Ordinal);
+            }
+
+            _toUnicode[gid] = clusterText;
+            return true;
+        }
+
+        // How many code points the face's cmap maps to the glyph.
+        private int CmapCodePointCount(int gid)
+        {
+            if (_cmapGlyphs is null)
+            {
+                Dictionary<int, int> glyphs = new Dictionary<int, int>();
+                foreach (KeyValuePair<int, int> entry in _face!.CharacterMap)
+                {
+                    glyphs[entry.Value] = glyphs.GetValueOrDefault(entry.Value) + 1;
+                }
+
+                _cmapGlyphs = glyphs;
+            }
+
+            return _cmapGlyphs.GetValueOrDefault(gid);
         }
 
         internal void Complete()

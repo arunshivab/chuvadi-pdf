@@ -100,37 +100,7 @@ public sealed class PdfFont
         CMapParseResult? toUnicode = ParseToUnicode(fontDict, resolver);
 
         // For simple fonts, also parse the encoding as fallback.
-        PdfFontEncoding? encoding = null;
-
-        if (!isComposite)
-        {
-            PdfPrimitive? encodingEntry =
-                fontDict.TryGetValue(PdfName.Intern("Encoding"), out PdfPrimitive? enc)
-                    ? enc
-                    : null;
-
-            if (encodingEntry is PdfReference encRef)
-            {
-                encodingEntry = resolver.Resolve(encRef);
-            }
-
-            // 3.31 (D-172, D-176), PDF 32000-1:2008 §9.6.6.1 and Table 114:
-            // a standard 14 font with no /Encoding uses its built-in encoding,
-            // and a /Differences dictionary without /BaseEncoding starts from
-            // the font's implicit base encoding.
-            string? standard14 = PdfFontEncoding.Standard14BuiltIn(fontDict.GetName(PdfName.Intern("BaseFont"))?.Value);
-            if (encodingEntry is null && standard14 is not null)
-            {
-                encoding = PdfFontEncoding.FromTable(standard14);
-            }
-            else
-            {
-                string? implicitBase = PdfFontEncoding.HasImplicitBase(encodingEntry)
-                    ? standard14 ?? ImplicitBaseEncoding(fontDict, resolver)
-                    : null;
-                encoding = PdfFontEncoding.Build(encodingEntry, implicitBase);
-            }
-        }
+        PdfFontEncoding? encoding = isComposite ? null : SimpleEncoding(fontDict, resolver);
 
         return new PdfFont(
             toUnicode?.Mapping,
@@ -140,6 +110,47 @@ public sealed class PdfFont
         {
             _widths = FontWidths.FromDictionary(fontDict, resolver),
         };
+    }
+
+    /// <summary>
+    /// The encoding of a simple font, as text reading uses it when there is no
+    /// ToUnicode map (3.31; shared with the standard-14 embedding engine in
+    /// 3.33.0, so a substitute shows exactly the glyphs the original named).
+    /// </summary>
+    /// <param name="fontDict">The simple font dictionary.</param>
+    /// <param name="resolver">Resolves indirect references.</param>
+    /// <returns>The font's encoding.</returns>
+    internal static PdfFontEncoding SimpleEncoding(PdfDictionary fontDict, IPdfObjectResolver resolver)
+    {
+        PdfFontEncoding encoding;
+        PdfPrimitive? encodingEntry =
+            fontDict.TryGetValue(PdfName.Intern("Encoding"), out PdfPrimitive? enc)
+                ? enc
+                : null;
+
+        if (encodingEntry is PdfReference encRef)
+        {
+            encodingEntry = resolver.Resolve(encRef);
+        }
+
+        // 3.31 (D-172, D-176), PDF 32000-1:2008 §9.6.6.1 and Table 114:
+        // a standard 14 font with no /Encoding uses its built-in encoding,
+        // and a /Differences dictionary without /BaseEncoding starts from
+        // the font's implicit base encoding.
+        string? standard14 = PdfFontEncoding.Standard14BuiltIn(fontDict.GetName(PdfName.Intern("BaseFont"))?.Value);
+        if (encodingEntry is null && standard14 is not null)
+        {
+            encoding = PdfFontEncoding.FromTable(standard14);
+        }
+        else
+        {
+            string? implicitBase = PdfFontEncoding.HasImplicitBase(encodingEntry)
+                ? standard14 ?? ImplicitBaseEncoding(fontDict, resolver)
+                : null;
+            encoding = PdfFontEncoding.Build(encodingEntry, implicitBase);
+        }
+
+        return encoding;
     }
 
     /// <summary>

@@ -17,6 +17,7 @@ public enum PdfWarningKind
 | `ShadingSkipped` | A shading could not be used (unsupported type or damaged entries); its paint is skipped. |
 | `AppearanceNotGenerated` | An annotation needed an appearance made from its own entries (a form field with `/NeedAppearances`, or an annotation with no `/AP`), and it could not be made; the annotation draws nothing (3.31). |
 | `StreamDamaged` | A stream's data could not be decoded (for example an invalid Flate stream); it is treated as damaged and what it holds (an image, a form, the objects of an object stream) is skipped. The reason says why (3.32.0). |
+| `ContentOperatorSkipped` | A content stream operator could not be used and is skipped, for example a path operator with no current point (no `m` before it); the subject names the operator (3.33.0). |
 
 ---
 

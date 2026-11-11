@@ -7,8 +7,9 @@
 
     POLICY: Test projects may use xUnit and related packages.
             Source projects (src/) have ZERO third-party NuGet dependencies.
-            The one package they may use is Chuvadi's own Chuvadi.Fonts
-            (D-113, D-147), restored from .fonts-feed (build/fetch-fonts.ps1).
+            The packages they may use are Chuvadi's own font packs,
+            Chuvadi.Fonts and Chuvadi.Fonts.Liberation (D-113, D-147, D-311),
+            restored from .fonts-feed (build/fetch-fonts.ps1).
   -->
 
   <PropertyGroup>
@@ -32,8 +33,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Chuvadi's own LiPi Sans font pack (fonts-v1.0.0 release, D-147). -->
-    <PackageVersion Include="Chuvadi.Fonts" Version="1.0.0" />
+    <!-- Chuvadi's own LiPi Sans font pack (fonts-v1.1.0 release, D-147, D-311). -->
+    <PackageVersion Include="Chuvadi.Fonts" Version="1.1.0" />
+    <!-- The Liberation fonts for the standard-14 embedding engine
+         (fonts-liberation-v1.0.0 release, 3.33.0, D-307/D-308, D-311). -->
+    <PackageVersion Include="Chuvadi.Fonts.Liberation" Version="1.0.0" />
   </ItemGroup>
 
 </Project>

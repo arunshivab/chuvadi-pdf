@@ -10,6 +10,160 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.33.0] - 2026-11-11
+
+Embedding the standard fonts (M1, D-302), PDF/A substitutes that keep the
+original font's characters (ticket 46, D-314), repair keeps the newest
+object (ticket 48, D-307), bookmarks that keep their target when saved
+(PDF-17, D-322, Chuvadi Reader), three bug fixes found on the way (D-318),
+Indic text in generated appearances that copies as written (ticket 45),
+damaged pages that show what decoded (ticket 39), PDF/A-1b Dublin Core
+metadata from `/Info` (ticket 49, D-325), and tooling.
+
+### Added
+- **`PdfDocumentBuilder.EmbedStandardFonts()`** (opt-in). The standard 14
+  text fonts a new document uses (Helvetica, Times, Courier, all four styles)
+  are embedded as subsetted Liberation fonts, which have the same metrics.
+  Each face is embedded once and shared by every page, as a TrueType font
+  with `/WinAnsiEncoding`. Symbol and ZapfDingbats are never embedded: their
+  substitute fonts' licence is not confirmed. Without the call, output is
+  exactly as before.
+- **`StandardFontEmbedder.Embed(PdfDocument, Stream, StandardFontEmbedOptions?)`**
+  (`Chuvadi.Pdf.Operations`), returning `StandardFontEmbedResult`. Writes a
+  copy of a document in which its non-embedded standard fonts are embedded.
+  - **Where:** fonts in page resources, the forms they use, annotation
+    appearances and the interactive form's `/DR`.
+  - **Aliases:** Arial, Times New Roman and Courier New (as Word writes them,
+    for example `ArialMT`) are embedded too, unless `IncludeAliases` is false.
+  - **The result** lists the fonts embedded and, with a reason, the fonts
+    left as they were (Symbol, ZapfDingbats, Type0 fonts, unknown fonts).
+  - **Encryption and signatures:** an encrypted document throws
+    `OperationsException` unless `AllowEncryptedInput` is set; the copy is
+    written without encryption, and a signature no longer verifies. The
+    source document is not changed.
+
+- **Bookmarks that keep their target (PDF-17, D-322).** Two new
+  `OutlineEntry` constructors for `OutlineWriter.Apply`:
+  - **`OutlineEntry(OutlineItem source, string title, children)`** keeps a
+    bookmark read with `OutlineReader.GetOutlines`, renamed or not. Its
+    `/Dest` (named destinations included) or `/A` (any action), colour `/C`,
+    style `/F`, structure element `/SE` and open or closed state are written
+    back unchanged. The source must come from the document being written,
+    otherwise `ArgumentException`.
+  - **`OutlineEntry(string title, PdfDestination destination, children)`**
+    goes to an exact destination (`/XYZ` left, top and zoom, `/FitH` top,
+    `/FitR` and so on), written as given; a null value is written as `null`.
+  - New properties `OutlineEntry.Destination` and `OutlineEntry.Source`.
+    Entries made with a page index are written exactly as before (the whole
+    page, `/Fit`, closed). An open bookmark's `/Count` counts its visible
+    descendants, as the specification requires.
+
+### Changed
+- **One embedding engine.** `PdfAWriter`, `EmbedStandardFonts()` and
+  `StandardFontEmbedder` share it (in `Chuvadi.Pdf.Authoring`). For fonts
+  with WinAnsi encoding, PDF/A output is unchanged apart from the header
+  line (see Fixed).
+
+### Fixed
+- **PDF/A substitutes keep the characters the original font's encoding
+  named (ticket 46, D-314).** Before, every substitute was WinAnsi-encoded,
+  so a font with no `/Encoding` (StandardEncoding), with `/Differences`, or
+  with `MacRomanEncoding` showed some wrong characters: for example `'`
+  instead of `’`, `á` instead of `Æ`, a TeX ligature lost. WinAnsi fonts are
+  written as before. The others get:
+  - **PDF/A-2b and `StandardFontEmbedder`:** a TrueType font with a
+    `/Differences` encoding over WinAnsiEncoding, using Adobe Glyph List
+    names, and a (3,1) Unicode cmap.
+  - **PDF/A-1b:** a symbolic TrueType font with no `/Encoding`, one (3,0)
+    cmap that maps each code to its glyph, and a `/ToUnicode` map. PDF/A-1b
+    allows no `/Differences` in a non-symbolic TrueType font.
+  - Two fonts on one face with different encodings get two substitutes.
+    A character the substitute face lacks (as the standard font lacked it,
+    such as the ff ligature) keeps its text and stays without a glyph.
+- **Repair keeps the newest definition of an object (ticket 48, D-307).**
+  Every definition is ranked by its position in the file, an object inside
+  an object stream at its stream's position, and the latest wins. Before, a
+  direct definition always won, so an incrementally updated file could come
+  back with older content (checked: of 385 damaged files, only the one such
+  file changes, and it gets its full text back).
+- **`MacRomanEncoding` was missing two entries (D-318).** `ã` (0x8B) and `õ`
+  (0x9B) were left out, so the 115 codes after them were shifted: text from
+  MacRoman fonts came out with wrong characters, for example `‘` for `“`
+  and `ß` for `•`.
+- **The binary comment on line 2 of every written file (D-318).**
+  `PdfWriter` and `LinearizedWriter` wrote it as `%????`; it is now
+  `%âãÏÓ` (four bytes above 127), as PDF/A requires. The file length and
+  every offset are unchanged.
+- **PDF/A-1b metadata (D-318).** The XMP `pdf:Producer` and
+  `xmp:CreatorTool` are now taken from the final `/Info` `/Producer` and
+  `/Creator`, and are `Chuvadi PDF/A` when `/Info` has none. Before they were
+  always `Chuvadi PDF/A`, which failed PDF/A-1b validation when `/Info` said
+  otherwise.
+- **Indic text in generated appearances copies and searches as written
+  (ticket 45, D-325).** Form-field, comment and signature appearances
+  (since 3.31) gave ToUnicode text only to the first glyph of each shaped
+  cluster, so copying or searching Tamil, Devanagari or Bengali gave stray
+  characters (for example `தமி*ழ்நா)டு`). Each cluster now carries its source
+  text, as `PageBuilder.DrawShapedRun` does: a glyph that alone shows a
+  cluster gets it through ToUnicode when that cannot contradict another use
+  of the glyph; any other cluster is wrapped in `/ActualText`. A glyph the
+  face lacks (`.notdef`) now extracts as the text it stands for. Drawing is
+  unchanged.
+- **Text extraction keeps the width of annotation text (ticket 45).** Text
+  from annotation appearances lost its measured width, so a shaped cluster
+  wider than its character count suggests was followed by a false word
+  space (`கொ ள்கை`). The width now comes along, scaled into page space,
+  when the baseline stays horizontal. On 4,939 corpus pages no extracted
+  text changes.
+- **A damaged page content stream (ticket 39, option A, D-325).** Since
+  3.32.0 an invalid Flate stream is rejected, and a page whose content was
+  damaged threw `FilterException` when drawn or extracted. The page now
+  shows and extracts what decoded before the damage, cut back to the last
+  whitespace so no half-read operand runs, and reports
+  `PdfWarningKind.StreamDamaged` (page number, `page content N G R`); when
+  nothing decoded the page is empty. On a set of 50 damaged files, text
+  extraction reads all 50 pages (was 20) and drawing all 50 (was 13, with
+  the fix below); undamaged files are unchanged.
+- **A path continued after `h` or `re` (ticket 39, D-332).** After a
+  subpath was closed, a following `l`, `c`, `v` or `y` threw
+  `InvalidOperationException` ("requires a current point") when the page
+  was drawn. It now starts a new subpath at the closed subpath's start, as
+  PDF and Poppler define the current point after `h`. A curve operator
+  (`c`, `v`, `y`) with no current point at all is still skipped, now with
+  the new `PdfWarningKind.ContentOperatorSkipped`.
+- **PDF/A-1b Dublin Core metadata (ticket 49, small part, D-325).** XMP
+  `dc:title`, `dc:creator` and the new `dc:description` now follow `/Info`
+  `/Title`, `/Author` and `/Subject`, which PDF/A-1b requires (ISO 19005-1
+  §6.7.3); where `/Info` has none, `PdfAOptions.Title` and `Author` are used
+  as before. An `/Info` value XML cannot hold (a control character) is left
+  as before. PDF/A-2b is unchanged.
+
+### Packages
+- The 12 Liberation fonts leave `Chuvadi.Pdf.PdfA` (its package goes from
+  about 2.4 MB to 32 KB). The engine in `Chuvadi.Pdf.Authoring` reads them
+  from the new `Chuvadi.Fonts.Liberation` 1.0.0 package (byte-identical
+  files; the monorepo's fonts-liberation-v1.0.0 release, D-311), which
+  `Chuvadi.Pdf.Authoring` now depends on.
+- `Chuvadi.Fonts` goes from 1.0.0 to 1.1.0 (additive only; the Liberation
+  package needs it). `build/fetch-fonts.ps1` fetches and checks both
+  packages by SHA-256, `nuget.config` maps both to `.fonts-feed`, and
+  `build/pack.ps1` copies both next to the chuvadi-pdf packages.
+
+### Tooling
+- `tools/check_style.py` (ticket 47): the `var` rule now runs on relative
+  paths, as CI passes them, and ignores `var` inside strings, comments and
+  names. The one real `var` it then found (`BrotliSimplePrefixCode`) is
+  typed.
+- `tools/gen_latin_glyph_names.py` generates the glyph-name table the
+  `/Differences` form uses, from the AGL file in the repository.
+
+### Backlog
+- Shipped: M1, 39, 45, 46, 47, 48, the small part of 49. Closed: 32
+  (already fixed in 3.31.0).
+- New: 49, what `PdfAWriter` output still fails in veraPDF. On 413 corpus
+  files it now passes 302 at PDF/A-1b and 373 at PDF/A-2b (before: none).
+
+---
 ## [3.32.1] - 2026-11-09
 
 Opt-in repair of damaged files while opening (D-280, Chuvadi Reader).

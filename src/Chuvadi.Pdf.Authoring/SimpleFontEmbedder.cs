@@ -11,11 +11,10 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
-namespace Chuvadi.Pdf.PdfA;
+namespace Chuvadi.Pdf.Authoring;
 
 internal static class SimpleFontEmbedder
 {
@@ -43,6 +42,36 @@ internal static class SimpleFontEmbedder
         string faceName,
         bool serif,
         Func<PdfObjectId> allocate)
+        => BuildSimpleTrueTypeFont(
+            sourceTtf, program, faceName, serif, allocate,
+            PdfName.Intern("WinAnsiEncoding"), symbolic: false, FirstChar, LastChar, toUnicode: null);
+
+    /// <summary>
+    /// Builds an embedded simple TrueType font (3.33.0, ticket 46): the
+    /// general form behind the WinAnsi one above.
+    /// </summary>
+    /// <param name="sourceTtf">The source TrueType font (for descriptor metrics).</param>
+    /// <param name="program">The subsetted program (sfnt + per-code widths).</param>
+    /// <param name="faceName">The base face name, e.g. "LiberationSans".</param>
+    /// <param name="serif">Whether the face is serif (sets the Serif descriptor flag).</param>
+    /// <param name="allocate">Allocates a fresh object id.</param>
+    /// <param name="encoding">The /Encoding value, or null for none (a symbolic font).</param>
+    /// <param name="symbolic">Whether the descriptor marks the font symbolic.</param>
+    /// <param name="firstChar">The first character code with a width.</param>
+    /// <param name="lastChar">The last character code with a width.</param>
+    /// <param name="toUnicode">A /ToUnicode CMap to attach, or null.</param>
+    /// <returns>The font id and the indirect objects to register.</returns>
+    internal static FontObjects BuildSimpleTrueTypeFont(
+        byte[] sourceTtf,
+        EmbeddableFont program,
+        string faceName,
+        bool serif,
+        Func<PdfObjectId> allocate,
+        PdfPrimitive? encoding,
+        bool symbolic,
+        int firstChar,
+        int lastChar,
+        byte[]? toUnicode)
     {
         ArgumentNullException.ThrowIfNull(sourceTtf);
         ArgumentNullException.ThrowIfNull(program);
@@ -50,7 +79,7 @@ internal static class SimpleFontEmbedder
         ArgumentNullException.ThrowIfNull(allocate);
 
         string baseFont = SubsetTag(program.GidByCode) + "+" + faceName;
-        DescriptorMetrics metrics = DescriptorMetrics.Read(sourceTtf, program.UnitsPerEm, serif);
+        DescriptorMetrics metrics = DescriptorMetrics.Read(sourceTtf, program.UnitsPerEm, serif, symbolic);
 
         PdfObjectId fontFileId = allocate();
         PdfDictionary fontFileDict = new PdfDictionary();
@@ -78,10 +107,20 @@ internal static class SimpleFontEmbedder
         descriptor.Set(PdfName.Intern("FontFile2"), new PdfReference(fontFileId));
         PdfIndirectObject descriptorObj = new PdfIndirectObject(descriptorId, descriptor);
 
-        List<PdfPrimitive> widths = new List<PdfPrimitive>(LastChar - FirstChar + 1);
-        for (int code = FirstChar; code <= LastChar; code++)
+        List<PdfPrimitive> widths = new List<PdfPrimitive>(lastChar - firstChar + 1);
+        for (int code = firstChar; code <= lastChar; code++)
         {
             widths.Add(new PdfInteger(program.WidthByCode[code]));
+        }
+
+        List<PdfIndirectObject> objects = new List<PdfIndirectObject> { fontFile, descriptorObj };
+        PdfObjectId? toUnicodeId = null;
+        if (toUnicode is not null)
+        {
+            toUnicodeId = allocate();
+            PdfDictionary cmapDict = new PdfDictionary();
+            cmapDict.Set(PdfName.Length, toUnicode.Length);
+            objects.Add(new PdfIndirectObject(toUnicodeId.Value, new PdfStream(cmapDict, toUnicode)));
         }
 
         PdfObjectId fontId = allocate();
@@ -89,14 +128,22 @@ internal static class SimpleFontEmbedder
         font.Set(PdfName.Type, PdfName.Intern("Font"));
         font.Set(PdfName.Intern("Subtype"), PdfName.Intern("TrueType"));
         font.Set(PdfName.Intern("BaseFont"), PdfName.Intern(baseFont));
-        font.Set(PdfName.Intern("FirstChar"), FirstChar);
-        font.Set(PdfName.Intern("LastChar"), LastChar);
+        font.Set(PdfName.Intern("FirstChar"), firstChar);
+        font.Set(PdfName.Intern("LastChar"), lastChar);
         font.Set(PdfName.Intern("Widths"), new PdfArray(widths));
-        font.Set(PdfName.Intern("Encoding"), PdfName.Intern("WinAnsiEncoding"));
-        font.Set(PdfName.Intern("FontDescriptor"), new PdfReference(descriptorId));
-        PdfIndirectObject fontObj = new PdfIndirectObject(fontId, font);
+        if (encoding is not null)
+        {
+            font.Set(PdfName.Intern("Encoding"), encoding);
+        }
 
-        return new FontObjects(fontId, new List<PdfIndirectObject> { fontFile, descriptorObj, fontObj });
+        font.Set(PdfName.Intern("FontDescriptor"), new PdfReference(descriptorId));
+        if (toUnicodeId is PdfObjectId cmapId)
+        {
+            font.Set(PdfName.Intern("ToUnicode"), new PdfReference(cmapId));
+        }
+
+        objects.Add(new PdfIndirectObject(fontId, font));
+        return new FontObjects(fontId, objects);
     }
 
     // A deterministic 6-uppercase-letter subset tag derived from the glyph set.
@@ -122,7 +169,7 @@ internal static class SimpleFontEmbedder
         int Flags, int XMin, int YMin, int XMax, int YMax,
         double ItalicAngle, int Ascent, int Descent, int CapHeight, int StemV)
     {
-        internal static DescriptorMetrics Read(byte[] ttf, int unitsPerEm, bool serif)
+        internal static DescriptorMetrics Read(byte[] ttf, int unitsPerEm, bool serif, bool symbolic)
         {
             Dictionary<string, int> tables = ReadTableDirectory(ttf);
             double scale = unitsPerEm > 0 ? 1000.0 / unitsPerEm : 1.0;
@@ -158,7 +205,7 @@ internal static class SimpleFontEmbedder
             // substitute's serif choice still sets Serif as before.
             FontDescriptorPolicy.Inputs inputs = FontDescriptorPolicy.Read(ttf);
             int flags = FontDescriptorPolicy.Flags(
-                symbolic: false,
+                symbolic: symbolic,
                 italic: (macStyle & 0x2) != 0 || italicAngle != 0.0,
                 fixedPitch: inputs.FixedPitch,
                 familyClass: inputs.FamilyClass);

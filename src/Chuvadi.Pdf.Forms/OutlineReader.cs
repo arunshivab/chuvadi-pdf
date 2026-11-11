@@ -65,7 +65,7 @@ public static class OutlineReader
 
         if (outlinesRoot.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstPrim))
         {
-            WalkSiblings(firstPrim, store, destinations, visited, items);
+            WalkSiblings(document, firstPrim, store, destinations, visited, items);
         }
 
         return items;
@@ -74,6 +74,7 @@ public static class OutlineReader
     // ── Outline tree traversal ────────────────────────────────────────────
 
     private static void WalkSiblings(
+        PdfDocument document,
         PdfPrimitive startPrim,
         PdfObjectStore store,
         DestinationResolver destinations,
@@ -106,12 +107,14 @@ public static class OutlineReader
 
             if (dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
             {
-                WalkSiblings(firstChild, store, destinations, visited, children);
+                WalkSiblings(document, firstChild, store, destinations, visited, children);
             }
 
             result.Add(new OutlineItem(title, destination?.PageIndex ?? -1, children)
             {
                 Destination = destination,
+                SourceDictionary = dict,
+                SourceDocument = document,
             });
 
             if (!dict.TryGetValue(PdfName.Intern("Next"), out PdfPrimitive? nextPrim))

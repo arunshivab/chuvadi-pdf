@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
@@ -59,7 +60,13 @@ public static class PdfAWriter
             throw new InvalidOperationException("The document /Root does not resolve to a catalog.");
         }
 
-        FontSubstitution.SubstituteStandard14(document, Allocate, LiberationFontProvider.Get, violations);
+        // 3.33.0 (ticket 46, D-314): PDF/A-1b allows no /Differences in a
+        // non-symbolic TrueType font, so a font whose encoding is not WinAnsi
+        // gets the symbolic form there.
+        NonWinAnsiForm form = options.Conformance == PdfAConformance.PdfA1B
+            ? NonWinAnsiForm.Symbolic
+            : NonWinAnsiForm.Differences;
+        FontSubstitution.SubstituteStandard14(document, Allocate, LiberationFaces.Get, violations, form);
         StripJavaScript(catalog, store);
 
         byte[] icc = options.OutputIntentIccProfile ?? SrgbIccProfile.Load();
@@ -72,7 +79,32 @@ public static class PdfAWriter
         }
 
         int part = options.Conformance == PdfAConformance.PdfA1B ? 1 : 2;
-        byte[] xmp = XmpMetadata.Build(part, "B", options.Title, options.Author, Producer);
+        // 3.33.0 (D-318): PDF/A-1b requires the XMP Producer and CreatorTool
+        // to equal /Info's /Producer and /Creator (ISO 19005-1 §6.7.3), so
+        // they are taken from the /Info the file ends up with; a missing entry
+        // gets "Chuvadi PDF/A", as before.
+        // 3.33.0 (ticket 49, D-325): likewise dc:title, dc:creator and
+        // dc:description follow /Info's /Title, /Author and /Subject; where
+        // /Info has none, the options' Title and Author are used, as before. A
+        // value XML cannot hold (a control character) is left as it was
+        // before 3.33.0.
+        string producer = Producer;
+        string creatorTool = Producer;
+        string? title = options.Title;
+        string? author = options.Author;
+        string? subject = null;
+        if (part == 1
+            && document.Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? sourceInfo)
+            && store.Resolve(sourceInfo) is PdfDictionary infoDict)
+        {
+            producer = InfoText(infoDict, "Producer", store) ?? Producer;
+            creatorTool = InfoText(infoDict, "Creator", store) ?? Producer;
+            title = InfoText(infoDict, "Title", store) ?? options.Title;
+            author = InfoText(infoDict, "Author", store) ?? options.Author;
+            subject = InfoText(infoDict, "Subject", store);
+        }
+
+        byte[] xmp = XmpMetadata.Build(part, "B", title, author, subject, producer, creatorTool);
         PdfObjectId metadataId = Allocate();
         PdfDictionary metadataDict = new PdfDictionary();
         metadataDict.Set(PdfName.Type, PdfName.Intern("Metadata"));
@@ -109,6 +141,16 @@ public static class PdfAWriter
 
         return new PdfAResult(true, violations);
     }
+
+    // A text entry of the document information dictionary, or null.
+    // (3.33.0: null too when the text holds a character XML cannot carry.)
+    private static string? InfoText(PdfDictionary info, string key, PdfObjectStore store) =>
+        info.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
+            && store.Resolve(value) is PdfString text
+            && text.ToTextString() is string decoded
+            && XmpMetadata.IsXmlText(decoded)
+            ? decoded
+            : null;
 
     private static int NextObjectNumber(PdfDocument document)
     {

@@ -105,7 +105,7 @@ internal sealed class BrotliSimplePrefixCode
         //   NSYM=3: symbol with len 1 → code 0 (1 bit); symbols with len 2 →
         //           codes 10, 11 binary = values 2, 3 (canonical, 2-bit).
         //   NSYM=4 (2,2,2,2): codes 00, 01, 10, 11 = values 0, 1, 2, 3.
-        var symbolsByLengthThenValue = Symbols
+        (int sym, int len)[] symbolsByLengthThenValue = Symbols
             .Select((sym, idx) => (sym, len: lengths[idx]))
             .OrderBy(t => t.len)
             .ThenBy(t => t.sym)

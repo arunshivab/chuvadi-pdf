@@ -5,6 +5,8 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Forms;
 
@@ -44,4 +46,12 @@ public sealed class OutlineItem
 
     /// <summary>Gets the nested child bookmarks, if any.</summary>
     public IReadOnlyList<OutlineItem> Children { get; }
+
+    // 3.33.0 (PDF-17, D-322): the outline item dictionary this bookmark was
+    // read from, and its document, so OutlineWriter can write an untouched
+    // bookmark's target and appearance back exactly. Null when the item was
+    // not read by OutlineReader.
+    internal PdfDictionary? SourceDictionary { get; init; }
+
+    internal PdfDocument? SourceDocument { get; init; }
 }

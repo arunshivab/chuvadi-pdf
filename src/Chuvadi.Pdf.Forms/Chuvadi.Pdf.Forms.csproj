@@ -29,5 +29,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.Annotations" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Signatures" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Operations" />
   </ItemGroup>
 </Project>

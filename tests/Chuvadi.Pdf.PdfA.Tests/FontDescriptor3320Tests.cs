@@ -4,6 +4,7 @@
 //        substitute fonts.
 
 using System.Linq;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Primitives;
 using FluentAssertions;
 using Xunit;
@@ -36,7 +37,7 @@ public sealed class FontDescriptor3320Tests
 
     private static PdfDictionary BuildDescriptor(string face, bool serif)
     {
-        byte[] ttf = LiberationFontProvider.Get(face)!;
+        byte[] ttf = LiberationFaces.Get(face)!;
         EmbeddableFont program = SimpleFontProgram.Build(ttf, WinAnsiEncoding.CodeToUnicode());
         int next = 10;
         SimpleFontEmbedder.FontObjects built = SimpleFontEmbedder.BuildSimpleTrueTypeFont(

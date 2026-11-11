@@ -109,6 +109,18 @@ Enables the automatic LiPi Sans font. After calling this, drawing text with the 
 
 **Remarks:** The one name this registers is `"Lipi"`, matched exactly (case-sensitive), for `PageBuilder.DrawText`. The per-script face names written into the PDF (`LiPi-Sans-Latin`, `LiPi-Sans-Tamil` and so on) are internal; any other name throws `ArgumentException` from `PageBuilder.DrawText` (since 3.30).
 
+### `EmbedStandardFonts`
+
+```csharp
+PdfDocumentBuilder EmbedStandardFonts()
+```
+
+Embeds the standard 14 text fonts (Helvetica, Times and Courier, in all four styles) used by the document as subsetted Liberation fonts, which have the same metrics, so the document looks the same in every viewer and needs no fonts on the reader's system (3.33.0). Off by default: without it the fonts are named only, as before.
+
+**Returns:** This builder.
+
+**Remarks:** Each face used is embedded once, as a TrueType font with `/WinAnsiEncoding` covering the whole WinAnsi character set, and shared by every page. Symbol and ZapfDingbats are never embedded: their substitute fonts' licence is not confirmed. A font added with `AddFont(string, byte[], int)` under a standard font's name is embedded as before.
+
 ### `AddPage`
 
 ```csharp

@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using Chuvadi.Pdf.Annotations;
@@ -385,7 +386,19 @@ public sealed class TextExtractor
                     (ap.MatrixB * ap.MatrixB) + (ap.MatrixD * ap.MatrixD));
                 double fontSize = fragment.FontSize * Math.Abs(ap.ScaleY) * matrixYScale;
 
-                fragments.Add(new TextFragment(fragment.Text, pageX, pageY, fontSize)
+                // 3.33.0 (ticket 45): the measured width comes along, scaled
+                // into page space, when the baseline stays horizontal there
+                // (the page fragment keeps angle 0, as before). Without it a
+                // shaped cluster wider than its character count suggests
+                // (a Tamil vowel sign drawn as two glyphs) was followed by a
+                // false word space.
+                double width = double.NaN;
+                if (!double.IsNaN(fragment.Width) && fragment.Angle == 0 && ap.MatrixB == 0 && ap.MatrixA * ap.ScaleX > 0)
+                {
+                    width = fragment.Width * ap.MatrixA * ap.ScaleX;
+                }
+
+                fragments.Add(new TextFragment(fragment.Text, pageX, pageY, fontSize, width)
                 {
                     IsActualText = fragment.IsActualText,
                 });
@@ -421,19 +434,19 @@ public sealed class TextExtractor
         // Single stream.
         if (resolved is PdfStream singleStream)
         {
-            return DecodeStream(singleStream);
+            return DecodePageStream(singleStream, contents, page.PageNumber);
         }
 
         // Array of stream references.
         if (resolved is PdfArray array)
         {
-            return ConcatenateStreams(array);
+            return ConcatenateStreams(array, page.PageNumber);
         }
 
         return [];
     }
 
-    private byte[] ConcatenateStreams(PdfArray array)
+    private byte[] ConcatenateStreams(PdfArray array, int pageNumber)
     {
         using (MemoryStream ms = new MemoryStream())
         {
@@ -443,7 +456,7 @@ public sealed class TextExtractor
 
                 if (item is PdfStream stream)
                 {
-                    byte[] decoded = DecodeStream(stream);
+                    byte[] decoded = DecodePageStream(stream, array[i], pageNumber);
                     ms.Write(decoded, 0, decoded.Length);
 
                     // Separate streams with a space to prevent token merging.
@@ -455,6 +468,25 @@ public sealed class TextExtractor
             }
 
             return ms.ToArray();
+        }
+    }
+
+    // 3.33.0 (ticket 39, D-325): a page content stream a filter finds
+    // damaged gives what decoded before the damage (or nothing) and a
+    // StreamDamaged warning, as drawing does; before, extraction threw.
+    private byte[] DecodePageStream(PdfStream stream, PdfPrimitive? reference, int pageNumber)
+    {
+        try
+        {
+            return DecodeStream(stream);
+        }
+        catch (FilterException damage)
+        {
+            string subject = reference is PdfReference r
+                ? "page content " + r.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " " + r.Generation.ToString(CultureInfo.InvariantCulture) + " R"
+                : "page content (direct)";
+            _objects.OnWarning?.Invoke(new PdfWarning(PdfWarningKind.StreamDamaged, pageNumber, subject, DamagedContent.Reason(damage)));
+            return DamagedContent.UsablePrefix(damage);
         }
     }
 

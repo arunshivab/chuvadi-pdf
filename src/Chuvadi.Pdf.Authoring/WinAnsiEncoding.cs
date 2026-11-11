@@ -3,7 +3,7 @@
 // SPEC:  PDF 32000-1:2008 Annex D.2 — WinAnsiEncoding (Windows-1252)
 // PHASE: Phase 3 — PDF/A font embedding
 
-namespace Chuvadi.Pdf.PdfA;
+namespace Chuvadi.Pdf.Authoring;
 
 /// <summary>
 /// The WinAnsiEncoding (Windows-1252) character-code to Unicode mapping, used to

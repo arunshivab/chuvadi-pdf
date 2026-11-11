@@ -31,6 +31,8 @@ namespace Chuvadi.Pdf.IO;
 
 internal static class LinearizedWriter
 {
+    // 3.33.0 (D-318): written as Latin-1, so the binary comment's four bytes
+    // are above 127; before, ASCII turned them into "????".
     private const string PdfHeader = "%PDF-1.7\n%\xE2\xE3\xCF\xD3\n";
 
     public static void Write(
@@ -303,7 +305,7 @@ internal static class LinearizedWriter
         }
 
         // ── Phase D: assemble final output ────────────────────────────────
-        output.Write(Encoding.ASCII.GetBytes(PdfHeader), 0, PdfHeader.Length);
+        output.Write(Encoding.Latin1.GetBytes(PdfHeader), 0, PdfHeader.Length);
         output.Write(paramDictBytes, 0, paramDictBytes.Length);
         output.Write(firstPageXrefBytes, 0, firstPageXrefBytes.Length);
         output.Write(objectBytes[cat.RootCatalog], 0, objectBytes[cat.RootCatalog].Length);

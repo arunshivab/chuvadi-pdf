@@ -64,6 +64,20 @@ internal sealed class AppearanceContent
         return this;
     }
 
+    // Opens a /Span marked-content sequence whose /ActualText is `text`
+    // (UTF-16BE with a byte order mark); close it with Op("EMC").
+    internal AppearanceContent BeginActualText(string text)
+    {
+        _sb.Append("/Span <</ActualText <FEFF");
+        foreach (char c in text)
+        {
+            _sb.Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
+        }
+
+        _sb.Append(">>> BDC\n");
+        return this;
+    }
+
     internal byte[] ToBytes() => Encoding.Latin1.GetBytes(_sb.ToString());
 
     internal static string Num(double v)

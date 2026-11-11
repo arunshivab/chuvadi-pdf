@@ -1,6 +1,7 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+using Chuvadi.Pdf.Authoring;
 using FluentAssertions;
 using Xunit;
 
@@ -11,7 +12,7 @@ public sealed class FontEmbeddingTests
     [Fact]
     public void SimpleFontProgram_Build_SubsetsAndMapsAscii()
     {
-        byte[]? ttf = LiberationFontProvider.Get("LiberationSans-Regular");
+        byte[]? ttf = LiberationFaces.Get("LiberationSans-Regular");
         ttf.Should().NotBeNull();
 
         EmbeddableFont program = SimpleFontProgram.Build(ttf!, WinAnsiEncoding.CodeToUnicode());
@@ -29,10 +30,10 @@ public sealed class FontEmbeddingTests
     [Fact]
     public void Standard14Map_MapsFacesAndToleratesSubsetPrefix()
     {
-        Standard14Map.Lookup("Helvetica").Should().Be(new Standard14Substitute("LiberationSans-Regular", false));
-        Standard14Map.Lookup("Times-Bold").Should().Be(new Standard14Substitute("LiberationSerif-Bold", true));
-        Standard14Map.Lookup("Courier").Should().Be(new Standard14Substitute("LiberationMono-Regular", false));
-        Standard14Map.Lookup("ABCDEF+Helvetica").Should().Be(new Standard14Substitute("LiberationSans-Regular", false));
+        Standard14Map.Lookup("Helvetica").Should().Be(new LiberationSubstitute("LiberationSans-Regular", false));
+        Standard14Map.Lookup("Times-Bold").Should().Be(new LiberationSubstitute("LiberationSerif-Bold", true));
+        Standard14Map.Lookup("Courier").Should().Be(new LiberationSubstitute("LiberationMono-Regular", false));
+        Standard14Map.Lookup("ABCDEF+Helvetica").Should().Be(new LiberationSubstitute("LiberationSans-Regular", false));
         Standard14Map.Lookup("NoSuchFont").Should().BeNull();
     }
 }

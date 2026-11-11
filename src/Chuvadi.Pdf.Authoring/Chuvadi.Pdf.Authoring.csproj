@@ -17,11 +17,17 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Chuvadi.Fonts" />
+    <!-- 3.33.0 (M1, D-307/D-308, D-311): the Liberation faces the standard-14
+         embedding engine embeds. -->
+    <PackageReference Include="Chuvadi.Fonts.Liberation" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Forms" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Signatures" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Authoring.Tests" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Operations" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA.Tests" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Operations.Tests" />
   </ItemGroup>
 </Project>
