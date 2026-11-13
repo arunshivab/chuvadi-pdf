@@ -6,6 +6,7 @@
 // the display-list builders that consume it.
 
 using System.Collections.Generic;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Rendering.Walking;
 
@@ -61,6 +62,16 @@ internal readonly struct TextArrayElement
 /// </remarks>
 internal interface IContentOperatorSink
 {
+    /// <summary>
+    /// The content could not be read past a point (3.34.0, #52a): an
+    /// unterminated string, an empty name or another syntax error. The
+    /// operators before it were dispatched; the rest are not.
+    /// </summary>
+    /// <param name="reason">What was wrong, for a warning.</param>
+    void ContentDamaged(string reason)
+    {
+    }
+
     // ── Graphics state ────────────────────────────────────────────────────
 
     /// <summary>q — push the graphics state.</summary>
@@ -341,6 +352,18 @@ internal interface IContentOperatorSink
 
     /// <summary>Do — invoke a named XObject (image or form).</summary>
     void InvokeXObject(string name)
+    {
+    }
+
+    /// <summary>
+    /// BI ... ID ... EI — an inline image. The dictionary has its
+    /// abbreviations written out in full (<c>/Width</c>, <c>/Filter</c>
+    /// <c>/FlateDecode</c>, <c>/ColorSpace</c> <c>/DeviceGray</c>); a colour
+    /// space given as a name other than a device one keys into the current
+    /// resources' <c>/ColorSpace</c>. The data is still encoded by the
+    /// dictionary's filters.
+    /// </summary>
+    void InlineImage(PdfDictionary dictionary, byte[] data)
     {
     }
 

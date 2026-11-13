@@ -12,6 +12,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters.Jbig2;
 
@@ -114,6 +115,7 @@ internal static class TextRegion
 
         while (instances < numInstances)
         {
+            PdfWorkScope.ThrowIfCancellationRequested(); // 3.34.0 (#20)
             int? dt = ArithmeticIntegerCoder.Decode(mq, iadt);
             if (dt is null)
             {

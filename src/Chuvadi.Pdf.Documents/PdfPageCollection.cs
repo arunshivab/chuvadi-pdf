@@ -7,6 +7,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -43,22 +44,72 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     private readonly Func<OptionalContentVisibility>? _optionalContent;
     private readonly Func<PdfDictionary?>? _structTreeRoot;
     private readonly Func<PdfDictionary?>? _acroForm;
+    private readonly Action<string>? _warn;
+
+    // 3.34.0 (#52g): the pages found by walking a page tree that loops back
+    // on itself, when the document was opened with RepairIfDamaged; null
+    // otherwise (pages are found through /Count).
+    private readonly List<PdfDictionary>? _walked;
+
+    // 3.34.0 (#52g): the warning for a /Kids entry that leads back to one of
+    // its own ancestors.
+    private const string LoopWarning =
+        "The page tree loops back on itself: a /Kids entry leads to one of its own ancestors. That entry was skipped.";
+
+    private const string NoKidsWarning =
+        "A page tree node has no /Kids array; it holds no pages.";
+
+    private static string BadKidWarning(int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"Page tree /Kids[{index}] is not a dictionary; that entry was skipped.");
 
     internal PdfPageCollection(
         PdfDictionary pagesRoot, IPdfObjectResolver resolver,
         Func<OptionalContentVisibility>? optionalContent = null,
         Func<PdfDictionary?>? structTreeRoot = null,
-        Func<PdfDictionary?>? acroForm = null)
+        Func<PdfDictionary?>? acroForm = null,
+        Action<string>? warn = null,
+        bool walkIfLooped = false)
     {
         _structTreeRoot = structTreeRoot;
         _acroForm = acroForm;
         _pagesRoot = pagesRoot ?? throw new ArgumentNullException(nameof(pagesRoot));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _optionalContent = optionalContent;
+        _warn = warn;
 
         // /Count is untrusted input: a negative value counts as no pages, and
         // nothing is allocated per page until it is accessed.
         _count = Math.Max(0, _pagesRoot.GetInteger(PdfName.Count, 0));
+
+        if (walkIfLooped)
+        {
+            // 3.34.0 (#52g): with RepairIfDamaged the tree is walked once;
+            // when it loops, the pages found are the document's pages and
+            // /Count is not used.
+            bool looped = false;
+            List<PdfDictionary> leaves = new List<PdfDictionary>();
+            try
+            {
+                foreach (PdfDictionary leaf in WalkPageDictionaries(_pagesRoot, 0, new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance), () => looped = true))
+                {
+                    leaves.Add(leaf);
+                }
+            }
+            catch (PdfCorruptionException)
+            {
+                // Damaged in another way: pages are found through /Count, as
+                // without RepairIfDamaged, and fail when they are reached.
+                looped = false;
+            }
+
+            if (looped)
+            {
+                _walked = leaves;
+                _warn?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                    $"The page tree loops back on itself; the looping /Kids entries were skipped and the pages counted by walking the tree: {leaves.Count} page(s), where /Count says {_count}."));
+                _count = leaves.Count;
+            }
+        }
     }
 
     /// <summary>Gets the total number of pages in the document.</summary>
@@ -83,7 +134,9 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
 
             if (!_cache.TryGetValue(index, out PdfPage? page))
             {
-                page = FindPage(_pagesRoot, index, 0, 0);
+                page = _walked is not null
+                    ? NewPage(_walked[index], index)
+                    : FindPage(_pagesRoot, index, 0, 0, new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance));
                 _cache[index] = page;
             }
 
@@ -118,12 +171,17 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     public IEnumerable<PdfPage> EnumerateStreaming()
     {
         int index = 0;
-        foreach (PdfDictionary leaf in WalkPageDictionaries(_pagesRoot, 0))
+        IEnumerable<PdfDictionary> leaves = _walked
+            ?? WalkPageDictionaries(_pagesRoot, 0, new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance), () => _warn?.Invoke(LoopWarning));
+        foreach (PdfDictionary leaf in leaves)
         {
-            yield return new PdfPage(leaf, _resolver, index, _optionalContent, _structTreeRoot, _acroForm);
+            yield return NewPage(leaf, index);
             index++;
         }
     }
+
+    private PdfPage NewPage(PdfDictionary dict, int index) =>
+        new PdfPage(dict, _resolver, index, _optionalContent, _structTreeRoot, _acroForm, _warn);
 
     /// <summary>
     /// Yields the leaf /Page dictionaries under <paramref name="node"/> in
@@ -131,7 +189,8 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     /// traversal in <see cref="FindPage"/> but streams every leaf instead of
     /// stopping at one index, and allocates nothing per page.
     /// </summary>
-    private IEnumerable<PdfDictionary> WalkPageDictionaries(PdfDictionary node, int depth)
+    private IEnumerable<PdfDictionary> WalkPageDictionaries(
+        PdfDictionary node, int depth, HashSet<PdfDictionary> ancestors, Action onLoop)
     {
         if (depth > MaxPageTreeDepth)
         {
@@ -140,9 +199,15 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                 "document may contain a cyclic /Kids reference.");
         }
 
-        PdfArray kids = node.GetArray(PdfName.Kids) ??
-            throw new PdfCorruptionException(
-                "Page tree node is missing the required /Kids array.");
+        // 3.34.0 (Phase B N9): a node without /Kids holds no pages, and a
+        // kid that is not a dictionary is skipped, each with a warning; before,
+        // either failed the page lookup, as Poppler and MuPDF do not.
+        PdfArray? kids = node.GetArray(PdfName.Kids);
+        if (kids is null)
+        {
+            _warn?.Invoke(NoKidsWarning);
+            yield break;
+        }
 
         for (int i = 0; i < kids.Count; i++)
         {
@@ -151,8 +216,8 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
 
             if (kid is not PdfDictionary kidDict)
             {
-                throw new PdfCorruptionException(
-                    $"Page tree /Kids[{i}] is not a dictionary.");
+                _warn?.Invoke(BadKidWarning(i));
+                continue;
             }
 
             PdfName? kidType = kidDict.Type;
@@ -163,10 +228,20 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
             }
             else if (kidType == PdfName.Pages)
             {
-                foreach (PdfDictionary leaf in WalkPageDictionaries(kidDict, depth + 1))
+                // 3.34.0 (#52g): a node that is its own ancestor is skipped.
+                if (ReferenceEquals(kidDict, node) || ancestors.Contains(kidDict))
+                {
+                    onLoop();
+                    continue;
+                }
+
+                ancestors.Add(node);
+                foreach (PdfDictionary leaf in WalkPageDictionaries(kidDict, depth + 1, ancestors, onLoop))
                 {
                     yield return leaf;
                 }
+
+                ancestors.Remove(node);
             }
         }
     }
@@ -185,7 +260,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     /// pathologically-deep page trees in malformed input.
     /// PDF 32000-1:2008 §7.7.3 — Page tree nodes.
     /// </summary>
-    private PdfPage FindPage(PdfDictionary node, int targetIndex, int offset, int depth)
+    private PdfPage FindPage(PdfDictionary node, int targetIndex, int offset, int depth, HashSet<PdfDictionary> ancestors)
     {
         if (depth > MaxPageTreeDepth)
         {
@@ -194,9 +269,13 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                 "document may contain a cyclic /Kids reference.");
         }
 
-        PdfArray kids = node.GetArray(PdfName.Kids) ??
+        PdfArray? kids = node.GetArray(PdfName.Kids);
+        if (kids is null)
+        {
+            _warn?.Invoke(NoKidsWarning);
             throw new PdfCorruptionException(
-                "Page tree node is missing the required /Kids array.");
+                $"Page index {targetIndex} not found in page tree (a page tree node has no /Kids array).");
+        }
 
         int localOffset = offset;
 
@@ -207,8 +286,8 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
 
             if (kid is not PdfDictionary kidDict)
             {
-                throw new PdfCorruptionException(
-                    $"Page tree /Kids[{i}] is not a dictionary.");
+                _warn?.Invoke(BadKidWarning(i));
+                continue;
             }
 
             PdfName? kidType = kidDict.Type;
@@ -217,18 +296,27 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
             {
                 if (localOffset == targetIndex)
                 {
-                    return new PdfPage(kidDict, _resolver, targetIndex, _optionalContent, _structTreeRoot, _acroForm);
+                    return NewPage(kidDict, targetIndex);
                 }
 
                 localOffset++;
             }
             else if (kidType == PdfName.Pages)
             {
+                // 3.34.0 (#52g): a node that is its own ancestor is skipped
+                // and holds no pages.
+                if (ReferenceEquals(kidDict, node) || ancestors.Contains(kidDict))
+                {
+                    _warn?.Invoke(LoopWarning);
+                    continue;
+                }
+
                 int subtreeCount = kidDict.GetInteger(PdfName.Count, 0);
 
                 if (targetIndex < localOffset + subtreeCount)
                 {
-                    return FindPage(kidDict, targetIndex, localOffset, depth + 1);
+                    ancestors.Add(node);
+                    return FindPage(kidDict, targetIndex, localOffset, depth + 1, ancestors);
                 }
 
                 localOffset += subtreeCount;

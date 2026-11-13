@@ -132,8 +132,8 @@ Test failures are a stop condition.
 ### Known logic pitfalls
 | Area | Pitfall | Fix |
 |---|---|---|
-| LZW decode | Code-width check uses `>=` not `>` in decoder (encoder uses `>`) | See A11 |
-| LZW EarlyChange | Decoder is 1 entry behind encoder in table building | >= compensates |
+| LZW decode | Width grows when `nextCode + EarlyChange >= 1 << bits` (decoder) and `>` in the encoder (3.34.0; the A11-era check grew one code too early and failed real streams) | Fixture vectors in Filters.Tests/Fixtures/Lzw |
+| LZW EarlyChange | Decoder is 1 entry behind encoder in table building | `>=` vs `>` compensates |
 | ASCII85 | Valid range is 33-117. `@`=64 IS valid. `v`=118 is NOT | |
 | %%EOF | It is a comment at lexical level — reader finds it by backward scan | |
 | Empty input | Decode of empty stream = empty output, not exception | |

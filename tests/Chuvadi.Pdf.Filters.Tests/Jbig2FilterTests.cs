@@ -11,7 +11,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using Chuvadi.Pdf.Filters.Jbig2;
+using Chuvadi.Pdf.Primitives;
 using FluentAssertions;
 using Xunit;
 
@@ -79,6 +81,37 @@ public sealed class Jbig2FilterTests
 
         Action act = () => new Jbig2Decoder().Decode(stream, null);
         act.Should().Throw<FilterException>().WithMessage("*MMR*");
+    }
+
+    [Fact]
+    public void Decode_LargeRegion_IsChargedBeforeItIsDecoded()
+    {
+        // 3.34.0 (#20): a 600 x 600 region (one byte per pixel while it
+        // decodes) is charged against the memory limit when it is allocated,
+        // not checked against the packed output after the whole decode.
+        Jbig2Bitmap source = PatternBitmap(600, 600, 5);
+        byte[] stream = BuildGenericRegionStream(source, 0, tpgdon: false);
+
+        using (PdfWorkScope.Enter(new PdfLimits { MaxMemoryBytes = 100_000 }))
+        {
+            Action act = () => new Jbig2Decoder().Decode(stream, null);
+            act.Should().Throw<PdfLimitExceededException>();
+        }
+    }
+
+    [Fact]
+    public void Decode_Cancelled_StopsInsideTheDecoder()
+    {
+        Jbig2Bitmap source = PatternBitmap(64, 64, 6);
+        byte[] stream = BuildGenericRegionStream(source, 0, tpgdon: false);
+        using CancellationTokenSource cancelled = new CancellationTokenSource();
+
+        using (PdfWorkScope.Enter(null, cancelled.Token))
+        {
+            cancelled.Cancel();
+            Action act = () => new Jbig2Decoder().Decode(stream, null);
+            act.Should().Throw<OperationCanceledException>();
+        }
     }
 
     private static byte[] BuildGenericRegionStream(

@@ -88,66 +88,69 @@ public static class StandardFontEmbedder
     /// </exception>
     public static StandardFontEmbedResult Embed(PdfDocument document, Stream output, StandardFontEmbedOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(output);
-        options ??= new StandardFontEmbedOptions();
-        if (document.Encryption is not null && !options.AllowEncryptedInput)
+        return PdfWriteGuard.Run(document, "written", () =>
         {
-            throw new OperationsException(
-                "The document is encrypted; set StandardFontEmbedOptions.AllowEncryptedInput to write a decrypted copy with its fonts embedded.");
-        }
-
-        // Copy everything reachable from the trailer, renumbered densely, so
-        // the caller's document is never changed.
-        Dictionary<int, PdfPrimitive> reachable = new Dictionary<int, PdfPrimitive>();
-        foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(output);
+            options ??= new StandardFontEmbedOptions();
+            if (document.Encryption is not null && !options.AllowEncryptedInput)
             {
-                PdfCompressor.Collect(value, document.Objects, reachable);
+                throw new OperationsException(
+                    "The document is encrypted; set StandardFontEmbedOptions.AllowEncryptedInput to write a decrypted copy with its fonts embedded.");
             }
-        }
 
-        Dictionary<int, int> remap = new Dictionary<int, int>(reachable.Count);
-        int next = 1;
-        foreach (int number in reachable.Keys)
-        {
-            remap[number] = next++;
-        }
-
-        PdfObjectStore store = new PdfObjectStore();
-        List<PdfIndirectObject> copies = new List<PdfIndirectObject>(reachable.Count);
-        foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
-        {
-            PdfIndirectObject copy = new PdfIndirectObject(
-                new PdfObjectId(remap[entry.Key], 0), PdfCompressor.DeepCopy(entry.Value, remap));
-            store.Add(copy);
-            copies.Add(copy);
-        }
-
-        PdfDictionary trailer = new PdfDictionary();
-        foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info"), PdfName.Intern("ID") })
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            // Copy everything reachable from the trailer, renumbered densely, so
+            // the caller's document is never changed.
+            Dictionary<int, PdfPrimitive> reachable = new Dictionary<int, PdfPrimitive>();
+            foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
             {
-                trailer.Set(key, PdfCompressor.DeepCopy(value, remap));
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    PdfCompressor.Collect(value, document.Objects, reachable);
+                }
             }
-        }
 
-        StandardFontSubstitution session = new StandardFontSubstitution(store, () => new PdfObjectId(next++, 0))
-        {
-            IncludeAliases = options.IncludeAliases,
-        };
-        HashSet<PdfDictionary> walked = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
-        foreach (PdfIndirectObject copy in copies)
-        {
-            FindResources(copy.Value, store, session, walked);
-        }
+            Dictionary<int, int> remap = new Dictionary<int, int>(reachable.Count);
+            int next = 1;
+            foreach (int number in reachable.Keys)
+            {
+                remap[number] = next++;
+            }
 
-        List<PdfIndirectObject> objects = new List<PdfIndirectObject>(store.Objects);
-        objects.Sort((a, b) => a.Id.ObjectNumber.CompareTo(b.Id.ObjectNumber));
-        PdfWriter.Write(output, objects, trailer);
-        return new StandardFontEmbedResult(session.Embedded, session.NotEmbedded.ToArray());
+            PdfObjectStore store = new PdfObjectStore();
+            List<PdfIndirectObject> copies = new List<PdfIndirectObject>(reachable.Count);
+            foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
+            {
+                PdfIndirectObject copy = new PdfIndirectObject(
+                    new PdfObjectId(remap[entry.Key], 0), PdfCompressor.DeepCopy(entry.Value, remap));
+                store.Add(copy);
+                copies.Add(copy);
+            }
+
+            PdfDictionary trailer = new PdfDictionary();
+            foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info"), PdfName.Intern("ID") })
+            {
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    trailer.Set(key, PdfCompressor.DeepCopy(value, remap));
+                }
+            }
+
+            StandardFontSubstitution session = new StandardFontSubstitution(store, () => new PdfObjectId(next++, 0))
+            {
+                IncludeAliases = options.IncludeAliases,
+            };
+            HashSet<PdfDictionary> walked = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
+            foreach (PdfIndirectObject copy in copies)
+            {
+                FindResources(copy.Value, store, session, walked);
+            }
+
+            List<PdfIndirectObject> objects = new List<PdfIndirectObject>(store.Objects);
+            objects.Sort((a, b) => a.Id.ObjectNumber.CompareTo(b.Id.ObjectNumber));
+            PdfWriter.Write(output, objects, trailer);
+            return new StandardFontEmbedResult(session.Embedded, session.NotEmbedded.ToArray());
+        });
     }
 
     // Hands every /Resources and /DR dictionary held directly in a value

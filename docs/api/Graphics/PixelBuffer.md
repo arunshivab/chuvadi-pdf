@@ -83,6 +83,14 @@ void SetPixelBgra(int x, int y, byte b, byte g, byte r, byte a)
 
 Sets a pixel at (x, y) from packed BGRA bytes. Out-of-range coordinates are silently ignored.
 
+### `GetPixelBgra`
+
+```csharp
+(byte B, byte G, byte R, byte A) GetPixelBgra(int x, int y)
+```
+
+Gets the BGRA bytes of a pixel. Returns (0, 0, 0, 0) for out-of-range coordinates.
+
 ### `BlendPixel`
 
 ```csharp

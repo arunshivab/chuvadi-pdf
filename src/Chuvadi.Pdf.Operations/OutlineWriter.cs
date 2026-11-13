@@ -54,49 +54,52 @@ public static class OutlineWriter
         PdfDocument document,
         IReadOnlyList<OutlineEntry> entries)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(entries);
-        CheckSources(entries, document);
-
-        DocumentRewriter rewriter = new DocumentRewriter(document);
-        Dictionary<int, PdfObjectId> pageIds = PageTree.BuildIndexToIdMap(document);
-
-        PdfDictionary catalog = rewriter.CopyCatalog();
-
-        if (entries.Count == 0)
+        PdfWriteGuard.Run(document, "updated", () =>
         {
-            catalog.Remove(PdfName.Outlines);
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(entries);
+            CheckSources(entries, document);
+
+            DocumentRewriter rewriter = new DocumentRewriter(document);
+            Dictionary<int, PdfObjectId> pageIds = PageTree.BuildIndexToIdMap(document);
+
+            PdfDictionary catalog = rewriter.CopyCatalog();
+
+            if (entries.Count == 0)
+            {
+                catalog.Remove(PdfName.Outlines);
+                rewriter.ReplaceObject(rewriter.CatalogId(), catalog);
+                rewriter.Write(output);
+                return;
+            }
+
+            // Allocate the root /Outlines id and an id for every entry up-front so
+            // sibling/child links can reference them before the dicts are built.
+            PdfObjectId rootId = rewriter.AllocateId();
+            List<EntryNode> nodes = new List<EntryNode>();
+            AssignIds(rewriter, entries, nodes);
+
+            // Build each item dictionary with First/Last/Next/Prev/Parent/Count.
+            int topVisible = BuildLevel(rewriter, document, pageIds, nodes, rootId);
+
+            // Root /Outlines dictionary.
+            PdfDictionary outlines = new PdfDictionary();
+            outlines.Set(PdfName.Type, PdfName.Outlines);
+            if (nodes.Count > 0)
+            {
+                outlines.Set(PdfName.Intern("First"), new PdfReference(nodes[0].Id));
+                outlines.Set(PdfName.Intern("Last"), new PdfReference(nodes[^1].Id));
+            }
+
+            outlines.Set(PdfName.Count, topVisible);
+            rewriter.AddObject(rootId, outlines);
+
+            catalog.Set(PdfName.Outlines, new PdfReference(rootId));
             rewriter.ReplaceObject(rewriter.CatalogId(), catalog);
+
             rewriter.Write(output);
-            return;
-        }
-
-        // Allocate the root /Outlines id and an id for every entry up-front so
-        // sibling/child links can reference them before the dicts are built.
-        PdfObjectId rootId = rewriter.AllocateId();
-        List<EntryNode> nodes = new List<EntryNode>();
-        AssignIds(rewriter, entries, nodes);
-
-        // Build each item dictionary with First/Last/Next/Prev/Parent/Count.
-        int topVisible = BuildLevel(rewriter, document, pageIds, nodes, rootId);
-
-        // Root /Outlines dictionary.
-        PdfDictionary outlines = new PdfDictionary();
-        outlines.Set(PdfName.Type, PdfName.Outlines);
-        if (nodes.Count > 0)
-        {
-            outlines.Set(PdfName.Intern("First"), new PdfReference(nodes[0].Id));
-            outlines.Set(PdfName.Intern("Last"), new PdfReference(nodes[^1].Id));
-        }
-
-        outlines.Set(PdfName.Count, topVisible);
-        rewriter.AddObject(rootId, outlines);
-
-        catalog.Set(PdfName.Outlines, new PdfReference(rootId));
-        rewriter.ReplaceObject(rewriter.CatalogId(), catalog);
-
-        rewriter.Write(output);
+        });
     }
 
     // Recursively allocates an id for each entry in a sibling list.

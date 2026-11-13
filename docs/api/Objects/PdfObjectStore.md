@@ -118,6 +118,14 @@ bool Contains(PdfObjectId id)
 
 <inheritdoc/>
 
+### `ResolveAs<T>`
+
+```csharp
+T? ResolveAs<T>(PdfPrimitive primitive) where T : PdfPrimitive
+```
+
+Resolves a primitive and attempts to cast the result to <typeparamref name="T"/>. Returns null when the object is missing or the value is not of the expected type.
+
 ### `ResolveDictionaryEntry<T>`
 
 ```csharp

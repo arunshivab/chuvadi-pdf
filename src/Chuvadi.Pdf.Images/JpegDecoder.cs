@@ -45,6 +45,19 @@ public static class JpegDecoder
         return Decode(ms.ToArray());
     }
 
+    // A four-component JPEG's channels as stored (CMYK order, YCCK turned
+    // into CMYK, Adobe inversion NOT undone), for PDF images whose /Decode
+    // array says how to read them. Null when the JPEG is not four-component.
+    internal static byte[]? DecodeCmykSamples(byte[] data, out int width, out int height)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        JpegContext ctx = new JpegContext(data);
+        ctx.Parse();
+        width = ctx.Width;
+        height = ctx.Height;
+        return ctx.BuildCmykSamples();
+    }
+
     // ── Marker constants ──────────────────────────────────────────────────
     private const byte MarkerPrefix = 0xFF;
     private const byte SOI = 0xD8;
@@ -715,7 +728,62 @@ public static class JpegDecoder
 
         // ── Frame assembly ────────────────────────────────────────────────
 
+        internal int Width => _width;
+
+        internal int Height => _height;
+
+        // The four colour channels of a CMYK or YCCK JPEG as stored, one byte
+        // each per pixel in C, M, Y, K order, or null when the JPEG does not
+        // have four components. YCCK is turned into CMYK, but the Adobe
+        // inverted-channel convention is NOT undone: inside a PDF the image
+        // dictionary's /Decode array says how to read the values (3.34.0,
+        // Phase B N3; Poppler and MuPDF read them the same way).
+        internal byte[]? BuildCmykSamples()
+        {
+            if (_components.Length != 4)
+            {
+                return null;
+            }
+
+            DecodePlanes();
+            Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)_width * _height * 4);
+            byte[] cmyk = new byte[(long)_width * _height * 4];
+            bool ycck = _adobeTransform == 2;
+            Component c0 = _components[0], c1 = _components[1], c2 = _components[2], c3 = _components[3];
+            int o = 0;
+            for (int j = 0; j < _height; j++)
+            {
+                Chuvadi.Pdf.Primitives.PdfWorkScope.ThrowIfCancellationRequested();
+                for (int i = 0; i < _width; i++)
+                {
+                    int s0 = Sample(c0, i, j);
+                    int s1 = Sample(c1, i, j);
+                    int s2 = Sample(c2, i, j);
+                    if (ycck)
+                    {
+                        (byte r, byte g, byte b) = YccToRgb(s0, s1, s2);
+                        s0 = 255 - r;
+                        s1 = 255 - g;
+                        s2 = 255 - b;
+                    }
+
+                    cmyk[o++] = (byte)s0;
+                    cmyk[o++] = (byte)s1;
+                    cmyk[o++] = (byte)s2;
+                    cmyk[o++] = Sample(c3, i, j);
+                }
+            }
+
+            return cmyk;
+        }
+
         internal ImageFrame BuildFrame()
+        {
+            DecodePlanes();
+            return BuildFrameFromPlanes();
+        }
+
+        private void DecodePlanes()
         {
             if (_width <= 0 || _height <= 0 || _components.Length == 0)
             {
@@ -759,7 +827,10 @@ public static class JpegDecoder
                     }
                 }
             }
+        }
 
+        private ImageFrame BuildFrameFromPlanes()
+        {
             Chuvadi.Pdf.Primitives.PdfWorkScope.ChargeMemory((long)_width * _height * 4);
             PixelBuffer buffer = new PixelBuffer(_width, _height);
             int nc = _components.Length;

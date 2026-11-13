@@ -141,6 +141,22 @@ public sealed class CompositeHintingTests
         hinted.Should().BeNull();
     }
 
+    [Fact]
+    public void Composite_ThatContainsItself_StopsInsteadOfOverflowingTheStack()
+    {
+        // 3.34.0 (Phase B, pdf.js recursiveCompositGlyf.pdf): GID 2 draws the
+        // base box, then itself. The unhinted path recursed until the stack
+        // overflowed, ending the process; now nesting stops after eight
+        // levels and the outline is the boxes drawn so far.
+        byte[] font = BuildSelfReferencingTtf();
+        TrueTypeLoader loader = new TrueTypeLoader(font);
+
+        GlyphOutline outline = loader.GetGlyphOutline(CompositeGlyphId);
+
+        outline.Should().NotBeNull();
+        MinY(outline.Outline).Should().BeApproximately(0, 0.001);
+    }
+
     // ── Outline measurement helpers ────────────────────────────────────────
 
     private static double MaxY(Path path)
@@ -207,6 +223,32 @@ public sealed class CompositeHintingTests
         int[] locaBytes = [0, 0, g1.Length, g1.Length + g2.Length];
 
         return Assemble(glyf.ToArray(), locaBytes);
+    }
+
+    // glyf: GID0 empty, GID1 base box, GID2 = [GID1, GID2] (itself).
+    private static byte[] BuildSelfReferencingTtf()
+    {
+        List<byte> g = new List<byte>();
+        g.AddRange(S16(-1));                         // composite
+        g.AddRange(S16(0));
+        g.AddRange(S16(0));
+        g.AddRange(S16(300));
+        g.AddRange(S16(700));
+        g.AddRange(U16(0x0001 | 0x0002 | 0x0020));  // words, XY values, MORE_COMPONENTS
+        g.AddRange(U16(BaseGlyphId));
+        g.AddRange(S16(0));
+        g.AddRange(S16(0));
+        g.AddRange(U16(0x0001 | 0x0002));            // words, XY values (last component)
+        g.AddRange(U16(CompositeGlyphId));           // itself
+        g.AddRange(S16(0));
+        g.AddRange(S16(0));
+
+        byte[] g1 = PadEven(BuildBaseGlyph());
+        byte[] g2 = PadEven(g.ToArray());
+        List<byte> glyf = new List<byte>();
+        glyf.AddRange(g1);
+        glyf.AddRange(g2);
+        return Assemble(glyf.ToArray(), [0, 0, g1.Length, g1.Length + g2.Length]);
     }
 
     private static byte[] BuildBaseGlyph()

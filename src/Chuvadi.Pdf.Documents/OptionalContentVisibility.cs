@@ -40,14 +40,24 @@ public sealed class OptionalContentVisibility
     private readonly IReadOnlyDictionary<int, bool>? _idOverrides;
     private readonly bool _all;
 
+    // 3.34.0 (#43): the catalog this visibility was read from, so the print
+    // visibility can be read from it too; null for AllVisible.
+    private readonly PdfDictionary? _catalog;
+    private readonly bool _forPrinting;
+    private OptionalContentVisibility? _printing;
+
     private OptionalContentVisibility(
         PdfObjectStore? store,
         Dictionary<int, bool> groupStates,
         Dictionary<int, string> groupNames,
         IReadOnlyDictionary<string, bool>? overrides,
         bool all,
-        IReadOnlyDictionary<int, bool>? idOverrides = null)
+        IReadOnlyDictionary<int, bool>? idOverrides = null,
+        PdfDictionary? catalog = null,
+        bool forPrinting = false)
     {
+        _catalog = catalog;
+        _forPrinting = forPrinting;
         _store = store;
         _groupStates = groupStates;
         _groupNames = groupNames;
@@ -96,7 +106,7 @@ public sealed class OptionalContentVisibility
             return this;
         }
 
-        return new OptionalContentVisibility(_store, _groupStates, _groupNames, layerVisibility, all: false, _idOverrides);
+        return new OptionalContentVisibility(_store, _groupStates, _groupNames, layerVisibility, all: false, _idOverrides, _catalog, _forPrinting);
     }
 
     /// <summary>
@@ -119,7 +129,51 @@ public sealed class OptionalContentVisibility
             return this;
         }
 
-        return new OptionalContentVisibility(_store, _groupStates, _groupNames, _overrides, all: false, layerVisibility);
+        return new OptionalContentVisibility(_store, _groupStates, _groupNames, _overrides, all: false, layerVisibility, _catalog, _forPrinting);
+    }
+
+    /// <summary>
+    /// Returns the visibility for printing (3.34.0): the same default
+    /// configuration and overrides, but the <c>/AS</c> auto-state applied is
+    /// the one for the Print event, so a layer whose <c>/Usage /Print
+    /// /PrintState</c> is <c>/ON</c> or <c>/OFF</c> takes that state, and the
+    /// View auto-state is not applied (PDF 32000-1:2008 §8.11.4.4). The
+    /// renderers and text extraction use it with <c>AnnotationMode.Print</c>.
+    /// A visibility that shows everything, or that is already for printing,
+    /// is returned as it is.
+    /// </summary>
+    /// <returns>The visibility for printing.</returns>
+    public OptionalContentVisibility ForPrinting()
+    {
+        if (_all || _forPrinting || _catalog is null || _store is null)
+        {
+            return this;
+        }
+
+        OptionalContentVisibility? cached = _printing;
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        OptionalContentVisibility built;
+        try
+        {
+            built = FromCatalog(_catalog, _store, forPrinting: true);
+        }
+        catch (PdfException abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
+        {
+            return this;
+        }
+
+        if (!built._all)
+        {
+            built = new OptionalContentVisibility(
+                built._store, built._groupStates, built._groupNames, _overrides, all: false, _idOverrides, _catalog, forPrinting: true);
+        }
+
+        _printing = built;
+        return built;
     }
 
     /// <summary>
@@ -175,7 +229,7 @@ public sealed class OptionalContentVisibility
         return Evaluate(optionalContent, 0);
     }
 
-    internal static OptionalContentVisibility FromCatalog(PdfDictionary catalog, PdfObjectStore store)
+    internal static OptionalContentVisibility FromCatalog(PdfDictionary catalog, PdfObjectStore store, bool forPrinting = false)
     {
         Dictionary<int, bool> states = new Dictionary<int, bool>();
         Dictionary<int, string> names = new Dictionary<int, string>();
@@ -206,15 +260,16 @@ public sealed class OptionalContentVisibility
         {
             ApplyList(config, "OFF", false, store, states);
             ApplyList(config, "ON", true, store, states);
-            ApplyViewAutoState(config, store, states);
+            ApplyAutoState(config, store, states, forPrinting ? "Print" : "View");
         }
 
-        return new OptionalContentVisibility(store, states, names, null, all: false);
+        return new OptionalContentVisibility(store, states, names, null, all: false, null, catalog, forPrinting);
     }
 
-    // /AS: usage application dictionaries; for the View event, groups whose
-    // /Usage /View /ViewState names a state take that state (§8.11.4.4).
-    private static void ApplyViewAutoState(PdfDictionary config, PdfObjectStore store, Dictionary<int, bool> states)
+    // /AS: usage application dictionaries; for the View (or, 3.34.0, Print)
+    // event, groups whose /Usage /View /ViewState (/Print /PrintState) names
+    // a state take that state (§8.11.4.4).
+    private static void ApplyAutoState(PdfDictionary config, PdfObjectStore store, Dictionary<int, bool> states, string eventName)
     {
         if (!config.TryGetValue(PdfName.Intern("AS"), out PdfPrimitive? asPrim)
             || store.ResolveAs<PdfArray>(asPrim) is not PdfArray autoStates)
@@ -225,8 +280,8 @@ public sealed class OptionalContentVisibility
         for (int i = 0; i < autoStates.Count; i++)
         {
             if (store.ResolveAs<PdfDictionary>(autoStates[i]) is not PdfDictionary usage
-                || usage.GetName(PdfName.Intern("Event"))?.Value != "View"
-                || !HasCategory(usage, "View", store)
+                || usage.GetName(PdfName.Intern("Event"))?.Value != eventName
+                || !HasCategory(usage, eventName, store)
                 || !usage.TryGetValue(PdfName.Intern("OCGs"), out PdfPrimitive? groupsPrim)
                 || store.ResolveAs<PdfArray>(groupsPrim) is not PdfArray groups)
             {
@@ -239,13 +294,13 @@ public sealed class OptionalContentVisibility
                     || store.ResolveAs<PdfDictionary>(r) is not PdfDictionary ocg
                     || !ocg.TryGetValue(PdfName.Intern("Usage"), out PdfPrimitive? usagePrim)
                     || store.ResolveAs<PdfDictionary>(usagePrim) is not PdfDictionary ocgUsage
-                    || !ocgUsage.TryGetValue(PdfName.Intern("View"), out PdfPrimitive? viewPrim)
+                    || !ocgUsage.TryGetValue(PdfName.Intern(eventName), out PdfPrimitive? viewPrim)
                     || store.ResolveAs<PdfDictionary>(viewPrim) is not PdfDictionary view)
                 {
                     continue;
                 }
 
-                string? state = view.GetName(PdfName.Intern("ViewState"))?.Value;
+                string? state = view.GetName(PdfName.Intern(eventName + "State"))?.Value;
                 if (state == "ON")
                 {
                     states[r.ObjectId.ObjectNumber] = true;

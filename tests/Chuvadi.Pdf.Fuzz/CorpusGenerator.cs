@@ -27,6 +27,7 @@ internal static class CorpusGenerator
     public static void RegenerateAll(string corpusRoot)
     {
         RegeneratePdfCorpus(Path.Combine(corpusRoot, "pdf-open"));
+        RegeneratePdfCorpus(Path.Combine(corpusRoot, "write-paths"));
         RegenerateContentStreamCorpus(Path.Combine(corpusRoot, "content-stream"));
         // TrueType corpus is not regenerated — Chuvadi has no TTF writer. See README.
 

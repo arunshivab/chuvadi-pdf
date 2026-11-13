@@ -62,6 +62,14 @@ static PdfColor Cmyk(double c, double m, double y, double k)
 
 Creates a DeviceCMYK color.
 
+### `ToSrgb`
+
+```csharp
+(double R, double G, double B) ToSrgb() => Space switch
+```
+
+Converts this color to sRGB (r, g, b) in [0, 1].
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/PdfColor.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/PdfColor.cs)_

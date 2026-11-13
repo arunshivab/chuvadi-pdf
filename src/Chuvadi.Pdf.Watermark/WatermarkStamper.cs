@@ -53,54 +53,60 @@ public static class WatermarkStamper
         PdfDocument document,
         TextWatermarkOptions options)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "watermarked", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (options is null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
-
-        if (string.IsNullOrWhiteSpace(options.Text))
-        {
-            throw new WatermarkException("Watermark text cannot be empty.");
-        }
-
-        HashSet<int> pageSet = BuildPageSet(options.PageIndices, document.PageCount);
-        WatermarkDocument doc = new WatermarkDocument(document);
-
-        // Embed a custom font once (shared by every watermarked page) when font
-        // bytes are supplied; otherwise the standard Helvetica resource is used.
-        string fontKey = SanitizeName(options.FontName);
-        PdfObjectId? embeddedFontId = null;
-        string? glyphHex = null;
-
-        if (options.FontData is not null)
-        {
-            (embeddedFontId, glyphHex) = doc.EmbedTrueTypeFont(
-                options.FontData, options.Text, options.FontName);
-        }
-
-        for (int i = 0; i < document.PageCount; i++)
-        {
-            if (!pageSet.Contains(i))
+            if (output is null)
             {
-                continue;
+                throw new ArgumentNullException(nameof(output));
             }
 
-            PdfPage page = document.Pages[i];
-            byte[] wmStream = BuildTextStream(page.Width, page.Height, options, fontKey, glyphHex);
-            doc.AppendContentStream(i, wmStream, options.Opacity, "WMTextGS", fontKey, embeddedFontId);
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        doc.Write(output);
+            if (options is null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            if (string.IsNullOrWhiteSpace(options.Text))
+            {
+                throw new WatermarkException("Watermark text cannot be empty.");
+            }
+
+            HashSet<int> pageSet = BuildPageSet(options.PageIndices, document.PageCount);
+            WatermarkDocument doc = new WatermarkDocument(document);
+
+            // Embed a custom font once (shared by every watermarked page) when font
+            // bytes are supplied; otherwise the standard Helvetica resource is used.
+            string fontKey = SanitizeName(options.FontName);
+            PdfObjectId? embeddedFontId = null;
+            string? glyphHex = null;
+
+            if (options.FontData is not null)
+            {
+                (embeddedFontId, glyphHex) = doc.EmbedTrueTypeFont(
+                    options.FontData, options.Text, options.FontName);
+            }
+
+            double textWidth = MeasureText(options, glyphHex);
+
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                if (!pageSet.Contains(i))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[i];
+                (double frameW, double frameH, string toUser) = Frame(page, options.PlaceInDisplaySpace);
+                byte[] wmStream = BuildTextStream(frameW, frameH, toUser, options, fontKey, glyphHex, textWidth);
+                doc.AppendContentStream(i, wmStream, options.Opacity, "WMTextGS", fontKey, embeddedFontId);
+            }
+
+            doc.Write(output);
+        });
     }
 
     /// <summary>
@@ -117,63 +123,104 @@ public static class WatermarkStamper
         ImageFrame frame,
         ImageWatermarkOptions options)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "watermarked", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (frame is null)
-        {
-            throw new ArgumentNullException(nameof(frame));
-        }
-
-        if (options is null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
-
-        HashSet<int> pageSet = BuildPageSet(options.PageIndices, document.PageCount);
-        WatermarkDocument doc = new WatermarkDocument(document);
-
-        // Encode image as PNG for embedding
-        byte[] pngBytes;
-
-        using (MemoryStream pngMs = new MemoryStream())
-        {
-            PngEncoder.Encode(frame, pngMs, includeAlpha: true);
-            pngBytes = pngMs.ToArray();
-        }
-
-        for (int i = 0; i < document.PageCount; i++)
-        {
-            if (!pageSet.Contains(i))
+            if (output is null)
             {
-                continue;
+                throw new ArgumentNullException(nameof(output));
             }
 
-            PdfPage page = document.Pages[i];
-            byte[] wmStream = BuildImageStream(
-                page.Width, page.Height, frame.Width, frame.Height, options);
-            doc.AppendImageStream(i, wmStream, pngBytes,
-                frame.Width, frame.Height, options.Opacity);
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        doc.Write(output);
+            if (frame is null)
+            {
+                throw new ArgumentNullException(nameof(frame));
+            }
+
+            if (options is null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            HashSet<int> pageSet = BuildPageSet(options.PageIndices, document.PageCount);
+            WatermarkDocument doc = new WatermarkDocument(document);
+
+            // 3.34.0: the image is embedded as Flate-compressed samples, with its
+            // alpha as a soft mask. Before, the bytes of a whole PNG file were
+            // written as raw DeviceRGB samples, so viewers drew noise.
+            EmbeddedImage image = ImageEmbedder.BuildFromFrame(frame);
+
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                if (!pageSet.Contains(i))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[i];
+                (double frameW, double frameH, string toUser) = Frame(page, options.PlaceInDisplaySpace);
+                byte[] wmStream = BuildImageStream(
+                    frameW, frameH, toUser, frame.Width, frame.Height, options);
+                doc.AppendImageStream(i, wmStream, image, options.Opacity);
+            }
+
+            doc.Write(output);
+        });
     }
 
     // ── Text stream builder ───────────────────────────────────────────────
 
-    private static byte[] BuildTextStream(
-        double pageW, double pageH, TextWatermarkOptions options,
-        string fontKey, string? glyphHex)
+    // The page frame the watermark is centred in: the unrotated MediaBox
+    // (historical), or with PlaceInDisplaySpace (3.34.0) the shown page, with
+    // the `cm` that maps it to user space.
+    private static (double Width, double Height, string ToUserCm) Frame(PdfPage page, bool placeInDisplaySpace)
     {
-        // Estimate text width: Helvetica metrics average ~0.5 × fontSize per char
-        double textWidth = options.Text.Length * options.FontSize * 0.5;
+        if (!placeInDisplaySpace)
+        {
+            return (page.Width, page.Height, string.Empty);
+        }
+
+        PdfRectangle shown = page.GetDisplayBox(PdfDisplayBox.CropBox);
+        int rotation = (((page.Rotate - (page.Rotate % 90)) % 360) + 360) % 360;
+        (double w, double h) = rotation is 90 or 270 ? (shown.Height, shown.Width) : (shown.Width, shown.Height);
+        Transform t = page.GetDisplayTransform(PdfDisplayBox.CropBox);
+        return (w, h, $"{Fmt(t.A)} {Fmt(t.B)} {Fmt(t.C)} {Fmt(t.D)} {Fmt(t.E)} {Fmt(t.F)} cm");
+    }
+
+    // 3.34.0 (D-335): the text's real advance width, from the Helvetica AFM
+    // widths or the embedded font's glyph advances. Before, it was estimated
+    // as 0.5 em per character, so long or wide text sat off-centre.
+    private static double MeasureText(TextWatermarkOptions options, string? glyphHex)
+    {
+        if (glyphHex is null || options.FontData is null)
+        {
+            double units = 0;
+            foreach (char ch in options.Text)
+            {
+                units += Standard14GlyphWidths.Width("Helvetica", ch);
+            }
+
+            return units * options.FontSize / 1000.0;
+        }
+
+        FontFace face = FontFace.Load(options.FontData);
+        double advance = 0;
+        for (int i = 0; i + 4 <= glyphHex.Length; i += 4)
+        {
+            int gid = int.Parse(glyphHex.AsSpan(i, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            advance += face.GetAdvanceWidth(gid);
+        }
+
+        return advance * options.FontSize / face.UnitsPerEm;
+    }
+
+    private static byte[] BuildTextStream(
+        double pageW, double pageH, string toUserCm, TextWatermarkOptions options,
+        string fontKey, string? glyphHex, double textWidth)
+    {
         double textHeight = options.FontSize;
 
         // Centre of page
@@ -203,6 +250,11 @@ public static class WatermarkStamper
 
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("q");
+        if (toUserCm.Length > 0)
+        {
+            sb.AppendLine(toUserCm);
+        }
+
         sb.AppendLine("/WMTextGS gs");
         sb.AppendLine($"{r} {g} {bv} rg");
         sb.AppendLine($"{Fmt(cosA)} {Fmt(sinA)} {Fmt(-sinA)} {Fmt(cosA)} {Fmt(tx)} {Fmt(ty)} cm");
@@ -218,7 +270,7 @@ public static class WatermarkStamper
     // ── Image stream builder ──────────────────────────────────────────────
 
     private static byte[] BuildImageStream(
-        double pageW, double pageH,
+        double pageW, double pageH, string toUserCm,
         int imgW, int imgH,
         ImageWatermarkOptions options)
     {
@@ -236,6 +288,11 @@ public static class WatermarkStamper
 
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("q");
+        if (toUserCm.Length > 0)
+        {
+            sb.AppendLine(toUserCm);
+        }
+
         sb.AppendLine("/WMImageGS gs");
         // Scale matrix for image: [w 0 0 h x y]
         sb.AppendLine($"{Fmt(destW * cosA)} {Fmt(destW * sinA)} {Fmt(-destH * sinA)} {Fmt(destH * cosA)} {Fmt(cx)} {Fmt(cy)} cm");
@@ -296,6 +353,7 @@ internal sealed class WatermarkDocument
 {
     private readonly PdfDocument _source;
     private readonly List<PdfIndirectObject> _extraObjects;
+    private PdfObjectId? _imageId;
 
     // Tracks per-page watermark stream IDs and resource additions
     private readonly Dictionary<int, List<WatermarkEntry>> _pageWatermarks;
@@ -435,20 +493,24 @@ internal sealed class WatermarkDocument
     }
 
     internal void AppendImageStream(
-        int pageIndex, byte[] content, byte[] imageBytes,
-        int imgW, int imgH, float opacity)
+        int pageIndex, byte[] content, EmbeddedImage image, float opacity)
     {
-        // Image XObject stream
-        PdfObjectId imageId = NextId();
-        PdfDictionary imageDict = new PdfDictionary();
-        imageDict.Set(PdfName.Type, PdfName.XObject);
-        imageDict.Set(PdfName.Intern("Subtype"), PdfName.Intern("Image"));
-        imageDict.Set(PdfName.Intern("Width"), imgW);
-        imageDict.Set(PdfName.Intern("Height"), imgH);
-        imageDict.Set(PdfName.Intern("ColorSpace"), PdfName.Intern("DeviceRGB"));
-        imageDict.Set(PdfName.Intern("BitsPerComponent"), 8);
-        imageDict.Set(PdfName.Length, imageBytes.Length);
-        _extraObjects.Add(new PdfIndirectObject(imageId, new PdfStream(imageDict, imageBytes)));
+        // Image XObject stream, shared by every stamped page, and its soft
+        // mask when the image has an alpha channel.
+        if (_imageId is not PdfObjectId imageId)
+        {
+            imageId = NextId();
+            PdfDictionary imageDict = image.ImageDictionary;
+            if (image.MaskDictionary is not null)
+            {
+                PdfObjectId maskId = NextId();
+                _extraObjects.Add(new PdfIndirectObject(maskId, new PdfStream(image.MaskDictionary, image.MaskData)));
+                imageDict.Set(PdfName.Intern("SMask"), new PdfReference(maskId));
+            }
+
+            _extraObjects.Add(new PdfIndirectObject(imageId, new PdfStream(imageDict, image.ImageData)));
+            _imageId = imageId;
+        }
 
         // Content stream
         PdfObjectId streamId = NextId();

@@ -112,4 +112,15 @@ public sealed class HeaderFooterOptions
     /// tokens, or null.
     /// </summary>
     public System.DateTimeOffset? Timestamp { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether the bands are placed on the page as a viewer
+    /// shows it (3.34.0, D-335): inside the shown box (the CropBox intersected
+    /// with the MediaBox) and upright after the page's <c>/Rotate</c>, so the
+    /// header is at the top of what the reader sees. Default: false, the
+    /// historical placement on the unrotated MediaBox. With this set,
+    /// <see cref="HeaderFooter.ResolveSegments"/> gives positions in display
+    /// space (see <see cref="Chuvadi.Pdf.Documents.PdfPage.GetDisplayTransform"/>).
+    /// </summary>
+    public bool PlaceInDisplaySpace { get; init; }
 }

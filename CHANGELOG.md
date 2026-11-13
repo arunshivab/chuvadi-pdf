@@ -10,6 +10,361 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
+## [3.34.0] - 2026-11-27
+
+Shown-page geometry for callers (D-334), forms that read and fill fully
+(fields, widgets, options, flags; buttons and radios fixed; UTF-16 names and
+Tamil values; `/Info`, `/ID` and encryption kept), merge that keeps forms and
+can encrypt, a redaction report, watermarks and headers placed on the page as
+shown, every write path inside the cancellation and limits scope, release
+guards, and a trimmed and ReadyToRun publish check (D-335, D-338, D-339,
+D-342). Also (D-348, D-350, D-351, D-353): images drawn through their full
+matrix, damaged input read past with a warning instead of failing (the pdf.js
+test set), crypt filters, print-state layers, round joins and the elliptical
+pen, soft masks at a form's `Do`, WPF clips, redaction of bookmarks and XMP,
+three PDF/A-1b fixes, and faster Devanagari shaping. Forms (D-358, D-362):
+several values for a multi-select list, refused values explained by
+properties apps can localise, opt-in value checks, and unknown field names
+ignored, reported or refused. Phase B test bench (D-365, D-366): inline
+images drawn, LZW streams read past 511 codes, CMYK JPEGs read through
+`/Decode`, text scaled by its matrices hinted at the size it is drawn,
+embedded Type 1 fonts with a standard-14 name drawn from their own program, image masks applied, skipped
+images reported, and several damaged-file cases read; checked on the test
+bench's real files, where open paths now fill and transparency groups keep
+their alpha (N14, D-367). PDF/A (D-364): a
+zone-less date is reported, and can be written as UTC on request.
+
+### Added
+- **Shown-page geometry (D-334).**
+  - `PdfPage.GetDisplayBox(PdfDisplayBox)`: the box a viewer shows, the
+    CropBox intersected with the MediaBox (normalised; the MediaBox when they
+    do not overlap). The rule is now shared by the raster, SVG and WPF
+    renderers.
+  - `PdfPage.GetDisplayTransform(PdfDisplayBox)`: a `Transform` from display
+    space (the shown page, upright after `/Rotate`, origin at its lower left)
+    to PDF user space. `Chuvadi.Pdf.Documents` now depends on
+    `Chuvadi.Pdf.Graphics`.
+  - `PageRasterizer.GetOutputSize(PdfPage)`: the size in pixels that
+    `Rasterize` will return, without rendering.
+- **Form reading (D-335).** `FormField.Widgets` (`FormWidget`: page index,
+  rectangle, object id, on-state, export value), `FormField.Options`
+  (`FormChoiceOption`: export value and display text), `FormField.Flags`
+  (`FormFieldFlags`, the PDF bit values) and `FormField.MaxLength`.
+  `/FT`, `/Ff` and `/MaxLen` are inherited from parent fields (item 27).
+- **`FormFiller.Fill(..., FormFillOptions)`** with
+  `FormFillOptions.Encryption` (D-342): the filled copy can be encrypted.
+- **`MergeOptions.FormFields`** (`MergeFormFields`: `Drop`,
+  `RenameOnConflict`, `ShareSameName`) and **`MergeOptions.Encryption`**.
+- **`Redactor.ApplyWithReport`**, returning `RedactionReport` with one
+  `PageRedactionReport` per rewritten page: glyphs removed, images blanked
+  and removed, paths cut and removed, annotations removed, field values
+  cleared, alternate texts removed. The output is the same as `Apply`.
+- **`PlaceInDisplaySpace`** on `TextWatermarkOptions`,
+  `ImageWatermarkOptions` and `HeaderFooterOptions` (default false): place
+  the watermark, header or footer on the page as a viewer shows it (the
+  shown box, upright after `/Rotate`).
+- **`OptionalContentVisibility.ForPrinting()`** (#43): the layer visibility
+  for printing, with each layer's `/Usage /Print /PrintState` applied.
+- **`RedactionReport.DocumentMatchesRemoved`** (#18): matches removed from
+  bookmark titles and the XMP metadata.
+- **Form filling with several values and a result (D-358, D-362).**
+  - `FormFiller.Fill(Stream, PdfDocument, IReadOnlyDictionary<string,
+    IReadOnlyList<string>>, FormFillOptions)` returns a `FormFillResult`
+    (`FilledFields`, `UnknownFields`). A multi-select list box takes any
+    number of export values: `/V` is one string for one value and an array
+    for more, and `/I` lists the chosen options' indices. Any other field
+    given more than one value throws (`TooManyValues`).
+  - `FormException.Reason` (`FormErrorReason`: `UnknownState`,
+    `NotInOptions`, `TooLong`, `TooManyValues`, `UnknownField`; null for
+    other form errors), `FieldName`, `Value`, `ValidStates` and
+    `MaxLength`, beside the English message, so an app can show its own.
+  - `FormFillOptions.Validate` (default false in 3.x; may become true in
+    4.0): a choice value that is not an option's export value throws
+    (`NotInOptions`; an editable combo box accepts any value), and a text
+    value longer than `/MaxLen` in Unicode code points throws (`TooLong`).
+    An empty value always clears. Values are never truncated or changed,
+    with or without it.
+  - `FormFillOptions.UnknownFields` (`FormUnknownFields`: `Ignore`, the
+    default and the behaviour before; `Report`, listed in
+    `FormFillResult.UnknownFields`; `Throw`, before anything is written).
+    The default may become `Throw` in 4.0. `Report` needs the overload that
+    returns a result; the others throw `ArgumentException`.
+- **`PdfAOptions.AssumeUtcForZonelessDates`** (default false) and
+  **`PdfAResult.Warnings`** (D-364, 63C). By default an `/Info` date with no
+  time zone is left out of the XMP, and a warning says which date and why
+  (nothing is invented). With the option it is written as UTC, also with a
+  warning. A date that cannot be read is left out with a warning.
+- **`PdfWarningKind.ImageSkipped`** (N7): an image that is not drawn is
+  reported: JPEG 2000 (not supported yet), a codec error, a colour space,
+  bit depth or size that is not supported, or a `/Mask` that cannot be
+  read. Before, such images were skipped in silence.
+- **Inline images are drawn** (N4) by the raster, SVG and WPF renderers
+  (`BI ... ID ... EI`, §8.9.7, with the abbreviated keys and names, a named
+  colour space from the resources, and every filter). Before, they were not
+  drawn at all.
+
+### Changed
+- **Merge keeps the inputs' forms** by default (`RenameOnConflict`), in both
+  `Merge` overloads. A top-level field whose name is taken is renamed
+  `name_2`, `name_3`, ...; `/DR` is merged (a clashing resource name is
+  renamed and the `/DA` strings follow); `NeedAppearances` and `SigFlags`
+  are set when any input sets them; `/CO` is concatenated; XFA is not
+  carried. Before, the form was dropped and the widgets stayed as plain
+  annotations: `FormFields = MergeFormFields.Drop` keeps that.
+  `ShareSameName` joins fields with the same full name, also below a parent
+  (`patient.name` in two inputs is one field).
+- **Text watermarks are centred by their real width** (D-335): the
+  Helvetica widths, or the embedded font's glyph advances. Before, the width
+  was estimated as half the font size per character, so every text
+  watermark sat a little off centre; each one moves.
+- **Write paths honour the cancellation and limits scope** (item 7b).
+  `PdfDocument.Save`, fill, merge, assemble, split, stamp, watermark,
+  header/footer, flatten, compress, sanitize, redact, PDF/A, XFA render and
+  the other write paths apply the limits the source documents were opened
+  with and any `PdfWorkScope` the caller opened, checking every object
+  written. A failure that is not one of their documented exceptions is
+  reported as `PdfCorruptionException` with the original as
+  `InnerException` (see `docs/EMBEDDING.md` §6).
+- **`FormFiller` keeps `/Info` and the file `/ID`** (D-342). Before, the
+  filled copy lost them, and an encrypted source came out unencrypted with
+  no way to encrypt it; it is still written unencrypted unless
+  `FormFillOptions.Encryption` is set.
+- **Filled values outside Latin-1 are written as UTF-16** (item 26), so
+  Tamil and other scripts fill; Latin-1 values are written as before.
+- **A filled text or choice value removes the field's `/RV`** (D-358 c), the
+  rich-text value a viewer could otherwise still show; and **a filled choice
+  value sets `/I`** to the indices of the options it matches (for a
+  multi-select list box, or a field that already had `/I`), or removes `/I`
+  when it matches none, so a stale selection no longer contradicts `/V`.
+  Both overloads that existed before do this too.
+- **Damaged input is read past with a warning** (#52, D-353), where before
+  the page or the open failed:
+  - content syntax damage (an unterminated string, an empty name) ends that
+    content stream: what came before is drawn and extracted, with a
+    `StreamDamaged` warning (raster, SVG, WPF and text);
+  - a Type 1 glyph that draws a line or curve with no current point starts
+    a subpath there;
+  - a stream with no `/Length` is read up to `endstream`; a damaged font
+    program draws with the substitute font; a damaged form or `ToUnicode`
+    stream gives what was decoded before the damage;
+  - inside an object, a dictionary key that is not a name, or an empty
+    name, is skipped (an empty name as a value reads as null), with a line
+    in `PdfDocument.Warnings`;
+  - a page whose MediaBox is missing or invalid is US Letter
+    (0 0 612 792), with a line in `PdfDocument.Warnings` (before, reading
+    `MediaBox`, `Width` or `Height` threw `PdfCorruptionException`);
+  - a page-tree `/Kids` entry that leads back to its own ancestor is
+    skipped, with a warning; with `RepairIfDamaged` the pages of a looping
+    tree are counted by walking it.
+- **`RepairIfDamaged` recovers more** (#52): a catalog whose `/Pages` does
+  not lead to a page tree, object streams that decode only in part, a
+  cross-reference or object stream that cannot be decoded at open (now a
+  structure failure that repair handles; without repair the exception is
+  unchanged), and an `/Encrypt` entry that leads to no dictionary (opened as
+  unencrypted, with a warning).
+- **Crypt filters** (#52, valid files, applies always): `/StmF`, `/StrF` and
+  `/EFF` select their own crypt filters, and a stream's own `/Crypt` filter
+  is honoured (ISO 32000-1 §7.6.5, §7.4.10). A file whose strings and
+  streams are `/Identity` (only its attachments are encrypted) opens
+  without a password, with a warning.
+- **Printing uses the layers' print state** (#43): with
+  `AnnotationMode.Print` the raster, SVG and structured renderers and text
+  extraction apply `/Usage /Print /PrintState` (before, the view state).
+  `AnnotationFlattener` bakes an annotation that is in a layer inside that
+  layer's marked content, so the layer still shows and hides it.
+- **Redaction carries the bookmarks and the XMP metadata, scrubbed** (#18):
+  patterns with no page list remove their matches from bookmark titles and
+  from the XMP packet. Before, bookmarks and XMP were written only if
+  something had loaded them, and then unscrubbed. The source `/Info` object
+  is never written.
+- **`PdfAWriter`** (#49c, #49d, #49g, 63C): every annotation gets the Print
+  flag and loses NoView (a Hidden or Invisible one is removed); a Type 1
+  subset gets a `/CharSet` (PDF/A-1b); `xmp:CreateDate` and
+  `xmp:ModifyDate` follow `/Info` (PDF/A-1b) when its dates give a time zone.
+  A date without one stays out of the XMP, as before (validators read a
+  zone-less XMP date in their own local zone), now with a warning in
+  `PdfAResult.Warnings`; `AssumeUtcForZonelessDates` writes it as UTC. The
+  XMP dates no longer depend on the machine's time zone.
+- **CMYK JPEGs are read through `/Decode`** (N3), as Poppler and MuPDF read
+  them: the stored channel values, inverted only when `/Decode` says
+  `[1 0 ...]`. Before, the Adobe inverted-channel rule was applied as well,
+  so a PDF that does not invert (MuPDF, Ghostscript and PIL write these)
+  drew as a negative. Raster, SVG (now embedded as PNG) and WPF. The display
+  list's `ImageOp` is unchanged, and `JpegDecoder.Decode` still follows the
+  Adobe rule for a standalone JPEG file.
+- **Text scaled up or down by its matrices is hinted at the size it is
+  drawn** (N1): when the text matrix and CTM scale Tf by more than 2 or less
+  than 0.5, the glyph is fitted at Tf times that scale. Before, only Tf was
+  used, so text set as `1 Tf` and scaled by `Tm` was fitted to a one-pixel
+  grid (wrong shapes and spacing). Other text is hinted at Tf as in 3.33.0
+  (D-377). A rotated or skewed text matrix is no longer hinted; a matrix
+  stretched by up to 2% (Word's `[0.9981 0 0 1]`, say) is still hinted.
+- **An embedded Type 1 font draws its own glyphs even with a standard-14
+  name** (N5, an Adobe "Helvetica" subset, say); before, the standard-14
+  substitute was drawn. Its program is no longer handed to the TrueType
+  reader, which reported a misleading warning; a Type 1 program that cannot
+  be read is reported as `FontSubstituted`.
+- **`/Mask` is applied** (N7, raster): a stencil mask hides the samples it
+  masks, a colour-key range hides the samples in it. Before, the image was
+  drawn unmasked. A mask that cannot be read skips the image (reported).
+- **Fonts are read once per page** (N10, raster): forms, patterns and
+  Type 3 glyphs that use the same font share it (a page of many small forms
+  renders about twice as fast).
+- **LZW encoding** (N2): `FilterPipeline.Encode` with `LZWDecode` writes the
+  standard stream (wider codes start at the standard point). Streams it
+  wrote before 3.34.0 were not standard past 511 codes; Chuvadi's own
+  writers never use LZW.
+- **Glyph choice** (#36, #37): substitute (non-embedded) fonts draw the
+  encoding's glyph, not the `ToUnicode` character, as Poppler and MuPDF do;
+  in SVG, an embedded TrueType font whose own cmap would lead the browser to
+  another glyph gets a cmap that matches the raster renderer.
+- **Round joins** are drawn round (#22), and **a pen under an uneven scale is
+  elliptical** (#23).
+- **A soft mask set before a form's `Do` masks the form** (#42, raster).
+- **`WpfRenderer` applies clips** (#40).
+- **A shading inside a soft mask's group, a Type 3 glyph or a pattern cell
+  paints in SVG** (#41); before, it painted nothing.
+- **JBIG2 and CCITT decodes check cancellation as they go**, and a large
+  JBIG2 region is charged against `MaxMemoryBytes` before it is allocated
+  (#20).
+- **The stamper and composer write references to objects they did not copy
+  as null** (#53), as the page operations already did, and a form
+  XObject's `/Parent` no longer pulls the source's page tree into the
+  output.
+- **Shaping is faster** (#27): Devanagari about a fifth faster, other scripts
+  a little (each subtable's coverage is checked before it is read).
+
+### Fixed
+- **Check boxes and radio buttons fill correctly.** A check box gets the
+  widget's own on-state (not always `/Yes`), `/V` is a name, and every radio
+  kid gets `/AS` (on for the chosen one, `/Off` for the rest). A value that
+  is not one of the button's states throws `FormException`. Pushbuttons are
+  left untouched.
+- **Image watermarks draw.** `WatermarkStamper.ApplyImage` wrote a whole PNG
+  file as raw pixels, so viewers showed noise or nothing. The image is now
+  embedded as Flate-compressed samples with its alpha as a soft mask, and
+  pages share one image object.
+- **Page operations no longer write references to objects they did not
+  copy.** Such a reference (for example a form widget's `/Parent` field)
+  kept its source number, which in the output named an unrelated object,
+  such as a stray copy of a page. It is now written as null. This affects
+  merge, assemble, split, extract, delete, rotate and reorder.
+- **A damaged cross-reference stream** (`/W` or `/Index` that is not a
+  small non-negative integer) throws `PdfParseException`, not
+  `InvalidCastException`; widths up to 8 bytes are read in full (found by
+  the new write-paths fuzz target).
+- **PDF/A-1b: `pdf:Keywords` equals `/Info`'s `/Keywords`** (ISO 19005-1
+  §6.7.3), as 3.33.0 did for the title, author and subject.
+- **Images drawn rotated, skewed or flipped** (#50, D-348):
+  `PageRasterizer` drew such images as their upright box, or skipped them;
+  they are now drawn through their full matrix.
+- **A stroke inside a form XObject drawn under a scale has its scaled
+  width** (raster). Before, the width ignored the CTM at the `Do` and the
+  form's `/Matrix` (a 1-unit line in a form scaled ten times drew one pixel
+  wide).
+- **Redaction no longer gives a new object the number of one the catalog
+  still names**; new numbers start past the file's `/Size`. The viewer
+  preferences, page labels and layer configuration are written with the
+  file (before, an unloaded one was named by the catalog and missing, or
+  pointed at a new content stream).
+- **Shaped text copies without stray spaces in more viewers.** A cluster
+  of several glyphs drawn in text order at their own widths (Tamil "சி" is
+  ச then the vowel sign ி) now gets its text glyph by glyph through
+  `ToUnicode`, as plain text does, instead of an `/ActualText` span; some
+  viewers (Edge) put a space between two such spans, so "அருண் சிவா"
+  copied as "அருண் சி வா". Reordered clusters (a vowel sign drawn before
+  its consonant) and marks moved onto a base keep `/ActualText`. Applies
+  to form, comment and signature appearances and to
+  `PageBuilder.DrawShapedRun`.
+- **WPF draws a closed path's closing edge** (found by the #40 check on
+  Windows). `WpfRenderer` ignored closepath, so a stroked rectangle from
+  `re` lost its left side and any stroked closed shape its last edge.
+- **LZW streams past 511 codes decode** (N2): the code width grew one code
+  early, so real LZW streams (qpdf, Poppler, MuPDF and pdf.js agree) came
+  out as garbage after their first few hundred bytes.
+- **Inline-image data no longer ends the page** (N4): a `<` or `(` in an
+  inline image's binary data was read as a string or dictionary, and the
+  rest of the content was dropped (with a "content damaged" warning).
+- **An indirect `/DecodeParms` is used** (N6): before, it was ignored, so a
+  predictor-coded image drew its predictor bytes as samples.
+- **Image data that ends early is drawn** (N13), the missing samples as
+  zero, with a `StreamDamaged` warning; a PNG-predicted stream whose last
+  row is short is padded. Before, the image was skipped.
+- **A page-tree `/Kids` entry that is not a dictionary is skipped with a
+  warning** (N9), so the later pages can still be reached.
+- **JPEG images (raster, found by the pdf.js run):** a JPEG behind another
+  filter (`[/FlateDecode /DCTDecode]`) is decoded (before, it was skipped);
+  a soft mask that is itself a JPEG is applied (before, the image was drawn
+  without it); JPEG data that cannot be read is reported as `ImageSkipped`
+  and never read as raw samples.
+- **More found by the pdf.js run (raster):** a soft mask's group paints only
+  inside its `/BBox`, the backdrop applying outside it (before, the group's
+  content spread past the box); a `/Mask` that is a plain 1-bit gray image
+  (no `/ImageMask`) shows the image where it is white, as Poppler and MuPDF
+  read it.
+- **Merge, split and assemble keep inherited page attributes** (§7.7.3.4).
+  A page whose `/Resources`, `/MediaBox` or `/CropBox` sat on its page-tree
+  node lost them when copied: its fonts and images were gone and it became
+  US Letter. They are now written on the copied page. Found by the
+  before/after run on the test bench's Govdocs1 files (also in 3.33.0).
+- **A fill closes every open sub-path** (raster, §8.5.3.1). A path drawn
+  as `m l l ... f` with no `h` filled nothing or the wrong area, because the
+  closing edge was left out (the clip region already closed it). Found with
+  the test bench's real files (N14; also in 3.33.0 and earlier).
+- **A transparency-group form keeps the alpha it was drawn with** (raster):
+  the `/ca` in effect at the `Do` now applies to everything the group
+  paints, and an `/ca` inside the group no longer undoes it (each object is
+  multiplied, which is exact unless objects inside the group overlap).
+  Before, a group drawn at `/ca 0.3` whose content set `/ca 1` painted
+  opaque (N14).
+- **SVG no longer throws on a stray `Q`, on CMYK image data shorter than
+  the image, or on a `Tf` with a stray operand before it** (found by
+  fuzzing; also in 3.33.0). `Tf` now takes its last two operands in every
+  renderer, and a font operand that is not a name is ignored.
+- **A stream whose `/Length` does not end at `endstream` is read up to
+  `endstream`**, with a warning, as Poppler and pdf.js do. Before, it was cut
+  at the wrong length (a content stream lost its text).
+- **Cross-reference tables:** `startxref` pointing at white space before
+  `xref` (N8), and `xref 0 76` on one line (N11), are read without repair.
+- **`FormFiller` writes every object the catalog and `/Info` name.** It
+  loaded only the pages and the form, so a filled copy could name bookmarks,
+  XMP metadata or name trees it did not contain (103 of 411 corpus files,
+  filled straight after opening), and lost them.
+
+### Tooling
+- **Release guards.** `build/pack.ps1` packs only from the clean commit of
+  tag `vX.Y.Z` (`-AllowUntagged` for trial packs) and sets `CI=true`, so
+  the packages name the released commit. `build/release-assets.ps1` checks
+  that every package names the tag's commit before uploading. The release
+  order is now merge, tag, check out the tag, pack, upload.
+- **Publish Smoke CI job.** A small app using rendering, text and authoring
+  is published trimmed and ReadyToRun for linux-x64 with warnings as errors,
+  then run.
+- **`write-paths` fuzz target**, in the weekly fuzz run.
+
+### Docs
+- `docs/CAPABILITY-AUDIT.md`: what Chuvadi does and lacks against viewers
+  and editors (Adobe, Windows), kept current every release (D-339). The
+  35-item roadmap and `CONFORMANCE-AUDIT` are marked superseded.
+- `docs/developer-guide.md`: "Behaviour changes within 3.x", and a
+  fill-and-flatten example.
+- API docs: members that return or are typed as a named tuple, and
+  properties whose body starts on the next line, are documented (#51).
+- `docs/EMBEDDING.md`: write paths in §4 to §6.
+
+### Known gaps (D-339)
+- JPEG 2000 images are not decoded (planned for 3.36).
+- `/Mask` (stencil and colour-key masking) is applied by the raster
+  renderer only; SVG and WPF still draw such images unmasked.
+- Predefined CJK CMaps and vertical text, the four non-separable blend
+  modes and knockout groups (planned for 3.35); several shading types, full
+  JBIG2, ICC-based colour and overprint (3.36). `docs/CAPABILITY-AUDIT.md`
+  has the release plan and the full list.
+- `RepairIfDamaged` stays opt-in (a default switch is for a major version).
+- Text is hinted at its drawn size only when its matrices scale it by more
+  than 2 or less than 0.5; hinting all text at its drawn size waits for two
+  hinting fixes at small sizes (planned for 3.35, backlog 65).
+
 ## [3.33.0] - 2026-11-11
 
 Embedding the standard fonts (M1, D-302), PDF/A substitutes that keep the
@@ -301,6 +656,16 @@ Deflate, and rotated pages in the rasterize fallback.
   - `DisplayBox = PdfDisplayBox.MediaBox` gives the old output.
   - `RenderRegion`, text extraction and `PdfPage.Width` and `Height` are
     unchanged.
+  - **Note for callers (added in 3.34.0, D-334).** This is a change in
+    output size and origin for pages whose CropBox is smaller than their
+    MediaBox. A consumer built against an earlier 3.x that sizes its canvas
+    or places marks from `PdfPage.Width`, `Height` or `MediaBox` will be off
+    on those pages: for example Pdf.Raster 0.1.0 running with chuvadi-pdf
+    3.32.0 or later. Use `PageRasterizer.GetOutputSize` for the image size,
+    and `PdfPage.GetDisplayBox` and `GetDisplayTransform` to map between the
+    shown page and PDF coordinates (all added in 3.34.0); or set
+    `DisplayBox = PdfDisplayBox.MediaBox` to keep the old output.
+    `docs/developer-guide.md` lists every behaviour change within 3.x.
 - **Redaction cuts curved strokes at the box edges** (P3). Before, a curved
   stroke crossing a box was removed whole; now the parts outside are kept.
   - Pieces are kept only when their control hull provably clears every box,

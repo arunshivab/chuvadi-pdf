@@ -42,108 +42,111 @@ public static class OptionalContentWriter
         PdfDocument document,
         IReadOnlyDictionary<string, bool> visibilityByName)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(visibilityByName);
-
-        PreloadAllObjects(document);
-
-        PdfObjectStore store = document.Objects;
-        (PdfDictionary catalog, PdfObjectId catalogId) = FindCatalog(store);
-
-        if (!catalog.TryGetValue(PdfName.Intern("OCProperties"), out PdfPrimitive? ocpRaw))
+        PdfWriteGuard.Run(document, "updated", () =>
         {
-            throw new InvalidOperationException(
-                "The document declares no optional content (/OCProperties).");
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(visibilityByName);
 
-        bool ocpIsRef = ocpRaw is PdfReference;
-        PdfObjectId ocpId = ocpIsRef ? ((PdfReference)ocpRaw).ObjectId : default;
+            PreloadAllObjects(document);
 
-        PdfDictionary ocProps = store.ResolveAs<PdfDictionary>(ocpRaw) ??
-            throw new InvalidOperationException("/OCProperties is not a dictionary.");
+            PdfObjectStore store = document.Objects;
+            (PdfDictionary catalog, PdfObjectId catalogId) = FindCatalog(store);
 
-        PdfArray ocgs = (ocProps.TryGetValue(PdfName.Intern("OCGs"), out PdfPrimitive? ocgsRaw)
-            ? store.ResolveAs<PdfArray>(ocgsRaw)
-            : null) ?? throw new InvalidOperationException("/OCProperties has no /OCGs array.");
-
-        // Map each layer name to the reference used in /OCGs.
-        Dictionary<string, PdfReference> refByName = new Dictionary<string, PdfReference>();
-        for (int i = 0; i < ocgs.Count; i++)
-        {
-            if (ocgs[i] is PdfReference groupRef)
+            if (!catalog.TryGetValue(PdfName.Intern("OCProperties"), out PdfPrimitive? ocpRaw))
             {
-                PdfDictionary? ocg = store.ResolveAs<PdfDictionary>(groupRef);
-                if (ocg is not null &&
-                    ocg.TryGetValue(PdfName.Intern("Name"), out PdfPrimitive? namePrim) &&
-                    namePrim is PdfString nameStr)
+                throw new InvalidOperationException(
+                    "The document declares no optional content (/OCProperties).");
+            }
+
+            bool ocpIsRef = ocpRaw is PdfReference;
+            PdfObjectId ocpId = ocpIsRef ? ((PdfReference)ocpRaw).ObjectId : default;
+
+            PdfDictionary ocProps = store.ResolveAs<PdfDictionary>(ocpRaw) ??
+                throw new InvalidOperationException("/OCProperties is not a dictionary.");
+
+            PdfArray ocgs = (ocProps.TryGetValue(PdfName.Intern("OCGs"), out PdfPrimitive? ocgsRaw)
+                ? store.ResolveAs<PdfArray>(ocgsRaw)
+                : null) ?? throw new InvalidOperationException("/OCProperties has no /OCGs array.");
+
+            // Map each layer name to the reference used in /OCGs.
+            Dictionary<string, PdfReference> refByName = new Dictionary<string, PdfReference>();
+            for (int i = 0; i < ocgs.Count; i++)
+            {
+                if (ocgs[i] is PdfReference groupRef)
                 {
-                    refByName[System.Text.Encoding.Latin1.GetString(nameStr.Bytes)] = groupRef;
+                    PdfDictionary? ocg = store.ResolveAs<PdfDictionary>(groupRef);
+                    if (ocg is not null &&
+                        ocg.TryGetValue(PdfName.Intern("Name"), out PdfPrimitive? namePrim) &&
+                        namePrim is PdfString nameStr)
+                    {
+                        refByName[System.Text.Encoding.Latin1.GetString(nameStr.Bytes)] = groupRef;
+                    }
                 }
             }
-        }
 
-        // Resolve the default configuration dictionary /D.
-        bool dIsRef = ocProps.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? dRaw) &&
-            dRaw is PdfReference;
-        PdfObjectId dId = dIsRef ? ((PdfReference)dRaw!).ObjectId : default;
-        PdfDictionary dDict = (dRaw is not null ? store.ResolveAs<PdfDictionary>(dRaw) : null)
-            ?? new PdfDictionary();
+            // Resolve the default configuration dictionary /D.
+            bool dIsRef = ocProps.TryGetValue(PdfName.Intern("D"), out PdfPrimitive? dRaw) &&
+                dRaw is PdfReference;
+            PdfObjectId dId = dIsRef ? ((PdfReference)dRaw!).ObjectId : default;
+            PdfDictionary dDict = (dRaw is not null ? store.ResolveAs<PdfDictionary>(dRaw) : null)
+                ?? new PdfDictionary();
 
-        List<PdfReference> onList = ReadReferenceArray(dDict, "ON", store);
-        List<PdfReference> offList = ReadReferenceArray(dDict, "OFF", store);
+            List<PdfReference> onList = ReadReferenceArray(dDict, "ON", store);
+            List<PdfReference> offList = ReadReferenceArray(dDict, "OFF", store);
 
-        // Apply the requested toggles unambiguously regardless of /BaseState:
-        // a visible layer goes in /ON and not /OFF; a hidden layer the reverse.
-        foreach (KeyValuePair<string, bool> request in visibilityByName)
-        {
-            if (!refByName.TryGetValue(request.Key, out PdfReference? target))
+            // Apply the requested toggles unambiguously regardless of /BaseState:
+            // a visible layer goes in /ON and not /OFF; a hidden layer the reverse.
+            foreach (KeyValuePair<string, bool> request in visibilityByName)
             {
-                continue;
+                if (!refByName.TryGetValue(request.Key, out PdfReference? target))
+                {
+                    continue;
+                }
+
+                int number = target.ObjectNumber;
+                onList.RemoveAll(r => r.ObjectNumber == number);
+                offList.RemoveAll(r => r.ObjectNumber == number);
+
+                if (request.Value)
+                {
+                    onList.Add(target);
+                }
+                else
+                {
+                    offList.Add(target);
+                }
             }
 
-            int number = target.ObjectNumber;
-            onList.RemoveAll(r => r.ObjectNumber == number);
-            offList.RemoveAll(r => r.ObjectNumber == number);
+            PdfDictionary newD = CopyDictionary(dDict);
+            newD.Set(PdfName.Intern("ON"), new PdfArray(onList));
+            newD.Set(PdfName.Intern("OFF"), new PdfArray(offList));
 
-            if (request.Value)
+            // Rewrite the shallowest indirect object that owns the change.
+            List<PdfIndirectObject> updated = new List<PdfIndirectObject>();
+            if (dIsRef)
             {
-                onList.Add(target);
-            }
-            else
-            {
-                offList.Add(target);
-            }
-        }
-
-        PdfDictionary newD = CopyDictionary(dDict);
-        newD.Set(PdfName.Intern("ON"), new PdfArray(onList));
-        newD.Set(PdfName.Intern("OFF"), new PdfArray(offList));
-
-        // Rewrite the shallowest indirect object that owns the change.
-        List<PdfIndirectObject> updated = new List<PdfIndirectObject>();
-        if (dIsRef)
-        {
-            updated.Add(new PdfIndirectObject(dId, newD));
-        }
-        else
-        {
-            PdfDictionary newOcProps = CopyDictionary(ocProps);
-            newOcProps.Set(PdfName.Intern("D"), newD);
-
-            if (ocpIsRef)
-            {
-                updated.Add(new PdfIndirectObject(ocpId, newOcProps));
+                updated.Add(new PdfIndirectObject(dId, newD));
             }
             else
             {
-                PdfDictionary newCatalog = CopyDictionary(catalog);
-                newCatalog.Set(PdfName.Intern("OCProperties"), newOcProps);
-                updated.Add(new PdfIndirectObject(catalogId, newCatalog));
-            }
-        }
+                PdfDictionary newOcProps = CopyDictionary(ocProps);
+                newOcProps.Set(PdfName.Intern("D"), newD);
 
-        WriteWithReplacements(output, store, catalogId, updated);
+                if (ocpIsRef)
+                {
+                    updated.Add(new PdfIndirectObject(ocpId, newOcProps));
+                }
+                else
+                {
+                    PdfDictionary newCatalog = CopyDictionary(catalog);
+                    newCatalog.Set(PdfName.Intern("OCProperties"), newOcProps);
+                    updated.Add(new PdfIndirectObject(catalogId, newCatalog));
+                }
+            }
+
+            WriteWithReplacements(output, store, catalogId, updated);
+        });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

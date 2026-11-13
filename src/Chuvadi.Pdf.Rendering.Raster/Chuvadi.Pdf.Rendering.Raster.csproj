@@ -24,4 +24,8 @@
   <ItemGroup>
     <PackageReference Include="Chuvadi.Fonts" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering" />
+  </ItemGroup>
+
 </Project>

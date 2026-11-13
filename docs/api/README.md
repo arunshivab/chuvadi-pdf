@@ -320,11 +320,18 @@ python tools/gen_api_docs.py
 |---|---|---|
 | [DestinationReader](Forms/DestinationReader.md) | class | Reads a document's named destinations (3.32.0). |
 | [FieldAppearanceGenerator](Forms/FieldAppearanceGenerator.md) | class | Makes a widget's normal appearance stream from the field's value and its `/DA`, `/Q`, `/MK` and flags: text fields (single line, multiline, comb, password), check boxes and radio buttons, combo and list boxes, and push-button captions. |
+| [FormChoiceOption](Forms/FormChoiceOption.md) | class | One option of a choice field (list box or combo box). |
+| [FormErrorReason](Forms/FormErrorReason.md) | enum | Why `FormFiller` refused a value (`FormException.Reason`). |
 | [FormException](Forms/FormException.md) | class | Thrown when an AcroForm or outline operation fails. |
 | [FormField](Forms/FormField.md) | class | A single AcroForm field, read from a PDF document. |
+| [FormFieldFlags](Forms/FormFieldFlags.md) | enum | The field flags (`/Ff`) of a form field. |
 | [FormFieldType](Forms/FormFieldType.md) | enum | Type of an AcroForm field. |
+| [FormFillOptions](Forms/FormFillOptions.md) | class | Options for `FormFiller`. |
+| [FormFillResult](Forms/FormFillResult.md) | class | What `FormFiller` did: the fields it wrote and, with `FormUnknownFields.Report`, the names that matched no field. |
 | [FormFiller](Forms/FormFiller.md) | class | Fills AcroForm field values in a PDF document and writes the result. |
 | [FormReader](Forms/FormReader.md) | class | Reads AcroForm interactive form fields from a PDF document. |
+| [FormUnknownFields](Forms/FormUnknownFields.md) | enum | What `FormFiller` does with a name that matches no field (`FormFillOptions.UnknownFields`). |
+| [FormWidget](Forms/FormWidget.md) | class | One widget annotation of a form field: where the field is shown, and for a check box or radio button the state that turns it on. |
 | [OutlineItem](Forms/OutlineItem.md) | class | A single bookmark in the document outline tree. |
 | [OutlineReader](Forms/OutlineReader.md) | class | Reads the document outline (bookmark) tree from a PDF. |
 | [PdfDestination](Forms/PdfDestination.md) | class | A resolved destination: the target page, and how the page is shown (3.32.0). |
@@ -424,6 +431,7 @@ python tools/gen_api_docs.py
 | [Imposition](Operations/Imposition.md) | class | Composes the pages of a source document onto larger sheets: N-up grids and 2-up saddle-stitch booklets. |
 | [ImpositionPlacement](Operations/ImpositionPlacement.md) | class | Where one source page lands on an imposition sheet. |
 | [ImpositionSheet](Operations/ImpositionSheet.md) | class | One output sheet (or booklet sheet side) in an imposition plan. |
+| [MergeFormFields](Operations/MergeFormFields.md) | enum | How `PageOperations.Merge(System.IO.Stream, System.Collections.Generic.IReadOnlyList{Chuvadi.Pdf.Documents.PdfDocument}, MergeOptions)` carries the inputs' form fields (`MergeOptions.FormFields`). |
 | [MergeOptions](Operations/MergeOptions.md) | class | Options for `PageOperations.Merge(System.IO.Stream, System.Collections.Generic.IReadOnlyList{Chuvadi.Pdf.Documents.PdfDocument}, MergeOptions)`. |
 | [NUpOptions](Operations/NUpOptions.md) | class | Options for `Imposition.NUp(System.IO.Stream, Chuvadi.Pdf.Documents.PdfDocument, NUpOptions)`: how many source pages to place per sheet, the sheet size, and the spacing around and between cells. |
 | [NUpOrder](Operations/NUpOrder.md) | enum | The order in which source pages fill the cells of an N-up sheet. |
@@ -516,17 +524,19 @@ python tools/gen_api_docs.py
 | Type | Kind | Description |
 |---|---|---|
 | [CommonPatterns](Redaction/CommonPatterns.md) | class | Pre-built regex strings for common PHI / PII tokens. |
+| [PageRedactionReport](Redaction/PageRedactionReport.md) | class | The redactions made on one page. |
 | [PatternRule](Redaction/PatternRule.md) | class | A regex pattern that locates text to redact, with optional per-page filtering. |
 | [PatternSets](Redaction/PatternSets.md) | class | Curated groups of `PatternRule` with checksum validators already attached, for common redaction scenarios. |
 | [PatternValidators](Redaction/PatternValidators.md) | class | Reusable checksum validators for `PatternRule` post-match predicates. |
 | [RedactionException](Redaction/RedactionException.md) | class | Thrown when a redaction operation fails. |
 | [RedactionOptions](Redaction/RedactionOptions.md) | class | Top-level configuration for a redaction operation. |
 | [RedactionRect](Redaction/RedactionRect.md) | class | One rectangle of content to permanently remove from a PDF page. |
+| [RedactionReport](Redaction/RedactionReport.md) | class | What `Redactor.ApplyWithReport` removed, page by page (3.34.0). |
 | [RedactionSurvivor](Redaction/RedactionSurvivor.md) | class | One piece of content found inside a region. |
 | [RedactionSurvivorKind](Redaction/RedactionSurvivorKind.md) | enum | The kind of content found inside a region. |
 | [RedactionVerification](Redaction/RedactionVerification.md) | class | The result of verifying that redaction regions are empty. |
 | [RedactionVerifier](Redaction/RedactionVerifier.md) | class | Checks what a document still paints inside given regions, using the same display list the renderers draw — page content, form XObjects, Type 3 glyphs and annotation appearances included. |
-| [Redactor](Redaction/Redactor.md) | class | Applies true PHI-safe redactions to a PDF document. |
+| [Redactor](Redaction/Redactor.md) | class | Applies true PHI-safe redactions to a PDF document: what lies under a redaction rectangle (or matches a text pattern) is removed from the file, not just covered, and the area is then overpainted with an opaque rectangle (`RedactionOptions.DrawOverlay`). |
 | [VectorRedactionMode](Redaction/VectorRedactionMode.md) | enum | How painted vector paths (fills and strokes) that intersect a redaction region are removed from the content stream. |
 
 ## Chuvadi.Pdf.Rendering

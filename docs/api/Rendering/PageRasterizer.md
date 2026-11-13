@@ -63,6 +63,22 @@ Rasterizes a PDF page to a `PixelBuffer`, stopping when `cancellationToken` is c
 
 **Remarks:** The work runs in a `PdfWorkScope` with the limits the document was opened with (`PdfObjectStore.Limits`): content operators, decoded streams and buffers are checked as they are processed, and cancellation is noticed well within a second.
 
+### `GetOutputSize`
+
+```csharp
+(int Width, int Height) GetOutputSize(PdfPage page)
+```
+
+Returns the size in pixels of the image `Rasterize(PdfPage)` and `RasterizeToPng(PdfPage)` produce for `page` with this rasterizer's options (3.34.0, D-334), without rendering anything.
+
+**Parameters**
+
+- `page` — The page.
+
+**Returns:** The shown box (`PdfPage.GetDisplayBox` for `RenderOptions.DisplayBox`) at `RenderOptions.Dpi`, with width and height swapped when `RenderOptions.Rotation`, plus the page's `/Rotate` when `RenderOptions.ApplyPageRotation` is set, is 90 or 270 degrees. Super-sampling does not change it.
+
+**Remarks:** Use this, not `PdfPage.Width` and `PdfPage.Height` (which report the MediaBox), to size a bitmap or scale output: since 3.32.0 the shown box is the CropBox by default. <exception cref="ArgumentNullException">`page` is null.</exception> <exception cref="PdfCorruptionException">The page has an empty or invalid MediaBox.</exception>
+
 ### `RasterizeToPng`
 
 ```csharp

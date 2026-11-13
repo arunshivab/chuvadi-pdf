@@ -27,28 +27,45 @@ using Chuvadi.Pdf.Primitives;
 namespace Chuvadi.Pdf.Redaction;
 
 /// <summary>
-/// Applies true PHI-safe redactions to a PDF document. Text-showing operators
-/// (Tj, TJ, ', '') whose visible position falls inside any redaction rectangle
-/// are permanently removed from the content stream, then the area is overpainted
-/// with an opaque rectangle for visual indication.
+/// Applies true PHI-safe redactions to a PDF document: what lies under a
+/// redaction rectangle (or matches a text pattern) is removed from the file,
+/// not just covered, and the area is then overpainted with an opaque
+/// rectangle (<see cref="RedactionOptions.DrawOverlay"/>).
 /// </summary>
 /// <remarks>
-/// The principle: cover-up alone is not redaction. Drawing a black rectangle on
-/// top of text leaves the text in the content stream where Ctrl+A copy reveals
-/// it. <see cref="Redactor"/> removes the text from the content stream itself
-/// and only then paints the overlay rectangle.
-///
-/// Conservative principle: when in doubt, REDACT. If a TJ array contains any
-/// string whose position is inside a redaction rectangle, the entire TJ is
-/// dropped. Over-redaction is preferred over leaking PHI.
-///
-/// Limitations:
+/// <para>
+/// The principle: cover-up alone is not redaction. A black rectangle drawn on
+/// top of text leaves the text in the content stream, where copying or text
+/// extraction reveals it. <see cref="Redactor"/> removes the content itself:
+/// </para>
 /// <list type="bullet">
-///   <item>Phase 2 uses approximate font-metric width (Helvetica baseline).
-///         Exact metric width requires loading and parsing embedded font tables.</item>
-///   <item>Image content is not redacted (Phase 3).</item>
-///   <item>Form XObjects are not recursed into (Phase 3).</item>
+///   <item>Text: each glyph whose box meets a rectangle is removed, using the
+///         font's own glyph widths; the glyphs around it stay, with a gap of
+///         the removed width (or <see cref="RedactionRect.ReplacementText"/>).</item>
+///   <item>Images: the covered pixels are blanked in a copy of the image and
+///         the rest is kept; an image that cannot be blanked (or is wholly
+///         covered) is removed, and an image no longer drawn leaves the file.</item>
+///   <item>Vector paths: the covered area is cut out of a painted path
+///         (<see cref="VectorRedactionMode.SubtractPrecise"/>, the default);
+///         a path that cannot be cut exactly is removed whole.</item>
+///   <item>Form XObjects and tiling patterns are rewritten the same way, in
+///         every place they are drawn.</item>
+///   <item>Annotations whose rectangle meets a redaction are removed with the
+///         objects only they use; a form widget there has its field value
+///         and appearance cleared.</item>
+///   <item>Bookmarks and XMP metadata (3.34.0): the matches of patterns that
+///         apply to the whole document (no page list) are removed from
+///         bookmark titles and from the XMP packet. The redacted file has no
+///         document information dictionary (<c>/Info</c>).</item>
+///   <item>Alternate text that describes removed content (<c>/ActualText</c>,
+///         <c>/Alt</c>, <c>/E</c>, in marked content and in the structure
+///         tree) is removed.</item>
 /// </list>
+/// <para>
+/// Conservative principle: when in doubt, remove. Over-redaction is preferred
+/// over leaking PHI. <see cref="ApplyWithReport"/> returns what was removed on
+/// each page; <see cref="RedactionVerifier"/> checks an output independently.
+/// </para>
 /// </remarks>
 public static class Redactor
 {
@@ -59,387 +76,451 @@ public static class Redactor
     public static void Apply(
         Stream output,
         PdfDocument document,
+        RedactionOptions options) =>
+        ApplyWithReport(output, document, options);
+
+    /// <summary>
+    /// Applies the redactions in <paramref name="options"/> to
+    /// <paramref name="document"/>, writes the result to
+    /// <paramref name="output"/>, and reports what was removed on each page
+    /// (3.34.0, D-335). The output is the same as <see cref="Apply"/> writes.
+    /// </summary>
+    /// <param name="output">The stream to write the redacted PDF to.</param>
+    /// <param name="document">The source document.</param>
+    /// <param name="options">The rectangles and patterns to redact.</param>
+    /// <returns>One entry per rewritten page, in page order.</returns>
+    public static RedactionReport ApplyWithReport(
+        Stream output,
+        PdfDocument document,
         RedactionOptions options)
     {
-        if (output is null)
+        return PdfWriteGuard.Run(document, "redacted", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (options is null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
-
-        // Force-load all reachable objects from the page graph. PdfObjectStore is lazy
-        // and only contains resolved objects, so we must walk the graph before iterating.
-        PreloadAllObjects(document);
-
-        // Resolve pattern rules into explicit rectangles by extracting text from each
-        // page and matching the patterns against it.
-        // Rectangle-based redaction targets. Pattern (text) redaction is applied
-        // separately, by content, inside the rewrite — it is not resolved to
-        // rectangles here (that required a second, approximate layout pass that
-        // could drift from the rewrite's own glyph positions).
-        List<RedactionRect> allRects = new List<RedactionRect>(options.Rectangles);
-
-        // Group rectangles by page (with a parallel list of optional
-        // in-place replacement strings, same index order as the rectangles).
-        Dictionary<int, List<RectangleF>> byPage = new Dictionary<int, List<RectangleF>>();
-        Dictionary<int, List<string?>> byPageReplacements =
-            new Dictionary<int, List<string?>>();
-
-        foreach (RedactionRect rect in allRects)
-        {
-            if (!byPage.TryGetValue(rect.PageIndex, out List<RectangleF>? list))
+            if (output is null)
             {
-                list = new List<RectangleF>();
-                byPage[rect.PageIndex] = list;
-                byPageReplacements[rect.PageIndex] = new List<string?>();
+                throw new ArgumentNullException(nameof(output));
             }
 
-            list.Add(rect.Bounds);
-            byPageReplacements[rect.PageIndex].Add(rect.ReplacementText);
-        }
-
-        FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
-
-        // Find each page object in the source store
-        Dictionary<int, PdfObjectId> pageIds = BuildPageIdMap(document);
-
-        List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
-        HashSet<int> rewrittenPageNums = new HashSet<int>();
-        HashSet<int> removedContentStreamNums = new HashSet<int>();
-        HashSet<int> redactedAnnotRefs = new HashSet<int>();
-        HashSet<int> annotRemovalCandidates = new HashSet<int>();
-        Dictionary<int, PdfDictionary> rewrittenFieldObjects =
-            new Dictionary<int, PdfDictionary>();
-
-        int nextObjectNum = FindNextObjectNumber(document);
-
-        List<RedactionWork> work = new List<RedactionWork>();
-
-        // Pages to rewrite = those with rectangles plus those with applicable
-        // text patterns (a page may need rewriting for patterns alone, with no
-        // rectangles). Process in stable page order.
-        SortedSet<int> pagesToProcess = new SortedSet<int>(byPage.Keys);
-        if (options.Patterns.Count > 0)
-        {
-            for (int p = 0; p < document.PageCount; p++)
+            if (document is null)
             {
-                if (PageApplicablePatterns(options.Patterns, p).Count > 0)
+                throw new ArgumentNullException(nameof(document));
+            }
+
+            if (options is null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            // Force-load all reachable objects from the page graph. PdfObjectStore is lazy
+            // and only contains resolved objects, so we must walk the graph before iterating.
+            PreloadAllObjects(document);
+
+            // Resolve pattern rules into explicit rectangles by extracting text from each
+            // page and matching the patterns against it.
+            // Rectangle-based redaction targets. Pattern (text) redaction is applied
+            // separately, by content, inside the rewrite — it is not resolved to
+            // rectangles here (that required a second, approximate layout pass that
+            // could drift from the rewrite's own glyph positions).
+            List<RedactionRect> allRects = new List<RedactionRect>(options.Rectangles);
+
+            // Group rectangles by page (with a parallel list of optional
+            // in-place replacement strings, same index order as the rectangles).
+            Dictionary<int, List<RectangleF>> byPage = new Dictionary<int, List<RectangleF>>();
+            Dictionary<int, List<string?>> byPageReplacements =
+                new Dictionary<int, List<string?>>();
+
+            foreach (RedactionRect rect in allRects)
+            {
+                if (!byPage.TryGetValue(rect.PageIndex, out List<RectangleF>? list))
                 {
-                    pagesToProcess.Add(p);
+                    list = new List<RectangleF>();
+                    byPage[rect.PageIndex] = list;
+                    byPageReplacements[rect.PageIndex] = new List<string?>();
+                }
+
+                list.Add(rect.Bounds);
+                byPageReplacements[rect.PageIndex].Add(rect.ReplacementText);
+            }
+
+            FilterPipeline pipeline = FilterRegistry.CreateDefaultPipeline();
+
+            // Find each page object in the source store
+            Dictionary<int, PdfObjectId> pageIds = BuildPageIdMap(document);
+
+            List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
+            HashSet<int> rewrittenPageNums = new HashSet<int>();
+            HashSet<int> removedContentStreamNums = new HashSet<int>();
+            HashSet<int> redactedAnnotRefs = new HashSet<int>();
+            HashSet<int> annotRemovalCandidates = new HashSet<int>();
+            Dictionary<int, PdfDictionary> rewrittenFieldObjects =
+                new Dictionary<int, PdfDictionary>();
+
+            int nextObjectNum = FindNextObjectNumber(document);
+
+            List<RedactionWork> work = new List<RedactionWork>();
+            List<int> workPages = new List<int>();
+
+            // Pages to rewrite = those with rectangles plus those with applicable
+            // text patterns (a page may need rewriting for patterns alone, with no
+            // rectangles). Process in stable page order.
+            SortedSet<int> pagesToProcess = new SortedSet<int>(byPage.Keys);
+            if (options.Patterns.Count > 0)
+            {
+                for (int p = 0; p < document.PageCount; p++)
+                {
+                    if (PageApplicablePatterns(options.Patterns, p).Count > 0)
+                    {
+                        pagesToProcess.Add(p);
+                    }
                 }
             }
-        }
 
-        foreach (int pageIndex in pagesToProcess)
-        {
-            if (pageIndex >= document.PageCount)
+            foreach (int pageIndex in pagesToProcess)
             {
-                continue;
+                PdfWorkScope.ThrowIfCancellationRequested();
+                if (pageIndex >= document.PageCount)
+                {
+                    continue;
+                }
+
+                if (!pageIds.TryGetValue(pageIndex, out PdfObjectId pageId))
+                {
+                    continue;
+                }
+
+                List<RectangleF> rects = byPage.TryGetValue(pageIndex, out List<RectangleF>? rectList)
+                    ? rectList
+                    : new List<RectangleF>();
+                List<string?> replacements =
+                    byPageReplacements.TryGetValue(pageIndex, out List<string?>? replList)
+                        ? replList
+                        : new List<string?>();
+                List<PatternRule> pagePatterns = PageApplicablePatterns(options.Patterns, pageIndex);
+
+                PdfPage page = document.Pages[pageIndex];
+                work.Add(new RedactionWork(pageId, page, rects, replacements, pagePatterns));
+                workPages.Add(pageIndex);
             }
 
-            if (!pageIds.TryGetValue(pageIndex, out PdfObjectId pageId))
-            {
-                continue;
-            }
-
-            List<RectangleF> rects = byPage.TryGetValue(pageIndex, out List<RectangleF>? rectList)
-                ? rectList
-                : new List<RectangleF>();
-            List<string?> replacements =
-                byPageReplacements.TryGetValue(pageIndex, out List<string?>? replList)
-                    ? replList
-                    : new List<string?>();
-            List<PatternRule> pagePatterns = PageApplicablePatterns(options.Patterns, pageIndex);
-
-            PdfPage page = document.Pages[pageIndex];
-            work.Add(new RedactionWork(pageId, page, rects, replacements, pagePatterns));
-        }
-
-        // Phase 1 (serial) — touches the lazy object store, which is NOT
-        // thread-safe (a cache miss writes back), so loading and content-stream
-        // tracking must stay single-threaded.
-        byte[][] originals = new byte[work.Count][];
-        for (int i = 0; i < work.Count; i++)
-        {
-            TrackOriginalContentStreams(work[i].Page, document.Objects, removedContentStreamNums);
-            originals[i] = LoadContentBytes(work[i].Page, document.Objects, pipeline);
-        }
-
-        // Build the form-redaction registry: walk each page (and nested forms)
-        // to record where every form XObject is placed, so its own content
-        // stream can be rewritten. Text inside a form is otherwise never removed
-        // — the form is only covered by the overlay, leaving it copyable.
-        RedactRun run = new RedactRun(document.Objects, pipeline);
-        run.VectorMode = options.VectorMode;
-        for (int i = 0; i < work.Count; i++)
-        {
-            CollectForms(
-                originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                work[i].Page.Resources, new HashSet<int>(), 0);
-        }
-
-        // Phase 2 (parallel-capable) — the redaction interpreter and overlay
-        // generation are pure functions of the page bytes and rectangles, with
-        // no shared state, so they can run concurrently. Opt-in via
-        // MaxDegreeOfParallelism (default 1 = sequential).
-        byte[][] redactedBytes = new byte[work.Count][];
-        byte[][] overlayBytes = new byte[work.Count][];
-        HashSet<int>[] redactedMcids = new HashSet<int>[work.Count];
-
-        // Partly redacted images: each page's blanked copies, added to the
-        // page's resources in phase 3.
-        List<BlankedImage>[] blankedImages = new List<BlankedImage>[work.Count];
-        PatternUses[] patternUses = new PatternUses[work.Count];
-        for (int i = 0; i < work.Count; i++)
-        {
-            blankedImages[i] = new List<BlankedImage>();
-            patternUses[i] = new PatternUses();
-        }
-
-        if (options.MaxDegreeOfParallelism == 1)
-        {
+            // 3.34.0: what each page lost, for ApplyWithReport.
+            RedactCounts[] counts = new RedactCounts[work.Count];
             for (int i = 0; i < work.Count; i++)
             {
-                (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
-                    RewriteContent(
-                        originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i]);
-                redactedBytes[i] = rewritten.Bytes;
-                redactedMcids[i] = rewritten.RedactedMcids;
-                overlayBytes[i] = BuildOverlayWithPatterns(
-                    work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
-            }
-        }
-        else
-        {
-            ParallelOptions parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = options.MaxDegreeOfParallelism <= 0
-                    ? -1
-                    : options.MaxDegreeOfParallelism,
-            };
-
-            Parallel.For(0, work.Count, parallelOptions, i =>
-            {
-                (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
-                    RewriteContent(
-                        originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
-                        work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i]);
-                redactedBytes[i] = rewritten.Bytes;
-                redactedMcids[i] = rewritten.RedactedMcids;
-                overlayBytes[i] = BuildOverlayWithPatterns(
-                    work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
-            });
-        }
-
-        // Phase 3 (serial) — allocate object numbers and assemble the output in
-        // stable order, so the result is identical regardless of parallelism.
-        List<PdfDictionary> modifiedPages = new List<PdfDictionary>(work.Count);
-        HashSet<int> strippedPageExtras = new HashSet<int>();
-        for (int i = 0; i < work.Count; i++)
-        {
-            PdfObjectId redactedId = new PdfObjectId(nextObjectNum++, 0);
-            PdfObjectId overlayId = new PdfObjectId(nextObjectNum++, 0);
-
-            PdfDictionary redactedDict = new PdfDictionary();
-            redactedDict.Set(PdfName.Length, redactedBytes[i].Length);
-            allObjects.Add(new PdfIndirectObject(
-                redactedId, new PdfStream(redactedDict, redactedBytes[i])));
-
-            PdfDictionary overlayDict = new PdfDictionary();
-            overlayDict.Set(PdfName.Length, overlayBytes[i].Length);
-            allObjects.Add(new PdfIndirectObject(
-                overlayId, new PdfStream(overlayDict, overlayBytes[i])));
-
-            PdfDictionary modifiedPage = CopyDictionary(work[i].Page.Dictionary);
-            RedactAnnotations(
-                modifiedPage, work[i].Page, work[i].Rects,
-                document.Objects, redactedAnnotRefs, annotRemovalCandidates,
-                rewrittenFieldObjects);
-            PdfArray contents = new PdfArray([
-                new PdfReference(redactedId),
-                new PdfReference(overlayId),
-            ]);
-            modifiedPage.Set(PdfName.Contents, contents);
-            StripPrivateEntries(modifiedPage, strippedPageExtras);
-            allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
-            modifiedPages.Add(modifiedPage);
-            rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
-        }
-
-        Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewrittenForms =
-            RewriteCollectedForms(document, run, allObjects, removedContentStreamNums);
-
-        // An image whose Do was removed must leave the file, not just the
-        // content stream: prune it from the rewritten pages' and forms'
-        // /XObject resources, then omit it below if nothing else reaches it.
-        HashSet<int> orphanImageCandidates = new HashSet<int>(strippedPageExtras);
-        RedactInheritedFormPatterns(rewrittenForms, run, allObjects, removedContentStreamNums, ref nextObjectNum, orphanImageCandidates);
-        for (int i = 0; i < work.Count; i++)
-        {
-            PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
-            AddBlankedImages(modifiedPages[i], work[i].Page.Resources, blankedImages[i], run, allObjects, ref nextObjectNum);
-            // The visible page: the MediaBox clipped by the CropBox.
-            PdfRectangle media = work[i].Page.MediaBox;
-            PdfRectangle crop = work[i].Page.CropBox;
-            RectangleF visible = Intersect(
-                new RectangleF(Math.Min(media.X1, media.X2), Math.Min(media.Y1, media.Y2), media.Width, media.Height),
-                new RectangleF(Math.Min(crop.X1, crop.X2), Math.Min(crop.Y1, crop.Y2), crop.Width, crop.Height));
-            // Annotations are drawn over the page: none may cover a witness.
-            foreach (RectangleF annotRect in AnnotationRects(work[i].Page.Dictionary, run.Store))
-            {
-                WithdrawShown(patternUses[i], annotRect, null);
+                counts[i] = new RedactCounts();
             }
 
-            RedactPatternCells(
-                modifiedPages[i], work[i].Page.Resources, PageContexts(work[i].Rects, work[i].Replacements),
-                patternUses[i], run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, visible);
-        }
-
-        foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> form in rewrittenForms)
-        {
-            PdfDictionary? formResources = form.Value.Dict.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
-                ? run.Store.Resolve(fr) as PdfDictionary
-                : null;
-            PruneUnusedImages(form.Value.Dict, formResources, form.Value.Content, run, orphanImageCandidates);
-            AddBlankedImages(form.Value.Dict, formResources, form.Value.Images, run, allObjects, ref nextObjectNum);
-            if (form.Value.Dict.ContainsKey(PdfName.Resources))
+            // Phase 1 (serial) — touches the lazy object store, which is NOT
+            // thread-safe (a cache miss writes back), so loading and content-stream
+            // tracking must stay single-threaded.
+            byte[][] originals = new byte[work.Count][];
+            for (int i = 0; i < work.Count; i++)
             {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                TrackOriginalContentStreams(work[i].Page, document.Objects, removedContentStreamNums);
+                originals[i] = LoadContentBytes(work[i].Page, document.Objects, pipeline);
+            }
+
+            // Build the form-redaction registry: walk each page (and nested forms)
+            // to record where every form XObject is placed, so its own content
+            // stream can be rewritten. Text inside a form is otherwise never removed
+            // — the form is only covered by the overlay, leaving it copyable.
+            RedactRun run = new RedactRun(document.Objects, pipeline);
+            run.VectorMode = options.VectorMode;
+            Dictionary<int, int> formPages = new Dictionary<int, int>();
+            for (int i = 0; i < work.Count; i++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                CollectForms(
+                    originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                    work[i].Page.Resources, new HashSet<int>(), 0);
+                foreach (int formNum in run.FormInvocations.Keys)
+                {
+                    formPages.TryAdd(formNum, i);
+                }
+            }
+
+            // Phase 2 (parallel-capable) — the redaction interpreter and overlay
+            // generation are pure functions of the page bytes and rectangles, with
+            // no shared state, so they can run concurrently. Opt-in via
+            // MaxDegreeOfParallelism (default 1 = sequential).
+            byte[][] redactedBytes = new byte[work.Count][];
+            byte[][] overlayBytes = new byte[work.Count][];
+            HashSet<int>[] redactedMcids = new HashSet<int>[work.Count];
+
+            // Partly redacted images: each page's blanked copies, added to the
+            // page's resources in phase 3.
+            List<BlankedImage>[] blankedImages = new List<BlankedImage>[work.Count];
+            PatternUses[] patternUses = new PatternUses[work.Count];
+            for (int i = 0; i < work.Count; i++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                blankedImages[i] = new List<BlankedImage>();
+                patternUses[i] = new PatternUses();
+            }
+
+            if (options.MaxDegreeOfParallelism == 1)
+            {
+                for (int i = 0; i < work.Count; i++)
+                {
+                    PdfWorkScope.ThrowIfCancellationRequested();
+                    (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
+                        RewriteContent(
+                            originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                            work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i], counts[i]);
+                    redactedBytes[i] = rewritten.Bytes;
+                    redactedMcids[i] = rewritten.RedactedMcids;
+                    overlayBytes[i] = BuildOverlayWithPatterns(
+                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
+                }
+            }
+            else
+            {
+                ParallelOptions parallelOptions = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = options.MaxDegreeOfParallelism <= 0
+                        ? -1
+                        : options.MaxDegreeOfParallelism,
+                };
+
+                Parallel.For(0, work.Count, parallelOptions, i =>
+                {
+                    (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) rewritten =
+                        RewriteContent(
+                            originals[i], PageContexts(work[i].Rects, work[i].Replacements), run,
+                            work[i].Page.Resources, work[i].Patterns, blankedImages[i], patternUses[i], counts[i]);
+                    redactedBytes[i] = rewritten.Bytes;
+                    redactedMcids[i] = rewritten.RedactedMcids;
+                    overlayBytes[i] = BuildOverlayWithPatterns(
+                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
+                });
+            }
+
+            // Phase 3 (serial) — allocate object numbers and assemble the output in
+            // stable order, so the result is identical regardless of parallelism.
+            List<PdfDictionary> modifiedPages = new List<PdfDictionary>(work.Count);
+            HashSet<int> strippedPageExtras = new HashSet<int>();
+            for (int i = 0; i < work.Count; i++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                PdfObjectId redactedId = new PdfObjectId(nextObjectNum++, 0);
+                PdfObjectId overlayId = new PdfObjectId(nextObjectNum++, 0);
+
+                PdfDictionary redactedDict = new PdfDictionary();
+                redactedDict.Set(PdfName.Length, redactedBytes[i].Length);
+                allObjects.Add(new PdfIndirectObject(
+                    redactedId, new PdfStream(redactedDict, redactedBytes[i])));
+
+                PdfDictionary overlayDict = new PdfDictionary();
+                overlayDict.Set(PdfName.Length, overlayBytes[i].Length);
+                allObjects.Add(new PdfIndirectObject(
+                    overlayId, new PdfStream(overlayDict, overlayBytes[i])));
+
+                PdfDictionary modifiedPage = CopyDictionary(work[i].Page.Dictionary);
+                RedactAnnotations(
+                    modifiedPage, work[i].Page, work[i].Rects,
+                    document.Objects, redactedAnnotRefs, annotRemovalCandidates,
+                    rewrittenFieldObjects, counts[i]);
+                PdfArray contents = new PdfArray([
+                    new PdfReference(redactedId),
+                    new PdfReference(overlayId),
+                ]);
+                modifiedPage.Set(PdfName.Contents, contents);
+                StripPrivateEntries(modifiedPage, strippedPageExtras);
+                allObjects.Add(new PdfIndirectObject(work[i].PageId, modifiedPage));
+                modifiedPages.Add(modifiedPage);
+                rewrittenPageNums.Add(work[i].PageId.ObjectNumber);
+            }
+
+            Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewrittenForms =
+                RewriteCollectedForms(document, run, allObjects, removedContentStreamNums, formPages, counts);
+
+            // An image whose Do was removed must leave the file, not just the
+            // content stream: prune it from the rewritten pages' and forms'
+            // /XObject resources, then omit it below if nothing else reaches it.
+            HashSet<int> orphanImageCandidates = new HashSet<int>(strippedPageExtras);
+            RedactInheritedFormPatterns(rewrittenForms, run, allObjects, removedContentStreamNums, ref nextObjectNum, orphanImageCandidates);
+            for (int i = 0; i < work.Count; i++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                PruneUnusedImages(modifiedPages[i], work[i].Page.Resources, redactedBytes[i], run, orphanImageCandidates);
+                AddBlankedImages(modifiedPages[i], work[i].Page.Resources, blankedImages[i], run, allObjects, ref nextObjectNum);
+                // The visible page: the MediaBox clipped by the CropBox.
+                PdfRectangle media = work[i].Page.MediaBox;
+                PdfRectangle crop = work[i].Page.CropBox;
+                RectangleF visible = Intersect(
+                    new RectangleF(Math.Min(media.X1, media.X2), Math.Min(media.Y1, media.Y2), media.Width, media.Height),
+                    new RectangleF(Math.Min(crop.X1, crop.X2), Math.Min(crop.Y1, crop.Y2), crop.Width, crop.Height));
+                // Annotations are drawn over the page: none may cover a witness.
+                foreach (RectangleF annotRect in AnnotationRects(work[i].Page.Dictionary, run.Store))
+                {
+                    WithdrawShown(patternUses[i], annotRect, null);
+                }
+
                 RedactPatternCells(
-                    form.Value.Dict, formResources, run.FormInvocations[form.Key], form.Value.Uses,
-                    run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, null);
+                    modifiedPages[i], work[i].Page.Resources, PageContexts(work[i].Rects, work[i].Replacements),
+                    patternUses[i], run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, visible);
             }
 
-            StripPrivateEntries(form.Value.Dict, orphanImageCandidates);
-        }
+            foreach (KeyValuePair<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> form in rewrittenForms)
+            {
+                PdfDictionary? formResources = form.Value.Dict.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
+                    ? run.Store.Resolve(fr) as PdfDictionary
+                    : null;
+                PruneUnusedImages(form.Value.Dict, formResources, form.Value.Content, run, orphanImageCandidates);
+                AddBlankedImages(form.Value.Dict, formResources, form.Value.Images, run, allObjects, ref nextObjectNum);
+                if (form.Value.Dict.ContainsKey(PdfName.Resources))
+                {
+                    RedactPatternCells(
+                        form.Value.Dict, formResources, run.FormInvocations[form.Key], form.Value.Uses,
+                        run, allObjects, ref nextObjectNum, orphanImageCandidates, 0, null);
+                }
 
-        // Resources a rewritten page inherits from a page-tree node: the
-        // page now carries its own (pruned) copy, and the node's resources
-        // keep only what the pages still inheriting them use.
-        Dictionary<int, PdfDictionary> replacedNodes = PruneInheritedResources(
-            document, pageIds, work, modifiedPages, rewrittenPageNums, run, pipeline, orphanImageCandidates);
+                StripPrivateEntries(form.Value.Dict, orphanImageCandidates);
+            }
 
-        // LA-04: neutralise the structure tree so redacted text cannot be
-        // recovered through /ActualText, /Alt, or marked-content references in the
-        // logical structure. Map each rewritten page to the MCIDs whose marked
-        // content was removed, then strip the matching structure elements'
-        // replacement text. PDF 32000-1:2008 §14.7-§14.9.
-        Dictionary<int, PdfPrimitive> rewrittenStructObjects = new Dictionary<int, PdfPrimitive>();
-        if (document.HasStructTree)
-        {
-            Dictionary<int, HashSet<int>> redactedMcidsByPage = new Dictionary<int, HashSet<int>>();
+            // Resources a rewritten page inherits from a page-tree node: the
+            // page now carries its own (pruned) copy, and the node's resources
+            // keep only what the pages still inheriting them use.
+            Dictionary<int, PdfDictionary> replacedNodes = PruneInheritedResources(
+                document, pageIds, work, modifiedPages, rewrittenPageNums, run, pipeline, orphanImageCandidates);
+
+            // LA-04: neutralise the structure tree so redacted text cannot be
+            // recovered through /ActualText, /Alt, or marked-content references in the
+            // logical structure. Map each rewritten page to the MCIDs whose marked
+            // content was removed, then strip the matching structure elements'
+            // replacement text. PDF 32000-1:2008 §14.7-§14.9.
+            Dictionary<int, PdfPrimitive> rewrittenStructObjects = new Dictionary<int, PdfPrimitive>();
+            if (document.HasStructTree)
+            {
+                Dictionary<int, HashSet<int>> redactedMcidsByPage = new Dictionary<int, HashSet<int>>();
+                for (int i = 0; i < work.Count; i++)
+                {
+                    PdfWorkScope.ThrowIfCancellationRequested();
+                    if (redactedMcids[i] is HashSet<int> pageMcids && pageMcids.Count > 0)
+                    {
+                        redactedMcidsByPage[work[i].PageId.ObjectNumber] = pageMcids;
+                    }
+                }
+
+                if (redactedMcidsByPage.Count > 0)
+                {
+                    Dictionary<int, int> altTexts = new Dictionary<int, int>();
+                    NeutralizeStructTree(document, redactedMcidsByPage, rewrittenStructObjects, altTexts);
+                    for (int i = 0; i < work.Count; i++)
+                    {
+                        if (altTexts.TryGetValue(work[i].PageId.ObjectNumber, out int stripped))
+                        {
+                            counts[i].AlternateTextsRemoved += stripped;
+                        }
+                    }
+                }
+            }
+
+            // Physically remove redacted annotations and any sub-objects they solely
+            // own (action dictionaries holding /URI, appearance streams), so a
+            // redacted link's target or a note's text cannot be recovered. An object
+            // still reachable from the catalog without passing through a redacted
+            // annotation is shared and is kept.
+            HashSet<int> removedAnnotationNums = new HashSet<int>();
+            if (redactedAnnotRefs.Count > 0)
+            {
+                HashSet<int> survivors = new HashSet<int>(redactedAnnotRefs);
+                PdfDictionary? catalog = FindCatalog(document);
+                if (catalog is not null)
+                {
+                    Visit(document.Objects, catalog, survivors);
+                }
+
+                survivors.ExceptWith(redactedAnnotRefs);
+                foreach (int candidate in annotRemovalCandidates)
+                {
+                    if (!survivors.Contains(candidate))
+                    {
+                        removedAnnotationNums.Add(candidate);
+                    }
+                }
+            }
+
+            // Copy untouched objects (excluding modified pages and replaced content streams)
+            foreach (PdfIndirectObject obj in document.Objects.Objects)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                if (rewrittenPageNums.Contains(obj.Id.ObjectNumber))
+                {
+                    continue;
+                }
+
+                if (removedContentStreamNums.Contains(obj.Id.ObjectNumber))
+                {
+                    continue;
+                }
+
+                if (removedAnnotationNums.Contains(obj.Id.ObjectNumber))
+                {
+                    continue;
+                }
+
+                if (rewrittenFieldObjects.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? rewrittenField))
+                {
+                    allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenField));
+                    continue;
+                }
+
+                if (rewrittenStructObjects.TryGetValue(obj.Id.ObjectNumber, out PdfPrimitive? rewrittenStruct))
+                {
+                    allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenStruct));
+                    continue;
+                }
+
+                if (replacedNodes.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? replacedNode))
+                {
+                    allObjects.Add(new PdfIndirectObject(obj.Id, replacedNode));
+                    continue;
+                }
+
+                allObjects.Add(obj);
+            }
+
+            // Build trailer with catalog reference
+            PdfDictionary trailer = new PdfDictionary();
+
+            foreach (PdfIndirectObject obj in document.Objects.Objects)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                if (obj.Value is PdfDictionary dict &&
+                    dict.TryGetValue(PdfName.Type, out PdfPrimitive? t) &&
+                    t is PdfName tn && tn.Value == "Catalog")
+                {
+                    trailer.Set(PdfName.Root, new PdfReference(obj.Id));
+                    break;
+                }
+            }
+
+            if (run.StripPropertyLists.Count > 0)
+            {
+                StripNamedPropertyLists(allObjects, run.StripPropertyLists);
+            }
+
+            if (orphanImageCandidates.Count > 0)
+            {
+                allObjects = OmitUnreachable(allObjects, trailer, orphanImageCandidates);
+            }
+
+            // 3.34.0 (#18): document-wide patterns also scrub the bookmark
+            // titles and the XMP metadata, and the information dictionary's
+            // object is left out with the rest of /Info.
+            int documentMatches = DocumentTextScrubber.Scrub(document, options.Patterns, allObjects, pipeline);
+
+            PdfWriter.Write(output, allObjects, trailer);
+
+            List<PageRedactionReport> report = new List<PageRedactionReport>(work.Count);
             for (int i = 0; i < work.Count; i++)
             {
-                if (redactedMcids[i] is HashSet<int> pageMcids && pageMcids.Count > 0)
-                {
-                    redactedMcidsByPage[work[i].PageId.ObjectNumber] = pageMcids;
-                }
+                report.Add(new PageRedactionReport(workPages[i], counts[i]));
             }
 
-            if (redactedMcidsByPage.Count > 0)
-            {
-                NeutralizeStructTree(document, redactedMcidsByPage, rewrittenStructObjects);
-            }
-        }
-
-        // Physically remove redacted annotations and any sub-objects they solely
-        // own (action dictionaries holding /URI, appearance streams), so a
-        // redacted link's target or a note's text cannot be recovered. An object
-        // still reachable from the catalog without passing through a redacted
-        // annotation is shared and is kept.
-        HashSet<int> removedAnnotationNums = new HashSet<int>();
-        if (redactedAnnotRefs.Count > 0)
-        {
-            HashSet<int> survivors = new HashSet<int>(redactedAnnotRefs);
-            PdfDictionary? catalog = FindCatalog(document);
-            if (catalog is not null)
-            {
-                Visit(document.Objects, catalog, survivors);
-            }
-
-            survivors.ExceptWith(redactedAnnotRefs);
-            foreach (int candidate in annotRemovalCandidates)
-            {
-                if (!survivors.Contains(candidate))
-                {
-                    removedAnnotationNums.Add(candidate);
-                }
-            }
-        }
-
-        // Copy untouched objects (excluding modified pages and replaced content streams)
-        foreach (PdfIndirectObject obj in document.Objects.Objects)
-        {
-            if (rewrittenPageNums.Contains(obj.Id.ObjectNumber))
-            {
-                continue;
-            }
-
-            if (removedContentStreamNums.Contains(obj.Id.ObjectNumber))
-            {
-                continue;
-            }
-
-            if (removedAnnotationNums.Contains(obj.Id.ObjectNumber))
-            {
-                continue;
-            }
-
-            if (rewrittenFieldObjects.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? rewrittenField))
-            {
-                allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenField));
-                continue;
-            }
-
-            if (rewrittenStructObjects.TryGetValue(obj.Id.ObjectNumber, out PdfPrimitive? rewrittenStruct))
-            {
-                allObjects.Add(new PdfIndirectObject(obj.Id, rewrittenStruct));
-                continue;
-            }
-
-            if (replacedNodes.TryGetValue(obj.Id.ObjectNumber, out PdfDictionary? replacedNode))
-            {
-                allObjects.Add(new PdfIndirectObject(obj.Id, replacedNode));
-                continue;
-            }
-
-            allObjects.Add(obj);
-        }
-
-        // Build trailer with catalog reference
-        PdfDictionary trailer = new PdfDictionary();
-
-        foreach (PdfIndirectObject obj in document.Objects.Objects)
-        {
-            if (obj.Value is PdfDictionary dict &&
-                dict.TryGetValue(PdfName.Type, out PdfPrimitive? t) &&
-                t is PdfName tn && tn.Value == "Catalog")
-            {
-                trailer.Set(PdfName.Root, new PdfReference(obj.Id));
-                break;
-            }
-        }
-
-        if (run.StripPropertyLists.Count > 0)
-        {
-            StripNamedPropertyLists(allObjects, run.StripPropertyLists);
-        }
-
-        if (orphanImageCandidates.Count > 0)
-        {
-            allObjects = OmitUnreachable(allObjects, trailer, orphanImageCandidates);
-        }
-
-        PdfWriter.Write(output, allObjects, trailer);
+            return new RedactionReport(report) { DocumentMatchesRemoved = documentMatches };
+        });
     }
 
     /// <summary>
@@ -519,13 +600,15 @@ public static class Redactor
     // known to show (see PatternUses).
     private static (byte[] Bytes, List<RectangleF> OverlayBoxes, HashSet<int> RedactedMcids) RewriteContent(
         byte[] content, IReadOnlyList<RedactContext> contexts, RedactRun run, PdfDictionary? resources,
-        IReadOnlyList<PatternRule> patterns, List<BlankedImage>? blankedImages, PatternUses? patternUses = null)
+        IReadOnlyList<PatternRule> patterns, List<BlankedImage>? blankedImages, PatternUses? patternUses = null,
+        RedactCounts? counts = null)
     {
         using (MemoryStream input = new MemoryStream(content))
         using (MemoryStream output = new MemoryStream())
         using (PdfTokenizer tok = new PdfTokenizer(input))
         {
             RedactState state = new RedactState();
+            state.Counts = counts;
             state.Patterns = patterns;
             state.BlankedImages = blankedImages;
             List<PdfToken> pendingOperands = new List<PdfToken>();
@@ -673,7 +756,19 @@ public static class Redactor
                         if (!string.IsNullOrEmpty(surviving))
                         {
                             WriteRaw(Sink(), surviving);
+                            if (counts is not null)
+                            {
+                                counts.PathsCut++;
+                            }
                         }
+                        else if (counts is not null)
+                        {
+                            counts.PathsRemoved++;
+                        }
+                    }
+                    else if (counts is not null)
+                    {
+                        counts.PathsRemoved++;
                     }
 
                     path.Reset();
@@ -760,6 +855,11 @@ public static class Redactor
                     if (scope.Mcid is int closedMcid && scope.Dropped)
                     {
                         redactedMcids.Add(closedMcid);
+                    }
+
+                    if (scope.Dropped && (scope.Buffer is not null || scope.NamedTextProperties is not null) && counts is not null)
+                    {
+                        counts.AlternateTextsRemoved++;
                     }
 
                     if (scope.Dropped && scope.NamedTextProperties is PdfDictionary named)
@@ -875,6 +975,14 @@ public static class Redactor
                         if (edit.Outcome == ImageBlankOutcome.Blanked && edit.Name is string blankedName)
                         {
                             WriteRaw(Sink(), "/" + blankedName + " Do\n");
+                            if (counts is not null)
+                            {
+                                counts.ImagesBlanked++;
+                            }
+                        }
+                        else if (counts is not null)
+                        {
+                            counts.ImagesRemoved++;
                         }
 
                         NoteDropped();
@@ -892,6 +1000,10 @@ public static class Redactor
                     // scope: the scope's replacement text (a Figure's /Alt)
                     // describes what was removed.
                     NoteDropped();
+                    if (op == "Do" && counts is not null)
+                    {
+                        counts.ImagesRemoved++;
+                    }
                 }
                 else
                 {
@@ -929,6 +1041,11 @@ public static class Redactor
                 if (scope.Mcid is int closedMcid && scope.Dropped)
                 {
                     redactedMcids.Add(closedMcid);
+                }
+
+                if (scope.Dropped && (scope.Buffer is not null || scope.NamedTextProperties is not null) && counts is not null)
+                {
+                    counts.AlternateTextsRemoved++;
                 }
             }
 
@@ -1094,7 +1211,8 @@ public static class Redactor
     private static void NeutralizeStructTree(
         PdfDocument document,
         Dictionary<int, HashSet<int>> redactedMcidsByPage,
-        Dictionary<int, PdfPrimitive> rewritten)
+        Dictionary<int, PdfPrimitive> rewritten,
+        Dictionary<int, int> altTextsByPage)
     {
         PdfDictionary? catalog = FindCatalog(document);
         if (catalog is null
@@ -1145,6 +1263,11 @@ public static class Redactor
                 || element.ContainsKey(PdfName.Intern("E"));
             if (redacted && hasReplacementText)
             {
+                if (isIndirect ? !selfStrip.Contains(thisObjNum) : !inlineStrip.Contains(element))
+                {
+                    altTextsByPage[pageObjNum] = altTextsByPage.GetValueOrDefault(pageObjNum) + 1;
+                }
+
                 if (isIndirect)
                 {
                     selfStrip.Add(thisObjNum);
@@ -1448,6 +1571,18 @@ public static class Redactor
         if (outcome == ImageBlankOutcome.Blanked && name is not null)
         {
             WriteRaw(output, "/" + name + " Do\n");
+        }
+
+        if (state.Counts is RedactCounts imageCounts)
+        {
+            if (outcome == ImageBlankOutcome.Blanked && name is not null)
+            {
+                imageCounts.ImagesBlanked++;
+            }
+            else
+            {
+                imageCounts.ImagesRemoved++;
+            }
         }
 
         return true;
@@ -3291,6 +3426,17 @@ public static class Redactor
         Transform overlayBase = contexts.Count > 0 ? contexts[0].BaseCtm : Transform.Identity;
         AddPatternOverlayBoxes(patternDrop, glyphX0, glyphX1, state, overlayBase);
 
+        if (anyDropped && state.Counts is RedactCounts glyphCounts)
+        {
+            foreach (bool dropped in drop)
+            {
+                if (dropped)
+                {
+                    glyphCounts.GlyphsRemoved++;
+                }
+            }
+        }
+
         if (!anyDropped)
         {
             WriteOriginalTj(output, operands);
@@ -3495,6 +3641,17 @@ public static class Redactor
 
         Transform overlayBase = contexts.Count > 0 ? contexts[0].BaseCtm : Transform.Identity;
         AddPatternOverlayBoxes(patternDrop, glyphX0, glyphX1, state, overlayBase);
+
+        if (anyDropped && state.Counts is RedactCounts glyphCounts)
+        {
+            foreach (bool dropped in drop)
+            {
+                if (dropped)
+                {
+                    glyphCounts.GlyphsRemoved++;
+                }
+            }
+        }
 
         if (!anyDropped)
         {
@@ -4175,7 +4332,8 @@ public static class Redactor
     // object id), removing in-rect text under any of its placements, and marks
     // the original for exclusion so no unredacted copy survives in the output.
     private static Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> RewriteCollectedForms(
-        PdfDocument document, RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded)
+        PdfDocument document, RedactRun run, List<PdfIndirectObject> allObjects, HashSet<int> excluded,
+        Dictionary<int, int> formPages, RedactCounts[] pageCounts)
     {
         Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)> rewritten =
             new Dictionary<int, (PdfDictionary Dict, byte[] Content, List<BlankedImage> Images, PatternUses Uses)>();
@@ -4212,9 +4370,14 @@ public static class Redactor
             bool ownResources = (form.Dictionary.ContainsKey(PdfName.Resources) || materialised is not null)
                 && formResources is not null;
             PatternUses uses = new PatternUses();
+            RedactCounts formCounts = new RedactCounts();
             byte[] redacted = RewriteContent(
                 formBytes, kvp.Value, run, formResources, System.Array.Empty<PatternRule>(),
-                ownResources ? images : null, uses).Bytes;
+                ownResources ? images : null, uses, formCounts).Bytes;
+            if (formPages.TryGetValue(objNum, out int firstPage))
+            {
+                pageCounts[firstPage].Add(formCounts);
+            }
 
             PdfDictionary newDict = CopyDictionary(form.Dictionary);
             newDict.Remove(PdfName.Intern("Filter"));
@@ -5316,7 +5479,12 @@ public static class Redactor
 
     private static int FindNextObjectNumber(PdfDocument document)
     {
-        int max = 0;
+        // 3.34.0: past every number the file declares (/Size), not only past
+        // the objects loaded so far, so a new object never takes the number of
+        // one the catalog still names (an entry that was not loaded).
+        int max = document.Trailer.TryGetValue(PdfName.Intern("Size"), out PdfPrimitive? size) && size is PdfInteger declared
+            ? Math.Max(0, declared.Value - 1)
+            : 0;
 
         foreach (PdfIndirectObject obj in document.Objects.Objects)
         {
@@ -5358,6 +5526,22 @@ public static class Redactor
             && catalog.TryGetValue(PdfName.Intern("StructTreeRoot"), out PdfPrimitive? structTreeRoot))
         {
             Visit(document.Objects, structTreeRoot, visited);
+        }
+
+        // 3.34.0 (#18): the bookmarks and the XMP metadata are kept and
+        // scrubbed (DocumentTextScrubber). Before, they were written only when
+        // something had happened to load them, and then unscrubbed; otherwise
+        // the catalog named objects the file did not have.
+        // The viewer preferences, page labels and layer configuration hold no
+        // page content and are kept as they are; before, an unloaded one was
+        // named by the catalog but missing from the file (3.34.0). Other
+        // catalog entries (name trees, actions) are unchanged: backlog 59.
+        foreach (string key in new[] { "Outlines", "Metadata", "ViewerPreferences", "PageLabels", "OCProperties" })
+        {
+            if (catalog is not null && catalog.TryGetValue(PdfName.Intern(key), out PdfPrimitive? entry))
+            {
+                Visit(document.Objects, entry, visited);
+            }
         }
     }
 
@@ -5423,7 +5607,8 @@ public static class Redactor
         PdfObjectStore store,
         HashSet<int> redactedAnnotRefs,
         HashSet<int> removalCandidates,
-        Dictionary<int, PdfDictionary> rewrittenFieldObjects)
+        Dictionary<int, PdfDictionary> rewrittenFieldObjects,
+        RedactCounts counts)
     {
         if (!page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsPrim))
         {
@@ -5459,9 +5644,11 @@ public static class Redactor
                 RedactWidgetValue(
                     annot, entry, store,
                     redactedAnnotRefs, removalCandidates, rewrittenFieldObjects);
+                counts.FieldValuesCleared++;
             }
             else if (entry is PdfReference reference)
             {
+                counts.AnnotationsRemoved++;
                 int num = reference.ObjectId.ObjectNumber;
                 redactedAnnotRefs.Add(num);
                 removalCandidates.Add(num);
@@ -5759,6 +5946,9 @@ public static class Redactor
 internal sealed class RedactState
 {
     private readonly Stack<Transform> _ctmStack;
+
+    // 3.34.0: the page's counters for ApplyWithReport, or null.
+    internal RedactCounts? Counts { get; set; }
 
     internal RedactState()
     {

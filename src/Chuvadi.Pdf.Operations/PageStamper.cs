@@ -45,7 +45,10 @@ public static class PageStamper
         Transform transform,
         StampPlacement placement = StampPlacement.Overlay)
     {
-        Place(output, target, new[] { targetPageIndex }, source, sourcePageIndex, transform, placement);
+        PdfWriteGuard.Run(new[] { target, source }, "stamped", () =>
+        {
+            Place(output, target, new[] { targetPageIndex }, source, sourcePageIndex, transform, placement);
+        });
     }
 
     /// <summary>Stamps a source page onto every page of the target document.</summary>
@@ -57,16 +60,19 @@ public static class PageStamper
         Transform transform,
         StampPlacement placement = StampPlacement.Overlay)
     {
-        ArgumentNullException.ThrowIfNull(target);
-
-        int count = target.PageCount;
-        List<int> all = new List<int>(count);
-        for (int i = 0; i < count; i++)
+        PdfWriteGuard.Run(new[] { target, source }, "stamped", () =>
         {
-            all.Add(i);
-        }
+            ArgumentNullException.ThrowIfNull(target);
 
-        Place(output, target, all, source, sourcePageIndex, transform, placement);
+            int count = target.PageCount;
+            List<int> all = new List<int>(count);
+            for (int i = 0; i < count; i++)
+            {
+                all.Add(i);
+            }
+
+            Place(output, target, all, source, sourcePageIndex, transform, placement);
+        });
     }
 
     /// <summary>
@@ -82,13 +88,16 @@ public static class PageStamper
         int targetPageIndex,
         string stampName)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(stampName);
+        PdfWriteGuard.Run(target, "stamped", () =>
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(stampName);
 
-        StampDocument document = new StampDocument(target);
-        document.AddRemoval(targetPageIndex, stampName);
-        document.Write(output);
+            StampDocument document = new StampDocument(target);
+            document.AddRemoval(targetPageIndex, stampName);
+            document.Write(output);
+        });
     }
 
     /// <summary>
@@ -106,15 +115,18 @@ public static class PageStamper
         Transform transform,
         StampPlacement placement = StampPlacement.Overlay)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(stampName);
-        ArgumentNullException.ThrowIfNull(source);
+        PdfWriteGuard.Run(new[] { target, source }, "stamped", () =>
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(stampName);
+            ArgumentNullException.ThrowIfNull(source);
 
-        StampDocument document = new StampDocument(target);
-        document.AddRemoval(targetPageIndex, stampName);
-        document.AddStamp(targetPageIndex, source, sourcePageIndex, transform, placement);
-        document.Write(output);
+            StampDocument document = new StampDocument(target);
+            document.AddRemoval(targetPageIndex, stampName);
+            document.AddStamp(targetPageIndex, source, sourcePageIndex, transform, placement);
+            document.Write(output);
+        });
     }
 
     /// <summary>Stamps a source page onto a set of target pages.</summary>
@@ -127,19 +139,22 @@ public static class PageStamper
         Transform transform,
         StampPlacement placement = StampPlacement.Overlay)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(targetPageIndices);
-
-        StampDocument document = new StampDocument(target);
-
-        foreach (int pageIndex in targetPageIndices)
+        PdfWriteGuard.Run(new[] { target, source }, "stamped", () =>
         {
-            document.AddStamp(pageIndex, source, sourcePageIndex, transform, placement);
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(targetPageIndices);
 
-        document.Write(output);
+            StampDocument document = new StampDocument(target);
+
+            foreach (int pageIndex in targetPageIndices)
+            {
+                document.AddStamp(pageIndex, source, sourcePageIndex, transform, placement);
+            }
+
+            document.Write(output);
+        });
     }
 
     /// <summary>
@@ -164,48 +179,51 @@ public static class PageStamper
     /// </exception>
     public static void PlaceMany(Stream output, PdfDocument target, IReadOnlyList<StampRequest> stamps)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(stamps);
-
-        // Validate everything before writing anything.
-        foreach (StampRequest request in stamps)
+        PdfWriteGuard.Run(StampDocuments(target, stamps), "stamped", () =>
         {
-            ArgumentNullException.ThrowIfNull(request);
-            ArgumentNullException.ThrowIfNull(request.Source, nameof(stamps));
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(stamps);
 
-            if (request.TargetPageIndex < 0 || request.TargetPageIndex >= target.PageCount)
+            // Validate everything before writing anything.
+            foreach (StampRequest request in stamps)
             {
-                throw new ArgumentOutOfRangeException(
-                    nameof(stamps), request.TargetPageIndex, "Target page index is outside the document.");
+                ArgumentNullException.ThrowIfNull(request);
+                ArgumentNullException.ThrowIfNull(request.Source, nameof(stamps));
+
+                if (request.TargetPageIndex < 0 || request.TargetPageIndex >= target.PageCount)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stamps), request.TargetPageIndex, "Target page index is outside the document.");
+                }
+
+                if (request.SourcePageIndex < 0 || request.SourcePageIndex >= request.Source.PageCount)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stamps), request.SourcePageIndex, "Source page index is outside the source document.");
+                }
+
+                if (!(request.Opacity >= 0.0 && request.Opacity <= 1.0))
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stamps), request.Opacity, "Opacity must be in [0, 1].");
+                }
             }
 
-            if (request.SourcePageIndex < 0 || request.SourcePageIndex >= request.Source.PageCount)
+            StampDocument document = new StampDocument(target);
+            foreach (StampRequest request in stamps)
             {
-                throw new ArgumentOutOfRangeException(
-                    nameof(stamps), request.SourcePageIndex, "Source page index is outside the source document.");
+                document.AddStamp(
+                    request.TargetPageIndex,
+                    request.Source,
+                    request.SourcePageIndex,
+                    request.Transform,
+                    request.Placement,
+                    request.Opacity);
             }
 
-            if (!(request.Opacity >= 0.0 && request.Opacity <= 1.0))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(stamps), request.Opacity, "Opacity must be in [0, 1].");
-            }
-        }
-
-        StampDocument document = new StampDocument(target);
-        foreach (StampRequest request in stamps)
-        {
-            document.AddStamp(
-                request.TargetPageIndex,
-                request.Source,
-                request.SourcePageIndex,
-                request.Transform,
-                request.Placement,
-                request.Opacity);
-        }
-
-        document.Write(output);
+            document.Write(output);
+        });
     }
 
     /// <summary>
@@ -335,7 +353,7 @@ public static class PageStamper
             if (resources is not null)
             {
                 formDict.Set(PdfName.Resources,
-                    ObjectImporter.DeepCopyDictionary(resources, 0, idRemap));
+                    ObjectImporter.DeepCopyDictionary(resources, 0, idRemap, nullUnmapped: true));
             }
 
             formDict.Set(PdfName.Length, body.Length);
@@ -352,7 +370,7 @@ public static class PageStamper
 
                 int newId = idRemap[refKey];
                 PdfPrimitive valueCopy =
-                    ObjectImporter.DeepCopyPrimitive(refObj.Value, 0, idRemap);
+                    ObjectImporter.DeepCopyPrimitive(refObj.Value, 0, idRemap, nullUnmapped: true);
                 _extraObjects.Add(new PdfIndirectObject(new PdfObjectId(newId, 0), valueCopy));
             }
 
@@ -760,5 +778,20 @@ public static class PageStamper
         internal StampPlacement Placement { get; }
 
         internal double Opacity { get; }
+    }
+
+    // The target and every stamp source, for PdfWriteGuard.
+    private static IEnumerable<PdfDocument> StampDocuments(PdfDocument target, IReadOnlyList<StampRequest>? stamps)
+    {
+        yield return target;
+        if (stamps is null)
+        {
+            yield break;
+        }
+
+        foreach (StampRequest stamp in stamps)
+        {
+            yield return stamp.Source;
+        }
     }
 }

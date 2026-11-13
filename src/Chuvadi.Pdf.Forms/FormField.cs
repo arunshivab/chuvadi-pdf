@@ -57,4 +57,29 @@ public sealed class FormField
 
     /// <summary>Returns true when this is a leaf field (no children).</summary>
     public bool IsLeaf => Children.Count == 0;
+
+    /// <summary>
+    /// Gets the field's widget annotations: where it is shown, and for a check
+    /// box or radio button the state that turns each widget on (3.34.0).
+    /// Empty for a field with no widget of its own (a parent of other fields).
+    /// </summary>
+    public IReadOnlyList<FormWidget> Widgets { get; init; } = Array.Empty<FormWidget>();
+
+    /// <summary>
+    /// Gets a choice field's options (<c>/Opt</c>), in order (3.34.0). Empty
+    /// for other fields.
+    /// </summary>
+    public IReadOnlyList<FormChoiceOption> Options { get; init; } = Array.Empty<FormChoiceOption>();
+
+    /// <summary>
+    /// Gets the field flags (<c>/Ff</c>, inherited from ancestors when the
+    /// field has none of its own) (3.34.0).
+    /// </summary>
+    public FormFieldFlags Flags { get; init; }
+
+    /// <summary>
+    /// Gets a text field's maximum length (<c>/MaxLen</c>, inherited), or null
+    /// when it has none (3.34.0).
+    /// </summary>
+    public int? MaxLength { get; init; }
 }

@@ -59,41 +59,44 @@ public static class TextStamper
         string? filePath = null,
         DateTimeOffset? timestamp = null)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(template);
-
-        HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
-        int total = document.PageCount;
-
-        StampWriter writer = new StampWriter(document);
-
-        for (int pageIndex = 0; pageIndex < total; pageIndex++)
+        PdfWriteGuard.Run(document, "stamped", () =>
         {
-            if (!targets.Contains(pageIndex))
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(template);
+
+            HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
+            int total = document.PageCount;
+
+            StampWriter writer = new StampWriter(document);
+
+            for (int pageIndex = 0; pageIndex < total; pageIndex++)
             {
-                continue;
+                if (!targets.Contains(pageIndex))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[pageIndex];
+                StampContext ctx = new StampContext(pageIndex + 1, total, filePath, timestamp);
+                string text = StampTokens.Resolve(template, ctx);
+
+                if (text.Length == 0)
+                {
+                    continue;
+                }
+
+                Transform placement = AnchorPlacement.ComputePlacement(
+                    anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
+                    fontSize, marginX, marginY);
+
+                string fragment = StampText.BuildShowText(text, placement, fontSize, color);
+                byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
+                writer.AddOverlay(pageIndex, streamBytes);
             }
 
-            PdfPage page = document.Pages[pageIndex];
-            StampContext ctx = new StampContext(pageIndex + 1, total, filePath, timestamp);
-            string text = StampTokens.Resolve(template, ctx);
-
-            if (text.Length == 0)
-            {
-                continue;
-            }
-
-            Transform placement = AnchorPlacement.ComputePlacement(
-                anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
-                fontSize, marginX, marginY);
-
-            string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-            byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
-            writer.AddOverlay(pageIndex, streamBytes);
-        }
-
-        writer.Write(output);
+            writer.Write(output);
+        });
     }
 
     /// <summary>
@@ -126,49 +129,52 @@ public static class TextStamper
     /// </exception>
     public static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(template);
-        ArgumentNullException.ThrowIfNull(numbering);
-
-        HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
-        int total = document.PageCount;
-
-        StampWriter writer = new StampWriter(document);
-
-        for (int pageIndex = 0; pageIndex < total; pageIndex++)
+        PdfWriteGuard.Run(document, "stamped", () =>
         {
-            int? sequenceValue = numbering.ResolveValue(pageIndex);
-            if (sequenceValue is not int value)
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(template);
+            ArgumentNullException.ThrowIfNull(numbering);
+
+            HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
+            int total = document.PageCount;
+
+            StampWriter writer = new StampWriter(document);
+
+            for (int pageIndex = 0; pageIndex < total; pageIndex++)
             {
-                continue;
+                int? sequenceValue = numbering.ResolveValue(pageIndex);
+                if (sequenceValue is not int value)
+                {
+                    continue;
+                }
+
+                if (!targets.Contains(pageIndex))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[pageIndex];
+                string label = numbering.Format(value);
+                StampContext ctx = new StampContext(pageIndex + 1, total, filePath, timestamp, label);
+                string text = StampTokens.Resolve(template, ctx);
+
+                if (text.Length == 0)
+                {
+                    continue;
+                }
+
+                Transform placement = AnchorPlacement.ComputePlacement(
+                    anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
+                    fontSize, marginX, marginY);
+
+                string fragment = StampText.BuildShowText(text, placement, fontSize, color);
+                byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
+                writer.AddOverlay(pageIndex, streamBytes);
             }
 
-            if (!targets.Contains(pageIndex))
-            {
-                continue;
-            }
-
-            PdfPage page = document.Pages[pageIndex];
-            string label = numbering.Format(value);
-            StampContext ctx = new StampContext(pageIndex + 1, total, filePath, timestamp, label);
-            string text = StampTokens.Resolve(template, ctx);
-
-            if (text.Length == 0)
-            {
-                continue;
-            }
-
-            Transform placement = AnchorPlacement.ComputePlacement(
-                anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
-                fontSize, marginX, marginY);
-
-            string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-            byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
-            writer.AddOverlay(pageIndex, streamBytes);
-        }
-
-        writer.Write(output);
+            writer.Write(output);
+        });
     }
 
     private static HashSet<int> ResolveTargets(IEnumerable<int>? pageIndices, int pageCount)

@@ -58,6 +58,14 @@ string? Author
 
 An optional document author written to the XMP metadata.
 
+### `AssumeUtcForZonelessDates`
+
+```csharp
+bool AssumeUtcForZonelessDates
+```
+
+Gets whether an `/Info` date that gives no time zone is written to the XMP metadata as UTC (3.34.0). By default (false) such a date is left out of the XMP, since it has no known relation to UT (PDF 32000-1:2008 §7.9.4) and validators read an XMP date without a zone in their own local zone; either way `PdfAResult.Warnings` says so. Omitted parts take the §7.9.4 defaults (month and day 01, the rest zero).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.PdfA/PdfAOptions.cs`](../../../src/Chuvadi.Pdf.PdfA/PdfAOptions.cs)_

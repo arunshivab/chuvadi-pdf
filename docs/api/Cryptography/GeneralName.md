@@ -59,6 +59,14 @@ The OID value for the registeredID variant.
 
 ## Methods
 
+### `ToString`
+
+```csharp
+override string ToString() => Kind switch
+```
+
+<inheritdoc/>
+
 ### `Read`
 
 __static__

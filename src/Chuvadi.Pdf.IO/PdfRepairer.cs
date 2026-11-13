@@ -10,8 +10,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -216,6 +218,12 @@ public static class PdfRepairer
             }
         }
 
+        // 3.34.0 (#52d): a catalog whose /Pages does not lead to a page tree.
+        if (rootNumber >= 0)
+        {
+            RepairPageTree(objects, positions, rootNumber, warnings);
+        }
+
         // Build a fresh trailer.
         PdfDictionary trailer = new PdfDictionary();
         if (rootNumber >= 0)
@@ -235,13 +243,22 @@ public static class PdfRepairer
             // still be decrypted. The /Encrypt dictionary is either direct or
             // an object that was recovered with the rest.
             if (candidates.Encrypt is PdfDictionary
-                || (candidates.Encrypt is PdfReference encryptRef && objects.ContainsKey(encryptRef.ObjectId.ObjectNumber)))
+                || (candidates.Encrypt is PdfReference encryptRef && objects.TryGetValue(encryptRef.ObjectId.ObjectNumber, out PdfIndirectObject? encryptObject)
+                    && encryptObject.Value is PdfDictionary))
             {
                 trailer.Set(PdfName.Intern("Encrypt"), candidates.Encrypt);
                 if (objectStreamCount > 0)
                 {
                     warnings.Add("The file is encrypted; objects stored in its object streams could not be recovered.");
                 }
+            }
+            else if (candidates.Encrypt is not null)
+            {
+                // 3.34.0 (#52d): the trailer names an encryption dictionary
+                // that is missing or damaged, so nothing can be decrypted.
+                // The file is opened as unencrypted; encrypted strings and
+                // streams then read as damaged data, and the warning says why.
+                warnings.Add("The trailer's /Encrypt does not lead to an encryption dictionary; the file was opened as unencrypted, so any encrypted content cannot be read.");
             }
 
             if (candidates.Id is PdfArray id)
@@ -608,6 +625,106 @@ public static class PdfRepairer
         return number >= 0;
     }
 
+    // The page-tree entries a page inherits (PDF 32000-1:2008 Table 30).
+    private static readonly string[] InheritableKeys = ["Resources", "MediaBox", "CropBox", "Rotate"];
+
+    // Points a catalog whose /Pages does not resolve to a page-tree node at
+    // the file's only parentless /Pages node, or else at a new node listing
+    // every /Page object in file order (each page first takes the entries it
+    // inherited from its old parents).
+    private static void RepairPageTree(
+        Dictionary<int, PdfIndirectObject> objects, Dictionary<int, long> positions, int rootNumber, List<string> warnings)
+    {
+        if (objects[rootNumber].Value is not PdfDictionary catalog)
+        {
+            return;
+        }
+
+        PdfDictionary? Resolve(PdfPrimitive? p) =>
+            p is PdfReference r && objects.TryGetValue(r.ObjectId.ObjectNumber, out PdfIndirectObject? o) ? o.Value as PdfDictionary : p as PdfDictionary;
+        bool IsType(PdfDictionary d, string type) => d.GetAs<PdfName>(PdfName.Type)?.Value == type;
+
+        catalog.TryGetValue(PdfName.Pages, out PdfPrimitive? pagesPrim);
+        if (Resolve(pagesPrim) is PdfDictionary existing && IsType(existing, "Pages"))
+        {
+            return;
+        }
+
+        List<int> roots = new List<int>();
+        List<(long Position, int Number)> pages = new List<(long, int)>();
+        foreach (KeyValuePair<int, PdfIndirectObject> entry in objects)
+        {
+            if (entry.Value.Value is not PdfDictionary d)
+            {
+                continue;
+            }
+
+            if (IsType(d, "Pages") && Resolve(d.TryGetValue(PdfName.Parent, out PdfPrimitive? pp) ? pp : null) is null)
+            {
+                roots.Add(entry.Key);
+            }
+            else if (IsType(d, "Page"))
+            {
+                pages.Add((positions.TryGetValue(entry.Key, out long at) ? at : 0, entry.Key));
+            }
+        }
+
+        if (roots.Count == 1)
+        {
+            catalog.Set(PdfName.Pages, new PdfReference(new PdfObjectId(roots[0], 0)));
+            warnings.Add(string.Create(CultureInfo.InvariantCulture,
+                $"The catalog's /Pages did not lead to a page tree; the page tree at object {roots[0]} was used."));
+            return;
+        }
+
+        if (pages.Count == 0)
+        {
+            return;
+        }
+
+        pages.Sort();
+        int newNumber = 1;
+        foreach (int n in objects.Keys)
+        {
+            newNumber = Math.Max(newNumber, n + 1);
+        }
+
+        PdfObjectId newId = new PdfObjectId(newNumber, 0);
+        PdfArray kids = new PdfArray();
+        foreach ((long _, int number) in pages)
+        {
+            PdfDictionary page = (PdfDictionary)objects[number].Value;
+            HashSet<PdfDictionary> seen = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
+            PdfDictionary? parent = Resolve(page.TryGetValue(PdfName.Parent, out PdfPrimitive? pp) ? pp : null);
+            while (parent is not null && seen.Add(parent))
+            {
+                foreach (string key in InheritableKeys)
+                {
+                    PdfName name = PdfName.Intern(key);
+                    if (!page.ContainsKey(name) && parent.TryGetValue(name, out PdfPrimitive? value))
+                    {
+                        page.Set(name, value);
+                    }
+                }
+
+                parent = Resolve(parent.TryGetValue(PdfName.Parent, out PdfPrimitive? up) ? up : null);
+            }
+
+            page.Set(PdfName.Parent, new PdfReference(newId));
+            kids.Add(new PdfReference(new PdfObjectId(number, 0)));
+        }
+
+        PdfDictionary root = new PdfDictionary();
+        root.Set(PdfName.Type, PdfName.Intern("Pages"));
+        root.Set(PdfName.Kids, kids);
+        root.Set(PdfName.Count, kids.Count);
+        objects[newNumber] = new PdfIndirectObject(newId, root);
+        positions[newNumber] = long.MaxValue;
+        catalog.Set(PdfName.Pages, new PdfReference(newId));
+        warnings.Add(string.Create(CultureInfo.InvariantCulture,
+            $"The catalog's /Pages did not lead to a page tree; a new one lists the {kids.Count} page objects found, in file order."));
+    }
+
     private static bool IsCatalog(PdfDictionary dict)
     {
         PdfName? type = dict.GetAs<PdfName>(PdfName.Type);
@@ -621,7 +738,20 @@ public static class PdfRepairer
     {
         try
         {
-            byte[] payload = ObjectStreamReader.Decode(stream.Dictionary, stream.RawBytes);
+            byte[] payload;
+            try
+            {
+                payload = ObjectStreamReader.Decode(stream.Dictionary, stream.RawBytes);
+            }
+            catch (FilterException damaged) when (damaged.PartialOutput is { Length: > 0 } partial)
+            {
+                // 3.34.0 (#52d): recover the objects stored in the part that
+                // decoded; each one is read separately below, and one cut
+                // short by the damage is skipped.
+                payload = partial;
+                warnings.Add("An object stream (/ObjStm) is damaged; the objects stored before the damage were recovered. " + damaged.Message);
+            }
+
             PdfInteger? countValue = stream.Dictionary.GetAs<PdfInteger>(PdfName.Intern("N"));
             PdfInteger? firstValue = stream.Dictionary.GetAs<PdfInteger>(PdfName.Intern("First"));
             if (countValue is null || firstValue is null)

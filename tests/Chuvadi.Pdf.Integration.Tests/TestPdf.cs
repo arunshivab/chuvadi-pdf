@@ -45,8 +45,11 @@ internal sealed class TestPdf
 
     internal void SetStream(int number, string dict, byte[] data) => _objects[number - 1] = (dict, data);
 
-    /// <summary>Writes the file with <paramref name="catalog"/> as its root.</summary>
-    internal byte[] Build(int catalog)
+    /// <summary>
+    /// Writes the file with <paramref name="catalog"/> as its root and, when
+    /// given, <paramref name="info"/> as its document information dictionary.
+    /// </summary>
+    internal byte[] Build(int catalog, int info = 0)
     {
         using MemoryStream ms = new MemoryStream();
         void W(string s) => ms.Write(Encoding.Latin1.GetBytes(s));
@@ -78,7 +81,8 @@ internal sealed class TestPdf
             W(off.ToString("D10", CultureInfo.InvariantCulture) + " 00000 n \n");
         }
 
-        W("trailer\n<</Size " + (_objects.Count + 1).ToString(CultureInfo.InvariantCulture) + "/Root " + catalog.ToString(CultureInfo.InvariantCulture) + " 0 R>>\nstartxref\n" + xref.ToString(CultureInfo.InvariantCulture) + "\n%%EOF\n");
+        W("trailer\n<</Size " + (_objects.Count + 1).ToString(CultureInfo.InvariantCulture) + "/Root " + catalog.ToString(CultureInfo.InvariantCulture) + " 0 R"
+            + (info > 0 ? "/Info " + info.ToString(CultureInfo.InvariantCulture) + " 0 R" : string.Empty) + ">>\nstartxref\n" + xref.ToString(CultureInfo.InvariantCulture) + "\n%%EOF\n");
         return ms.ToArray();
     }
 

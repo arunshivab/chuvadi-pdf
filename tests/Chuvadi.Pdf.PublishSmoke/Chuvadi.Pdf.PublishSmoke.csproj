@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <Description>
+      Publish smoke test (3.34.0, D-335 item 8). CI publishes this console app
+      trimmed and ReadyToRun, then runs it: it authors a PDF with an embedded
+      standard-font substitute and a filled form field, renders a page to PNG,
+      extracts its text and searches it. A trimming or ReadyToRun problem in
+      any Chuvadi assembly fails the run.
+    </Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Rendering\Chuvadi.Pdf.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Rendering.DisplayList\Chuvadi.Pdf.Rendering.DisplayList.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Text\Chuvadi.Pdf.Text.csproj" />
+  </ItemGroup>
+</Project>

@@ -296,10 +296,14 @@ public sealed class DeflateFilter : IStreamFilter
         int bytesPerRow = ((columns * colors * bitsPerComponent) + 7) / 8;
         int stride = bytesPerRow + 1; // +1 for filter type byte
 
+        // 3.34.0: a last row cut short (the stream ends inside it) is
+        // completed with zero bytes and decoded, as Poppler and MuPDF do;
+        // before, the whole stream was refused and the image was skipped.
         if (data.Length % stride != 0)
         {
-            throw new FilterException("FlateDecode",
-                $"PNG predictor data length {data.Length} is not a multiple of stride {stride}.");
+            byte[] padded = new byte[(data.Length / stride + 1) * stride];
+            Array.Copy(data, padded, data.Length);
+            data = padded;
         }
 
         int rows = data.Length / stride;

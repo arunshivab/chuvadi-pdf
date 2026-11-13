@@ -44,17 +44,20 @@ public static class AnnotationFlattener
     /// </exception>
     public static void Flatten(Stream output, PdfDocument document, AnnotationFlattenOptions options)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(options);
-        if (options.Mode is AnnotationMode mode && mode is not (AnnotationMode.View or AnnotationMode.Print))
+        PdfWriteGuard.Run(document, "flattened", () =>
         {
-            throw new ArgumentException(
-                $"AnnotationFlattenOptions.Mode must be View or Print, or null; {mode} has no meaning for flattening.",
-                nameof(options));
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(options);
+            if (options.Mode is AnnotationMode mode && mode is not (AnnotationMode.View or AnnotationMode.Print))
+            {
+                throw new ArgumentException(
+                    $"AnnotationFlattenOptions.Mode must be View or Print, or null; {mode} has no meaning for flattening.",
+                    nameof(options));
+            }
 
-        new Worker(document, options).Write(output);
+            new Worker(document, options).Write(output);
+        });
     }
 
     // ── Implementation ────────────────────────────────────────────────────
@@ -368,8 +371,11 @@ public static class AnnotationFlattener
             List<(string Name, PdfDictionary Gs)> extGStateAdds = new List<(string, PdfDictionary)>();
             HashSet<string> xobjectNames = CollectResourceNames(page, PdfName.XObject);
             HashSet<string> extGStateNames = CollectResourceNames(page, PdfName.Intern("ExtGState"));
+            List<(string Name, PdfPrimitive Group)> propertiesAdds = new List<(string, PdfPrimitive)>();
+            HashSet<string> propertiesNames = CollectResourceNames(page, PdfName.Intern("Properties"));
             int xobjectCounter = 0;
             int extGStateCounter = 0;
+            int propertiesCounter = 0;
             bool changed = false;
 
             for (int i = 0; i < annots.Count; i++)
@@ -465,6 +471,17 @@ public static class AnnotationFlattener
                     extGStateAdds.Add((gsName, MakeAlphaGraphicsState(alpha)));
                 }
 
+                // 3.34.0 (#43): an annotation in a layer (/OC) is baked inside
+                // that layer's marked content, so the layer still shows and
+                // hides it (and its print state applies) after flattening.
+                string? ocName = null;
+                if (annot.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) && oc is PdfReference or PdfDictionary)
+                {
+                    ocName = NextName("CvFlatOc", propertiesNames, ref propertiesCounter);
+                    propertiesAdds.Add((ocName, oc));
+                    overlay.Append("/OC /").Append(ocName).Append(" BDC\n");
+                }
+
                 overlay.Append("q\n");
                 if (gsName is not null)
                 {
@@ -475,6 +492,10 @@ public static class AnnotationFlattener
                     .Append(Fmt(tx)).Append(' ').Append(Fmt(ty)).Append(" cm\n");
                 overlay.Append('/').Append(formName).Append(" Do\n");
                 overlay.Append("Q\n");
+                if (ocName is not null)
+                {
+                    overlay.Append("EMC\n");
+                }
 
                 if (isWidget)
                 {
@@ -508,6 +529,11 @@ public static class AnnotationFlattener
                 if (extGStateAdds.Count > 0)
                 {
                     MergeExtGStates(resources, extGStateAdds);
+                }
+
+                if (propertiesAdds.Count > 0)
+                {
+                    MergeProperties(resources, propertiesAdds);
                 }
 
                 newPage.Set(PdfName.Resources, resources);
@@ -845,6 +871,24 @@ public static class AnnotationFlattener
             foreach ((string name, PdfDictionary gs) in additions)
             {
                 sub.Set(PdfName.Intern(name), gs);
+            }
+
+            resources.Set(key, sub);
+        }
+
+        // 3.34.0 (#43): the layers the baked annotations are marked with.
+        private void MergeProperties(
+            PdfDictionary resources, List<(string Name, PdfPrimitive Group)> additions)
+        {
+            PdfName key = PdfName.Intern("Properties");
+            PdfDictionary sub = resources.TryGetValue(key, out PdfPrimitive? existing)
+                && _store.ResolveAs<PdfDictionary>(existing) is PdfDictionary current
+                ? ObjectImporter.CopyDictionary(current)
+                : new PdfDictionary();
+
+            foreach ((string name, PdfPrimitive group) in additions)
+            {
+                sub.Set(PdfName.Intern(name), group);
             }
 
             resources.Set(key, sub);

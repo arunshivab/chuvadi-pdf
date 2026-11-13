@@ -6,6 +6,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
@@ -35,13 +37,16 @@ public sealed class PdfPage
     private readonly Func<PdfDictionary?>? _structTreeRoot;
     private readonly Func<PdfDictionary?>? _acroForm;
     private IReadOnlyList<PdfViewport>? _viewports;
+    private readonly Action<string>? _warn;
 
     internal PdfPage(
         PdfDictionary dict, IPdfObjectResolver resolver, int pageIndex,
         Func<OptionalContentVisibility>? optionalContent = null,
         Func<PdfDictionary?>? structTreeRoot = null,
-        Func<PdfDictionary?>? acroForm = null)
+        Func<PdfDictionary?>? acroForm = null,
+        Action<string>? warn = null)
     {
+        _warn = warn;
         _acroForm = acroForm;
         _dict = dict ?? throw new ArgumentNullException(nameof(dict));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
@@ -89,12 +94,16 @@ public sealed class PdfPage
     /// Gets or sets the MediaBox — the full extent of the page in points.
     /// Required. The getter falls back to the parent /Pages node if absent
     /// from this page; the setter writes a direct <c>/MediaBox</c> entry on
-    /// this page's dictionary, overriding any inherited value.
+    /// this page's dictionary, overriding any inherited value. Since 3.34.0 a
+    /// MediaBox that is missing, or is not four numbers enclosing a non-empty
+    /// area, reads as US Letter (0 0 612 792) and adds a line to
+    /// <see cref="PdfDocument.Warnings"/>; before, reading it threw
+    /// <see cref="PdfCorruptionException"/>.
     /// PDF 32000-1:2008 §7.7.3.3, Table 30 — MediaBox.
     /// </summary>
     public PdfRectangle MediaBox
     {
-        get => GetInheritedBox(PdfName.MediaBox);
+        get => GetMediaBox();
         set => SetBox(PdfName.MediaBox, value);
     }
 
@@ -104,6 +113,10 @@ public sealed class PdfPage
     /// <c>/CropBox</c> entry on this page's dictionary, overriding any inherited
     /// value. PDF 32000-1:2008 §7.7.3.3, Table 30 — CropBox.
     /// </summary>
+    /// <remarks>
+    /// The value as written in the file. What is shown is the CropBox
+    /// intersected with the MediaBox: <see cref="GetDisplayBox"/> (3.34.0).
+    /// </remarks>
     public PdfRectangle CropBox
     {
         get
@@ -142,11 +155,21 @@ public sealed class PdfPage
     /// <summary>
     /// Gets the width of the page's MediaBox in points (1/72 inch).
     /// </summary>
+    /// <remarks>
+    /// This is not always the size a viewer or the renderers show: since
+    /// 3.32.0 they show the CropBox, and <c>/Rotate</c> can swap width and
+    /// height. Use <see cref="GetDisplayBox"/> for the shown box,
+    /// <see cref="GetDisplayTransform"/> to map the shown page to PDF
+    /// coordinates, and <c>PageRasterizer.GetOutputSize</c> for an image's size.
+    /// </remarks>
     public double Width => MediaBox.Width;
 
     /// <summary>
     /// Gets the height of the page's MediaBox in points (1/72 inch).
     /// </summary>
+    /// <remarks>
+    /// Not always the shown height; see <see cref="Width"/>.
+    /// </remarks>
     public double Height => MediaBox.Height;
 
     // ── Page attributes ───────────────────────────────────────────────────
@@ -263,6 +286,73 @@ public sealed class PdfPage
     }
 
     /// <summary>
+    /// Returns the box a renderer shows for <paramref name="box"/>, in user
+    /// space, normalised so that <see cref="PdfRectangle.X1"/> and
+    /// <see cref="PdfRectangle.Y1"/> are the lower-left corner (3.34.0, D-334).
+    /// </summary>
+    /// <param name="box">
+    /// <see cref="PdfDisplayBox.CropBox"/>: the CropBox intersected with the
+    /// MediaBox, or the MediaBox when they do not overlap (PDF 32000-1:2008
+    /// §14.11.2). <see cref="PdfDisplayBox.MediaBox"/>: the MediaBox.
+    /// </param>
+    /// <remarks>
+    /// The raster, SVG and WPF renderers all show this box (the CropBox by
+    /// default since 3.32.0). Unlike <see cref="Width"/> and <see cref="Height"/>,
+    /// which report the MediaBox, it gives the size the rendered output has
+    /// before any rotation. <see cref="Rotate"/> is not applied; see
+    /// <see cref="GetDisplayTransform"/>.
+    /// </remarks>
+    public PdfRectangle GetDisplayBox(PdfDisplayBox box)
+    {
+        PdfRectangle media = Normalised(MediaBox);
+        if (box == PdfDisplayBox.MediaBox)
+        {
+            return media;
+        }
+
+        PdfRectangle crop = Normalised(CropBox);
+        double x1 = Math.Max(media.X1, crop.X1);
+        double y1 = Math.Max(media.Y1, crop.Y1);
+        double x2 = Math.Min(media.X2, crop.X2);
+        double y2 = Math.Min(media.Y2, crop.Y2);
+        return x2 > x1 && y2 > y1 ? new PdfRectangle(x1, y1, x2, y2) : media;
+    }
+
+    /// <summary>
+    /// Returns the transform from display space to user space (3.34.0, D-335).
+    /// Display space is the page as a viewer shows it: the
+    /// <paramref name="box"/> from <see cref="GetDisplayBox"/>, turned by
+    /// <see cref="Rotate"/>, with the origin at its lower-left corner, y up,
+    /// in points.
+    /// </summary>
+    /// <param name="box">The box the page is shown with.</param>
+    /// <returns>
+    /// A transform whose <see cref="Transform.TransformPoint"/> maps a display
+    /// point to the user-space point under it. Use it to place content (a
+    /// stamp, a watermark, a redaction box) where the viewer shows a position.
+    /// </returns>
+    /// <remarks>
+    /// The display width and height are the box's, swapped when the rotation
+    /// is 90 or 270 degrees. A <c>/Rotate</c> that is not a multiple of 90 is
+    /// taken at its nearest lower multiple, as the renderers do.
+    /// </remarks>
+    public Transform GetDisplayTransform(PdfDisplayBox box)
+    {
+        PdfRectangle b = GetDisplayBox(box);
+        int rotation = (((Rotate - (Rotate % 90)) % 360) + 360) % 360;
+        return rotation switch
+        {
+            90 => new Transform(0, 1, -1, 0, b.X1 + b.Width, b.Y1),
+            180 => new Transform(-1, 0, 0, -1, b.X1 + b.Width, b.Y1 + b.Height),
+            270 => new Transform(0, -1, 1, 0, b.X1, b.Y1 + b.Height),
+            _ => new Transform(1, 0, 0, 1, b.X1, b.Y1),
+        };
+    }
+
+    private static PdfRectangle Normalised(PdfRectangle r) =>
+        new PdfRectangle(Math.Min(r.X1, r.X2), Math.Min(r.Y1, r.Y2), Math.Max(r.X1, r.X2), Math.Max(r.Y1, r.Y2));
+
+    /// <summary>
     /// Gets the Resources dictionary for this page, or null when absent.
     /// PDF 32000-1:2008 §7.7.3.3, Table 30 — Resources.
     /// </summary>
@@ -317,13 +407,30 @@ public sealed class PdfPage
 
     // ── Inherited value helpers ───────────────────────────────────────────
 
-    private PdfRectangle GetInheritedBox(PdfName key)
-    {
-        PdfArray box = GetInheritedArray(key) ??
-            throw new PdfCorruptionException(
-                $"Required page entry /{key.Value} not found on page {PageNumber} or any ancestor.");
+    // 3.34.0 (#52f): US Letter, the size used for a page whose MediaBox is
+    // missing or unusable.
+    private static readonly PdfRectangle LetterBox = new PdfRectangle(0, 0, 612, 792);
 
-        return RectangleFromArray(box);
+    // The MediaBox, inherited when absent here. A missing box, or one that is
+    // not four finite numbers enclosing a non-empty area, gives US Letter
+    // (612 x 792 points) and a warning in PdfDocument.Warnings (3.34.0, #52f;
+    // before, reading the box threw PdfCorruptionException).
+    private PdfRectangle GetMediaBox()
+    {
+        PdfArray? box = GetInheritedArray(PdfName.MediaBox);
+        if (box is not null)
+        {
+            PdfRectangle rect = RectangleFromArray(box);
+            if (double.IsFinite(rect.X1) && double.IsFinite(rect.Y1) && double.IsFinite(rect.X2) && double.IsFinite(rect.Y2)
+                && rect.Width > 0 && rect.Height > 0)
+            {
+                return rect;
+            }
+        }
+
+        _warn?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Page {PageNumber}: the MediaBox is {(box is null ? "missing" : "invalid")}; US Letter (612 x 792 points) is used."));
+        return LetterBox;
     }
 
     private PdfArray? GetInheritedArray(PdfName key)

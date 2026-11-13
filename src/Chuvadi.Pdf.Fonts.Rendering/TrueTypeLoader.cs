@@ -712,7 +712,14 @@ public sealed class TrueTypeLoader
         return RectangleF.FromCorners(xMin, yMin, xMax, yMax);
     }
 
-    private Path BuildGlyphPath(int glyphId)
+    private Path BuildGlyphPath(int glyphId) => BuildGlyphPath(glyphId, 0);
+
+    // 3.34.0: `depth` counts composite nesting. A composite glyph that
+    // contains itself (directly or through others) recursed until the stack
+    // overflowed, which ends the process; past MaxCompositeDepth a component
+    // draws nothing, as in the hinted paths (found by Phase B, pdf.js
+    // recursiveCompositGlyf.pdf).
+    private Path BuildGlyphPath(int glyphId, int depth)
     {
         uint offset = GetGlyfOffset(glyphId);
 
@@ -728,7 +735,7 @@ public sealed class TrueTypeLoader
             return BuildSimpleGlyph(offset, numberOfContours);
         }
 
-        return BuildCompositeGlyph(offset);
+        return BuildCompositeGlyph(offset, depth);
     }
 
     // ── Simple glyph parsing ──────────────────────────────────────────────
@@ -1321,7 +1328,9 @@ public sealed class TrueTypeLoader
     }
     // ── Composite glyph ───────────────────────────────────────────────────
 
-    private Path BuildCompositeGlyph(uint offset)
+    private const int MaxCompositeDepth = 8;
+
+    private Path BuildCompositeGlyph(uint offset, int depth)
     {
         Path composite = new Path();
         uint pos = offset + 10; // Skip glyph header
@@ -1377,9 +1386,9 @@ public sealed class TrueTypeLoader
                 pos += 8;
             }
 
-            if (componentGlyphId >= 0 && componentGlyphId < _numGlyphs)
+            if (componentGlyphId >= 0 && componentGlyphId < _numGlyphs && depth < MaxCompositeDepth)
             {
-                Path componentPath = BuildGlyphPath(componentGlyphId);
+                Path componentPath = BuildGlyphPath(componentGlyphId, depth + 1);
                 AppendTranslatedPath(composite, componentPath, dx, dy);
             }
 

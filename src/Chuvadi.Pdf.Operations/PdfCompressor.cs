@@ -291,36 +291,39 @@ public static partial class PdfCompressor
         ImageLevelOptions? imageOptions = null,
         CompressionOptions? baseOptions = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(output);
-        baseOptions ??= new CompressionOptions();
-        imageOptions ??= new ImageLevelOptions();
-        if (!Enum.IsDefined(level))
+        return PdfWriteGuard.Run(document, "compressed", () =>
         {
-            throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level.");
-        }
-
-        if (IsImageLevel(level))
-        {
-            imageOptions.Validate(nameof(imageOptions));
-            CompressionSkipReason skip = EvaluateGuard(document, baseOptions);
-            if (skip != CompressionSkipReason.None)
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(output);
+            baseOptions ??= new CompressionOptions();
+            imageOptions ??= new ImageLevelOptions();
+            if (!Enum.IsDefined(level))
             {
-                return new CompressionResult { SkipReason = skip, Level = level };
+                throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level.");
             }
 
-            byte[] pages = BuildImageLevel(document, level, imageOptions.Dpi, imageOptions.Fills);
-            output.Write(pages, 0, pages.Length);
-            return new CompressionResult
+            if (IsImageLevel(level))
             {
-                Level = level,
-                ImageDpi = imageOptions.Dpi,
-                BelowReadableResolution = imageOptions.Dpi < ImageLevelOptions.ReadableDpi,
-            };
-        }
+                imageOptions.Validate(nameof(imageOptions));
+                CompressionSkipReason skip = EvaluateGuard(document, baseOptions);
+                if (skip != CompressionSkipReason.None)
+                {
+                    return new CompressionResult { SkipReason = skip, Level = level };
+                }
 
-        CompressionResult result = Compress(document, output, OptionsFor(level, baseOptions));
-        return result with { Level = level };
+                byte[] pages = BuildImageLevel(document, level, imageOptions.Dpi, imageOptions.Fills);
+                output.Write(pages, 0, pages.Length);
+                return new CompressionResult
+                {
+                    Level = level,
+                    ImageDpi = imageOptions.Dpi,
+                    BelowReadableResolution = imageOptions.Dpi < ImageLevelOptions.ReadableDpi,
+                };
+            }
+
+            CompressionResult result = Compress(document, output, OptionsFor(level, baseOptions));
+            return result with { Level = level };
+        });
     }
 
     // The image levels' default resolution, and the first rung of each in
@@ -376,192 +379,195 @@ public static partial class PdfCompressor
     public static CompressionResult Compress(
         PdfDocument document, Stream output, CompressionOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(output);
-        options ??= new CompressionOptions();
-
-        // ── 0. Safety guard ───────────────────────────────────────────────
-        // A full rewrite invalidates digital signatures and emits the document
-        // without its encryption. Such documents are skipped by default — no
-        // bytes are written to the output — so a batch run over a mixed corpus
-        // carries on instead of throwing; callers opt in per hazard to rewrite
-        // anyway.
-        CompressionSkipReason skip = EvaluateGuard(document, options);
-        if (skip != CompressionSkipReason.None)
+        return PdfWriteGuard.Run(document, "compressed", () =>
         {
-            return new CompressionResult { SkipReason = skip };
-        }
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(output);
+            options ??= new CompressionOptions();
 
-        PdfName[] effectiveRootKeys = options.RemoveDocumentInfo
-            ? new[] { PdfName.Root }
-            : RootKeys;
-
-        // ── 1. Reachability from the trailer ─────────────────────────────
-        Dictionary<int, PdfPrimitive> reachable = new();
-        foreach (PdfName key in effectiveRootKeys)
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            // ── 0. Safety guard ───────────────────────────────────────────────
+            // A full rewrite invalidates digital signatures and emits the document
+            // without its encryption. Such documents are skipped by default — no
+            // bytes are written to the output — so a batch run over a mixed corpus
+            // carries on instead of throwing; callers opt in per hazard to rewrite
+            // anyway.
+            CompressionSkipReason skip = EvaluateGuard(document, options);
+            if (skip != CompressionSkipReason.None)
             {
-                Collect(value, document.Objects, reachable);
+                return new CompressionResult { SkipReason = skip };
             }
-        }
 
-        // The object store loads lazily, so its cache cannot be used to
-        // count the source document's objects. The trailer's /Size (highest
-        // object number + 1, PDF 32000-1:2008 Table 15) gives the number of
-        // object slots; the difference against the reachable set counts the
-        // slots not carried over (orphans plus free entries).
-        int totalObjects = 0;
-        if (document.Trailer.TryGetValue(PdfName.Intern("Size"), out PdfPrimitive? sizeValue) &&
-            sizeValue is PdfInteger size)
-        {
-            totalObjects = size.Value - 1;
-        }
+            PdfName[] effectiveRootKeys = options.RemoveDocumentInfo
+                ? new[] { PdfName.Root }
+                : RootKeys;
 
-        // ── 2. Dense renumbering ──────────────────────────────────────────
-        Dictionary<int, int> remap = new(reachable.Count);
-        int next = 1;
-        foreach (int oldNumber in reachable.Keys)
-        {
-            remap[oldNumber] = next++;
-        }
+            // ── 1. Reachability from the trailer ─────────────────────────────
+            Dictionary<int, PdfPrimitive> reachable = new();
+            foreach (PdfName key in effectiveRootKeys)
+            {
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    Collect(value, document.Objects, reachable);
+                }
+            }
 
-        // ── 3. Copy with remapped references and stream reduction ────────
-        // Image placements (largest painted extent per image object) feed the
-        // optional downsample-to-DPI step.
-        Dictionary<int, (double WidthPts, double HeightPts)>? placements =
-            options.RecompressImages && options.DownsampleImagesToDpi > 0
-                ? ImagePlacementScanner.Scan(document)
-                : null;
+            // The object store loads lazily, so its cache cannot be used to
+            // count the source document's objects. The trailer's /Size (highest
+            // object number + 1, PDF 32000-1:2008 Table 15) gives the number of
+            // object slots; the difference against the reachable set counts the
+            // slots not carried over (orphans plus free entries).
+            int totalObjects = 0;
+            if (document.Trailer.TryGetValue(PdfName.Intern("Size"), out PdfPrimitive? sizeValue) &&
+                sizeValue is PdfInteger size)
+            {
+                totalObjects = size.Value - 1;
+            }
 
-        // Streams referenced as another image's /SMask must stay DeviceGray
-        // (PDF 32000-1:2008 §11.6.5.2) — the palette recoding would make them
-        // Indexed/DeviceRGB and viewers could drop the transparency.
-        HashSet<int> softMaskObjects = new HashSet<int>();
-        if (options.RecompressImages)
-        {
+            // ── 2. Dense renumbering ──────────────────────────────────────────
+            Dictionary<int, int> remap = new(reachable.Count);
+            int next = 1;
+            foreach (int oldNumber in reachable.Keys)
+            {
+                remap[oldNumber] = next++;
+            }
+
+            // ── 3. Copy with remapped references and stream reduction ────────
+            // Image placements (largest painted extent per image object) feed the
+            // optional downsample-to-DPI step.
+            Dictionary<int, (double WidthPts, double HeightPts)>? placements =
+                options.RecompressImages && options.DownsampleImagesToDpi > 0
+                    ? ImagePlacementScanner.Scan(document)
+                    : null;
+
+            // Streams referenced as another image's /SMask must stay DeviceGray
+            // (PDF 32000-1:2008 §11.6.5.2) — the palette recoding would make them
+            // Indexed/DeviceRGB and viewers could drop the transparency.
+            HashSet<int> softMaskObjects = new HashSet<int>();
+            if (options.RecompressImages)
+            {
+                foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
+                {
+                    if (entry.Value is PdfStream candidate
+                        && candidate.Dictionary.TryGetValue(
+                            PdfName.Intern("SMask"), out PdfPrimitive? smRef)
+                        && smRef is PdfReference reference)
+                    {
+                        softMaskObjects.Add(reference.ObjectId.ObjectNumber);
+                    }
+                }
+            }
+
+            int streamsCompressed = 0;
+            int imagesRecompressed = 0;
+            int contentStreamsMinified = 0;
+            List<PdfIndirectObject> objects = new(reachable.Count);
+            HashSet<int> contentStreamNumbers = CollectContentStreamNumbers(document);
+
             foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
             {
-                if (entry.Value is PdfStream candidate
-                    && candidate.Dictionary.TryGetValue(
-                        PdfName.Intern("SMask"), out PdfPrimitive? smRef)
-                    && smRef is PdfReference reference)
-                {
-                    softMaskObjects.Add(reference.ObjectId.ObjectNumber);
-                }
-            }
-        }
+                PdfPrimitive copy = DeepCopy(entry.Value, remap);
 
-        int streamsCompressed = 0;
-        int imagesRecompressed = 0;
-        int contentStreamsMinified = 0;
-        List<PdfIndirectObject> objects = new(reachable.Count);
-        HashSet<int> contentStreamNumbers = CollectContentStreamNumbers(document);
-
-        foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
-        {
-            PdfPrimitive copy = DeepCopy(entry.Value, remap);
-
-            if (copy is PdfStream stream)
-            {
-                bool isContent = contentStreamNumbers.Contains(entry.Key) || IsFormXObject(stream.Dictionary);
-                PdfStream? minified = isContent ? TryMinifyContentStream(stream, options) : null;
-                if (minified is not null)
+                if (copy is PdfStream stream)
                 {
-                    copy = minified;
-                    contentStreamsMinified++;
-                }
-                else
-                {
-                    (double WidthPts, double HeightPts)? placement = null;
-                    if (placements is not null
-                        && placements.TryGetValue(entry.Key, out (double WidthPts, double HeightPts) extent))
+                    bool isContent = contentStreamNumbers.Contains(entry.Key) || IsFormXObject(stream.Dictionary);
+                    PdfStream? minified = isContent ? TryMinifyContentStream(stream, options) : null;
+                    if (minified is not null)
                     {
-                        placement = extent;
-                    }
-
-                    PdfStream? recompressed = options.RecompressImages
-                        ? TryRecompressImage(
-                            stream, document.Objects, options, placement,
-                            isSoftMask: softMaskObjects.Contains(entry.Key))
-                        : null;
-                    if (recompressed is not null)
-                    {
-                        copy = recompressed;
-                        imagesRecompressed++;
+                        copy = minified;
+                        contentStreamsMinified++;
                     }
                     else
                     {
-                        PdfStream? flated = TryFlateRawStream(stream, options);
-                        if (flated is not null)
+                        (double WidthPts, double HeightPts)? placement = null;
+                        if (placements is not null
+                            && placements.TryGetValue(entry.Key, out (double WidthPts, double HeightPts) extent))
                         {
-                            copy = flated;
-                            streamsCompressed++;
+                            placement = extent;
+                        }
+
+                        PdfStream? recompressed = options.RecompressImages
+                            ? TryRecompressImage(
+                                stream, document.Objects, options, placement,
+                                isSoftMask: softMaskObjects.Contains(entry.Key))
+                            : null;
+                        if (recompressed is not null)
+                        {
+                            copy = recompressed;
+                            imagesRecompressed++;
+                        }
+                        else
+                        {
+                            PdfStream? flated = TryFlateRawStream(stream, options);
+                            if (flated is not null)
+                            {
+                                copy = flated;
+                                streamsCompressed++;
+                            }
                         }
                     }
                 }
+
+                objects.Add(new PdfIndirectObject(new PdfObjectId(remap[entry.Key], 0), copy));
             }
 
-            objects.Add(new PdfIndirectObject(new PdfObjectId(remap[entry.Key], 0), copy));
-        }
-
-        // ── 4. New trailer ────────────────────────────────────────────────
-        PdfDictionary trailer = new();
-        foreach (PdfName key in effectiveRootKeys)
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            // ── 4. New trailer ────────────────────────────────────────────────
+            PdfDictionary trailer = new();
+            foreach (PdfName key in effectiveRootKeys)
             {
-                trailer.Set(key, RemapPrimitive(value, remap));
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    trailer.Set(key, RemapPrimitive(value, remap));
+                }
             }
-        }
-        if (document.Trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? fileId))
-        {
-            trailer.Set(PdfName.Intern("ID"), DeepCopy(fileId, remap));
-        }
+            if (document.Trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? fileId))
+            {
+                trailer.Set(PdfName.Intern("ID"), DeepCopy(fileId, remap));
+            }
 
-        // ── 5. Optional stripping, then drop now-orphaned objects ─────────
-        // Each opt-in flag removes a catalog or page entry; the streams and
-        // dictionaries thereby made unreachable are swept by the garbage
-        // collector that follows. RemoveDocumentInfo needs no strip pass here —
-        // the Info dictionary is simply not collected as a root above.
-        if (StripRequested(options))
-        {
-            StripCategories(objects, trailer, options);
-            GarbageCollect(objects, trailer);
-        }
+            // ── 5. Optional stripping, then drop now-orphaned objects ─────────
+            // Each opt-in flag removes a catalog or page entry; the streams and
+            // dictionaries thereby made unreachable are swept by the garbage
+            // collector that follows. RemoveDocumentInfo needs no strip pass here —
+            // the Info dictionary is simply not collected as a root above.
+            if (StripRequested(options))
+            {
+                StripCategories(objects, trailer, options);
+                GarbageCollect(objects, trailer);
+            }
 
-        // Orphans unreachable from the trailer plus anything stripped above.
-        // Captured before deduplication so byte-identical merges are reported
-        // only in DuplicatesRemoved rather than being double-counted here.
-        int objectsRemoved = Math.Max(0, totalObjects - objects.Count);
+            // Orphans unreachable from the trailer plus anything stripped above.
+            // Captured before deduplication so byte-identical merges are reported
+            // only in DuplicatesRemoved rather than being double-counted here.
+            int objectsRemoved = Math.Max(0, totalObjects - objects.Count);
 
-        // ── 6. Merge byte-identical objects, then densify numbering ──────
-        PdfDictionary deduped = Deduplicate(objects, trailer, out int duplicatesRemoved);
-        trailer = Densify(objects, deduped);
+            // ── 6. Merge byte-identical objects, then densify numbering ──────
+            PdfDictionary deduped = Deduplicate(objects, trailer, out int duplicatesRemoved);
+            trailer = Densify(objects, deduped);
 
-        SynthesizedMetadata synthesized = SynthesizedMetadata.All;
-        if (options.RemoveDocumentInfo)
-        {
-            synthesized &= ~SynthesizedMetadata.Info;
-        }
-        if (options.RemoveMetadata)
-        {
-            synthesized &= ~SynthesizedMetadata.Metadata;
-        }
+            SynthesizedMetadata synthesized = SynthesizedMetadata.All;
+            if (options.RemoveDocumentInfo)
+            {
+                synthesized &= ~SynthesizedMetadata.Info;
+            }
+            if (options.RemoveMetadata)
+            {
+                synthesized &= ~SynthesizedMetadata.Metadata;
+            }
 
-        // Object streams + a compressed cross-reference stream (PDF 1.5+) give
-        // the largest lossless structural win, so the compressor enables them by
-        // default. Plain document saves via PdfWriter.Write remain classic xref.
-        PdfWriter.Write(output, objects, trailer, null, synthesized, XrefStyle.Stream);
+            // Object streams + a compressed cross-reference stream (PDF 1.5+) give
+            // the largest lossless structural win, so the compressor enables them by
+            // default. Plain document saves via PdfWriter.Write remain classic xref.
+            PdfWriter.Write(output, objects, trailer, null, synthesized, XrefStyle.Stream);
 
-        return new CompressionResult
-        {
-            ObjectsRemoved = objectsRemoved,
-            StreamsCompressed = streamsCompressed,
-            ImagesRecompressed = imagesRecompressed,
-            DuplicatesRemoved = duplicatesRemoved,
-            ContentStreamsMinified = contentStreamsMinified,
-        };
+            return new CompressionResult
+            {
+                ObjectsRemoved = objectsRemoved,
+                StreamsCompressed = streamsCompressed,
+                ImagesRecompressed = imagesRecompressed,
+                DuplicatesRemoved = duplicatesRemoved,
+                ContentStreamsMinified = contentStreamsMinified,
+            };
+        });
     }
 
     private static readonly PdfName[] RootKeys =

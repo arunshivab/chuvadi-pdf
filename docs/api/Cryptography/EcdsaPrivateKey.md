@@ -41,6 +41,14 @@ BigInteger D
 
 The private scalar d.
 
+### `PublicKey`
+
+```csharp
+EcdsaPublicKey PublicKey
+```
+
+The corresponding ECDSA public key (Q = d·G).
+
 ## Methods
 
 ### `FromPkcs8`

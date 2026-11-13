@@ -92,6 +92,14 @@ Validity Validity => Tbs.Validity
 
 Convenience accessor for the validity period.
 
+### `IsSelfIssued`
+
+```csharp
+bool IsSelfIssued
+```
+
+True when this certificate is self-issued (Subject == Issuer).
+
 ## Methods
 
 ### `Decode`

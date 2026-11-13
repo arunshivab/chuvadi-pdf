@@ -2,7 +2,7 @@
 
 **Class** in `Chuvadi.Pdf.Redaction` (Redaction)
 
-Applies true PHI-safe redactions to a PDF document. Text-showing operators (Tj, TJ, ', '') whose visible position falls inside any redaction rectangle are permanently removed from the content stream, then the area is overpainted with an opaque rectangle for visual indication.
+Applies true PHI-safe redactions to a PDF document: what lies under a redaction rectangle (or matches a text pattern) is removed from the file, not just covered, and the area is then overpainted with an opaque rectangle (`RedactionOptions.DrawOverlay`).
 
 ```csharp
 public static class Redactor
@@ -10,11 +10,17 @@ public static class Redactor
 
 ## Remarks
 
-The principle: cover-up alone is not redaction. Drawing a black rectangle on top of text leaves the text in the content stream where Ctrl+A copy reveals it. `Redactor` removes the text from the content stream itself and only then paints the overlay rectangle. Conservative principle: when in doubt, REDACT. If a TJ array contains any string whose position is inside a redaction rectangle, the entire TJ is dropped. Over-redaction is preferred over leaking PHI. Limitations: 
+The principle: cover-up alone is not redaction. A black rectangle drawn on top of text leaves the text in the content stream, where copying or text extraction reveals it. `Redactor` removes the content itself:  
  
-- Phase 2 uses approximate font-metric width (Helvetica baseline). Exact metric width requires loading and parsing embedded font tables. 
-- Image content is not redacted (Phase 3). 
-- Form XObjects are not recursed into (Phase 3).
+- Text: each glyph whose box meets a rectangle is removed, using the font's own glyph widths; the glyphs around it stay, with a gap of the removed width (or `RedactionRect.ReplacementText`). 
+- Images: the covered pixels are blanked in a copy of the image and the rest is kept; an image that cannot be blanked (or is wholly covered) is removed, and an image no longer drawn leaves the file. 
+- Vector paths: the covered area is cut out of a painted path (`VectorRedactionMode.SubtractPrecise`, the default); a path that cannot be cut exactly is removed whole. 
+- Form XObjects and tiling patterns are rewritten the same way, in every place they are drawn. 
+- Annotations whose rectangle meets a redaction are removed with the objects only they use; a form widget there has its field value and appearance cleared. 
+- Bookmarks and XMP metadata (3.34.0): the matches of patterns that apply to the whole document (no page list) are removed from bookmark titles and from the XMP packet. The redacted file has no document information dictionary (`/Info`). 
+- Alternate text that describes removed content (`/ActualText`, `/Alt`, `/E`, in marked content and in the structure tree) is removed.  
+
+ Conservative principle: when in doubt, remove. Over-redaction is preferred over leaking PHI. `ApplyWithReport` returns what was removed on each page; `RedactionVerifier` checks an output independently.
 
 ## Methods
 
@@ -27,6 +33,24 @@ static void Apply(Stream output, PdfDocument document, RedactionOptions options)
 ```
 
 Applies the redactions in `options` to `document` and writes the result to `output`.
+
+### `ApplyWithReport`
+
+__static__
+
+```csharp
+static RedactionReport ApplyWithReport(Stream output, PdfDocument document, RedactionOptions options)
+```
+
+Applies the redactions in `options` to `document`, writes the result to `output`, and reports what was removed on each page (3.34.0, D-335). The output is the same as `Apply` writes.
+
+**Parameters**
+
+- `output` — The stream to write the redacted PDF to.
+- `document` — The source document.
+- `options` — The rectangles and patterns to redact.
+
+**Returns:** One entry per rewritten page, in page order.
 
 ---
 

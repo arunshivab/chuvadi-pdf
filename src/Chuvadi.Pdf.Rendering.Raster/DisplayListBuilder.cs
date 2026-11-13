@@ -244,6 +244,46 @@ public static class DisplayListBuilder
         // 3.31 (D-146): which annotations are drawn.
         internal AnnotationMode Annotations { get; init; } = AnnotationMode.View;
 
+        // 3.34.0 (Phase B N10): fonts read once per page, keyed by the font
+        // dictionary and shared with the workers for forms, patterns, groups
+        // and Type 3 glyphs. Before, each form's worker started empty and
+        // decoded the font program again for every form it drew (a page of
+        // 375 forms took over a second; a real file hit the 30 s limit). The
+        // per-worker caches stay keyed by resource name for speed.
+        private SharedFonts _shared = new SharedFonts();
+
+        private sealed class SharedFonts
+        {
+            internal Dictionary<PdfDictionary, FontRenderer?> Renderers { get; } = new Dictionary<PdfDictionary, FontRenderer?>(ReferenceEqualityComparer.Instance);
+
+            internal Dictionary<PdfDictionary, Type1FontRenderer?> Type1 { get; } = new Dictionary<PdfDictionary, Type1FontRenderer?>(ReferenceEqualityComparer.Instance);
+
+            internal Dictionary<PdfDictionary, RenderableFont?> Std14 { get; } = new Dictionary<PdfDictionary, RenderableFont?>(ReferenceEqualityComparer.Instance);
+
+            internal Dictionary<PdfDictionary, Chuvadi.Pdf.Fonts.PdfFont?> PdfFonts { get; } = new Dictionary<PdfDictionary, Chuvadi.Pdf.Fonts.PdfFont?>(ReferenceEqualityComparer.Instance);
+        }
+
+        // Looks the current font up in the shared cache, or resolves it and
+        // remembers it there (a font with no dictionary is not shared).
+        private T? Shared<T>(Dictionary<PdfDictionary, T?> cache, Func<T?> resolve)
+            where T : class
+        {
+            PdfDictionary? fontDict = ResolveFontDict();
+            if (fontDict is null)
+            {
+                return resolve();
+            }
+
+            if (cache.TryGetValue(fontDict, out T? found))
+            {
+                return found;
+            }
+
+            T? value = resolve();
+            cache[fontDict] = value;
+            return value;
+        }
+
         public Worker(
             PdfObjectStore objects, double hintingScale = 0.0, bool lightHinting = false,
             bool autohintFallback = true, OptionalContentVisibility? visibility = null)
@@ -790,6 +830,35 @@ public static class DisplayListBuilder
             }
         }
 
+        // 3.34.0 (Phase B test bench N13): image data that ends early is
+        // completed with zero samples and drawn, with a warning, as Poppler and
+        // MuPDF draw it; before, the image was skipped without a word. Data
+        // with nothing in it, or a size past what an array can hold, is left
+        // as it is (the caller then skips the image).
+        private byte[] PadShortSamples(byte[] samples, long needed)
+        {
+            if (samples.Length == 0 || samples.Length >= needed || needed > Array.MaxLength)
+            {
+                return samples;
+            }
+
+            PdfWorkScope.ChargeMemory(needed);
+            _reporter.Report(
+                PdfWarningKind.StreamDamaged,
+                "image",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"The image data ends early ({samples.Length} of {needed} bytes); the missing samples are drawn as zero."));
+            byte[] padded = new byte[needed];
+            Buffer.BlockCopy(samples, 0, padded, 0, samples.Length);
+            return padded;
+        }
+
+        // 3.34.0 (#52a): content cut short by syntax damage.
+        public void ContentDamaged(string reason) =>
+            _reporter.Report(
+                PdfWarningKind.StreamDamaged,
+                "content " + (_xobjectSubject ?? "(page)"),
+                reason + " What came before is drawn; the rest is left out.");
+
         // A curve operator with no current point at all (no m before it):
         // skipped, as Poppler does ("No current point"), now with a warning.
         private void SkipWithoutCurrentPoint(string op) =>
@@ -923,6 +992,7 @@ public static class DisplayListBuilder
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._reporter = _reporter;
+            sub._shared = _shared;
 
             byte[] content;
             try
@@ -937,6 +1007,21 @@ public static class DisplayListBuilder
             if (content.Length > 0)
             {
                 sub._resources = groupResources;
+
+                // 3.34.0: the group paints only inside its /BBox (§8.10.1);
+                // outside it the mask takes the backdrop /BC. Before, the
+                // group's content was not clipped (found by the pdf.js run,
+                // issue7891_bc1: the mask's text showed outside the box).
+                double[]? bbox = ReadRectEntry(groupStream.Dictionary, "BBox");
+                if (bbox is not null)
+                {
+                    double x0 = Math.Min(bbox[0], bbox[2]);
+                    double y0 = Math.Min(bbox[1], bbox[3]);
+                    sub.AppendRectangle(x0, y0, Math.Abs(bbox[2] - bbox[0]), Math.Abs(bbox[3] - bbox[1]));
+                    sub.SetClip(evenOdd: false);
+                    sub.EndPath();
+                }
+
                 ContentStreamWalker.Walk(content, sub);
             }
 
@@ -1262,8 +1347,10 @@ public static class DisplayListBuilder
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._reporter = _reporter;
+            sub._shared = _shared;
             sub._state.FillAlpha = _state.FillAlpha;
             sub._state.StrokeAlpha = _state.StrokeAlpha;
+            sub._groupAlpha = _groupAlpha;
             if (ReadIntEntry(dict, "PaintType") == 2)
             {
                 sub._state.FillColor = underlying;
@@ -1369,9 +1456,19 @@ public static class DisplayListBuilder
         }
 
         // Paint colours with the constant ExtGState alpha (/ca, /CA) folded in.
-        private ColorF EffectiveFill => ApplyAlpha(_state.FillColor, _state.FillAlpha);
+        private ColorF EffectiveFill => ApplyAlpha(_state.FillColor, _state.FillAlpha * _groupAlpha);
 
-        private ColorF EffectiveStroke => ApplyAlpha(_state.StrokeColor, _state.StrokeAlpha);
+        private ColorF EffectiveStroke => ApplyAlpha(_state.StrokeColor, _state.StrokeAlpha * _groupAlpha);
+
+        // 3.34.0: the constant alpha (/ca) in effect where a transparency-group
+        // form is drawn (§11.6.6), applied to everything the group paints. The
+        // group's own content starts at alpha 1, so an /ca inside it does not
+        // undo the outer one. This multiplies each painted object, which is
+        // exact unless objects inside the group overlap (a full group would
+        // be composited off-screen first). Before, a group drawn at /ca 0.3
+        // whose content set /ca 1 painted fully opaque (found with the
+        // Phase B test-bench file safedocs-0206).
+        private double _groupAlpha = 1.0;
 
         private static ColorF ApplyAlpha(ColorF color, double alpha)
         {
@@ -1413,7 +1510,7 @@ public static class DisplayListBuilder
             {
                 Path transformed = TransformPath(_currentPath, _state.Ctm);
                 StrokeStyle style = BuildStrokeStyle();
-                EmitOp(new StrokePathOp(transformed, style, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                EmitOp(new StrokePathOp(transformed, style, SnapshotClips()) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask, Pen = Pen(), UserWidth = _state.LineWidth, UserDash = _state.DashPattern, UserDashOffset = _state.DashOffset });
             }
 
             ApplyDeferredClip();
@@ -1448,7 +1545,7 @@ public static class DisplayListBuilder
                 else if (_state.StrokeValid)
                 {
                     StrokeStyle style = BuildStrokeStyle();
-                    EmitOp(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+                    EmitOp(new StrokePathOp(transformed, style, snapshot) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask, Pen = Pen(), UserWidth = _state.LineWidth, UserDash = _state.DashPattern, UserDashOffset = _state.DashOffset });
                 }
             }
 
@@ -1517,6 +1614,15 @@ public static class DisplayListBuilder
                 DashOffset = _state.DashOffset * scale,
                 Color = EffectiveStroke,
             };
+        }
+
+        // 3.34.0 (#23): the pen of a stroke, the CTM's linear part (see
+        // StrokePathOp.Pen); the stroke ops also carry the user-space width
+        // and dash.
+        private Transform Pen()
+        {
+            Transform ctm = _state.Ctm;
+            return new Transform(ctm.A, ctm.B, ctm.C, ctm.D, 0, 0);
         }
 
         private IReadOnlyList<ClipPath>? SnapshotClips()
@@ -1820,11 +1926,12 @@ public static class DisplayListBuilder
             // Non-embedded Standard-14 fonts (Helvetica/Times/Courier/Symbol/
             // ZapfDingbats) carry no font program; their glyph outlines come
             // from the embedded substitute bundle via RenderableFont.
-            RenderableFont? std14 = renderer is null ? GetStd14Font() : null;
-
             // Embedded Type1 (FontFile) programs, parsed separately from the
-            // TrueType path.
-            Type1FontRenderer? type1 = renderer is null && std14 is null ? GetType1Font() : null;
+            // TrueType path. 3.34.0 (Phase B N5): tried before the standard-14
+            // outlines, so an embedded font with a standard-14 name (an Adobe
+            // "Times-Roman" subset) draws its own glyphs, not the substitute.
+            Type1FontRenderer? type1 = renderer is null ? GetType1Font() : null;
+            RenderableFont? std14 = renderer is null && type1 is null ? GetStd14Font() : null;
 
             Chuvadi.Pdf.Fonts.PdfFont? pdfFont = GetPdfFont();
             bool symbolic = IsSymbolicFont();
@@ -1842,7 +1949,7 @@ public static class DisplayListBuilder
                 {
                     int gid = ResolveEmbeddedGid(renderer, pdfFont, code, symbolic);
                     GlyphOutline glyph = SafeOutline(renderer, gid);
-                    GlyphOutline? hintedGlyph = TryHint(renderer, gid);
+                    GlyphOutline? hintedGlyph = TryHint(renderer, gid, out double hintPixels);
                     GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
@@ -1860,7 +1967,7 @@ public static class DisplayListBuilder
                     }
 
                     double programAdvance = hintedGlyph is not null && !_lightHinting
-                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
+                        ? hintedGlyph.Metrics.AdvanceWidth / hintPixels
                         : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
                     advance = ResolveSimpleAdvance(code, programAdvance);
                 }
@@ -2002,6 +2109,7 @@ public static class DisplayListBuilder
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._reporter = _reporter;
+            sub._shared = _shared;
             sub._resources = type3.Resources ?? _resources;
             sub.SeedType3Fill(fill);
 
@@ -2090,13 +2198,22 @@ public static class DisplayListBuilder
             FontRenderer renderer, Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code, bool symbolic) =>
             EmbeddedGlyphs.ForSimpleCode(renderer, pdfFont, code, symbolic);
 
-        // Decodes a single content-stream code to one character via the font's
-        // encoding/ToUnicode, for substitute (Standard-14) rendering. Falls back
-        // to Latin-1 interpretation of the raw byte.
+        // Decodes a single content-stream code to the character whose glyph a
+        // substitute (Standard-14) font draws. 3.34.0 (#37): the font's
+        // encoding (its glyph name) comes first, as for embedded TrueType
+        // fonts (D-175) and as Poppler and MuPDF do; ToUnicode, which is for
+        // extraction, is used only when the encoding gives no character.
+        // Falls back to Latin-1 interpretation of the raw byte.
         private static char DecodeOneChar(Chuvadi.Pdf.Fonts.PdfFont? pdfFont, int code)
         {
             if (pdfFont is not null)
             {
+                char byEncoding = pdfFont.GetEncodingCharacter(code);
+                if (byEncoding != '\0')
+                {
+                    return byEncoding;
+                }
+
                 string decoded = pdfFont.DecodeCode(code);
                 if (decoded.Length > 0)
                 {
@@ -2229,7 +2346,7 @@ public static class DisplayListBuilder
                 else
                 {
                     GlyphOutline glyph = SafeOutline(renderer, code);
-                    GlyphOutline? hintedGlyph = TryHint(renderer, code);
+                    GlyphOutline? hintedGlyph = TryHint(renderer, code, out double hintPixels);
                     GlyphOutline scaled = hintedGlyph ?? glyph.Scale(_state.FontSize);
 
                     if (emit && !scaled.IsEmpty && _state.FillValid)
@@ -2247,7 +2364,7 @@ public static class DisplayListBuilder
                     }
 
                     advance = hintedGlyph is not null && !_lightHinting
-                        ? hintedGlyph.Metrics.AdvanceWidth / _hintingScale
+                        ? hintedGlyph.Metrics.AdvanceWidth / hintPixels
                         : glyph.Metrics.AdvanceWidthAt(_state.FontSize);
                 }
 
@@ -2540,14 +2657,35 @@ public static class DisplayListBuilder
             }
         }
 
-        private GlyphOutline? TryHint(FontRenderer renderer, int glyphId)
+        // Grid-fits one glyph. Ordinary text is hinted at Tf, as in 3.33.0.
+        // When the text matrix and the CTM scale it by more than 2 or less
+        // than 0.5 (a page that sets 1 Tf and scales with Tm, say), it is
+        // hinted at the size it is really drawn instead, not at one pixel
+        // (D-377). A rotated, skewed or unevenly scaled matrix is not
+        // hinted, because the pixel grid no longer lines up with the glyph.
+        // The outline comes back in glyph space at Tf, and pixelsPerUnit is
+        // what to divide the hinted advance by.
+        // Within this range of text-matrix-and-CTM scale, text is hinted at
+        // Tf (3.33.0's size); outside it, at the drawn size (D-377).
+        private const double MinTfHintingScale = 0.5;
+        private const double MaxTfHintingScale = 2.0;
+
+        private GlyphOutline? TryHint(FontRenderer renderer, int glyphId, out double pixelsPerUnit)
         {
+            pixelsPerUnit = 0.0;
             if (_hintingScale <= 0.0)
             {
                 return null;
             }
 
-            int ppem = (int)Math.Round(_state.FontSize * _hintingScale);
+            double drawScale = UniformTextScale(_textMatrix.Multiply(_state.Ctm));
+            if (drawScale <= 0.0)
+            {
+                return null;
+            }
+
+            double sizeScale = drawScale > MaxTfHintingScale || drawScale < MinTfHintingScale ? drawScale : 1.0;
+            int ppem = (int)Math.Round(_state.FontSize * sizeScale * _hintingScale);
 
             if (ppem <= 0)
             {
@@ -2569,11 +2707,42 @@ public static class DisplayListBuilder
                 return null;
             }
 
-            // Device pixels -> PDF user space, so the painter's device scale
-            // restores the fitted positions instead of compounding them.
-            Transform toUserSpace = Transform.CreateScale(1.0 / _hintingScale);
-            Path userSpace = TransformPath(hinted.Outline, toUserSpace);
-            return new GlyphOutline(userSpace, hinted.Metrics);
+            // Device pixels -> glyph space at Tf, so the text matrix, the CTM
+            // and the painter's device scale restore the fitted positions
+            // instead of compounding them.
+            pixelsPerUnit = sizeScale * _hintingScale;
+            Transform toGlyphSpace = Transform.CreateScale(1.0 / pixelsPerUnit);
+            Path glyphSpace = TransformPath(hinted.Outline, toGlyphSpace);
+            return new GlyphOutline(glyphSpace, hinted.Metrics);
+        }
+
+        // The vertical scale of a text-to-user matrix when it is an even
+        // scale (with or without a mirror), or 0 when it rotates, skews or
+        // stretches. A stretch of up to 2% still counts as even: Word and
+        // other office writers set text with matrices such as
+        // [0.9981 0 0 1], and the grid then drifts by at most 2% of the em.
+        private static double UniformTextScale(Transform m)
+        {
+            double sx = Math.Abs(m.A);
+            double sy = Math.Abs(m.D);
+            double largest = Math.Max(sx, sy);
+            if (largest <= 0.0 || double.IsNaN(largest) || double.IsInfinity(largest))
+            {
+                return 0.0;
+            }
+
+            double skewTolerance = largest * 1e-3;
+            if (Math.Abs(m.B) > skewTolerance || Math.Abs(m.C) > skewTolerance)
+            {
+                return 0.0;
+            }
+
+            if (Math.Abs(sx - sy) > largest * 0.02)
+            {
+                return 0.0;
+            }
+
+            return sy;
         }
 
         // The current composite font's /CIDToGIDMap stream as CID → GID, or
@@ -2622,7 +2791,7 @@ public static class DisplayListBuilder
                 return cached;
             }
 
-            FontRenderer? renderer = ResolveFontRenderer();
+            FontRenderer? renderer = Shared(_shared.Renderers, ResolveFontRenderer);
             _fontCache[_state.FontName] = renderer;
             return renderer;
         }
@@ -2639,7 +2808,7 @@ public static class DisplayListBuilder
                 return cached;
             }
 
-            RenderableFont? font = ResolveStd14Font();
+            RenderableFont? font = Shared(_shared.Std14, ResolveStd14Font);
             _std14FontCache[_state.FontName] = font;
             return font;
         }
@@ -2765,6 +2934,9 @@ public static class DisplayListBuilder
             };
         }
 
+        private static bool IsType1Program(byte[] program) =>
+            program.Length >= 2 && ((program[0] == (byte)'%' && program[1] == (byte)'!') || (program[0] == 0x80 && program[1] == 0x01));
+
         private Type1FontRenderer? GetType1Font()
         {
             if (string.IsNullOrEmpty(_state.FontName))
@@ -2777,7 +2949,7 @@ public static class DisplayListBuilder
                 return cached;
             }
 
-            Type1FontRenderer? font = ResolveType1Font();
+            Type1FontRenderer? font = Shared(_shared.Type1, ResolveType1Font);
             _type1Cache[_state.FontName] = font;
             return font;
         }
@@ -2811,10 +2983,17 @@ public static class DisplayListBuilder
 
             try
             {
-                return Type1FontRenderer.Create(fontFile, fd, _objects);
+                Type1FontRenderer? created = Type1FontRenderer.Create(fontFile, fd, _objects);
+                if (created is null)
+                {
+                    _reporter.Report(PdfWarningKind.FontSubstituted, "font /" + _state.FontName, "the embedded Type 1 font program could not be read; the text is drawn with a substitute font");
+                }
+
+                return created;
             }
             catch (System.Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
+                _reporter.Report(PdfWarningKind.FontSubstituted, "font /" + _state.FontName, "the embedded Type 1 font program could not be read (" + abortCheck.Message + "); the text is drawn with a substitute font");
                 return null;
             }
         }
@@ -2831,7 +3010,7 @@ public static class DisplayListBuilder
                 return cached;
             }
 
-            Chuvadi.Pdf.Fonts.PdfFont? font = ResolvePdfFont();
+            Chuvadi.Pdf.Fonts.PdfFont? font = Shared(_shared.PdfFonts, ResolvePdfFont);
             _pdfFontCache[_state.FontName] = font;
             return font;
         }
@@ -2982,7 +3161,33 @@ public static class DisplayListBuilder
 
                 if (fontStream is not null)
                 {
-                    return ContentStreamLoader.Decode(fontStream);
+                    try
+                    {
+                        byte[] program = ContentStreamLoader.Decode(fontStream);
+
+                        // 3.34.0 (Phase B N5): a Type 1 program (PFA "%!" or
+                        // PFB) is drawn by the Type 1 renderer, not parsed as
+                        // TrueType here; before, that parse failed with a
+                        // misleading "substitute" warning, and a font with a
+                        // standard-14 name then got the substitute outlines.
+                        if (key == "FontFile" && IsType1Program(program))
+                        {
+                            return null;
+                        }
+
+                        return program;
+                    }
+                    catch (FilterException damaged)
+                    {
+                        // 3.34.0 (#52c): a damaged font program is treated as
+                        // not embedded, so a substitute draws the text. Before,
+                        // the page failed (pdf.js issue11651).
+                        _reporter.Report(
+                            PdfWarningKind.StreamDamaged,
+                            "font program " + WarningReporter.Describe(key, ffRef ?? PdfNull.Value),
+                            damaged.Message + " The font is drawn with a substitute.");
+                        return null;
+                    }
                 }
             }
 
@@ -3069,6 +3274,114 @@ public static class DisplayListBuilder
             }
         }
 
+        /// <inheritdoc />
+        public void InlineImage(PdfDictionary dictionary, byte[] data)
+        {
+            // 3.34.0 (Phase B N4): inline images are drawn through the image
+            // XObject path. Before, they were not drawn at all.
+            PdfDictionary image = WithResourceColorSpace(dictionary);
+            string? outerSubject = _xobjectSubject;
+            _xobjectSubject = "(inline)";
+            try
+            {
+                EmitImageXObject(new PdfStream(image, data));
+            }
+            finally
+            {
+                _xobjectSubject = outerSubject;
+            }
+        }
+
+        // An inline image may name its colour space in the resources'
+        // /ColorSpace (§8.9.7); the named entry is put in its place.
+        private PdfDictionary WithResourceColorSpace(PdfDictionary image)
+        {
+            if (!image.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? cs)
+                || cs is not PdfName name
+                || ResolvedColorSpace.Parse(name, _objects) is not null
+                || _resources is null
+                || !_resources.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? spacesRef)
+                || _objects.ResolveAs<PdfDictionary>(spacesRef ?? PdfNull.Value) is not PdfDictionary spaces
+                || !spaces.TryGetValue(name, out PdfPrimitive? entry)
+                || entry is null)
+            {
+                return image;
+            }
+
+            PdfDictionary copy = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> pair in image)
+            {
+                copy.Set(pair.Key, pair.Value);
+            }
+
+            copy.Set(PdfName.Intern("ColorSpace"), _objects.Resolve(entry));
+            return copy;
+        }
+
+        // The encoded JPEG bytes of a DCT stream. 3.34.0: filters before
+        // DCTDecode in a chain ([/FlateDecode /DCTDecode]) are decoded first;
+        // before, the still-compressed bytes were taken as the JPEG.
+        private byte[] CodecBytes(PdfStream stream)
+        {
+            if (stream.Filter is not PdfArray { Count: > 1 } filters)
+            {
+                return stream.RawBytes;
+            }
+
+            PdfDictionary outer = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> pair in stream.Dictionary)
+            {
+                outer.Set(pair.Key, pair.Value);
+            }
+
+            outer.Set(PdfName.Filter, new PdfArray(Prefix(filters)));
+            if (stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms)
+                && _objects.Resolve(parms) is PdfArray { Count: > 1 } parmList)
+            {
+                outer.Set(PdfName.Intern("DecodeParms"), new PdfArray(Prefix(parmList)));
+            }
+
+            return ContentStreamLoader.Decode(new PdfStream(outer, stream.RawBytes), _objects);
+        }
+
+        // The gray samples of a one-component JPEG of the given size, or none
+        // when it is not one (the caller then leaves the mask off).
+        private static byte[] JpegGraySamples(byte[] jpeg, int width, int height)
+        {
+            if (jpeg.Length < 2 || jpeg[0] != 0xFF || jpeg[1] != 0xD8)
+            {
+                return Array.Empty<byte>();
+            }
+
+            ImageFrame gray = JpegDecoder.Decode(jpeg);
+            if (gray.Width != width || gray.Height != height || gray.OriginalFormat != ImageColorFormat.Gray8)
+            {
+                return Array.Empty<byte>();
+            }
+
+            byte[] samples = new byte[(long)width * height];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    samples[((long)y * width) + x] = gray.Pixels.GetPixelBgra(x, y).B;
+                }
+            }
+
+            return samples;
+        }
+
+        private static List<PdfPrimitive> Prefix(PdfArray array)
+        {
+            List<PdfPrimitive> items = new List<PdfPrimitive>(array.Count - 1);
+            for (int i = 0; i < array.Count - 1; i++)
+            {
+                items.Add(array[i]);
+            }
+
+            return items;
+        }
+
         // Image-format filters (DCTDecode/JPXDecode) carry the encoded image
         // bytes directly; they must not go through the sample-filter pipeline.
         private static bool StreamIsJpegOrJpx(PdfStream stream)
@@ -3104,10 +3417,20 @@ public static class DisplayListBuilder
         private void EmitImageXObject(PdfStream xobjStream)
         {
             byte[] imageBytes;
+            string imageSubject = "image " + (_xobjectSubject ?? "(direct)");
 
+            // 3.34.0 (Phase B N7): an image format not supported yet is
+            // reported, not skipped in silence.
+            if (LastFilterIs(xobjStream, "JPXDecode"))
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "JPEG 2000 (JPXDecode) images are not supported yet; the image is skipped.");
+                return;
+            }
+
+            bool codec = StreamIsJpegOrJpx(xobjStream);
             try
             {
-                imageBytes = StreamIsJpegOrJpx(xobjStream) ? xobjStream.RawBytes : ContentStreamLoader.Decode(xobjStream, _objects);
+                imageBytes = codec ? CodecBytes(xobjStream) : ContentStreamLoader.Decode(xobjStream, _objects);
             }
             catch (FilterException damaged)
             {
@@ -3130,7 +3453,7 @@ public static class DisplayListBuilder
                 ImageFrame? stencil = StencilFrame(xobjStream, imageBytes);
                 if (stencil is not null)
                 {
-                    EmitOp(new DrawImageOp(stencil, _state.Ctm, SnapshotClips(), _state.FillAlpha)
+                    EmitOp(new DrawImageOp(stencil, _state.Ctm, SnapshotClips(), _state.FillAlpha * _groupAlpha)
                     {
                         BlendMode = _state.BlendMode,
                         SoftMask = _state.SoftMask,
@@ -3147,7 +3470,7 @@ public static class DisplayListBuilder
                 if (imageBytes.Length > 2 &&
                     imageBytes[0] == 0xFF && imageBytes[1] == 0xD8)
                 {
-                    frame = JpegDecoder.Decode(imageBytes);
+                    frame = CmykJpegFrame(xobjStream, imageBytes) ?? JpegDecoder.Decode(imageBytes);
                 }
                 else if (imageBytes.Length > 8 &&
                          imageBytes[0] == 137 && imageBytes[1] == 80)
@@ -3155,24 +3478,42 @@ public static class DisplayListBuilder
                     frame = PngDecoder.Decode(imageBytes);
                 }
             }
-            catch (ImageException)
+            catch (ImageException bad)
             {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, bad.Message + " The image is skipped.");
                 return;
             }
 
             // Not a self-describing codec stream: interpret the bytes as raw
             // PDF image samples (Flate/CCITT/LZW output) using the image
             // dictionary's geometry and colour space.
+            // 3.34.0: JPEG bytes that do not decode are never read as raw
+            // samples (they drew as noise once short data was padded, N13).
+            if (frame is null && codec)
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The JPEG data could not be read; the image is skipped.");
+                return;
+            }
+
+            bool raw = frame is null;
             frame ??= FrameFromRawSamples(xobjStream, imageBytes);
 
             if (frame is null)
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The image's colour space, bit depth or size is not supported; the image is skipped.");
+                return;
+            }
+
+            // 3.34.0 (Phase B N7): explicit masking (/Mask, §8.9.6.3, §8.9.6.4).
+            // Before, /Mask was ignored and the image was drawn unmasked.
+            if (!ApplyExplicitMask(xobjStream, frame, raw ? imageBytes : null, imageSubject))
             {
                 return;
             }
 
             ApplySoftMask(xobjStream, frame);
 
-            EmitOp(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
+            EmitOp(new DrawImageOp(frame, _state.Ctm, SnapshotClips(), _state.FillAlpha * _groupAlpha) { BlendMode = _state.BlendMode, SoftMask = _state.SoftMask });
         }
 
         // Converts decoded raw samples into an ImageFrame for the cases the
@@ -3182,6 +3523,70 @@ public static class DisplayListBuilder
         // /Decode [1 0] inversion for the gray cases. Stencil masks
         // (/ImageMask true) and other colour spaces return null and the
         // image is skipped, as before.
+        // 3.34.0 (Phase B N3): a CMYK (or YCCK) JPEG is drawn from its stored
+        // channel values read through the image dictionary's /Decode array,
+        // like any other CMYK image. Before, the Adobe inverted-channel rule
+        // was applied as well, so a PDF that does not invert with /Decode drew
+        // as a negative. Null when the JPEG is not four-component, its size
+        // does not match the dictionary, or the dictionary's colour space is
+        // not a four-component one; the JPEG then decodes as before.
+        private ImageFrame? CmykJpegFrame(PdfStream stream, byte[] jpeg)
+        {
+            PdfDictionary dict = stream.Dictionary;
+            if (ReadBoolEntry(dict, "ImageMask") || IndexedSpace(dict) is not null || ResolveComponentCount(dict) != 4)
+            {
+                return null;
+            }
+
+            byte[]? cmyk = JpegDecoder.DecodeCmykSamples(jpeg, out int width, out int height);
+            if (cmyk is null || width != ReadIntEntry(dict, "Width") || height != ReadIntEntry(dict, "Height"))
+            {
+                return null;
+            }
+
+            return FrameFromCmyk(dict, cmyk, width, height);
+        }
+
+        // 8-bpc CMYK samples (C, M, Y, K per pixel) to RGB with the standard
+        // subtractive formula, honouring a /Decode [1 0 ...] inversion.
+        private ImageFrame? FrameFromCmyk(PdfDictionary dict, byte[] samples, int width, int height)
+        {
+            bool invert = GrayDecodeInverted(dict);
+            samples = PadShortSamples(samples, (long)width * height * 4);
+            if (samples.Length < (long)width * height * 4)
+            {
+                return null;
+            }
+
+            ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
+            for (int y = 0; y < height; y++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                for (int x = 0; x < width; x++)
+                {
+                    int si = ((y * width) + x) * 4;
+                    double c = samples[si] / 255.0;
+                    double m = samples[si + 1] / 255.0;
+                    double yc = samples[si + 2] / 255.0;
+                    double k = samples[si + 3] / 255.0;
+                    if (invert)
+                    {
+                        c = 1 - c;
+                        m = 1 - m;
+                        yc = 1 - yc;
+                        k = 1 - k;
+                    }
+
+                    byte r = (byte)Math.Round(255.0 * (1 - c) * (1 - k));
+                    byte g = (byte)Math.Round(255.0 * (1 - m) * (1 - k));
+                    byte b = (byte)Math.Round(255.0 * (1 - yc) * (1 - k));
+                    frame.Pixels.SetPixelBgra(x, y, b, g, r, 255);
+                }
+            }
+
+            return frame;
+        }
+
         private ImageFrame? FrameFromRawSamples(PdfStream stream, byte[] samples)
         {
             PdfDictionary dict = stream.Dictionary;
@@ -3213,6 +3618,7 @@ public static class DisplayListBuilder
             if (components == 1 && bpc == 1)
             {
                 int stride = (width + 7) / 8;
+                samples = PadShortSamples(samples, (long)stride * height);
                 if (samples.Length < stride * height)
                 {
                     return null;
@@ -3235,6 +3641,7 @@ public static class DisplayListBuilder
 
             if (components == 1 && bpc == 8)
             {
+                samples = PadShortSamples(samples, (long)width * height);
                 if (samples.Length < width * height)
                 {
                     return null;
@@ -3259,6 +3666,7 @@ public static class DisplayListBuilder
 
             if (components == 3 && bpc == 8)
             {
+                samples = PadShortSamples(samples, (long)width * height * 3);
                 if (samples.Length < width * height * 3)
                 {
                     return null;
@@ -3283,38 +3691,7 @@ public static class DisplayListBuilder
             // /Decode [1 0 …] inversion (Adobe CMYK convention) is honoured.
             if (components == 4 && bpc == 8)
             {
-                if (samples.Length < (long)width * height * 4)
-                {
-                    return null;
-                }
-
-                ImageFrame frame = ImageFrame.Create(width, height, ImageColorFormat.Rgb24);
-                for (int y = 0; y < height; y++)
-                {
-                    PdfWorkScope.ThrowIfCancellationRequested();
-                    for (int x = 0; x < width; x++)
-                    {
-                        int si = ((y * width) + x) * 4;
-                        double c = samples[si] / 255.0;
-                        double m = samples[si + 1] / 255.0;
-                        double yc = samples[si + 2] / 255.0;
-                        double k = samples[si + 3] / 255.0;
-                        if (invert)
-                        {
-                            c = 1 - c;
-                            m = 1 - m;
-                            yc = 1 - yc;
-                            k = 1 - k;
-                        }
-
-                        byte r = (byte)Math.Round(255.0 * (1 - c) * (1 - k));
-                        byte g = (byte)Math.Round(255.0 * (1 - m) * (1 - k));
-                        byte b = (byte)Math.Round(255.0 * (1 - yc) * (1 - k));
-                        frame.Pixels.SetPixelBgra(x, y, b, g, r, 255);
-                    }
-                }
-
-                return frame;
+                return FrameFromCmyk(dict, samples, width, height);
             }
 
             return null;
@@ -3326,6 +3703,148 @@ public static class DisplayListBuilder
         // Without this, soft-masked images (e.g. faded watermarks) render as
         // fully opaque, painting their backing colour where they should be
         // transparent.
+        // Whether the stream's last filter is the given one (aliases resolved).
+        private static bool LastFilterIs(PdfStream stream, string filterName)
+        {
+            PdfPrimitive? filter = stream.Filter;
+            PdfName? last = filter as PdfName ?? (filter is PdfArray { Count: > 0 } array ? array.GetAs<PdfName>(array.Count - 1) : null);
+            return last is not null && FilterRegistry.ResolveAlias(last.Value) == filterName;
+        }
+
+        // 3.34.0 (Phase B N7): /Mask as a stencil image (§8.9.6.3): a 1-bit
+        // image, scaled to the base image, whose samples of 1 (0 with /Decode
+        // [1 0]) leave the base image unpainted; or as an array of colour-key
+        // ranges (§8.9.6.4) over the raw samples of an 8-bit image with 1 or
+        // 3 components, or of a JPEG decoded to gray or RGB. Returns false
+        // when the mask stream cannot be decoded: the image is then skipped
+        // with a warning rather than drawn unmasked over what it should only
+        // partly cover (a scanned page's colour layer under a text mask).
+        private bool ApplyExplicitMask(PdfStream xobjStream, ImageFrame frame, byte[]? rawSamples, string imageSubject)
+        {
+            if (!xobjStream.Dictionary.TryGetValue(PdfName.Intern("Mask"), out PdfPrimitive? maskRef) || maskRef is null)
+            {
+                return true;
+            }
+
+            PdfPrimitive mask = _objects.Resolve(maskRef);
+            if (mask is PdfStream maskStream)
+            {
+                return ApplyStencilMask(maskStream, frame, imageSubject);
+            }
+
+            if (mask is PdfArray ranges)
+            {
+                ApplyColorKeyMask(xobjStream.Dictionary, ranges, frame, rawSamples, imageSubject);
+            }
+
+            return true;
+        }
+
+        private bool ApplyStencilMask(PdfStream maskStream, ImageFrame frame, string imageSubject)
+        {
+            int mw = ReadIntEntry(maskStream.Dictionary, "Width");
+            int mh = ReadIntEntry(maskStream.Dictionary, "Height");
+            if (mw <= 0 || mh <= 0)
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The image's /Mask has no size; the image is skipped rather than drawn unmasked.");
+                return false;
+            }
+
+            byte[] bits;
+            try
+            {
+                bits = ContentStreamLoader.Decode(maskStream, _objects);
+            }
+            catch (Exception damaged) when (!PdfWorkScope.IsAbort(damaged))
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The image's /Mask could not be decoded (" + damaged.Message + "); the image is skipped rather than drawn unmasked.");
+                return false;
+            }
+
+            int stride = (mw + 7) / 8;
+            bits = PadShortSamples(bits, (long)stride * mh);
+            if ((long)bits.Length < (long)stride * mh)
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The image's /Mask holds no data; the image is skipped rather than drawn unmasked.");
+                return false;
+            }
+
+            // A mask that is not marked /ImageMask (an ordinary 1-bit gray
+            // image) is read as Poppler and MuPDF read it: white (1) shows the
+            // image, black (0) hides it (found by the pdf.js run, issue6621).
+            bool zeroMasks = GrayDecodeInverted(maskStream.Dictionary) != !ReadBoolEntry(maskStream.Dictionary, "ImageMask");
+            int fw = frame.Width;
+            int fh = frame.Height;
+            for (int y = 0; y < fh; y++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                int my = Math.Min(mh - 1, (int)((long)y * mh / fh));
+                for (int x = 0; x < fw; x++)
+                {
+                    int mx = Math.Min(mw - 1, (int)((long)x * mw / fw));
+                    int bit = (bits[(my * stride) + (mx >> 3)] >> (7 - (mx & 7))) & 1;
+                    if ((bit == 1) != zeroMasks)
+                    {
+                        (byte b, byte g, byte r, byte _) = frame.Pixels.GetPixelBgra(x, y);
+                        frame.Pixels.SetPixelBgra(x, y, b, g, r, 0);
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void ApplyColorKeyMask(PdfDictionary dict, PdfArray ranges, ImageFrame frame, byte[]? rawSamples, string imageSubject)
+        {
+            int bpc = ReadIntEntry(dict, "BitsPerComponent");
+            int components = rawSamples is null ? (frame.OriginalFormat == ImageColorFormat.Gray8 ? 1 : 3) : ResolveComponentCount(dict);
+            if ((rawSamples is not null && bpc != 8) || components is not (1 or 3) || ranges.Count < components * 2)
+            {
+                _reporter.Report(PdfWarningKind.ImageSkipped, imageSubject, "The image's colour-key /Mask is not supported for this image format; the image is drawn without it.");
+                return;
+            }
+
+            int[] lo = new int[components];
+            int[] hi = new int[components];
+            for (int c = 0; c < components; c++)
+            {
+                lo[c] = (int)Math.Round(PdfReal.ToDouble(ranges[2 * c]));
+                hi[c] = (int)Math.Round(PdfReal.ToDouble(ranges[(2 * c) + 1]));
+            }
+
+            int fw = frame.Width;
+            int fh = frame.Height;
+            for (int y = 0; y < fh; y++)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+                for (int x = 0; x < fw; x++)
+                {
+                    (byte b, byte g, byte r, byte a) = frame.Pixels.GetPixelBgra(x, y);
+                    bool inside = true;
+                    for (int c = 0; c < components && inside; c++)
+                    {
+                        int v;
+                        if (rawSamples is not null)
+                        {
+                            long at = (((long)y * fw) + x) * components + c;
+                            v = at < rawSamples.Length ? rawSamples[at] : 0;
+                        }
+                        else
+                        {
+                            v = components == 1 ? r : c switch { 0 => r, 1 => g, _ => b };
+                        }
+
+                        inside = v >= lo[c] && v <= hi[c];
+                    }
+
+                    if (inside && a != 0)
+                    {
+                        frame.Pixels.SetPixelBgra(x, y, b, g, r, 0);
+                    }
+                }
+            }
+        }
+
         private void ApplySoftMask(PdfStream xobjStream, ImageFrame frame)
         {
             if (!xobjStream.Dictionary.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smRef))
@@ -3351,7 +3870,11 @@ public static class DisplayListBuilder
 
             try
             {
-                smSamples = ContentStreamLoader.Decode(smStream, _objects);
+                // 3.34.0: a soft mask may itself be a (gray) JPEG; before, its
+                // decode failed and the image was drawn without its mask.
+                smSamples = StreamIsJpegOrJpx(smStream)
+                    ? JpegGraySamples(CodecBytes(smStream), smWidth, smHeight)
+                    : ContentStreamLoader.Decode(smStream, _objects);
             }
             catch (Exception abortCheck) when (!PdfWorkScope.IsAbort(abortCheck))
             {
@@ -3550,6 +4073,7 @@ public static class DisplayListBuilder
             }
 
             int stride = (width + 7) / 8;
+            samples = PadShortSamples(samples, (long)stride * height);
             if ((long)samples.Length < (long)stride * height)
             {
                 return null;
@@ -3661,6 +4185,7 @@ public static class DisplayListBuilder
             Worker sub = new Worker(_objects, _hintingScale, _lightHinting, _autohintFallback, _visibility);
             sub._nestingDepth = _nestingDepth + 1;
             sub._reporter = _reporter;
+            sub._shared = _shared;
 
             // A form XObject inherits the graphics state in effect at the Do
             // (PDF 32000-1:2008 §8.10.1), not the defaults: since 3.32.0
@@ -3674,13 +4199,22 @@ public static class DisplayListBuilder
             //  - fill and stroke patterns: a pattern is defined in the space it
             //    was set in, so inside a form with its own matrix it would be
             //    misplaced (unchanged: such a form paints its default colour);
-            //  - the soft mask (unchanged; not applied to forms yet).
+            //  - the soft mask: it is set on the nested list instead, so its
+            //    coverage is made in the outer space (3.34.0, #42).
             BuilderGraphicsState inherited = _state.Clone();
             inherited.Ctm = Transform.Identity;
             inherited.ActiveClips = new List<ClipPath>();
             inherited.FillPattern = null;
             inherited.StrokePattern = null;
             inherited.SoftMask = null;
+            sub._groupAlpha = _groupAlpha;
+            if (IsTransparencyGroup(xobjStream.Dictionary))
+            {
+                sub._groupAlpha = _groupAlpha * _state.FillAlpha;
+                inherited.FillAlpha = 1.0;
+                inherited.StrokeAlpha = 1.0;
+            }
+
             sub._state = inherited;
 
             byte[] formContent;
@@ -3713,8 +4247,17 @@ public static class DisplayListBuilder
             // Composition: form-local · outer CTM (row-vector convention)
             Transform composition = formMatrix.Multiply(_state.Ctm);
 
-            EmitOp(new NestedDisplayListOp(inner, composition, SnapshotClips()));
+            // 3.34.0 (#42, D-264): the soft mask in effect at the Do applies to
+            // the form's content; the rasterizer makes its coverage in this
+            // (the outer) space.
+            EmitOp(new NestedDisplayListOp(inner, composition, SnapshotClips()) { SoftMask = _state.SoftMask });
         }
+
+        private bool IsTransparencyGroup(PdfDictionary form) =>
+            form.TryGetValue(PdfName.Intern("Group"), out PdfPrimitive? group)
+            && _objects.ResolveAs<PdfDictionary>(group ?? PdfNull.Value) is PdfDictionary g
+            && g.TryGetValue(PdfName.Intern("S"), out PdfPrimitive? kind)
+            && _objects.Resolve(kind) is PdfName { Value: "Transparency" };
 
         private static double AsDouble(PdfPrimitive p)
         {

@@ -361,7 +361,9 @@ public sealed class PageBuilder
 
             string clusterText = text.Substring(start, ClusterEnd(starts, start, text.Length) - start);
             bool first = emitted.Add(start);
-            bool plain = first && j - i == 1 && ClaimGlyphText(custom, glyphs[i].GlyphId, clusterText);
+            bool plain = first && (j - i == 1
+                ? ClaimGlyphText(custom, glyphs[i].GlyphId, clusterText)
+                : ClaimEachGlyph(custom, glyphs, i, j, clusterText));
             if (!plain)
             {
                 // A later run of a cluster already spoken for says nothing.
@@ -450,6 +452,59 @@ public sealed class PageBuilder
         }
 
         custom.GlyphText[gid] = clusterText;
+        return true;
+    }
+
+    // 3.34.0: a cluster of several glyphs in logical order, one per code
+    // point (Tamil "சி" is ச then the vowel sign ி, or a contextual form of
+    // it that no code point reaches and that has no other text), is given its text glyph by glyph through ToUnicode.
+    // Before, it was wrapped in /ActualText, and viewers that copy text span
+    // by span put a space between two such clusters. A reordered cluster (a
+    // pre-base vowel sign drawn first) still needs /ActualText.
+    private static bool ClaimEachGlyph(CustomFont custom, IReadOnlyList<ShapedGlyph> glyphs, int from, int to, string clusterText)
+    {
+        List<int> codepoints = new List<int>();
+        for (int c = 0; c < clusterText.Length; c += char.IsSurrogatePair(clusterText, c) ? 2 : 1)
+        {
+            codepoints.Add(char.ConvertToUtf32(clusterText, c));
+        }
+
+        if (codepoints.Count != to - from)
+        {
+            return false;
+        }
+
+        for (int k = from; k < to; k++)
+        {
+            ShapedGlyph g = glyphs[k];
+            string cp = char.ConvertFromUtf32(codepoints[k - from]);
+            int cmapCount = g.GlyphId > 0 ? custom.CmapCodePointCount(g.GlyphId) : 0;
+            bool mapsCleanly = cmapCount > 0
+                ? cmapCount == 1 && custom.Face.GetGlyphIndex(codepoints[k - from]) == g.GlyphId
+                : !custom.GlyphText.TryGetValue(g.GlyphId, out string? claimed) || claimed == cp;
+            if (g.GlyphId <= 0 || !mapsCleanly
+                || g.XOffset != 0 || g.YOffset != 0
+                || Math.Abs(g.XAdvance - (custom.Face.GetAdvanceWidth(g.GlyphId) * 1000.0 / custom.Face.UnitsPerEm)) >= 0.5)
+            {
+                // A mark moved onto its base, or a glyph not drawn at its own
+                // width, would look like a gap or overlap to a viewer.
+                return false;
+            }
+        }
+
+        for (int k = from; k < to; k++)
+        {
+            int codepoint = codepoints[k - from];
+            if (custom.CmapCodePointCount(glyphs[k].GlyphId) > 0)
+            {
+                custom.UsedCodepoints.Add(codepoint);
+            }
+            else
+            {
+                custom.GlyphText[glyphs[k].GlyphId] = char.ConvertFromUtf32(codepoint);
+            }
+        }
+
         return true;
     }
 

@@ -48,6 +48,14 @@ bool IsSingleValued => _values.Length == 1
 
 True when the attribute carries exactly one value (the typical case).
 
+### `SingleValue`
+
+```csharp
+byte[] SingleValue
+```
+
+Returns the single value, or throws when there are multiple.
+
 ## Methods
 
 ### `Read`

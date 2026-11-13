@@ -60,6 +60,10 @@ public sealed class PageRasterizer
     private readonly RenderOptions _options;
     private readonly ScanlineRasterizer _scanline;
     private readonly StrokeExpander _stroke;
+    // 3.34.0 (#42): the coverage of the soft mask in effect at the Do of the
+    // form being painted; null outside a masked form.
+    private float[]? _ambientMask;
+
     private readonly Dictionary<RasterSoftMaskInfo, float[]> _softMaskCache =
         new(ReferenceEqualityComparer.Instance);
 
@@ -144,6 +148,48 @@ public sealed class PageRasterizer
         PdfRectangle box = DisplayRect(page, _options.DisplayBox);
         (int finalW, int finalH) = _options.PixelSize(box.Width, box.Height);
         PdfWorkScope.CheckOutputPixels(finalW, finalH);
+        return RotateClockwise(RasterizeUpright(page), OutputRotation(page));
+    }
+
+    /// <summary>
+    /// Returns the size in pixels of the image <see cref="Rasterize(PdfPage)"/>
+    /// and <see cref="RasterizeToPng(PdfPage)"/> produce for
+    /// <paramref name="page"/> with this rasterizer's options (3.34.0, D-334),
+    /// without rendering anything.
+    /// </summary>
+    /// <param name="page">The page.</param>
+    /// <returns>
+    /// The shown box (<see cref="PdfPage.GetDisplayBox"/> for
+    /// <see cref="RenderOptions.DisplayBox"/>) at <see cref="RenderOptions.Dpi"/>,
+    /// with width and height swapped when <see cref="RenderOptions.Rotation"/>,
+    /// plus the page's <c>/Rotate</c> when
+    /// <see cref="RenderOptions.ApplyPageRotation"/> is set, is 90 or 270
+    /// degrees. Super-sampling does not change it.
+    /// </returns>
+    /// <remarks>
+    /// Use this, not <see cref="PdfPage.Width"/> and <see cref="PdfPage.Height"/>
+    /// (which report the MediaBox), to size a bitmap or scale output: since
+    /// 3.32.0 the shown box is the CropBox by default.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="page"/> is null.</exception>
+    /// <exception cref="PdfCorruptionException">The page has an empty or invalid MediaBox.</exception>
+    public (int Width, int Height) GetOutputSize(PdfPage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (!(page.Width > 0) || !(page.Height > 0))
+        {
+            throw new PdfCorruptionException("The page has an empty or invalid MediaBox.");
+        }
+
+        PdfRectangle box = DisplayRect(page, _options.DisplayBox);
+        (int width, int height) = _options.PixelSize(box.Width, box.Height);
+        return OutputRotation(page) is 90 or 270 ? (height, width) : (width, height);
+    }
+
+    // The clockwise rotation applied to the upright render: RenderOptions.Rotation,
+    // plus the page's /Rotate when ApplyPageRotation is set.
+    private int OutputRotation(PdfPage page)
+    {
         int rotation = _options.Rotation;
         if (_options.ApplyPageRotation)
         {
@@ -153,7 +199,7 @@ public sealed class PageRasterizer
             rotation = RenderOptions.NormalizeRotation(rotation + pageRotate, nameof(RenderOptions.Rotation));
         }
 
-        return RotateClockwise(RasterizeUpright(page), rotation);
+        return rotation;
     }
 
     // Renders the page in its unrotated user space (the historical output).
@@ -222,27 +268,9 @@ public sealed class PageRasterizer
         return buffer;
     }
 
-    // The rendered page box, normalised (X1/Y1 the lower-left corner). For
-    // CropBox: the CropBox intersected with the MediaBox (PDF 32000-1:2008
-    // §14.11.2); when they do not overlap, the MediaBox.
-    internal static PdfRectangle DisplayRect(PdfPage page, PdfDisplayBox which)
-    {
-        PdfRectangle media = Normalised(page.MediaBox);
-        if (which == PdfDisplayBox.MediaBox)
-        {
-            return media;
-        }
-
-        PdfRectangle crop = Normalised(page.CropBox);
-        double x1 = Math.Max(media.X1, crop.X1);
-        double y1 = Math.Max(media.Y1, crop.Y1);
-        double x2 = Math.Min(media.X2, crop.X2);
-        double y2 = Math.Min(media.Y2, crop.Y2);
-        return x2 > x1 && y2 > y1 ? new PdfRectangle(x1, y1, x2, y2) : media;
-    }
-
-    private static PdfRectangle Normalised(PdfRectangle r) =>
-        new PdfRectangle(Math.Min(r.X1, r.X2), Math.Min(r.Y1, r.Y2), Math.Max(r.X1, r.X2), Math.Max(r.Y1, r.Y2));
+    // The rendered page box: PdfPage.GetDisplayBox, the one rule the raster,
+    // SVG and WPF renderers share (3.34.0, D-334).
+    internal static PdfRectangle DisplayRect(PdfPage page, PdfDisplayBox which) => page.GetDisplayBox(which);
 
     // Exact pixel rotation (no resampling) for the clockwise view rotation.
     private static PixelBuffer RotateClockwise(PixelBuffer src, int rotation)
@@ -805,9 +833,7 @@ public sealed class PageRasterizer
             }
         }
 
-        float[]? smask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        float[]? smask = MaskFor(op, buffer, pageHeight, outerTransform);
         CompositeImage(region, buffer, x0, y0, regionW, regionH, clip, 1.0, op.BlendMode, smask, buffer.Width);
     }
 
@@ -1037,9 +1063,7 @@ public sealed class PageRasterizer
         SnapThinAxisAlignedRects(subPaths);
         ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
-        _scanline.SoftMask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMask = MaskFor(op, buffer, pageHeight, outerTransform);
         _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, subPaths, op.Color, op.Rule, clip);
         _scanline.BlendMode = PdfBlendMode.Normal;
@@ -1048,12 +1072,12 @@ public sealed class PageRasterizer
 
     // Dash lengths are in user-space points, like the line width; scale them
     // to device pixels the same way.
-    private double[] ScaleDash(double[] pattern)
+    private double[] ScaleDash(double[] pattern, double outerScale)
     {
         double[] scaled = new double[pattern.Length];
         for (int i = 0; i < pattern.Length; i++)
         {
-            scaled[i] = pattern[i] * _options.Scale;
+            scaled[i] = pattern[i] * _options.Scale * outerScale;
         }
 
         return scaled;
@@ -1067,8 +1091,24 @@ public sealed class PageRasterizer
         PathFlattener flattener = new PathFlattener(_options.FlatnessTolerance);
         List<List<PointF>> subPaths = flattener.Flatten(device);
 
+        // 3.34.0 (#23): the space the list is drawn in scales the stroke too
+        // (before, a stroke in a form XObject drawn under a scale kept its
+        // unscaled width), and a pen that scales unevenly is elliptical.
+        Transform outerLinear = new Transform(outerTransform.A, outerTransform.B, outerTransform.C, outerTransform.D, 0, 0);
+        double outerScale = Math.Sqrt(Math.Abs((outerLinear.A * outerLinear.D) - (outerLinear.B * outerLinear.C)));
+        if (!double.IsFinite(outerScale) || outerScale <= 0)
+        {
+            outerScale = 1.0;
+        }
+
+        if (op.Pen is Transform pen && TryStrokeElliptical(op, pen, outerLinear, subPaths, out List<List<PointF>>? elliptical))
+        {
+            PaintStrokeOutline(op, buffer, pageHeight, outerTransform, ambientClip, elliptical);
+            return;
+        }
+
         // Stroke width in op.Style is in PDF user-space points; scale to device.
-        double deviceWidth = op.Style.Width * _options.Scale;
+        double deviceWidth = op.Style.Width * _options.Scale * outerScale;
 
         // Hairline crispening: a thin axis-aligned stroke (e.g. a table-cell
         // border drawn as "re S") whose 1px-wide body straddles a pixel
@@ -1088,17 +1128,102 @@ public sealed class PageRasterizer
             Cap = op.Style.Cap,
             Join = op.Style.Join,
             MiterLimit = op.Style.MiterLimit,
-            DashPattern = ScaleDash(op.Style.DashPattern),
-            DashOffset = op.Style.DashOffset * _options.Scale,
+            DashPattern = ScaleDash(op.Style.DashPattern, outerScale),
+            DashOffset = op.Style.DashOffset * _options.Scale * outerScale,
             Color = op.Style.Color,
         };
 
         List<List<PointF>> filled = _stroke.Expand(subPaths, deviceStyle);
+        PaintStrokeOutline(op, buffer, pageHeight, outerTransform, ambientClip, filled);
+    }
+
+    // 3.34.0 (#23): a stroke whose pen (with the drawing space and the device
+    // scale) stretches one direction by more than 1% over the other, and
+    // whose widest direction is more than 1.5 device pixels, is stroked in its
+    // own user space and the outline mapped to the device: the line is wider
+    // across the stretched direction, as PDF 32000-1:2008 §8.4.3.2 says.
+    // (Before, one width, the square root of the scale's determinant, was
+    // used in every direction.) The user space is scaled evenly to device
+    // size first, so round caps and joins keep their smoothness.
+    private bool TryStrokeElliptical(
+        StrokePathOp op, Transform pen, Transform outerLinear, List<List<PointF>> deviceSubPaths, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out List<List<PointF>>? outline)
+    {
+        outline = null;
+        double s = _options.Scale;
+        Transform m = pen.Multiply(outerLinear).Multiply(new Transform(s, 0, 0, -s, 0, 0));
+        double det = Math.Abs((m.A * m.D) - (m.B * m.C));
+        double sumSq = (m.A * m.A) + (m.B * m.B) + (m.C * m.C) + (m.D * m.D);
+        double disc = Math.Sqrt(Math.Max(0, (sumSq * sumSq / 4) - (det * det)));
+        double stretchMax = Math.Sqrt((sumSq / 2) + disc);
+        double stretchMin = Math.Sqrt(Math.Max(0, (sumSq / 2) - disc));
+        if (!double.IsFinite(det) || det <= 1e-12 || stretchMin <= 0
+            || stretchMax / stretchMin <= 1.01 || op.UserWidth * stretchMax <= 1.5)
+        {
+            return false;
+        }
+
+        double k = Math.Sqrt(det);
+        Transform shape = new Transform(m.A / k, m.B / k, m.C / k, m.D / k, 0, 0);
+        Transform inverse;
+        try
+        {
+            inverse = shape.Invert();
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        List<List<PointF>> local = new List<List<PointF>>(deviceSubPaths.Count);
+        foreach (List<PointF> sub in deviceSubPaths)
+        {
+            List<PointF> mapped = new List<PointF>(sub.Count);
+            foreach (PointF p in sub)
+            {
+                mapped.Add(Apply(inverse, p));
+            }
+
+            local.Add(mapped);
+        }
+
+        double[] dash = new double[op.UserDash.Length];
+        for (int i = 0; i < dash.Length; i++)
+        {
+            dash[i] = op.UserDash[i] * k;
+        }
+
+        StrokeStyle style = new StrokeStyle
+        {
+            Width = op.UserWidth * k,
+            Cap = op.Style.Cap,
+            Join = op.Style.Join,
+            MiterLimit = op.Style.MiterLimit,
+            DashPattern = dash,
+            DashOffset = op.UserDashOffset * k,
+            Color = op.Style.Color,
+        };
+
+        outline = _stroke.Expand(local, style);
+        foreach (List<PointF> sub in outline)
+        {
+            for (int i = 0; i < sub.Count; i++)
+            {
+                sub[i] = Apply(shape, sub[i]);
+            }
+        }
+
+        return true;
+    }
+
+    private static PointF Apply(Transform t, PointF p) =>
+        new PointF((t.A * p.X) + (t.C * p.Y), (t.B * p.X) + (t.D * p.Y));
+
+    private void PaintStrokeOutline(
+        StrokePathOp op, PixelBuffer buffer, double pageHeight, Transform outerTransform, ClipRegion? ambientClip, List<List<PointF>> filled)
+    {
         ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
-        _scanline.SoftMask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMask = MaskFor(op, buffer, pageHeight, outerTransform);
         _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, filled, op.Style.Color, FillRule.NonZeroWinding, clip);
         _scanline.BlendMode = PdfBlendMode.Normal;
@@ -1117,9 +1242,7 @@ public sealed class PageRasterizer
         List<List<PointF>> subPaths = flattener.Flatten(device);
         ClipRegion? clip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
         _scanline.BlendMode = op.BlendMode;
-        _scanline.SoftMask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        _scanline.SoftMask = MaskFor(op, buffer, pageHeight, outerTransform);
         _scanline.SoftMaskWidth = buffer.Width;
         _scanline.Fill(buffer, subPaths, op.Color, FillRule.NonZeroWinding, clip);
         _scanline.BlendMode = PdfBlendMode.Normal;
@@ -1133,13 +1256,30 @@ public sealed class PageRasterizer
         Transform imageToOuter = op.DeviceTransform.Multiply(outerTransform);
         double scale = _options.Scale;
 
-        // Axis-aligned shortcut (matches pre-v2 behaviour exactly):
+        // 3.34.0 (#50, D-348): an image whose matrix rotates, skews or flips
+        // it is drawn through its full matrix. Before, it was drawn as its
+        // upright box, skipped (a negative x scale, a 90-degree turn), or
+        // drawn unflipped (a negative y scale).
+        if (imageToOuter.B != 0 || imageToOuter.C != 0 || !(imageToOuter.A > 0) || !(imageToOuter.D > 0))
+        {
+            ClipRegion? generalClip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
+            if (generalClip is not null && generalClip.IsEmpty)
+            {
+                return;
+            }
+
+            float[]? generalMask = MaskFor(op, buffer, pageHeight, outerTransform);
+            CompositeImageAffine(
+                op.Image, buffer, imageToOuter, pageHeight, scale, generalClip, op.Alpha,
+                op.BlendMode, generalMask, buffer.Width);
+            return;
+        }
+
+        // Axis-aligned case (matches pre-v2 behaviour exactly):
         //   destX = E * scale
         //   destY = (pageH - F) * scale - destH
         //   destW = A * scale
         //   destH = |D| * scale
-        // For rotated/skewed images, this approximation collapses to the
-        // axis-aligned bounding box. v2.1 will use a proper image transform.
         double destX = imageToOuter.E * scale;
         double destY = (pageHeight - imageToOuter.F) * scale;
         double destW = imageToOuter.A * scale;
@@ -1157,15 +1297,42 @@ public sealed class PageRasterizer
             return;
         }
 
-        float[]? smask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        float[]? smask = MaskFor(op, buffer, pageHeight, outerTransform);
         CompositeImage(
             op.Image, buffer, destX, destY - destH, destW, destH, clip, op.Alpha,
             op.BlendMode, smask, buffer.Width);
     }
 
+    // The soft-mask coverage for an op: its own mask, or else the mask in
+    // effect at the Do of the form it is in (3.34.0, #42).
+    private float[]? MaskFor(RenderOp op, PixelBuffer buffer, double pageHeight, Transform outerTransform) =>
+        op.SoftMask is null ? _ambientMask : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+
     private void PaintNestedOp(
+        NestedDisplayListOp op, PixelBuffer buffer,
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
+    {
+        // 3.34.0 (#42, D-264): a soft mask set in the graphics state before
+        // the Do applies to everything the form paints (PDF 32000-1:2008
+        // §11.6.4.3). Its coverage is made in the space of the Do, then each
+        // object of the form that sets no mask of its own uses it.
+        float[]? outerMask = _ambientMask;
+        if (op.SoftMask is not null)
+        {
+            _ambientMask = GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        }
+
+        try
+        {
+            PaintNestedOpCore(op, buffer, pageHeight, outerTransform, ambientClip);
+        }
+        finally
+        {
+            _ambientMask = outerMask;
+        }
+    }
+
+    private void PaintNestedOpCore(
         NestedDisplayListOp op, PixelBuffer buffer,
         double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
     {
@@ -1205,9 +1372,7 @@ public sealed class PageRasterizer
             return;
         }
 
-        float[]? smask = op.SoftMask is null
-            ? null
-            : GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform);
+        float[]? smask = MaskFor(op, buffer, pageHeight, outerTransform);
         int smW = buffer.Width;
 
         double scale = _options.Scale;
@@ -1516,7 +1681,16 @@ public sealed class PageRasterizer
         }
 
         Transform groupToPage = mask.Composition.Multiply(outerTransform);
-        PaintDisplayList(mask.Group, maskBuffer, pageHeight, groupToPage);
+        float[]? outerMask = _ambientMask;
+        _ambientMask = null; // the mask group itself is not masked
+        try
+        {
+            PaintDisplayList(mask.Group, maskBuffer, pageHeight, groupToPage);
+        }
+        finally
+        {
+            _ambientMask = outerMask;
+        }
 
         float[] coverage = new float[w * h];
         for (int y = 0; y < h; y++)
@@ -1569,7 +1743,7 @@ public sealed class PageRasterizer
                     Cap = stroke.Cap,
                     Join = stroke.Join,
                     MiterLimit = stroke.MiterLimit,
-                    DashPattern = ScaleDash(stroke.DashPattern),
+                    DashPattern = ScaleDash(stroke.DashPattern, 1.0),
                     DashOffset = stroke.DashOffset * _options.Scale,
                     Color = stroke.Color,
                 };
@@ -1690,6 +1864,94 @@ public sealed class PageRasterizer
                 {
                     WriteBlended(
                         buffer, px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA), mode, smask, smW);
+                }
+                else if (effA >= 255)
+                {
+                    buffer.SetPixelBgra(px, py, sb, sg, sr, 255);
+                }
+                else
+                {
+                    buffer.BlendPixel(px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA), gammaCorrect: false);
+                }
+            }
+        }
+    }
+
+    // Draws an image through a general matrix (3.34.0, #50): each device
+    // pixel centre inside the image's parallelogram is mapped back into the
+    // unit square and sampled nearest-neighbour, as CompositeImage does.
+    // Image row 0 is the top of the unit square (v = 1).
+    private static void CompositeImageAffine(
+        ImageFrame frame, PixelBuffer buffer, Transform imageToPage, double pageHeight, double scale,
+        ClipRegion? clip, double alpha, PdfBlendMode mode, float[]? smask, int smW)
+    {
+        double a = imageToPage.A, b = imageToPage.B, c = imageToPage.C, d = imageToPage.D;
+        double det = (a * d) - (b * c);
+        if (Math.Abs(det) < 1e-12 || frame.Width <= 0 || frame.Height <= 0)
+        {
+            return;
+        }
+
+        // Device-space bounds of the unit square.
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach ((double u, double v) in new[] { (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0) })
+        {
+            double dx = ((a * u) + (c * v) + imageToPage.E) * scale;
+            double dy = (pageHeight - ((b * u) + (d * v) + imageToPage.F)) * scale;
+            minX = Math.Min(minX, dx);
+            maxX = Math.Max(maxX, dx);
+            minY = Math.Min(minY, dy);
+            maxY = Math.Max(maxY, dy);
+        }
+
+        int dstX0 = Math.Max(0, (int)Math.Floor(minX));
+        int dstY0 = Math.Max(0, (int)Math.Floor(minY));
+        int dstX1 = Math.Min(buffer.Width - 1, (int)Math.Ceiling(maxX));
+        int dstY1 = Math.Min(buffer.Height - 1, (int)Math.Ceiling(maxY));
+        if (dstX0 > dstX1 || dstY0 > dstY1)
+        {
+            return;
+        }
+
+        // Inverse of [a c; b d].
+        double ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+        for (int py = dstY0; py <= dstY1; py++)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            List<(double Start, double End)>? allowed = clip?.AllowedIntervals(py + 0.5);
+            if (allowed is not null && allowed.Count == 0)
+            {
+                continue;
+            }
+
+            double pageY = pageHeight - ((py + 0.5) / scale) - imageToPage.F;
+            for (int px = dstX0; px <= dstX1; px++)
+            {
+                if (allowed is not null && !InAnyInterval(allowed, px + 0.5))
+                {
+                    continue;
+                }
+
+                double pageX = ((px + 0.5) / scale) - imageToPage.E;
+                double u = (ia * pageX) + (ic * pageY);
+                double v = (ib * pageX) + (id * pageY);
+                if (u < 0 || u >= 1 || v <= 0 || v > 1)
+                {
+                    continue;
+                }
+
+                int srcX = Math.Min(frame.Width - 1, (int)(u * frame.Width));
+                int srcY = Math.Min(frame.Height - 1, (int)((1 - v) * frame.Height));
+                (byte sb, byte sg, byte sr, byte sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
+                int effA = alpha >= 1.0 ? sa : (int)((sa * alpha) + 0.5);
+                if (effA <= 0)
+                {
+                    continue;
+                }
+
+                if (mode != PdfBlendMode.Normal || smask is not null)
+                {
+                    WriteBlended(buffer, px, py, ColorF.FromRgb8(sr, sg, sb, (byte)effA), mode, smask, smW);
                 }
                 else if (effA >= 255)
                 {

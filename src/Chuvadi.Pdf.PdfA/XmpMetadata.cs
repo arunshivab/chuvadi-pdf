@@ -59,6 +59,47 @@ internal static class XmpMetadata
     /// <returns>The XMP packet bytes (UTF-8).</returns>
     internal static byte[] Build(
         int part, string conformance, string? title, string? author, string? subject, string producer, string creatorTool)
+        => Build(part, conformance, title, author, subject, null, producer, creatorTool);
+
+    /// <summary>
+    /// Builds the XMP packet with <c>pdf:Keywords</c> too (3.34.0, D-335):
+    /// PDF/A-1b requires it to equal the document information dictionary's
+    /// /Keywords (ISO 19005-1 §6.7.3).
+    /// </summary>
+    /// <param name="part">The PDF/A part (1 or 2).</param>
+    /// <param name="conformance">The conformance level, e.g. "B".</param>
+    /// <param name="title">The dc:title, or null.</param>
+    /// <param name="author">The dc:creator, or null.</param>
+    /// <param name="subject">The dc:description, or null.</param>
+    /// <param name="keywords">The pdf:Keywords, or null.</param>
+    /// <param name="producer">The pdf:Producer.</param>
+    /// <param name="creatorTool">The xmp:CreatorTool.</param>
+    /// <returns>The XMP packet bytes (UTF-8).</returns>
+    internal static byte[] Build(
+        int part, string conformance, string? title, string? author, string? subject, string? keywords,
+        string producer, string creatorTool)
+        => Build(part, conformance, title, author, subject, keywords, producer, creatorTool, null, null);
+
+    /// <summary>
+    /// Builds the XMP packet with <c>xmp:CreateDate</c> and
+    /// <c>xmp:ModifyDate</c> too (3.34.0, #49g): PDF/A-1b requires them to
+    /// equal the document information dictionary's /CreationDate and /ModDate
+    /// (ISO 19005-1 §6.7.3).
+    /// </summary>
+    /// <param name="part">The PDF/A part (1 or 2).</param>
+    /// <param name="conformance">The conformance level, e.g. "B".</param>
+    /// <param name="title">The dc:title, or null.</param>
+    /// <param name="author">The dc:creator, or null.</param>
+    /// <param name="subject">The dc:description, or null.</param>
+    /// <param name="keywords">The pdf:Keywords, or null.</param>
+    /// <param name="producer">The pdf:Producer.</param>
+    /// <param name="creatorTool">The xmp:CreatorTool.</param>
+    /// <param name="createDate">The xmp:CreateDate (ISO 8601), or null.</param>
+    /// <param name="modifyDate">The xmp:ModifyDate (ISO 8601), or null.</param>
+    /// <returns>The XMP packet bytes (UTF-8).</returns>
+    internal static byte[] Build(
+        int part, string conformance, string? title, string? author, string? subject, string? keywords,
+        string producer, string creatorTool, string? createDate, string? modifyDate)
     {
         ArgumentNullException.ThrowIfNull(conformance);
         ArgumentNullException.ThrowIfNull(producer);
@@ -100,10 +141,25 @@ internal static class XmpMetadata
 
         sb.Append("  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n");
         sb.Append("   <xmp:CreatorTool>").Append(Escape(creatorTool)).Append("</xmp:CreatorTool>\n");
+        if (createDate is not null)
+        {
+            sb.Append("   <xmp:CreateDate>").Append(Escape(createDate)).Append("</xmp:CreateDate>\n");
+        }
+
+        if (modifyDate is not null)
+        {
+            sb.Append("   <xmp:ModifyDate>").Append(Escape(modifyDate)).Append("</xmp:ModifyDate>\n");
+        }
+
         sb.Append("  </rdf:Description>\n");
 
         sb.Append("  <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\n");
         sb.Append("   <pdf:Producer>").Append(Escape(producer)).Append("</pdf:Producer>\n");
+        if (keywords is not null)
+        {
+            sb.Append("   <pdf:Keywords>").Append(Escape(keywords)).Append("</pdf:Keywords>\n");
+        }
+
         sb.Append("  </rdf:Description>\n");
 
         sb.Append(" </rdf:RDF>\n");

@@ -35,6 +35,12 @@ internal sealed class PdfObjectParser
         _pending2 = null;
     }
 
+    /// <summary>
+    /// Gets or sets where tolerated damage is recorded (3.34.0): a stream with
+    /// no <c>/Length</c>, read up to <c>endstream</c>. Null records nothing.
+    /// </summary>
+    internal RecoveryLog? Log { get; set; }
+
     /// <summary>Gets the current byte offset in the underlying stream.</summary>
     internal long Position => _tokenizer.Position;
 
@@ -557,6 +563,14 @@ internal sealed class PdfObjectParser
                 return PdfNull.Value;
 
             case PdfTokenType.Name:
+                // 3.34.0 (#52h): an empty name (a lone '/') reads as null,
+                // with a warning, instead of failing the whole object.
+                if (IsEmptyName(token.RawBytes))
+                {
+                    Damaged("an empty name", token.ByteOffset, "read as null");
+                    return PdfNull.Value;
+                }
+
                 return PdfName.FromRawBytes(token.RawBytes);
 
             case PdfTokenType.LiteralString:
@@ -729,6 +743,15 @@ internal sealed class PdfObjectParser
         return value;
     }
 
+    // True when a name token holds no characters after its '/'.
+    private static bool IsEmptyName(ReadOnlySpan<byte> raw) =>
+        raw.Length == 0 || (raw.Length == 1 && raw[0] == (byte)'/');
+
+    // 3.34.0 (#52h): records damaged object syntax that was read past.
+    private void Damaged(string what, long offset, string action) =>
+        Log?.Add(string.Create(CultureInfo.InvariantCulture,
+            $"Damaged object syntax at offset {offset}: {what} was {action}."));
+
     private PdfPrimitive ReadDictionaryOrStream()
     {
         PdfDictionary dict = new PdfDictionary();
@@ -749,13 +772,30 @@ internal sealed class PdfObjectParser
 
             if (key.Type != PdfTokenType.Name)
             {
-                throw new PdfParseException(
-                    $"Dictionary key must be a name, got {key.Type} at offset {key.ByteOffset}.");
+                // 3.34.0 (#52h): a token where a key belongs (for example the
+                // second word of a name written with a space in it) is
+                // skipped, with a warning, and the dictionary read on.
+                // A token that opens a value would leave its contents
+                // behind, so those still fail.
+                if (key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart or PdfTokenType.StreamStart)
+                {
+                    throw new PdfParseException(
+                        $"Dictionary key must be a name, got {key.Type} at offset {key.ByteOffset}.");
+                }
+
+                Damaged("a dictionary key that is not a name (" + key.Type + ")", key.ByteOffset, "skipped");
+                continue;
             }
 
-            PdfName keyName = PdfName.FromRawBytes(key.RawBytes);
             PdfPrimitive val = ReadValue();
-            dict.Set(keyName, val);
+            if (IsEmptyName(key.RawBytes))
+            {
+                // 3.34.0 (#52h): an empty key is skipped with its value.
+                Damaged("an empty name as a dictionary key", key.ByteOffset, "skipped with its value");
+                continue;
+            }
+
+            dict.Set(PdfName.FromRawBytes(key.RawBytes), val);
         }
 
         PdfToken after = PeekToken();
@@ -830,7 +870,11 @@ internal sealed class PdfObjectParser
     {
         if (!dict.TryGetValue(PdfName.Length, out PdfPrimitive? lengthValue))
         {
-            throw new PdfParseException("Stream dictionary missing /Length entry.");
+            // 3.34.0 (#52c): read up to endstream, as for an indirect /Length.
+            // Before, the object (and so its page) failed to load.
+            Log?.Add(string.Create(CultureInfo.InvariantCulture,
+                $"A stream at offset {_tokenizer.Position} has no /Length; it was read up to 'endstream'."));
+            return -1;
         }
 
         if (lengthValue is PdfInteger directLength)
@@ -864,6 +908,26 @@ internal sealed class PdfObjectParser
                 read += n;
             }
 
+            // 3.34.0: a /Length that does not end at "endstream" (or at
+            // "endobj", for a file that leaves endstream out) is wrong; the
+            // data is read up to endstream instead, as Poppler and pdf.js
+            // do. Before, the stream was cut at the wrong length (found by
+            // the pdf.js run: issue6108, a /Length of 9 for a 200-byte
+            // content stream).
+            if (!EndsAtStreamEnd(pos + length))
+            {
+                long endstream = FindEndstream(pos);
+                if (endstream >= 0)
+                {
+                    Log?.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"A stream at offset {pos} has a /Length of {length} that does not end at 'endstream'; it was read up to 'endstream'."));
+                    _tokenizer.Seek(pos);
+                    _pending1 = null;
+                    _pending2 = null;
+                    return ScanForEndstream();
+                }
+            }
+
             _tokenizer.Seek(pos + length);
             _pending1 = null;
             _pending2 = null;
@@ -873,6 +937,48 @@ internal sealed class PdfObjectParser
         {
             return ScanForEndstream();
         }
+    }
+
+    // Whether "endstream" (or "endobj") follows the given offset after
+    // optional white space.
+    private bool EndsAtStreamEnd(long offset)
+    {
+        _stream.Seek(offset, SeekOrigin.Begin);
+        byte[] after = new byte[64];
+        int read = _stream.Read(after, 0, after.Length);
+        int i = 0;
+        while (i < read && after[i] is 0 or 9 or 10 or 12 or 13 or 32)
+        {
+            i++;
+        }
+
+        string text = Encoding.Latin1.GetString(after, i, read - i);
+        return text.StartsWith("endstream", StringComparison.Ordinal) || text.StartsWith("endobj", StringComparison.Ordinal);
+    }
+
+    // The offset of the next "endstream" at or after the given offset, or -1.
+    private long FindEndstream(long from)
+    {
+        _stream.Seek(from, SeekOrigin.Begin);
+        byte[] marker = Encoding.ASCII.GetBytes("endstream");
+        int matchLen = 0;
+        int b;
+        while ((b = _stream.ReadByte()) != -1)
+        {
+            if (b == marker[matchLen])
+            {
+                if (++matchLen == marker.Length)
+                {
+                    return _stream.Position - marker.Length;
+                }
+            }
+            else
+            {
+                matchLen = b == marker[0] ? 1 : 0;
+            }
+        }
+
+        return -1;
     }
 
     private byte[] ScanForEndstream()

@@ -28,6 +28,16 @@ Verifies an ECDSA signature.
 
 **Returns:** True iff the signature is valid.
 
+### `DecodeSignature`
+
+__static__
+
+```csharp
+static (BigInteger R, BigInteger S) DecodeSignature(byte[] signature)
+```
+
+Decodes an ECDSA signature from its ASN.1 SEQUENCE { INTEGER r, INTEGER s } form.
+
 ---
 
 _Source: [`src/Chuvadi.Cryptography/PublicKey/EcdsaVerifier.cs`](../../../src/Chuvadi.Cryptography/PublicKey/EcdsaVerifier.cs)_

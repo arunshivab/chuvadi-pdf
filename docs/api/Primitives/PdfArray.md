@@ -106,6 +106,14 @@ double GetNumber(int index) => PdfReal.ToDouble(_items[index])
 
 Gets the element at `index` as a double value.
 
+### `AsRectangle`
+
+```csharp
+(double X1, double Y1, double X2, double Y2) AsRectangle()
+```
+
+Interprets this array as a PDF rectangle [x1, y1, x2, y2]. <exception cref="InvalidOperationException"> Thrown when the array does not contain exactly four numeric elements. </exception>
+
 ### `ToString`
 
 ```csharp

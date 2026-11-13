@@ -34,6 +34,22 @@ IReadOnlyList<string?>? DocumentTitles
 
 Gets or initialises the titles used for the per-document parent nodes when `WrapPerDocument` is set. Indexed positionally against the merge input list; a null, empty, or missing entry falls back to the document's `Chuvadi.Pdf.Documents.PdfDocument.Title`, then to "Document N" (one-based). Default: `null`.
 
+### `FormFields`
+
+```csharp
+MergeFormFields FormFields
+```
+
+Gets or initialises how the inputs' form fields are carried (3.34.0, D-335). Default: `MergeFormFields.RenameOnConflict`: every input's fields are kept, and a top-level field whose name is already taken is renamed `name_2`, `name_3`, and so on. Before 3.34.0 a merge dropped the form (the widgets stayed as plain annotations), which is `MergeFormFields.Drop`.
+
+### `Encryption`
+
+```csharp
+Chuvadi.Pdf.IO.EncryptionOptions? Encryption
+```
+
+Gets or initialises the encryption applied to the merged output, or null (the default) to write it unencrypted (3.34.0, D-335). The inputs' own encryption is never carried over.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/MergeOptions.cs`](../../../src/Chuvadi.Pdf.Operations/MergeOptions.cs)_

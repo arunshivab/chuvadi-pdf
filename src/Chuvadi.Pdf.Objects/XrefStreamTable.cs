@@ -92,9 +92,12 @@ public sealed class XrefStreamTable
                 "XRef stream dictionary missing or invalid /W array.");
         }
 
-        int w1 = wArray.GetInteger(0); // type field width
-        int w2 = wArray.GetInteger(1); // offset/objnum field width
-        int w3 = wArray.GetInteger(2); // generation/index field width
+        // 3.34.0: each width is checked (an integer of 0 to 8 bytes), so a
+        // damaged /W is a PdfParseException rather than an invalid cast or a
+        // silent overflow.
+        int w1 = Checked(wArray, 0, "/W", 0, MaxFieldWidth); // type field width
+        int w2 = Checked(wArray, 1, "/W", 0, MaxFieldWidth); // offset/objnum field width
+        int w3 = Checked(wArray, 2, "/W", 0, MaxFieldWidth); // generation/index field width
         int entrySize = w1 + w2 + w3;
 
         if (entrySize == 0)
@@ -122,13 +125,13 @@ public sealed class XrefStreamTable
                 }
 
                 int objectNumber = first + i;
-                int type = w1 > 0 ? ReadInt(decodedBytes, pos, w1) : 1; // default type=1
+                long type = w1 > 0 ? ReadInt(decodedBytes, pos, w1) : 1; // default type=1
                 pos += w1;
 
-                int field2 = ReadInt(decodedBytes, pos, w2);
+                long field2 = ReadInt(decodedBytes, pos, w2);
                 pos += w2;
 
-                int field3 = ReadInt(decodedBytes, pos, w3);
+                long field3 = ReadInt(decodedBytes, pos, w3);
                 pos += w3;
 
                 XrefEntry entry;
@@ -136,13 +139,13 @@ public sealed class XrefStreamTable
                 switch (type)
                 {
                     case 0:
-                        entry = XrefEntry.Free(objectNumber, field3, field2);
+                        entry = XrefEntry.Free(objectNumber, ToInt(field3), ToInt(field2));
                         break;
                     case 1:
-                        entry = new XrefEntry(objectNumber, field3, field2);
+                        entry = new XrefEntry(objectNumber, ToInt(field3), field2);
                         break;
                     case 2:
-                        entry = XrefEntry.Compressed(objectNumber, field2, field3);
+                        entry = XrefEntry.Compressed(objectNumber, ToInt(field2), ToInt(field3));
                         break;
                     default:
                         // Unknown type: skip per spec (§7.5.8.2).
@@ -214,16 +217,37 @@ public sealed class XrefStreamTable
 
         for (int i = 0; i < indexArray.Count; i += 2)
         {
-            ranges.Add((indexArray.GetInteger(i), indexArray.GetInteger(i + 1)));
+            ranges.Add((Checked(indexArray, i, "/Index", 0, int.MaxValue), Checked(indexArray, i + 1, "/Index", 0, int.MaxValue)));
         }
 
         return ranges;
     }
 
-    // Read a big-endian integer of width bytes from data at offset.
-    private static int ReadInt(byte[] data, int offset, int width)
+    // The widest /W field read (an 8-byte offset).
+    private const int MaxFieldWidth = 8;
+
+    // An /W or /Index entry: an integer within [min, max], else a parse error.
+    private static int Checked(PdfArray array, int index, string key, int min, int max)
     {
-        int value = 0;
+        if (array[index] is PdfInteger integer && integer.Value >= min && integer.Value <= max)
+        {
+            return integer.Value;
+        }
+
+        throw new PdfParseException(
+            $"XRef stream {key} entry {index} must be an integer from {min} to {max}.");
+    }
+
+    // A field value that must fit an object number, generation or index.
+    private static int ToInt(long value) =>
+        value <= int.MaxValue
+            ? (int)value
+            : throw new PdfParseException($"XRef stream field value {value} is out of range.");
+
+    // Read a big-endian integer of width bytes (at most 8) from data at offset.
+    private static long ReadInt(byte[] data, int offset, int width)
+    {
+        long value = 0;
 
         for (int i = 0; i < width; i++)
         {

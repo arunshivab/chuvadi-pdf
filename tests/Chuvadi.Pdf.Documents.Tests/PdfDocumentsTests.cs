@@ -304,8 +304,9 @@ public sealed class PdfDocumentTests
     {
         // The /Pages node lists itself as one of its own /Kids — a malformed
         // input that previously caused unbounded recursion in FindPage and
-        // a StackOverflowException at process level. Now caught by the depth
-        // guard and rejected as PdfCorruptionException.
+        // a StackOverflowException at process level. Since 3.34.0 (#52g) the
+        // looping entry is skipped with a warning; the tree then has no page,
+        // so the page /Count promises is reported as not found.
         using (MemoryStream ms = BuildPdfWithCyclicPageTree())
         {
             ms.Seek(0, SeekOrigin.Begin);
@@ -314,7 +315,8 @@ public sealed class PdfDocumentTests
             {
                 Action act = () => { PdfPage _ = doc.Pages[0]; };
                 act.Should().Throw<PdfCorruptionException>()
-                    .WithMessage("*Page tree depth*");
+                    .WithMessage("*not found*");
+                doc.Warnings.Should().Contain(w => w.Contains("loops back", StringComparison.Ordinal));
             }
         }
     }

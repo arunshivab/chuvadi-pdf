@@ -15,6 +15,16 @@ public static class ColorConversion
 __static__
 
 ```csharp
+static (byte R, byte G, byte B) CmykToSrgb(byte c, byte m, byte y, byte k)
+```
+
+Converts a single CMYK pixel to sRGB using the math approximation.
+
+### `CmykToSrgb`
+
+__static__
+
+```csharp
 static void CmykToSrgb(ReadOnlySpan<byte> cmyk, Span<byte> rgb)
 ```
 

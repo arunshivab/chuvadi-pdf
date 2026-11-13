@@ -14,6 +14,14 @@ public sealed class PdfDocument : IDisposable
 
 ## Properties
 
+### `Pages`
+
+```csharp
+PdfPageCollection Pages
+```
+
+Gets the collection of pages in the document. Pages are resolved lazily from the page tree. PDF 32000-1:2008 §7.7.3 — Page tree.
+
 ### `PageCount`
 
 ```csharp
@@ -102,6 +110,14 @@ byte[]? XmpMetadata => GetXmpMetadata()
 
 Gets the XMP metadata stream bytes, or null when the document has no /Metadata entry in its Catalog. PDF 32000-1:2008 §14.3.2 — Metadata streams.
 
+### `Catalog`
+
+```csharp
+PdfDictionary Catalog
+```
+
+Gets the raw document Catalog dictionary. PDF 32000-1:2008 §7.7.2 — Document Catalog.
+
 ### `Trailer`
 
 ```csharp
@@ -109,6 +125,14 @@ PdfDictionary Trailer => _reader.Trailer
 ```
 
 Gets the raw trailer dictionary.
+
+### `Linearization`
+
+```csharp
+LinearizationInfo? Linearization
+```
+
+Gets the document's linearization parameter dictionary, or null when the document is not linearized (Fast Web View).
 
 ### `IsLinearized`
 
@@ -133,6 +157,14 @@ XfaKind XfaKind
 ```
 
 Classifies the document's use of XFA (none, static, hybrid, or dynamic), so a consumer can tell forms that render from the page content apart from dynamic XFA that needs a processor. PDF 32000-1:2008 §12.7.8.
+
+### `Xfa`
+
+```csharp
+XfaPackets? Xfa
+```
+
+Gets the document's XFA (XML Forms Architecture) packets and data layer, or null when the document has no XFA form (`XfaKind` is `XfaKind.None`). Exposes the raw packets (template, datasets, config, …) and, from the datasets packet, the data layer as `XfaDataField` values with best-effort widget geometry. The result is computed once and cached. PDF 32000-1:2008 §12.7.8.
 
 ### `StructTreeRoot`
 
@@ -165,6 +197,14 @@ PdfDictionary? Info => _reader.Info
 ```
 
 Gets the raw document information dictionary, or null when absent.
+
+### `Encryption`
+
+```csharp
+EncryptionInfo? Encryption
+```
+
+Gets the encryption properties of this document, or null when the document is not encrypted. PDF 32000-1:2008 §7.6 — Encryption.
 
 ### `Objects`
 
@@ -204,7 +244,7 @@ Gets the receiver of warnings the document was opened with (`PdfOpenOptions.OnWa
 IReadOnlyList<string> Warnings => _reader.Warnings
 ```
 
-Gets the structural repairs made to the document. A non-empty list means the file was repaired while loading — for example, a page-tree object recovered from a corrupt cross-reference table, or an object whose cross-reference offset was wrong (recovered by scanning, read from a misnumbered definition, or treated as missing). Objects load lazily, so the list can grow after open: check it after rendering, extracting or saving, not only at open. The document is usable, and writing it back out (merge, reorder, extract, save) emits a clean, repaired file.
+Gets the structural repairs made to the document. A non-empty list means the file was repaired while loading — for example, a page-tree object recovered from a corrupt cross-reference table, or an object whose cross-reference offset was wrong (recovered by scanning, read from a misnumbered definition, or treated as missing). Since 3.34.0 it also lists damaged object syntax that was read past, a page whose missing or invalid MediaBox was taken as US Letter, a page tree that loops back on itself, and a file opened without a password because only its embedded files are encrypted. Objects load lazily, so the list can grow after open: check it after rendering, extracting or saving, not only at open. The document is usable, and writing it back out (merge, reorder, extract, save) emits a clean, repaired file.
 
 ### `IsRecovered`
 

@@ -43,6 +43,7 @@ internal static class FuzzTargets
         ["pdf-open"] = () => new PdfOpenTarget(),
         ["content-stream"] = () => new ContentStreamTarget(),
         ["truetype"] = () => new TrueTypeTarget(),
+        ["write-paths"] = () => new WritePathsTarget(),
     };
 
     public static IEnumerable<string> Names => _registry.Keys;

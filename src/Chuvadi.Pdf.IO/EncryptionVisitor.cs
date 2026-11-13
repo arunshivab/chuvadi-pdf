@@ -98,6 +98,65 @@ internal static class EncryptionVisitor
         return value;
     }
 
+    /// <summary>
+    /// 3.34.0 (#52d): as <see cref="Transform(PdfPrimitive, int, int, Func{byte[], int, int, byte[]}, bool)"/>,
+    /// with separate transforms for strings and for streams, so the /StrF,
+    /// /StmF and /EFF crypt filters and a stream's own /Crypt filter can
+    /// differ. The stream transform receives the stream's dictionary (its
+    /// strings already transformed) and raw data, and returns the stream.
+    /// </summary>
+    public static PdfPrimitive Transform(
+        PdfPrimitive value,
+        int objectNumber,
+        int generation,
+        Func<byte[], int, int, byte[]> transformString,
+        Func<PdfDictionary, byte[], int, int, PdfStream> transformStream,
+        bool skipMetadataEncryption)
+    {
+        if (value is PdfString s)
+        {
+            return new PdfString(transformString(s.Bytes, objectNumber, generation), s.PreferHexForm);
+        }
+
+        if (value is PdfStream stream)
+        {
+            PdfDictionary streamDict = (PdfDictionary)Transform(
+                stream.Dictionary, objectNumber, generation, transformString, transformStream, skipMetadataEncryption);
+            if (skipMetadataEncryption && IsMetadataStream(stream.Dictionary))
+            {
+                return new PdfStream(streamDict, stream.RawBytes);
+            }
+
+            return transformStream(streamDict, stream.RawBytes, objectNumber, generation);
+        }
+
+        if (value is PdfDictionary dict)
+        {
+            PdfDictionary copy = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> kvp in dict)
+            {
+                copy.Set(kvp.Key, Transform(
+                    kvp.Value, objectNumber, generation, transformString, transformStream, skipMetadataEncryption));
+            }
+
+            return copy;
+        }
+
+        if (value is PdfArray arr)
+        {
+            List<PdfPrimitive> items = new List<PdfPrimitive>(arr.Count);
+            for (int i = 0; i < arr.Count; i++)
+            {
+                items.Add(Transform(
+                    arr[i], objectNumber, generation, transformString, transformStream, skipMetadataEncryption));
+            }
+
+            return new PdfArray(items);
+        }
+
+        return value;
+    }
+
     private static bool IsMetadataStream(PdfDictionary dict)
     {
         PdfName? type = dict.GetName(PdfName.Type);

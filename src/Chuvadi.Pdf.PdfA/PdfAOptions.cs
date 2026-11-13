@@ -40,15 +40,26 @@ public sealed class PdfAOptions
 
     /// <summary>An optional document author written to the XMP metadata.</summary>
     public string? Author { get; init; }
+
+    /// <summary>
+    /// Gets whether an <c>/Info</c> date that gives no time zone is written to
+    /// the XMP metadata as UTC (3.34.0). By default (false) such a date is left
+    /// out of the XMP, since it has no known relation to UT (PDF 32000-1:2008
+    /// §7.9.4) and validators read an XMP date without a zone in their own
+    /// local zone; either way <see cref="PdfAResult.Warnings"/> says so. Omitted
+    /// parts take the §7.9.4 defaults (month and day 01, the rest zero).
+    /// </summary>
+    public bool AssumeUtcForZonelessDates { get; init; }
 }
 
 /// <summary>The outcome of a PDF/A write attempt.</summary>
 public sealed class PdfAResult
 {
-    internal PdfAResult(bool succeeded, IReadOnlyList<string> violations)
+    internal PdfAResult(bool succeeded, IReadOnlyList<string> violations, IReadOnlyList<string> warnings)
     {
         Succeeded = succeeded;
         Violations = violations;
+        Warnings = warnings;
     }
 
     /// <summary>
@@ -59,4 +70,11 @@ public sealed class PdfAResult
 
     /// <summary>Messages describing conformance problems that could not be fixed.</summary>
     public IReadOnlyList<string> Violations { get; }
+
+    /// <summary>
+    /// Gets what the conversion changed or left out that the caller may want
+    /// to know (3.34.0): for example an <c>/Info</c> date without a time zone
+    /// left out of the XMP metadata, or written as UTC.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; }
 }

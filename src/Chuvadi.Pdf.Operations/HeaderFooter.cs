@@ -35,22 +35,25 @@ public static class HeaderFooter
     /// </exception>
     public static void Apply(Stream output, PdfDocument document, HeaderFooterOptions options)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(options);
-
-        int total = document.PageCount;
-        HashSet<int> targets = ResolveTargets(options.PageIndices, total);
-
-        bool anyScaling = options.Fit != PageContentFit.Overlay;
-
-        if (!anyScaling)
+        PdfWriteGuard.Run(document, "stamped", () =>
         {
-            ApplyOverlay(output, document, options, targets, total);
-            return;
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(options);
 
-        ApplyWithReflow(output, document, options, targets, total);
+            int total = document.PageCount;
+            HashSet<int> targets = ResolveTargets(options.PageIndices, total);
+
+            bool anyScaling = options.Fit != PageContentFit.Overlay;
+
+            if (!anyScaling)
+            {
+                ApplyOverlay(output, document, options, targets, total);
+                return;
+            }
+
+            ApplyWithReflow(output, document, options, targets, total);
+        });
     }
 
     /// <summary>
@@ -92,7 +95,7 @@ public static class HeaderFooter
             return Array.Empty<HeaderFooterSegment>();
         }
 
-        return ComputeSegments(options, document.Pages[pageIndex].MediaBox, pageIndex, total);
+        return ComputeSegments(options, Frame(document.Pages[pageIndex], options).Box, pageIndex, total);
     }
 
     /// <summary>
@@ -173,7 +176,7 @@ public static class HeaderFooter
             }
 
             PdfPage page = document.Pages[pageIndex];
-            PdfRectangle mediaBox = page.MediaBox;
+            (PdfRectangle mediaBox, Transform toUser) = Frame(page, options);
             double pageH = mediaBox.Height;
 
             double headerBand = options.Header is null ? 0.0 : options.HeaderHeight;
@@ -195,6 +198,13 @@ public static class HeaderFooter
                     factor, 0, 0, factor,
                     mediaBox.X1 * (1 - factor),
                     (mediaBox.Y1 * factor) + footerBand);
+            }
+
+            // 3.34.0: with PlaceInDisplaySpace the scale is worked out in display
+            // space and carried to user space (user → display → scale → user).
+            if (!toUser.IsIdentity)
+            {
+                contentTransform = toUser.Invert().Multiply(contentTransform).Multiply(toUser);
             }
 
             string fragment = BuildBandFragments(options, page, pageIndex, total);
@@ -223,6 +233,14 @@ public static class HeaderFooter
                     mediaBox.X1, mediaBox.Y1, mediaBox.X2, mediaBox.Y1 + footerBand));
             }
 
+            if (!toUser.IsIdentity)
+            {
+                for (int b = 0; b < backgroundBands.Count; b++)
+                {
+                    backgroundBands[b] = ToUser(backgroundBands[b], toUser);
+                }
+            }
+
             editor.TransformAndOverlay(
                 pageIndex, contentTransform, options.Background, backgroundBands, overlays);
             editor.AddOverlayFontResource(pageIndex, StampText.FontResourceName, StampText.BuildHelveticaFont());
@@ -240,13 +258,46 @@ public static class HeaderFooter
         int total)
     {
         StringBuilder sb = new StringBuilder();
-        foreach (HeaderFooterSegment segment in ComputeSegments(options, page.MediaBox, pageIndex, total))
+        (PdfRectangle box, Transform toUser) = Frame(page, options);
+        List<HeaderFooterSegment> segments = ComputeSegments(options, box, pageIndex, total);
+        if (segments.Count > 0 && !toUser.IsIdentity)
+        {
+            // Display space → user space for every segment that follows.
+            sb.Append(string.Create(CultureInfo.InvariantCulture,
+                $"{toUser.A:0.######} {toUser.B:0.######} {toUser.C:0.######} {toUser.D:0.######} {toUser.E:0.######} {toUser.F:0.######} cm\n"));
+        }
+
+        foreach (HeaderFooterSegment segment in segments)
         {
             Transform placement = new Transform(1, 0, 0, 1, segment.X, segment.BaselineY);
             sb.Append(StampText.BuildShowText(segment.Text, placement, options.FontSize, options.Color));
         }
 
         return sb.ToString();
+    }
+
+    // The box the bands are laid out in, and the transform from that box's
+    // space to user space: the unrotated MediaBox and identity by default; with
+    // PlaceInDisplaySpace (3.34.0) the shown page at the origin and its
+    // display transform.
+    private static (PdfRectangle Box, Transform ToUser) Frame(PdfPage page, HeaderFooterOptions options)
+    {
+        if (!options.PlaceInDisplaySpace)
+        {
+            return (page.MediaBox, Transform.Identity);
+        }
+
+        PdfRectangle shown = page.GetDisplayBox(PdfDisplayBox.CropBox);
+        int rotation = (((page.Rotate - (page.Rotate % 90)) % 360) + 360) % 360;
+        (double w, double h) = rotation is 90 or 270 ? (shown.Height, shown.Width) : (shown.Width, shown.Height);
+        return (new PdfRectangle(0, 0, w, h), page.GetDisplayTransform(PdfDisplayBox.CropBox));
+    }
+
+    private static PdfRectangle ToUser(PdfRectangle r, Transform toUser)
+    {
+        PointF a = toUser.TransformPoint(new PointF(r.X1, r.Y1));
+        PointF b = toUser.TransformPoint(new PointF(r.X2, r.Y2));
+        return new PdfRectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
     }
 
     private static List<HeaderFooterSegment> ComputeSegments(

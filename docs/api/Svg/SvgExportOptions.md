@@ -98,6 +98,14 @@ double RasterFallbackDpi
 
 Resolution used when `DensityFallback` is `SvgDensityFallback.Rasterize` and the budget is exceeded. Default: 150 DPI.
 
+### `Rotation`
+
+```csharp
+int Rotation
+```
+
+Clockwise display rotation applied to the whole rendered page, in degrees: 0 (default), 90, 180 or 270. The SVG's width, height and `viewBox` are emitted for the rotated orientation (swapped for 90 and 270) and the page content is rotated inside it, so the output can be shown as-is without editing the SVG. It is a view rotation; the page's own `/Rotate` is added only when `ApplyPageRotation` is set. Values are normalised modulo 360 (so -90 means 270). <exception cref="ArgumentOutOfRangeException"> Thrown when the value is not a multiple of 90. </exception>
+
 ### `ApplyPageRotation`
 
 ```csharp

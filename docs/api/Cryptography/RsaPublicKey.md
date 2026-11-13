@@ -48,6 +48,14 @@ BigInteger PublicExponent
 
 The RSA public exponent (e), typically 65537.
 
+### `ModulusSizeBytes`
+
+```csharp
+int ModulusSizeBytes
+```
+
+The modulus size in bytes (k), used for padding calculations in RFC 8017.
+
 ## Methods
 
 ### `FromSubjectPublicKey`

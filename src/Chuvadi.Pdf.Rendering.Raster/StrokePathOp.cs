@@ -54,4 +54,18 @@ public sealed class StrokePathOp : RenderOp
 
     /// <summary>Gets the stroke parameters (colour, width, cap, join, miter limit, dash).</summary>
     public StrokeStyle Style { get; }
+
+    // 3.34.0 (#23): the pen, the linear part of the CTM the stroke was made
+    // under (user space to the list's space), with the line width and dash in
+    // user space. The rasterizer composes it with the space the list is drawn
+    // in, so a stroke in a scaled form XObject gets its scaled width, and one
+    // under an uneven scale is drawn with an elliptical pen. Null: the width
+    // in Style is used as it is (as before 3.34.0).
+    internal Transform? Pen { get; init; }
+
+    internal double UserWidth { get; init; }
+
+    internal double[] UserDash { get; init; } = System.Array.Empty<double>();
+
+    internal double UserDashOffset { get; init; }
 }

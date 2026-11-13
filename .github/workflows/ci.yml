@@ -144,6 +144,40 @@ jobs:
           --no-restore
           --configuration Release
 
+  publish-smoke:
+    # 3.34.0 (D-335 item 8): publishes a console app trimmed and ReadyToRun,
+    # then runs it (author, render to PNG, extract, search). Catches a
+    # trimming or ReadyToRun problem in any Chuvadi assembly.
+    name: Publish Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Fetch Chuvadi.Fonts (pinned by SHA-256, D-147)
+        shell: pwsh
+        run: ./build/fetch-fonts.ps1
+
+      - name: Publish (trimmed, ReadyToRun)
+        run: >
+          dotnet publish
+          tests/Chuvadi.Pdf.PublishSmoke/Chuvadi.Pdf.PublishSmoke.csproj
+          --configuration Release
+          --runtime linux-x64
+          --self-contained
+          -p:PublishTrimmed=true
+          -p:PublishReadyToRun=true
+          -p:TreatWarningsAsErrors=true
+          --output publish-smoke
+
+      - name: Run
+        run: ./publish-smoke/Chuvadi.Pdf.PublishSmoke
+
   perf-baseline:
     # Non-required job (not in branch protection): catches pathological
     # performance regressions against the committed perf baseline with a

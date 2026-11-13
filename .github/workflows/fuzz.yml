@@ -2,8 +2,8 @@ name: fuzz
 
 on:
   schedule:
-    # Sundays at 02:00 UTC. Runs all three targets for 15 minutes each.
-    # Total runtime ~50 min (build + 3 × 15 min + artifact upload).
+    # Sundays at 02:00 UTC. Runs all four targets for 15 minutes each, in
+    # parallel jobs (write-paths added in 3.34.0).
     - cron: '0 2 * * 0'
   workflow_dispatch:
     inputs:
@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [pdf-open, content-stream, truetype]
+        target: [pdf-open, content-stream, truetype, write-paths]
 
     steps:
       - name: Checkout

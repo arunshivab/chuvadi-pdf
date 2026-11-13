@@ -48,6 +48,14 @@ int[]? PageIndices
 
 Gets or initialises which pages to watermark. Null means all pages. Otherwise a zero-based page index set.
 
+### `PlaceInDisplaySpace`
+
+```csharp
+bool PlaceInDisplaySpace
+```
+
+Gets or initialises whether the watermark is centred on the page as a viewer shows it (3.34.0, D-335): on the shown box (the CropBox intersected with the MediaBox), with `RotationDegrees` measured from the upright view after the page's `/Rotate`. Default: false, the historical placement on the unrotated MediaBox.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Watermark/ImageWatermarkOptions.cs`](../../../src/Chuvadi.Pdf.Watermark/ImageWatermarkOptions.cs)_

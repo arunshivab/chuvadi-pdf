@@ -372,6 +372,22 @@ bool Cv14
 
 Gets or inits character variant 14 (cv14). Default: false.
 
+## Methods
+
+### `IsEnabled`
+
+```csharp
+bool IsEnabled(string tag) => tag switch
+```
+
+Returns whether a four-character OpenType feature tag is enabled by this feature set. Tags not explicitly listed are treated as disabled.
+
+**Parameters**
+
+- `tag` — The four-character ASCII feature tag, e.g. "liga".
+
+**Returns:** `true` if the feature is enabled.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Text.Shaping/ShapingFeatures.cs`](../../../src/Chuvadi.Pdf.Text.Shaping/ShapingFeatures.cs)_

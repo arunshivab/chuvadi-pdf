@@ -42,4 +42,21 @@ public sealed class MergeOptions
     /// "Document N" (one-based). Default: <see langword="null"/>.
     /// </summary>
     public IReadOnlyList<string?>? DocumentTitles { get; init; }
+
+    /// <summary>
+    /// Gets or initialises how the inputs' form fields are carried (3.34.0,
+    /// D-335). Default: <see cref="MergeFormFields.RenameOnConflict"/>: every
+    /// input's fields are kept, and a top-level field whose name is already
+    /// taken is renamed <c>name_2</c>, <c>name_3</c>, and so on. Before 3.34.0
+    /// a merge dropped the form (the widgets stayed as plain annotations),
+    /// which is <see cref="MergeFormFields.Drop"/>.
+    /// </summary>
+    public MergeFormFields FormFields { get; init; } = MergeFormFields.RenameOnConflict;
+
+    /// <summary>
+    /// Gets or initialises the encryption applied to the merged output, or
+    /// null (the default) to write it unencrypted (3.34.0, D-335). The inputs'
+    /// own encryption is never carried over.
+    /// </summary>
+    public Chuvadi.Pdf.IO.EncryptionOptions? Encryption { get; init; }
 }

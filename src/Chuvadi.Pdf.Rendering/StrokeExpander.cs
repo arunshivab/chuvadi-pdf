@@ -16,8 +16,7 @@ namespace Chuvadi.Pdf.Rendering;
 /// by half the stroke width on each side.
 /// </summary>
 /// <remarks>
-/// Butt, round and square caps; miter and bevel joins (round joins are
-/// approximated with bevels).
+/// Butt, round and square caps; mitred joins, and round joins (3.34.0).
 /// A dash pattern splits each sub-path into its dashes, each stroked as an
 /// open sub-path with caps (3.25).
 /// The output is a list of sub-paths suitable for
@@ -243,6 +242,12 @@ public sealed class StrokeExpander
                 left.Add(l0);
                 right.Add(r0);
             }
+            else if (havePrev && left.Count > 0 && style.Join == LineJoin.Round
+                && RoundJoin(left, right, p0, prevDx, prevDy, curDx, curDy, l0, r0, halfWidth))
+            {
+                // 3.34.0 (#22): a round join; the outer side follows an arc
+                // round the vertex, the inner side is mitred.
+            }
             else if (havePrev && left.Count > 0)
             {
                 // Mitre the join: intersect the previous and current offset
@@ -301,6 +306,60 @@ public sealed class StrokeExpander
         }
 
         return new List<List<PointF>> { outline };
+    }
+
+    // 3.34.0 (#22): a round join at `vertex`. On the outer side of the turn
+    // the previous segment's offset end is kept and an arc of radius
+    // halfWidth round the vertex leads to the current segment's offset start
+    // (PDF 32000-1:2008 §8.4.3.4, line join style 1); the inner side is
+    // mitred as for other joins. False (nothing changed) for a straight or
+    // degenerate join, which the caller mitres.
+    private static bool RoundJoin(
+        List<PointF> left, List<PointF> right, PointF vertex,
+        double prevDx, double prevDy, double curDx, double curDy,
+        PointF l0, PointF r0, double halfWidth)
+    {
+        double prevLen = Math.Sqrt((prevDx * prevDx) + (prevDy * prevDy));
+        double curLen = Math.Sqrt((curDx * curDx) + (curDy * curDy));
+        double cross = (prevDx * curDy) - (prevDy * curDx);
+        if (prevLen < 1e-10 || curLen < 1e-10 || Math.Abs(cross) < 1e-12 * prevLen * curLen)
+        {
+            return false;
+        }
+
+        // A left turn (cross > 0) has its outside on the right.
+        bool outerIsLeft = cross < 0;
+        double sign = outerIsLeft ? 1 : -1;
+        double a0 = Math.Atan2(sign * prevDx / prevLen, sign * -prevDy / prevLen);
+        double a1 = Math.Atan2(sign * curDx / curLen, sign * -curDy / curLen);
+        double delta = a1 - a0;
+        while (delta > Math.PI)
+        {
+            delta -= 2 * Math.PI;
+        }
+
+        while (delta <= -Math.PI)
+        {
+            delta += 2 * Math.PI;
+        }
+
+        int steps = Math.Clamp((int)Math.Ceiling(halfWidth * Math.Abs(delta) * 0.75), 2, 64);
+        List<PointF> outer = outerIsLeft ? left : right;
+        for (int k = 1; k < steps; k++)
+        {
+            double a = a0 + (delta * k / steps);
+            outer.Add(new PointF(vertex.X + (halfWidth * Math.Cos(a)), vertex.Y + (halfWidth * Math.Sin(a))));
+        }
+
+        outer.Add(outerIsLeft ? l0 : r0);
+
+        List<PointF> inner = outerIsLeft ? right : left;
+        PointF innerStart = outerIsLeft ? r0 : l0;
+        PointF prevInner = inner[inner.Count - 1];
+        inner[inner.Count - 1] = TryMitre(prevInner, prevDx, prevDy, innerStart, curDx, curDy, halfWidth, out PointF mitre)
+            ? mitre
+            : innerStart;
+        return true;
     }
 
     private static bool TryMitre(
@@ -382,9 +441,12 @@ public sealed class StrokeExpander
             }
             else
             {
-                int last = left.Count - 1;
-                left[last] = new PointF(left[last].X + ex, left[last].Y + ey);
-                right[last] = new PointF(right[last].X + ex, right[last].Y + ey);
+                // The two sides can differ in length: a round join adds its
+                // arc to the outer side only (3.34.0, #22).
+                int lastLeft = left.Count - 1;
+                int lastRight = right.Count - 1;
+                left[lastLeft] = new PointF(left[lastLeft].X + ex, left[lastLeft].Y + ey);
+                right[lastRight] = new PointF(right[lastRight].X + ex, right[lastRight].Y + ey);
             }
         }
         else if (cap == LineCap.Round)

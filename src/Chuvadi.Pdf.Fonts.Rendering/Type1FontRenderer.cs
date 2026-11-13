@@ -89,6 +89,28 @@ public sealed class Type1FontRenderer
         return new Type1FontRenderer(charstrings, subrs, encoding);
     }
 
+    // 3.34.0 (#49d): the glyph names the program's /CharStrings defines, for
+    // a PDF/A /CharSet; empty when the program cannot be read.
+    internal static IReadOnlyCollection<string> CharStringNames(byte[] fontFile)
+    {
+        ArgumentNullException.ThrowIfNull(fontFile);
+        byte[] program = NormalizePfb(fontFile);
+        int eexecPos = IndexOf(program, "eexec", 0);
+        if (eexecPos < 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        int binStart = eexecPos + 5;
+        while (binStart < program.Length && IsWhitespace(program[binStart]))
+        {
+            binStart++;
+        }
+
+        byte[] privatePart = Decrypt(ExtractEexecBinary(program, binStart), EexecR, 4);
+        return ParseCharStrings(privatePart, ParseLenIV(privatePart)).Keys;
+    }
+
     /// <summary>
     /// Returns the outline path for <paramref name="code"/>, scaled to
     /// <paramref name="pointSize"/>, and reports the glyph advance in points.
@@ -428,6 +450,7 @@ public sealed class Type1FontRenderer
                 double x4 = _flexPoints[8], y4 = _flexPoints[9];
                 double x5 = _flexPoints[10], y5 = _flexPoints[11];
                 double x6 = _flexPoints[12], y6 = _flexPoints[13];
+                StartSubpathIfNeeded();
                 Path.CubicBezierTo(new PointF((float)x1, (float)y1), new PointF((float)x2, (float)y2), new PointF((float)x3, (float)y3));
                 Path.CubicBezierTo(new PointF((float)x4, (float)y4), new PointF((float)x5, (float)y5), new PointF((float)x6, (float)y6));
                 _x = x6;
@@ -474,13 +497,28 @@ public sealed class Type1FontRenderer
 
         private void LineBy(double dx, double dy)
         {
+            StartSubpathIfNeeded();
             _x += dx;
             _y += dy;
             Path.LineTo(_x, _y);
         }
 
+        // 3.34.0 (#52b): a line or curve with no open subpath (none yet, or
+        // after closepath) starts one at the current point, which hsbw/sbw
+        // set to the side bearing. Before, the path threw "LineTo requires a
+        // current point" and the whole page failed (pdf.js issue7769).
+        private void StartSubpathIfNeeded()
+        {
+            if (!_open)
+            {
+                Path.MoveTo(_x, _y);
+                _open = true;
+            }
+        }
+
         private void CurveBy(double dx1, double dy1, double dx2, double dy2, double dx3, double dy3)
         {
+            StartSubpathIfNeeded();
             double c1x = _x + dx1;
             double c1y = _y + dy1;
             double c2x = c1x + dx2;

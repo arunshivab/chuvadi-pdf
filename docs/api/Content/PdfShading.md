@@ -115,6 +115,34 @@ Evaluates the shading colour at a normalised axis position `s` in [0, 1], which 
 
 **Returns:** The colour components in the shading's colour space.
 
+### `EvaluateRgb`
+
+```csharp
+(double R, double G, double B) EvaluateRgb(double s)
+```
+
+Evaluates the shading colour at a normalised axis position and converts it to sRGB. Device gray (1), RGB (3), and CMYK (4) component counts are converted directly; other counts are mapped to gray or truncated to RGB.
+
+**Parameters**
+
+- `s` — Normalised position along the axis, clamped to [0, 1].
+
+**Returns:** Red, green, and blue each in [0, 1].
+
+### `ToRgb`
+
+```csharp
+(double R, double G, double B) ToRgb(double[] components)
+```
+
+Converts colour components in the shading's colour space to sRGB by component count: 1 = gray, 3 = RGB, 4 = CMYK.
+
+**Parameters**
+
+- `components` — The colour components, each in [0, 1].
+
+**Returns:** Red, green, and blue each in [0, 1].
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Content/PdfShading.cs`](../../../src/Chuvadi.Pdf.Content/PdfShading.cs)_

@@ -11,6 +11,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters.Jbig2;
 
@@ -87,6 +88,7 @@ internal static class SymbolDictionary
 
         while (decoded < newCount)
         {
+            PdfWorkScope.ThrowIfCancellationRequested(); // 3.34.0 (#20)
             int hcdh = ArithmeticIntegerCoder.Decode(mq, iadh)
                 ?? throw new FilterException(FilterName, "Unexpected OOB decoding symbol height class.");
 

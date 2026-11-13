@@ -126,81 +126,84 @@ public static class PdfSanitizer
     /// </exception>
     public static SanitizeReport Sanitize(PdfDocument document, Stream output, SanitizeOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(output);
-        options ??= new SanitizeOptions();
-        if (document.Encryption is not null && !options.AllowEncryptedInput)
+        return PdfWriteGuard.Run(document, "sanitized", () =>
         {
-            throw new OperationsException(
-                "The document is encrypted; set SanitizeOptions.AllowEncryptedInput to write a decrypted, sanitized copy.");
-        }
-
-        // Copy everything reachable from the trailer, renumbered densely.
-        Dictionary<int, PdfPrimitive> reachable = new Dictionary<int, PdfPrimitive>();
-        foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(output);
+            options ??= new SanitizeOptions();
+            if (document.Encryption is not null && !options.AllowEncryptedInput)
             {
-                PdfCompressor.Collect(value, document.Objects, reachable);
+                throw new OperationsException(
+                    "The document is encrypted; set SanitizeOptions.AllowEncryptedInput to write a decrypted, sanitized copy.");
             }
-        }
 
-        Dictionary<int, int> remap = new Dictionary<int, int>(reachable.Count);
-        int next = 1;
-        foreach (int number in reachable.Keys)
-        {
-            remap[number] = next++;
-        }
-
-        List<PdfIndirectObject> objects = new List<PdfIndirectObject>(reachable.Count);
-        Dictionary<int, PdfPrimitive> byNumber = new Dictionary<int, PdfPrimitive>(reachable.Count);
-        foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
-        {
-            PdfPrimitive copy = PdfCompressor.DeepCopy(entry.Value, remap);
-            objects.Add(new PdfIndirectObject(new PdfObjectId(remap[entry.Key], 0), copy));
-            byNumber[remap[entry.Key]] = copy;
-        }
-
-        PdfDictionary trailer = new PdfDictionary();
-        foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
-        {
-            if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+            // Copy everything reachable from the trailer, renumbered densely.
+            Dictionary<int, PdfPrimitive> reachable = new Dictionary<int, PdfPrimitive>();
+            foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
             {
-                trailer.Set(key, PdfCompressor.DeepCopy(value, remap));
-            }
-        }
-
-        if (document.Trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? fileId))
-        {
-            trailer.Set(PdfName.Intern("ID"), PdfCompressor.DeepCopy(fileId, remap));
-        }
-
-        SanitizeReport report = new SanitizeReport();
-        HashSet<PdfStream> embedded = Disarm(trailer, byNumber, options, report, apply: true);
-        PdfCompressor.GarbageCollect(objects, trailer);
-
-        // Embedded file streams still reachable some other way (a private
-        // key, an unusual parent) keep their dictionary but lose their data.
-        for (int i = 0; i < objects.Count; i++)
-        {
-            if (objects[i].Value is PdfStream stream && embedded.Contains(stream))
-            {
-                PdfDictionary dict = new PdfDictionary();
-                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
                 {
-                    dict.Set(entry.Key, entry.Value);
+                    PdfCompressor.Collect(value, document.Objects, reachable);
                 }
-
-                dict.Remove(PdfName.Intern("Filter"));
-                dict.Remove(PdfName.Intern("DecodeParms"));
-                dict.Remove(PdfName.Intern("Params"));
-                dict.Set(PdfName.Length, 0);
-                objects[i] = new PdfIndirectObject(objects[i].Id, new PdfStream(dict, Array.Empty<byte>()));
             }
-        }
 
-        PdfWriter.Write(output, objects, trailer);
-        return report;
+            Dictionary<int, int> remap = new Dictionary<int, int>(reachable.Count);
+            int next = 1;
+            foreach (int number in reachable.Keys)
+            {
+                remap[number] = next++;
+            }
+
+            List<PdfIndirectObject> objects = new List<PdfIndirectObject>(reachable.Count);
+            Dictionary<int, PdfPrimitive> byNumber = new Dictionary<int, PdfPrimitive>(reachable.Count);
+            foreach (KeyValuePair<int, PdfPrimitive> entry in reachable)
+            {
+                PdfPrimitive copy = PdfCompressor.DeepCopy(entry.Value, remap);
+                objects.Add(new PdfIndirectObject(new PdfObjectId(remap[entry.Key], 0), copy));
+                byNumber[remap[entry.Key]] = copy;
+            }
+
+            PdfDictionary trailer = new PdfDictionary();
+            foreach (PdfName key in new[] { PdfName.Root, PdfName.Intern("Info") })
+            {
+                if (document.Trailer.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    trailer.Set(key, PdfCompressor.DeepCopy(value, remap));
+                }
+            }
+
+            if (document.Trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? fileId))
+            {
+                trailer.Set(PdfName.Intern("ID"), PdfCompressor.DeepCopy(fileId, remap));
+            }
+
+            SanitizeReport report = new SanitizeReport();
+            HashSet<PdfStream> embedded = Disarm(trailer, byNumber, options, report, apply: true);
+            PdfCompressor.GarbageCollect(objects, trailer);
+
+            // Embedded file streams still reachable some other way (a private
+            // key, an unusual parent) keep their dictionary but lose their data.
+            for (int i = 0; i < objects.Count; i++)
+            {
+                if (objects[i].Value is PdfStream stream && embedded.Contains(stream))
+                {
+                    PdfDictionary dict = new PdfDictionary();
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+                    {
+                        dict.Set(entry.Key, entry.Value);
+                    }
+
+                    dict.Remove(PdfName.Intern("Filter"));
+                    dict.Remove(PdfName.Intern("DecodeParms"));
+                    dict.Remove(PdfName.Intern("Params"));
+                    dict.Set(PdfName.Length, 0);
+                    objects[i] = new PdfIndirectObject(objects[i].Id, new PdfStream(dict, Array.Empty<byte>()));
+                }
+            }
+
+            PdfWriter.Write(output, objects, trailer);
+            return report;
+        });
     }
 
     /// <summary>

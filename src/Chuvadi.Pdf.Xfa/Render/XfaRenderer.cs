@@ -91,38 +91,42 @@ public static class XfaRenderer
     /// <exception cref="XfaRenderException">The document has no usable XFA template.</exception>
     public static void Render(Stream output, PdfDocument document, XfaRenderOptions options)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(options);
-
-        XfaPackets? packets = document.Xfa;
-        if (packets?.Template is null)
+        PdfWriteGuard.Run(new[] { document }, "rendered", () =>
         {
-            throw new XfaRenderException("The document does not contain an XFA template packet.");
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(options);
 
-        XfaSubform root = XfaTemplateParser.Parse(packets.Template.Xml)
-            ?? throw new XfaRenderException("The XFA template does not contain a root subform.");
+            XfaPackets? packets = document.Xfa;
+            if (packets?.Template is null)
+            {
+                throw new XfaRenderException("The document does not contain an XFA template packet.");
+            }
 
-        // Merge datasets values into the template fields so bound fields render
-        // their actual values rather than the (usually empty) template defaults.
-        XfaDataMerge.Apply(root, packets.DataFields);
+            XfaSubform root = XfaTemplateParser.Parse(packets.Template.Xml)
+                ?? throw new XfaRenderException("The XFA template does not contain a root subform.");
 
-        // Run embedded scripts per the requested mode. Scripts execute after the
-        // data merge so they observe merged values, and before pagination so the
-        // computed values flow through layout. Each script fails soft.
-        RunScripts(root, options.ScriptMode);
+            // Merge datasets values into the template fields so bound fields render
+            // their actual values rather than the (usually empty) template defaults.
+            XfaDataMerge.Apply(root, packets.DataFields);
 
-        PdfDocumentBuilder builder = PdfDocumentBuilder.Create();
+            // Run embedded scripts per the requested mode. Scripts execute after the
+            // data merge so they observe merged values, and before pagination so the
+            // computed values flow through layout. Each script fails soft.
+            RunScripts(root, options.ScriptMode);
 
-        foreach (XfaComposedPage composed in XfaPaginator.Compose(root))
-        {
-            PageBuilder page = builder.AddPage(ResolvePageSize(composed.Area));
-            XfaContentEmitter.Emit(page, composed.Boxes);
-        }
+            PdfDocumentBuilder builder = PdfDocumentBuilder.Create();
 
-        byte[] bytes = builder.ToByteArray();
-        output.Write(bytes, 0, bytes.Length);
+            foreach (XfaComposedPage composed in XfaPaginator.Compose(root))
+            {
+                PageBuilder page = builder.AddPage(ResolvePageSize(composed.Area));
+                XfaContentEmitter.Emit(page, composed.Boxes);
+            }
+
+            byte[] bytes = builder.ToByteArray();
+            output.Write(bytes, 0, bytes.Length);
+            return true;
+        }, passThrough: ex => ex is XfaRenderException or XfaScriptException);
     }
 
     private static void RunScripts(XfaSubform root, XfaScriptMode mode)
