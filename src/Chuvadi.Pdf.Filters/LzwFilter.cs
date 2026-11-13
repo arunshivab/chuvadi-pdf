@@ -46,7 +46,6 @@ public sealed class LzwFilter : IStreamFilter
         InitTable(table);
 
         int codeBits = 9;
-        int maxCode = (1 << codeBits) - 1 - earlyChange;
         int nextCode = FirstCode;
 
         int code = reader.ReadBits(codeBits);
@@ -60,7 +59,6 @@ public sealed class LzwFilter : IStreamFilter
         {
             InitTable(table);
             codeBits = 9;
-            maxCode = (1 << codeBits) - 1 - earlyChange;
             nextCode = FirstCode;
             code = reader.ReadBits(codeBits);
         }
@@ -88,7 +86,6 @@ public sealed class LzwFilter : IStreamFilter
             {
                 InitTable(table);
                 codeBits = 9;
-                maxCode = (1 << codeBits) - 1 - earlyChange;
                 nextCode = FirstCode;
 
                 code = reader.ReadBits(codeBits);
@@ -136,10 +133,14 @@ public sealed class LzwFilter : IStreamFilter
                 table.Add(newEntry);
                 nextCode++;
 
-                if (nextCode >= maxCode && codeBits < MaxCodeBits)
+                // 3.34.0: the code width grows once the next code (plus
+                // EarlyChange) reaches the width's limit (PDF 32000-1:2008
+                // §7.4.4.2), as every other reader does; before, it grew one
+                // code too early, so valid streams failed once codes passed
+                // 9 bits.
+                if (nextCode + earlyChange >= (1 << codeBits) && codeBits < MaxCodeBits)
                 {
                     codeBits++;
-                    maxCode = (1 << codeBits) - 1 - earlyChange;
                 }
             }
 
@@ -167,7 +168,6 @@ public sealed class LzwFilter : IStreamFilter
         InitEncodeTable(encodeTable);
 
         int codeBits = 9;
-        int maxCode = (1 << codeBits) - 1 - earlyChange;
         int nextCode = FirstCode;
 
         writer.WriteBits(ClearCode, codeBits);
@@ -197,10 +197,11 @@ public sealed class LzwFilter : IStreamFilter
                     current.Add(data[i]);
                     encodeTable[new ByteSequenceKey(current.ToArray())] = nextCode++;
 
-                    if (nextCode > maxCode && codeBits < MaxCodeBits)
+                    // 3.34.0: the encoder is one entry ahead of a decoder,
+                    // so it widens one code later (see Decode).
+                    if (nextCode + earlyChange > (1 << codeBits) && codeBits < MaxCodeBits)
                     {
                         codeBits++;
-                        maxCode = (1 << codeBits) - 1 - earlyChange;
                     }
                 }
                 else
@@ -208,7 +209,6 @@ public sealed class LzwFilter : IStreamFilter
                     writer.WriteBits(ClearCode, codeBits);
                     InitEncodeTable(encodeTable);
                     codeBits = 9;
-                    maxCode = (1 << codeBits) - 1 - earlyChange;
                     nextCode = FirstCode;
                 }
 

@@ -26,6 +26,14 @@ bool IsClean => Survivors.Count == 0
 
 Gets whether nothing survives inside any region.
 
+### `SurvivingText`
+
+```csharp
+string SurvivingText
+```
+
+Gets the surviving glyph text, concatenated in page and drawing order.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Redaction/RedactionVerifier.cs`](../../../src/Chuvadi.Pdf.Redaction/RedactionVerifier.cs)_

@@ -122,6 +122,14 @@ System.DateTimeOffset? Timestamp
 
 Gets or initialises the caller-supplied timestamp for the date/time tokens, or null.
 
+### `PlaceInDisplaySpace`
+
+```csharp
+bool PlaceInDisplaySpace
+```
+
+Gets or initialises whether the bands are placed on the page as a viewer shows it (3.34.0, D-335): inside the shown box (the CropBox intersected with the MediaBox) and upright after the page's `/Rotate`, so the header is at the top of what the reader sees. Default: false, the historical placement on the unrotated MediaBox. With this set, `HeaderFooter.ResolveSegments` gives positions in display space (see `Chuvadi.Pdf.Documents.PdfPage.GetDisplayTransform`).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/HeaderFooterOptions.cs`](../../../src/Chuvadi.Pdf.Operations/HeaderFooterOptions.cs)_

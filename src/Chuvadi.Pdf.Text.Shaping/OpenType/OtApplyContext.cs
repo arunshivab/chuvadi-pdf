@@ -441,8 +441,18 @@ internal sealed partial class OtApplyContext
 
     private bool ApplySubtables(OtLookup lookup)
     {
-        foreach (int st in lookup.Subtables)
+        int glyph = Buffer.Cur().Codepoint;
+        int[] subtables = lookup.Subtables;
+        SetDigest[] digests = lookup.SubtableDigests;
+        for (int i = 0; i < subtables.Length; i++)
         {
+            // 3.34.0 (#27): skip a subtable whose coverage cannot hold the glyph.
+            if (!digests[i].MayHave(glyph))
+            {
+                continue;
+            }
+
+            int st = subtables[i];
             bool applied = IsGsub ? ApplyGsubSubtable(lookup.LookupType, st) : ApplyGposSubtable(lookup.LookupType, st);
             if (applied)
             {

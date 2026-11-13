@@ -106,6 +106,14 @@ double Scale => Dpi / 72.0
 
 Computes the scale factor from PDF points to device pixels for this DPI.
 
+### `Rotation`
+
+```csharp
+int Rotation
+```
+
+Gets or initialises a clockwise view rotation applied to the rendered page, in degrees: 0 (default), 90, 180 or 270. The output buffer takes the rotated size (width and height swapped for 90 and 270). Values are normalised modulo 360, so -90 means 270. <exception cref="ArgumentOutOfRangeException"> Thrown when the value is not a multiple of 90. </exception>
+
 ### `ApplyPageRotation`
 
 ```csharp
@@ -145,6 +153,16 @@ PdfDisplayBox DisplayBox
 ```
 
 Gets or initialises which page box is rendered (3.32.0, P2). Default: `PdfDisplayBox.CropBox` — the CropBox intersected with the MediaBox, what a viewer shows; content outside it is not drawn, and the output is the box's size with its lower-left corner at the bottom-left pixel. `PdfDisplayBox.MediaBox` renders the whole MediaBox, as before 3.32.0. Pages whose CropBox is absent or equals the MediaBox render the same either way. `PageRasterizer.RenderRegion` is not affected: its region is in absolute user space.
+
+## Methods
+
+### `PixelSize`
+
+```csharp
+(int Width, int Height) PixelSize(double pageWidthPt, double pageHeightPt)
+```
+
+Computes the pixel dimensions for a page of the given PDF point size at this option's DPI.
 
 ---
 

@@ -58,6 +58,25 @@ Straightens the quadrilateral to a rectangle of the given size.
 
 **Returns:** The corrected image. <exception cref="ArgumentNullException">Thrown when `source` is null.</exception> <exception cref="ArgumentOutOfRangeException">Thrown when an output dimension is out of range.</exception> <exception cref="ArgumentException">Thrown when the corners do not form a convex quadrilateral.</exception>
 
+### `SuggestSize`
+
+__static__
+
+```csharp
+static (int Width, int Height) SuggestSize(PointF topLeft, PointF topRight, PointF bottomRight, PointF bottomLeft)
+```
+
+Returns the output size `Correct(ImageFrame, PointF, PointF, PointF, PointF)` uses for these corners: the longer horizontal edge by the longer vertical edge, rounded, each at least 1 and at most `MaxDimension`.
+
+**Parameters**
+
+- `topLeft` — The top-left corner.
+- `topRight` — The top-right corner.
+- `bottomRight` — The bottom-right corner.
+- `bottomLeft` — The bottom-left corner.
+
+**Returns:** The suggested width and height in pixels.
+
 ## Fields
 
 ### `MaxDimension`

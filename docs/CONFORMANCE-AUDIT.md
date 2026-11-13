@@ -1,5 +1,10 @@
 # Conformance Audit — Phase A (code survey)
 
+> **Superseded (3.34.0, D-339).** The current record of what Chuvadi does
+> and lacks, against the spec and against viewers and editors, is
+> `docs/CAPABILITY-AUDIT.md`, updated every release. This file is kept for
+> history.
+
 > **Status: historical snapshot, partially superseded (last reconciled 2026-07-07,
 > v3.16.0).** This is the original Phase-A code survey dated 2026-06-15. Several
 > gaps it records have since shipped — notably shadings (`sh`), ExtGState

@@ -81,6 +81,16 @@ Returns a copy with layers overridden by id (3.32.0): the `OptionalContentGroup.
 
 **Remarks:** Overrides apply to locked layers too (`OptionalContentGroup.IsLocked`): the lock stops a viewer's user, not the program (D-230).
 
+### `ForPrinting`
+
+```csharp
+OptionalContentVisibility ForPrinting()
+```
+
+Returns the visibility for printing (3.34.0): the same default configuration and overrides, but the `/AS` auto-state applied is the one for the Print event, so a layer whose `/Usage /Print /PrintState` is `/ON` or `/OFF` takes that state, and the View auto-state is not applied (PDF 32000-1:2008 §8.11.4.4). The renderers and text extraction use it with `AnnotationMode.Print`. A visibility that shows everything, or that is already for printing, is returned as it is.
+
+**Returns:** The visibility for printing.
+
 ### `IsLayerVisible`
 
 ```csharp

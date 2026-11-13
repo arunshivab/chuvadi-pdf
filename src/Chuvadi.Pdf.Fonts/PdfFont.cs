@@ -527,7 +527,24 @@ public sealed class PdfFont
 
         // Decode the stream through its whole /Filter chain (a single name or
         // an array), with the matching /DecodeParms for each filter.
-        byte[] rawBytes = DecodeFilterChain(stream, resolver);
+        byte[] rawBytes;
+        try
+        {
+            rawBytes = DecodeFilterChain(stream, resolver);
+        }
+        catch (FilterException ex)
+        {
+            // 3.34.0 (#52c): a damaged ToUnicode stream gives the mappings
+            // decoded before the damage (a single filter), or none, and the
+            // font's encoding maps the rest, instead of failing the page.
+            bool chain = stream.Dictionary.TryGetValue(PdfName.Filter, out PdfPrimitive? f) && resolver.Resolve(f) is PdfArray { Count: > 1 };
+            if (chain || ex.PartialOutput is not { Length: > 0 } partial)
+            {
+                return null;
+            }
+
+            rawBytes = partial;
+        }
 
         CMapParser parser = new CMapParser(rawBytes);
         return parser.ParseFull();

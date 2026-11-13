@@ -107,7 +107,20 @@ public sealed class FilterPipeline
         {
             using (GuardedOutputStream output = new GuardedOutputStream())
             {
-                filter.Decode(input, output, parms);
+                try
+                {
+                    filter.Decode(input, output, parms);
+                }
+                catch (FilterException damaged) when (damaged.PartialOutput is null && !(parms?.Predictor > 1) && output.Length > 0)
+                {
+                    // 3.34.0 (#52c, #52d): keep what a streaming filter
+                    // (ASCII85, ASCIIHex, LZW, RunLength) wrote before the
+                    // damage, as Flate does since 3.33.0 (ticket 39). Not with
+                    // a predictor: those bytes are not the data yet.
+                    damaged.PartialOutput = output.ToArray();
+                    throw;
+                }
+
                 PdfWorkScope.CheckDecodedSize(output.Length);
                 PdfWorkScope.ChargeMemory(output.Length - output.Charged);
                 return output.ToArray();

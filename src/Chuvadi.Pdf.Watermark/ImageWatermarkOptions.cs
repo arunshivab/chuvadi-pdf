@@ -44,4 +44,13 @@ public sealed class ImageWatermarkOptions
     /// Null means all pages. Otherwise a zero-based page index set.
     /// </summary>
     public int[]? PageIndices { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether the watermark is centred on the page as a
+    /// viewer shows it (3.34.0, D-335): on the shown box (the CropBox
+    /// intersected with the MediaBox), with <see cref="RotationDegrees"/>
+    /// measured from the upright view after the page's <c>/Rotate</c>.
+    /// Default: false, the historical placement on the unrotated MediaBox.
+    /// </summary>
+    public bool PlaceInDisplaySpace { get; init; }
 }

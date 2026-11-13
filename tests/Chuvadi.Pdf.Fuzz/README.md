@@ -31,6 +31,7 @@ dependency.
 | `pdf-open`       | `PdfDocument.Open(Stream)` + page enumeration          |
 | `content-stream` | `ContentStreamParser.Parse(byte[])` with stub resolver |
 | `truetype`       | `new TrueTypeLoader(byte[])` + a couple of lookups     |
+| `write-paths`    | open, then save, fill, merge, watermark, header/footer, flatten, compress, rotate, redact (3.34.0) |
 
 Discover them via `dotnet run -c Release -- --list`.
 

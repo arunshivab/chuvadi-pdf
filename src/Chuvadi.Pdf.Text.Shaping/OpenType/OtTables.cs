@@ -182,6 +182,13 @@ internal struct SetDigest
         return true;
     }
 
+    internal void Union(in SetDigest o)
+    {
+        _m0 |= o._m0;
+        _m1 |= o._m1;
+        _m2 |= o._m2;
+    }
+
     internal readonly bool MayIntersect(in SetDigest o) =>
         (_m0 & o._m0) != 0 && (_m1 & o._m1) != 0 && (_m2 & o._m2) != 0;
 
@@ -293,12 +300,13 @@ internal static class LookupFlag
 /// <summary>A parsed lookup: its type, props and subtable offsets (extensions resolved).</summary>
 internal sealed class OtLookup
 {
-    internal OtLookup(int type, int props, int[] subtables, SetDigest digest)
+    internal OtLookup(int type, int props, int[] subtables, SetDigest digest, SetDigest[] subtableDigests)
     {
         LookupType = type;
         Props = props;
         Subtables = subtables;
         Digest = digest;
+        SubtableDigests = subtableDigests;
     }
 
     internal int LookupType { get; }
@@ -309,6 +317,12 @@ internal sealed class OtLookup
     internal int[] Subtables { get; }
 
     internal SetDigest Digest { get; }
+
+    // 3.34.0 (#27): each subtable's own coverage digest, so a subtable whose
+    // coverage cannot hold the current glyph is skipped without reading it
+    // (HarfBuzz's subtable accelerator). A digest only rules glyphs out, so
+    // the result is the same.
+    internal SetDigest[] SubtableDigests { get; }
 }
 
 /// <summary>A GSUB or GPOS table: script/language/feature selection and lookups.</summary>
@@ -644,12 +658,14 @@ internal sealed class OtLayoutTable
         }
 
         SetDigest digest = default;
-        foreach (int st in subtables)
+        SetDigest[] subtableDigests = new SetDigest[subtables.Length];
+        for (int i = 0; i < subtables.Length; i++)
         {
-            OtCommon.CollectCoverage(_d, SubtableCoverage(realType, st), ref digest);
+            OtCommon.CollectCoverage(_d, SubtableCoverage(realType, subtables[i]), ref subtableDigests[i]);
+            digest.Union(subtableDigests[i]);
         }
 
-        return new OtLookup(realType, props, subtables, digest);
+        return new OtLookup(realType, props, subtables, digest, subtableDigests);
     }
 
     // The coverage HarfBuzz's get_coverage() returns for a subtable.

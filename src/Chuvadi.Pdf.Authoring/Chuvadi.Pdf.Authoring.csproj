@@ -25,6 +25,7 @@
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Forms" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Signatures" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Watermark" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Authoring.Tests" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Operations" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA.Tests" />

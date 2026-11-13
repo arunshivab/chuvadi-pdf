@@ -46,6 +46,22 @@ int PageNumber => _pageIndex + 1
 
 Gets the one-based page number of this page.
 
+### `MediaBox`
+
+```csharp
+PdfRectangle MediaBox
+```
+
+Gets or sets the MediaBox — the full extent of the page in points. Required. The getter falls back to the parent /Pages node if absent from this page; the setter writes a direct `/MediaBox` entry on this page's dictionary, overriding any inherited value. Since 3.34.0 a MediaBox that is missing, or is not four numbers enclosing a non-empty area, reads as US Letter (0 0 612 792) and adds a line to `PdfDocument.Warnings`; before, reading it threw `PdfCorruptionException`. PDF 32000-1:2008 §7.7.3.3, Table 30 — MediaBox.
+
+### `CropBox`
+
+```csharp
+PdfRectangle CropBox
+```
+
+Gets or sets the CropBox — the visible region of the page. The getter defaults to MediaBox when absent; the setter writes a direct `/CropBox` entry on this page's dictionary, overriding any inherited value. PDF 32000-1:2008 §7.7.3.3, Table 30 — CropBox.
+
 ### `BleedBox`
 
 ```csharp
@@ -86,6 +102,14 @@ double Height => MediaBox.Height
 
 Gets the height of the page's MediaBox in points (1/72 inch).
 
+### `UserUnit`
+
+```csharp
+double UserUnit
+```
+
+Gets the size of one default user-space unit in multiples of 1/72 inch (`/UserUnit`, PDF 1.6; not inherited). 1.0 when absent or not a positive number. The page's physical width in inches is `Width * UserUnit / 72`; large-format drawings use it to exceed the 14,400-unit page limit. PDF 32000-1:2008 §8.3.2.3, Table 30 — UserUnit.
+
 ### `Rotate`
 
 ```csharp
@@ -93,6 +117,14 @@ int Rotate => GetInheritedInteger(PdfName.Rotate, 0)
 ```
 
 Gets the page rotation in degrees (0, 90, 180, or 270). PDF 32000-1:2008 §7.7.3.3, Table 30 — Rotate.
+
+### `EffectiveSize`
+
+```csharp
+(double Width, double Height) EffectiveSize
+```
+
+The page's displayed size — its crop box dimensions with width and height swapped when `Rotate` is 90° or 270°. Use this to compute fit/scale transforms against the page as the viewer shows it.
 
 ### `Resources`
 
@@ -159,6 +191,36 @@ Measures the distance between two points (default user space) in the real-world 
 - `y2` — Second point y.
 
 **Returns:** The measured distance, or null.
+
+### `GetDisplayBox`
+
+```csharp
+PdfRectangle GetDisplayBox(PdfDisplayBox box)
+```
+
+Returns the box a renderer shows for `box`, in user space, normalised so that `PdfRectangle.X1` and `PdfRectangle.Y1` are the lower-left corner (3.34.0, D-334).
+
+**Parameters**
+
+- `box` — `PdfDisplayBox.CropBox`: the CropBox intersected with the MediaBox, or the MediaBox when they do not overlap (PDF 32000-1:2008 §14.11.2). `PdfDisplayBox.MediaBox`: the MediaBox.
+
+**Remarks:** The raster, SVG and WPF renderers all show this box (the CropBox by default since 3.32.0). Unlike `Width` and `Height`, which report the MediaBox, it gives the size the rendered output has before any rotation. `Rotate` is not applied; see `GetDisplayTransform`.
+
+### `GetDisplayTransform`
+
+```csharp
+Transform GetDisplayTransform(PdfDisplayBox box)
+```
+
+Returns the transform from display space to user space (3.34.0, D-335). Display space is the page as a viewer shows it: the `box` from `GetDisplayBox`, turned by `Rotate`, with the origin at its lower-left corner, y up, in points.
+
+**Parameters**
+
+- `box` — The box the page is shown with.
+
+**Returns:** A transform whose `Transform.TransformPoint` maps a display point to the user-space point under it. Use it to place content (a stamp, a watermark, a redaction box) where the viewer shows a position.
+
+**Remarks:** The display width and height are the box's, swapped when the rotation is 90 or 270 degrees. A `/Rotate` that is not a multiple of 90 is taken at its nearest lower multiple, as the renderers do.
 
 ---
 

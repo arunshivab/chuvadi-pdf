@@ -10,7 +10,7 @@ public sealed class StrokeExpander
 
 ## Remarks
 
-Butt, round and square caps; miter and bevel joins (round joins are approximated with bevels). A dash pattern splits each sub-path into its dashes, each stroked as an open sub-path with caps (3.25). The output is a list of sub-paths suitable for `ScanlineRasterizer` with the non-zero winding fill rule. PDF 32000-1:2008 §8.5.3.2 — Stroking.
+Butt, round and square caps; mitred joins, and round joins (3.34.0). A dash pattern splits each sub-path into its dashes, each stroked as an open sub-path with caps (3.25). The output is a list of sub-paths suitable for `ScanlineRasterizer` with the non-zero winding fill rule. PDF 32000-1:2008 §8.5.3.2 — Stroking.
 
 ## Methods
 

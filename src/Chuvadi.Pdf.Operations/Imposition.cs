@@ -42,9 +42,12 @@ public static class Imposition
     /// <param name="encryption">The encryption options, or null for no encryption.</param>
     public static void NUp(Stream output, PdfDocument source, NUpOptions options, EncryptionOptions? encryption)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        IReadOnlyList<ImpositionSheet> plan = PlanNUp(source, options);
-        Execute(output, source, plan, encryption);
+        PdfWriteGuard.Run(source, "imposed", () =>
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            IReadOnlyList<ImpositionSheet> plan = PlanNUp(source, options);
+            Execute(output, source, plan, encryption);
+        });
     }
 
     /// <summary>Lays out the source pages as a 2-up saddle-stitch booklet and writes the result.</summary>
@@ -60,9 +63,12 @@ public static class Imposition
     /// <param name="encryption">The encryption options, or null for no encryption.</param>
     public static void Booklet(Stream output, PdfDocument source, BookletOptions options, EncryptionOptions? encryption)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        IReadOnlyList<ImpositionSheet> plan = PlanBooklet(source, options);
-        Execute(output, source, plan, encryption);
+        PdfWriteGuard.Run(source, "imposed", () =>
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            IReadOnlyList<ImpositionSheet> plan = PlanBooklet(source, options);
+            Execute(output, source, plan, encryption);
+        });
     }
 
     /// <summary>

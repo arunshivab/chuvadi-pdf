@@ -92,6 +92,14 @@ IReadOnlyList<TransparencyGroup> TransparencyGroups
 
 The page's transparency groups (3.31, D-173), by id: entry `i` has `TransparencyGroup.Id` `i + 1`. Empty when there are none.
 
+### `HasTransparency`
+
+```csharp
+bool HasTransparency
+```
+
+True when anything on the page needs transparency (3.31): a blend mode other than Normal, a soft mask, an opacity below 1, or a transparency group.
+
 ### `MediaWidth`
 
 ```csharp

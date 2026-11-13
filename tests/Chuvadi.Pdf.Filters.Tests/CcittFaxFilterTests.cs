@@ -97,6 +97,31 @@ public sealed class CcittFaxFilterTests
     }
 
     [Fact]
+    public void Cancelled_StopsInsideTheDecoder()
+    {
+        // 3.34.0 (#20): cancellation is checked as rows decode, so the plain
+        // output stream (which checks nothing) does not hide it.
+        byte[] encoded = [0x10, 0x05, 0xC4, 0x00];
+        FilterParameters parms = new()
+        {
+            Columns = 64,
+            ColumnsSpecified = true,
+            Rows = 1,
+            CcittK = 0,
+        };
+        using System.Threading.CancellationTokenSource cancelled = new();
+
+        using (Chuvadi.Pdf.Primitives.PdfWorkScope.Enter(null, cancelled.Token))
+        {
+            cancelled.Cancel();
+            using MemoryStream input = new(encoded);
+            using MemoryStream output = new();
+            Action act = () => new CcittFaxFilter().Decode(input, output, parms);
+            act.Should().Throw<OperationCanceledException>();
+        }
+    }
+
+    [Fact]
     public void BlackIs1_InvertsThePackedBits()
     {
         byte[] normal = DecodeStrip("bar_64x16_group4.bin", 64, 16, k: -1, blackIs1: false);

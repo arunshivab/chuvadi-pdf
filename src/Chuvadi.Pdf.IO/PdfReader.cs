@@ -333,8 +333,8 @@ public sealed class PdfReader : IDisposable
         XrefTable xref = new XrefTable();
         LoadXrefChain(stream, startXrefOffset, xref, trailer);
 
-        PdfObjectParser parser = new PdfObjectParser(stream);
         RecoveryLog recoveryLog = new RecoveryLog();
+        PdfObjectParser parser = new PdfObjectParser(stream) { Log = recoveryLog };
 
         // Check for encryption. The /Encrypt entry in the trailer holds the
         // encryption dictionary (or an indirect reference to it).
@@ -372,7 +372,7 @@ public sealed class PdfReader : IDisposable
 
             if (loaded is null || finalDecryptor is null)
             {
-                return loaded;
+                return WithDecodeParmsInline(loaded, storeHolder[0]);
             }
 
             // The /Encrypt object itself is NEVER decrypted (chicken-and-egg).
@@ -389,17 +389,18 @@ public sealed class PdfReader : IDisposable
             if (xref.TryGet(id.ObjectNumber, out XrefEntry compressedEntry)
                 && compressedEntry.IsCompressed)
             {
-                return loaded;
+                return WithDecodeParmsInline(loaded, storeHolder[0]);
             }
 
             PdfPrimitive decryptedValue = EncryptionVisitor.Transform(
                 loaded.Value,
                 id.ObjectNumber,
                 id.Generation,
-                finalDecryptor.Decrypt,
+                finalDecryptor.DecryptString,
+                (dict, raw, number, generation) => DecryptStream(finalDecryptor, dict, raw, number, generation),
                 skipMetadataEncryption: !finalEncryptMetadata);
 
-            return new PdfIndirectObject(loaded.Id, decryptedValue);
+            return WithDecodeParmsInline(new PdfIndirectObject(loaded.Id, decryptedValue), storeHolder[0]);
         });
 
         storeHolder[0] = objects;
@@ -465,7 +466,7 @@ public sealed class PdfReader : IDisposable
         }
     }
 
-    private static (Decryptor decryptor, int encryptObjectNumber, bool encryptMetadata)
+    private static (Decryptor? decryptor, int encryptObjectNumber, bool encryptMetadata)
         BuildDecryptor(
             PdfObjectParser parser,
             XrefTable xref,
@@ -507,8 +508,23 @@ public sealed class PdfReader : IDisposable
             firstFileId = idStr.Bytes;
         }
 
-        Decryptor decryptor = PdfEncryption.TryOpen(encryptDict, firstFileId, password ?? string.Empty)
-            ?? throw new PdfPasswordRequiredException(passwordSupplied: !string.IsNullOrEmpty(password));
+        encryptDict = WithCryptFiltersResolved(parser, xref, encryptDict, recoveryLog);
+        Decryptor? decryptor = PdfEncryption.TryOpen(encryptDict, firstFileId, password ?? string.Empty);
+        if (decryptor is null)
+        {
+            // 3.34.0 (#52d): when /StmF and /StrF are both /Identity only the
+            // embedded files are encrypted (ISO 32000-1 §7.6.5), so the
+            // document opens without a password; its embedded files stay
+            // encrypted until it is opened with the password.
+            if (string.IsNullOrEmpty(password)
+                && EncryptionDictionary.Parse(encryptDict) is { OnlyEmbeddedFilesEncrypted: true })
+            {
+                recoveryLog.Add("Only the file's embedded files are encrypted (/StmF and /StrF are /Identity); the document was opened without a password, and its embedded files stay encrypted until it is opened with the password.");
+                return (null, encryptObjectNumber, true);
+            }
+
+            throw new PdfPasswordRequiredException(passwordSupplied: !string.IsNullOrEmpty(password));
+        }
 
         bool encryptMetadata = true;
         if (encryptDict.TryGetValue(PdfName.Intern("EncryptMetadata"), out PdfPrimitive? emPrim) &&
@@ -518,6 +534,169 @@ public sealed class PdfReader : IDisposable
         }
 
         return (decryptor, encryptObjectNumber, encryptMetadata);
+    }
+
+    // 3.34.0 (#52d): decrypts one stream. A stream whose first filter is
+    // /Crypt is decrypted with the crypt filter its /DecodeParms /Name
+    // names (/Identity when there is none) instead of /StmF, and the /Crypt
+    // filter is taken off the stream so the filters that follow decode it
+    // (ISO 32000-1 §7.4.10). An embedded file stream uses /EFF.
+    private static PdfStream DecryptStream(Decryptor decryptor, PdfDictionary dict, byte[] raw, int objectNumber, int generation)
+    {
+        PdfName filterKey = PdfName.Intern("Filter");
+        PdfName parmsKey = PdfName.Intern("DecodeParms");
+        dict.TryGetValue(filterKey, out PdfPrimitive? filter);
+        dict.TryGetValue(parmsKey, out PdfPrimitive? parms);
+        PdfArray? filters = filter as PdfArray;
+        PdfName? first = filter as PdfName ?? (filters is { Count: > 0 } ? filters[0] as PdfName : null);
+        if (first is not null && first.Value == "Crypt")
+        {
+            PdfArray? parmsArray = parms as PdfArray;
+            PdfDictionary? cryptParms = parms as PdfDictionary ?? (parmsArray is { Count: > 0 } ? parmsArray[0] as PdfDictionary : null);
+            string name = cryptParms?.GetName(PdfName.Intern("Name"))?.Value ?? "Identity";
+            if (decryptor.TryDecryptWithCryptFilter(name, raw, objectNumber, generation, out byte[] decrypted))
+            {
+                PdfDictionary copy = new PdfDictionary();
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                {
+                    if (!entry.Key.Equals(filterKey) && !entry.Key.Equals(parmsKey))
+                    {
+                        copy.Set(entry.Key, entry.Value);
+                    }
+                }
+
+                if (filters is { Count: > 1 })
+                {
+                    copy.Set(filterKey, Rest(filters));
+                    if (parmsArray is { Count: > 1 })
+                    {
+                        copy.Set(parmsKey, Rest(parmsArray));
+                    }
+                }
+
+                return new PdfStream(copy, decrypted);
+            }
+        }
+
+        PdfName? type = dict.GetName(PdfName.Type);
+        bool embeddedFile = type is not null && type.Value == "EmbeddedFile";
+        return new PdfStream(dict, decryptor.DecryptStream(raw, objectNumber, generation, embeddedFile));
+    }
+
+    // 3.34.0: a stream whose /DecodeParms (or an element of a /DecodeParms
+    // array) is an indirect reference gets the dictionary in place, so every
+    // decoder sees the parameters; before, an indirect one was ignored and the
+    // filter ran with its defaults (a predictor image came out garbled, a
+    // CCITT image was skipped). §7.3.8.2 allows any stream dictionary value
+    // to be indirect.
+    private static PdfIndirectObject? WithDecodeParmsInline(PdfIndirectObject? loaded, PdfObjectStore store)
+    {
+        if (loaded?.Value is not PdfStream stream
+            || !stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms)
+            || parms is null)
+        {
+            return loaded;
+        }
+
+        if (parms is PdfReference single)
+        {
+            if (store.Resolve(single) is PdfDictionary resolved)
+            {
+                stream.Dictionary.Set(PdfName.Intern("DecodeParms"), resolved);
+            }
+
+            return loaded;
+        }
+
+        if (parms is PdfArray array)
+        {
+            bool anyIndirect = false;
+            List<PdfPrimitive> items = new List<PdfPrimitive>(array.Count);
+            foreach (PdfPrimitive element in array)
+            {
+                if (element is PdfReference reference && store.Resolve(reference) is PdfDictionary resolved)
+                {
+                    items.Add(resolved);
+                    anyIndirect = true;
+                }
+                else
+                {
+                    items.Add(element);
+                }
+            }
+
+            if (anyIndirect)
+            {
+                stream.Dictionary.Set(PdfName.Intern("DecodeParms"), new PdfArray(items));
+            }
+        }
+
+        return loaded;
+    }
+
+    // An array without its first element.
+    private static PdfArray Rest(PdfArray array)
+    {
+        List<PdfPrimitive> items = new List<PdfPrimitive>(array.Count - 1);
+        for (int i = 1; i < array.Count; i++)
+        {
+            items.Add(array[i]);
+        }
+
+        return new PdfArray(items);
+    }
+
+    // 3.34.0 (#52d): the /CF dictionary and its crypt filters may be
+    // indirect objects. They are resolved into a copy of the encryption
+    // dictionary so the crypt filters can be read (the objects are never
+    // encrypted themselves: they belong to the encryption dictionary).
+    private static PdfDictionary WithCryptFiltersResolved(
+        PdfObjectParser parser, XrefTable xref, PdfDictionary encryptDict, RecoveryLog recoveryLog)
+    {
+        PdfName cfKey = PdfName.Intern("CF");
+        if (!encryptDict.TryGetValue(cfKey, out PdfPrimitive? cfPrim))
+        {
+            return encryptDict;
+        }
+
+        bool changed = false;
+        if (cfPrim is PdfReference cfRef)
+        {
+            cfPrim = LoadInUseObjectFromFile(parser, xref, cfRef.ObjectId, recoveryLog)?.Value;
+            changed = true;
+        }
+
+        if (cfPrim is not PdfDictionary cf)
+        {
+            return encryptDict;
+        }
+
+        PdfDictionary resolvedCf = new PdfDictionary();
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in cf)
+        {
+            PdfPrimitive filter = entry.Value;
+            if (filter is PdfReference filterRef)
+            {
+                filter = LoadInUseObjectFromFile(parser, xref, filterRef.ObjectId, recoveryLog)?.Value ?? PdfNull.Value;
+                changed = true;
+            }
+
+            resolvedCf.Set(entry.Key, filter);
+        }
+
+        if (!changed)
+        {
+            return encryptDict;
+        }
+
+        PdfDictionary copy = new PdfDictionary();
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in encryptDict)
+        {
+            copy.Set(entry.Key, entry.Value);
+        }
+
+        copy.Set(cfKey, resolvedCf);
+        return copy;
     }
 
     // ── Public API ────────────────────────────────────────────────────────
@@ -553,6 +732,10 @@ public sealed class PdfReader : IDisposable
             return all;
         }
     }
+
+    // 3.34.0: adds a warning to Warnings, once (a repeated message is
+    // dropped), for fallbacks the document layer takes (#52f, #52g).
+    internal void AddWarningOnce(string message) => _recoveryLog.AddOnce(message);
 
     /// <summary>Gets the total length of the underlying file in bytes.</summary>
     public long FileLength
@@ -790,14 +973,36 @@ public sealed class PdfReader : IDisposable
             visited.Add(offset);
             stream.Seek(offset, SeekOrigin.Begin);
 
-            byte[] peek = new byte[5];
-            int peekRead = stream.Read(peek, 0, 5);
-            string peekText = Encoding.Latin1.GetString(peek, 0, peekRead);
+            // 3.34.0: an offset that lands on white space before the "xref"
+            // keyword (an off-by-a-few startxref or /Prev) still finds the
+            // classic table, as Poppler, MuPDF and qpdf do; before, the white
+            // space sent it down the xref-stream path, so the file needed
+            // repair.
+            byte[] peek = new byte[64];
+            int peekRead = stream.Read(peek, 0, peek.Length);
+            int skip = 0;
+            while (skip < peekRead && peek[skip] is 0 or 9 or 10 or 12 or 13 or 32)
+            {
+                skip++;
+            }
+
+            string peekText = Encoding.Latin1.GetString(peek, skip, Math.Min(5, peekRead - skip));
 
             if (peekText.StartsWith("xref", StringComparison.Ordinal))
             {
                 (XrefTable section, PdfDictionary sectionTrailer) =
-                    LoadClassicXref(stream, offset);
+                    LoadClassicXref(stream, offset + skip);
+
+                // A table reached past white space is trusted only when its
+                // entries lead to their objects; otherwise the offsets are
+                // off as a whole, and repair (when asked for) rebuilds them,
+                // as before (found by the pdf.js run: issue6108, issue2177).
+                if (skip > 0 && !EntriesLeadToObjects(stream, section))
+                {
+                    throw new PdfParseException(
+                        "startxref points near an xref table whose offsets do not lead to their objects.", offset);
+                }
+
                 MergeTrailer(mergedTrailer, sectionTrailer);
 
                 // Hybrid-reference file (PDF 32000-1:2008 §7.5.8.4): a classic
@@ -844,6 +1049,42 @@ public sealed class PdfReader : IDisposable
                 xref.Set(entry);
             }
         }
+    }
+
+    // Whether the first few in-use entries of a table each lead to an
+    // "N G obj" header for their own object number.
+    private static bool EntriesLeadToObjects(Stream stream, XrefTable section)
+    {
+        int checkedEntries = 0;
+        byte[] head = new byte[32];
+        foreach (XrefEntry entry in section.Entries)
+        {
+            if (!entry.IsInUse || entry.ObjectNumber == 0)
+            {
+                continue;
+            }
+
+            if (entry.ByteOffset < 0 || entry.ByteOffset >= stream.Length)
+            {
+                return false;
+            }
+
+            stream.Seek(entry.ByteOffset, SeekOrigin.Begin);
+            int read = stream.Read(head, 0, head.Length);
+            string text = Encoding.Latin1.GetString(head, 0, read).TrimStart('\0', '\t', '\n', '\f', '\r', ' ');
+            string expected = entry.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " ";
+            if (!text.StartsWith(expected, StringComparison.Ordinal) || !text.Contains("obj", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (++checkedEntries == 3)
+            {
+                break;
+            }
+        }
+
+        return true;
     }
 
     private static (XrefTable Section, PdfDictionary Trailer) LoadClassicXref(

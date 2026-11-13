@@ -21,7 +21,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 3.34.0 (D-335 item 7b): the write paths share PdfWriteGuard. -->
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Annotations" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Forms" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Operations" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Redaction" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Watermark" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Xfa" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Integration.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
+    <ProjectReference Include="..\Chuvadi.Pdf.Graphics\Chuvadi.Pdf.Graphics.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Encryption\Chuvadi.Pdf.Encryption.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />

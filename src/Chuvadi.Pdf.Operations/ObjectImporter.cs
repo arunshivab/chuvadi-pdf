@@ -49,6 +49,7 @@ internal static class ObjectImporter
             }
 
             visited.Add(num);
+            PdfWorkScope.ThrowIfCancellationRequested();
             PdfPrimitive resolved = resolver.Resolve(reference);
             collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
             CollectReferences(resolved, resolver, collected, visited);
@@ -76,6 +77,14 @@ internal static class ObjectImporter
         {
             foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
             {
+                // 3.34.0 (#53): a stream's /Parent is not followed either, as
+                // for a dictionary; before, a form XObject with a /Parent
+                // pulled in the source's whole page tree.
+                if (entry.Key == PdfName.Parent)
+                {
+                    continue;
+                }
+
                 CollectReferences(entry.Value, resolver, collected, visited);
             }
         }
@@ -92,7 +101,21 @@ internal static class ObjectImporter
     internal static PdfPrimitive DeepCopyPrimitive(
         PdfPrimitive primitive,
         int docIndex,
-        Dictionary<(int Doc, int Num), int> idRemap)
+        Dictionary<(int Doc, int Num), int> idRemap) =>
+        DeepCopyPrimitive(primitive, docIndex, idRemap, nullUnmapped: false);
+
+    /// <summary>
+    /// Deep-copies a primitive as the three-argument overload does;
+    /// with <paramref name="nullUnmapped"/>, a reference to an object that was
+    /// not copied is written as null (3.34.0) instead of keeping its source
+    /// number, which in the output names an unrelated object (for example a
+    /// widget's <c>/Parent</c> field pointing at a page).
+    /// </summary>
+    internal static PdfPrimitive DeepCopyPrimitive(
+        PdfPrimitive primitive,
+        int docIndex,
+        Dictionary<(int Doc, int Num), int> idRemap,
+        bool nullUnmapped)
     {
         switch (primitive)
         {
@@ -100,21 +123,21 @@ internal static class ObjectImporter
                 return idRemap.TryGetValue(
                     (docIndex, reference.ObjectId.ObjectNumber), out int newNum)
                     ? new PdfReference(new PdfObjectId(newNum, 0))
-                    : reference;
+                    : nullUnmapped ? PdfNull.Value : reference;
 
             case PdfStream stream:
                 return new PdfStream(
-                    DeepCopyDictionary(stream.Dictionary, docIndex, idRemap),
+                    DeepCopyDictionary(stream.Dictionary, docIndex, idRemap, nullUnmapped),
                     stream.RawBytes);
 
             case PdfDictionary dict:
-                return DeepCopyDictionary(dict, docIndex, idRemap);
+                return DeepCopyDictionary(dict, docIndex, idRemap, nullUnmapped);
 
             case PdfArray array:
                 PdfArray arrayCopy = new PdfArray([]);
                 for (int i = 0; i < array.Count; i++)
                 {
-                    arrayCopy.Add(DeepCopyPrimitive(array[i], docIndex, idRemap));
+                    arrayCopy.Add(DeepCopyPrimitive(array[i], docIndex, idRemap, nullUnmapped));
                 }
                 return arrayCopy;
 
@@ -129,13 +152,25 @@ internal static class ObjectImporter
     internal static PdfDictionary DeepCopyDictionary(
         PdfDictionary source,
         int docIndex,
-        Dictionary<(int Doc, int Num), int> idRemap)
+        Dictionary<(int Doc, int Num), int> idRemap) =>
+        DeepCopyDictionary(source, docIndex, idRemap, nullUnmapped: false);
+
+    /// <summary>
+    /// Deep-copies a dictionary with reference remapping; with
+    /// <paramref name="nullUnmapped"/>, a reference to an object that was not
+    /// copied becomes null (3.34.0).
+    /// </summary>
+    internal static PdfDictionary DeepCopyDictionary(
+        PdfDictionary source,
+        int docIndex,
+        Dictionary<(int Doc, int Num), int> idRemap,
+        bool nullUnmapped)
     {
         PdfDictionary copy = new PdfDictionary();
 
         foreach (KeyValuePair<PdfName, PdfPrimitive> entry in source)
         {
-            copy.Set(entry.Key, DeepCopyPrimitive(entry.Value, docIndex, idRemap));
+            copy.Set(entry.Key, DeepCopyPrimitive(entry.Value, docIndex, idRemap, nullUnmapped));
         }
 
         return copy;

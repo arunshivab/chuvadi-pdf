@@ -30,6 +30,16 @@ static Transform Center(double sourceWidth, double sourceHeight, double destinat
 
 Centres a source box within a destination box without scaling.
 
+### `RotatedSize`
+
+__static__
+
+```csharp
+static (double Width, double Height) RotatedSize(double degrees, double width, double height)
+```
+
+The bounding-box size of a `width` × `height` box rotated by `degrees`. Pair with `RotateIntoBox` to rotate a page onto a sheet sized to the result.
+
 ### `RotateIntoBox`
 
 __static__

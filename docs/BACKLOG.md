@@ -158,6 +158,59 @@ Shipped in v3.30.2:
   after `hmoveto`, `vmoveto` and an opening `hintmask` (Reader report:
   Elsevier paper, search box one space left of the text).
 
+Shipped in v3.34.0 (D-334, D-335, D-338, D-339, D-342):
+- **Shown-page geometry (D-334)** — `PdfPage.GetDisplayBox`,
+  `PdfPage.GetDisplayTransform`, `PageRasterizer.GetOutputSize`; one box
+  rule in the raster, SVG and WPF renderers.
+- **Forms** — `FormField.Widgets`, `Options`, `Flags`, `MaxLength`;
+  inherited `/FT`, `/Ff`, `/MaxLen` (27); check box and radio fills fixed,
+  unknown button values throw, pushbuttons untouched; UTF-16 names and
+  values, Tamil fill (26); `FormFiller` keeps `/Info` and `/ID` and can
+  encrypt (`FormFillOptions.Encryption`, 28 / D-342).
+- **Merge** — `MergeOptions.FormFields` (default `RenameOnConflict`) and
+  `MergeOptions.Encryption`; page operations write a reference to an
+  object they did not copy as null.
+- **Redaction** — `Redactor.ApplyWithReport` (`RedactionReport`,
+  `PageRedactionReport`); class summary corrected.
+- **Watermarks and header/footer** — `PlaceInDisplaySpace`; text watermarks
+  centred by real width; image watermarks embedded correctly (they drew
+  noise before).
+- **Write paths (7b)** — every write path honours `PdfWorkScope` and the
+  documents' `PdfLimits`, and reports unexpected failures as
+  `PdfCorruptionException`; `write-paths` fuzz target; `EMBEDDING.md` §4–6.
+- **PDF/A-1b** — `pdf:Keywords` follows `/Info` `/Keywords` (rest of 49).
+- **Xref streams** — a damaged `/W` or `/Index` is a `PdfParseException`;
+  8-byte fields read in full (found by the new fuzz target).
+- **Tooling** — release guards in `pack.ps1` and `release-assets.ps1`;
+  Publish Smoke CI job (trimmed, ReadyToRun).
+- **Docs** — `docs/CAPABILITY-AUDIT.md` (D-339), "Behaviour changes within
+  3.x" and fill-and-flatten in the developer guide, 3.32.0 caller note.
+
+Also shipped in v3.34.0 (D-351, Group A and the named items):
+- **50** — images drawn rotated, skewed or flipped (inverse mapping).
+- **52** (except 52e) — content syntax damage draws what parsed before it;
+  the issue7769 current-point case; streams without `/Length` and damaged
+  Flate in page resources; crypt filters (`/CF`, `/Crypt`, `/EFF`); a
+  missing or invalid MediaBox (52f), a looping page tree (52g) and damaged
+  object syntax (52h) recovered, each with a `PdfDocument.Warnings` line.
+- **53** — `PageStamper` and `PageComposer` write unmapped references as
+  null.
+- **40** — WPF clipping. **41** — SVG shading in nested lists. **42** —
+  soft mask at a form's `Do`. **43** — annotation `/OC` and print-state
+  layers (`OptionalContentVisibility.ForPrinting`, flattening).
+- **22** — round joins. **23** — elliptical pen under a non-uniform CTM,
+  and stroke widths inside scaled forms.
+- **36** — SVG text when ToUnicode contradicts the encoding. **37** —
+  glyph choice in non-embedded fonts from the encoding.
+- **20** — JBIG2 and CCITT decodes cancellable part-way and charged to the
+  memory limit.
+- **18** — redaction patterns also clear bookmark titles and XMP; `/Info`
+  is left out (`RedactionReport.DocumentMatchesRemoved`).
+- **49c, 49d, 49g** — PDF/A annotation flags, `/CharSet`, XMP dates.
+- **51** — API docs list members that return a named tuple.
+- **27** — Indic shaping: subtable digests and a face cache keyed by
+  script and features (Devanagari −21%).
+
 Shipped in v3.33.0 (D-302, D-307, D-308, D-325):
 - **M1** — one standard-14 embedding engine (`Chuvadi.Pdf.Authoring`),
   used by `PdfAWriter` (output unchanged for WinAnsi fonts), by the opt-in
@@ -338,29 +391,99 @@ Shipped in v3.22.0 (backlog scope A):
 
 ## Open roadmap
 
-Status verified against code at v3.26.0. Items are independent and may be
-re-ordered.
+Status verified against code at v3.26.0 (3.34.0 findings added). The
+release each item is planned for is in `docs/CAPABILITY-AUDIT.md`, "Release
+plan" (D-350, D-351); items not placed there are to be discussed.
 
 ### Reader asks (open)
 None open (39 shipped in 3.33.0).
 
-### Rendering (3.32.0 findings)
-**40. WPF clipping (Q10, D-231).** `WpfRenderer` ignores `ClipOp` (not
-implemented since v1). The Reader does not draw through WPF; needed if
-Windows printing later goes vector through `Chuvadi.Pdf.Rendering.Wpf`.
+### Rendering (3.34.0 findings)
+**52e. Repair by default (major version).** Repair is opt-in
+(`PdfOpenOptions.RepairIfDamaged`); 27 of the 48 pdf.js open failures
+recover with it. Whether a viewer-style default should repair is a decision
+for 4.0. The rest of 52 shipped in 3.34.0.
 
-**41. SVG shading inside a group, soft mask or Type3 glyph.** A `sh` in a
-nested display list paints nothing (a 0 by 0 rect); 12 corpus pages, mostly
-colour emoji. Filling the page box instead improved 9 pages but made 2 worse,
-because SVG does not apply the group's soft mask to the shading. Fix: apply
-the group's mask and clip to the shading.
+**54. Stroker joins and mitre limit (3.34.0 finding).** The raster stroker
+draws a bevel join as a mitre and ignores `/ML` (it uses a fixed limit of
+8 × w/2). Seen while measuring 22 and 23.
 
-**42. Soft mask in effect at a form's `Do` (D-264).** The raster renderer
-does not apply an ExtGState soft mask set before `Do` to the form's content.
+**55. Soft-mask gradient on three emoji pages (3.34.0 finding).** On the
+rainbow-flag, face-palming and judge corpus pages, the SVG (since 41) and
+the raster renderer agree with each other but not with Poppler and MuPDF;
+a minimal case of the same construct matches Poppler, so the difference is
+elsewhere in those files. Find the construct first.
 
-**43. Annotation `/OC` and print-state layers.** An annotation's own `/OC`
-layer and a layer's `/Usage /Print /PrintState` are honoured by neither the
-renderer nor `AnnotationFlattener`.
+**56. Tiling pattern with tiny steps (3.34.0 finding).** pdf.js
+`tiling-pattern-tiny-steps-large.pdf` takes minutes in the raster renderer
+(it finishes, slowly; measure where the time goes).
+
+**57. `bug946506.pdf` text (3.34.0 finding).** The extracted text is
+garbled, also in 3.33.0. Not yet looked at.
+
+**58. API docs: constant names (3.34.0 finding).** `gen_api_docs.py`
+mangles the names of some constants whose value is a regex pattern string
+(pre-existing; cosmetic).
+
+**59. Redaction: catalog entries nothing loaded (3.34.0 finding).** The
+redacted file's catalog keeps every entry of the source catalog, but only
+the objects the redactor loaded are written. 3.34.0 loads the outline, XMP,
+viewer preferences, page labels and layer configuration; an unloaded name
+tree (`/Names`: attachments, JavaScript, destinations), `/OpenAction`,
+`/AA` and the like stay named but missing from the file (before 3.34.0 such
+a reference could instead land on a new content stream). Decide: carry them
+(loaded and kept as they are, unscrubbed) or drop them from the catalog
+(fail closed). 0 corpus files affected after the 3.34.0 fix.
+
+**60. `/Mask` in SVG and WPF (3.34.0 finding, N7).** The raster renderer
+applies stencil and colour-key masks since 3.34.0; the SVG and WPF output
+still draw such images unmasked. The display list would carry the mask as
+it carries `/SMask`.
+
+**62. SVG and WPF: a JPEG behind another filter (3.34.0 finding).** The
+raster renderer decodes `[/FlateDecode /DCTDecode]` and JPEG soft masks
+since 3.34.0; the display list (SVG, WPF) still leaves such images out.
+
+**63. Ligatures in the standard-14 outlines (3.34.0 finding, test bench;
+a later release, D-370).**
+A Times-Roman that is not embedded draws nothing for `/fi` and `/fl` (and
+`ff`, `ffi`, `ffl`): the built-in standard-14 outline bundle has no ligature
+glyphs, though Liberation has them. Fix: add them to the bundle, or draw
+"f" + "i". Seen in govdocs1-0088 ("pro les" for "profiles").
+
+**64. Transparency groups composited off-screen (3.34.0 follow-up; planned
+3.35, D-370).** 3.34.0 applies the group alpha per object (exact unless
+objects in the group overlap). The full render-then-blend of a group goes
+into 3.35 with knockout groups, which need the same off-screen layer.
+
+**65. Hinting at the drawn size (3.34.0 finding; planned 3.35, D-377).**
+3.34.0 hints at the drawn size (Tf x text matrix x CTM) only when that scale
+is above 2 or below 0.5; ordinary text keeps 3.33.0's Tf size. Hinting all
+text at its drawn size brought out two older faults at 10 to 12 ppem, so it
+waits for these and a dedicated hinting corpus run:
+(a) the autohinter reads floors and ceilings by direction of travel as if
+every outline ran counter-clockwise; TrueType outlines run clockwise, so its
+strokes are never paired and thin crossbars round to zero height
+(safedocs-0302, a DejaVu subset with no hinting programs: Cyrillic н, т, д
+lose their bars). A trial fix (orientation from the signed area, edges
+matched only to blue zones of their own kind, a one-pixel floor for a stroke
+whose two ends are anchored separately) brought the bars back, but letter
+heights stayed uneven on a subset with no `cmap` (no blue zones). It changes
+every autohinted TrueType page, so it is measured on its own. See also 34.
+(b) the TrueType interpreter distorts some glyphs at small sizes: Arial "D"
+on safedocs-0286 (full `fpgm`/`prep`/`cvt`) has its bowl points pulled
+about 2 px down at 12 and 16 ppem. Not yet diagnosed. See also 33.
+
+**66. Writer precision and a clip edge on a pixel centre (3.34.0 finding,
+D-377).** The writer keeps 6 significant digits of a real number, so a soft
+mask's `/BBox` of 1.0833334 becomes 1.08333. On pdf.js issue18529 the clip
+edge then lands just below a pixel centre and one pixel row of the stroke is
+lost after saving (the clip samples each row at its centre). Cosmetic. Fix:
+write enough digits to round-trip, or give the clip edge partial coverage.
+
+**61. CMYK to RGB (3.34.0 finding, N3).** CMYK images and colours use the
+plain subtractive formula; Poppler and MuPDF use a profile-like conversion
+(pure cyan reads bluer there). Belongs with ICC colour management (3.36).
 
 ### Redaction
 **44. Curved fills crossing a redaction box (Q9).** 3.32.0 cuts curved
@@ -377,32 +500,12 @@ legacy `kern` table, vertical text, and variable-font instances other than
 the default. None is needed by a LiPi script; take up when a consumer needs
 one.
 
-**27. Indic shaping speed.** With the face reused, `Shape(byte[])` is as
-fast as the `FontFace` overload, and faster than 3.25 for Latin and Tamil;
-Devanagari is about 8% slower than 3.25's byte overload (74 µs against
-68 µs on a 2-core sandbox), because the full Indic pipeline does more work. The cost is in
-applying the many Devanagari lookups; profile `OtApplyContext.ApplyForward`
-if a consumer needs more.
-
 ### Text extraction
 **30. Letters recovered from the embedded font.** When a font's ToUnicode
 map is missing or wrong (the Word-made maths test sheet in the 3.29
 reference pack), WPS reads the real characters from the embedded font's own
 cmap; Acrobat and Chuvadi give the wrong letters. Take up when a consumer
 needs maths or symbol text from such files.
-
-### Rendering (3.30 findings)
-**36. SVG text when ToUnicode contradicts the encoding (D-175, D-201).** In
-an embedded TrueType simple font the raster renderer chooses the glyph from
-the font's encoding (3.31), but the SVG text is the ToUnicode character, and
-the browser draws that character's glyph from the embedded font. The two
-differ only when ToUnicode contradicts the encoding; no PDF in the corpus
-does. Measure on such files before choosing a fix.
-
-**37. Glyph choice in non-embedded fonts (D-175, D-201).** A substitute font
-still chooses glyphs from the decoded text, not from the encoding's glyph
-names. On the O9 Courier fixture Chuvadi draws "BBBB" where MuPDF draws
-"AAAA". Measure on the corpus before choosing a fix.
 
 ### Hinting provenance (D-106)
 **33. Clean-room TrueType interpreter.** Rewrite `HintingInterpreter` from
@@ -424,15 +527,10 @@ because its gate requires today's output. Fix it after the rewrite passes, as
 its own measured Rule 5 change: it changes hinted output for fonts whose
 `prep` sets graphics state.
 
-### Rendering follow-ups (3.25 findings)
-**22. Round joins** are drawn as bevel joins in the raster stroker (round
-and square caps and dotted lines are done, 3.25).
-**23. Line width under a non-uniform CTM** uses sqrt(|det|) (one width for
-the whole stroke); a true elliptical pen needs stroking in user space.
-
 ### Image codecs (rendering)
 **1. JPXDecode (JPEG 2000).** Recognised but not decoded; JPX image bytes fall
-through. A decoder is a multi-week engine (EBCOT, wavelets); long-horizon.
+through. A decoder is a multi-week engine (EBCOT, wavelets). Planned for
+3.36 (D-338, moved by D-350).
 
 ### Rendering follow-ups
 **3. Page boxes in the default renderers.** SVG and raster render the
@@ -461,8 +559,10 @@ from the source files, which `PdfAWriter` does not yet convert:
   page resources (annotation appearances, Type 3 glyphs) not embedded (9);
   `NeedAppearances` in the form (9); `.notdef` glyphs used (7); annotation
   flags (4-6); `TR` in ExtGState (4); signatures (4).
-Take up per item; the rest of Info-to-XMP (Keywords, dates) is small and
-follows the D-318 Producer fix.
+3.34.0 fixed three of these (49c, 49d, 49g): annotation flags (hidden or
+invisible annotations removed, Print set, NoView cleared), `/CharSet` for
+Type 1 subsets at PDF/A-1b, and `/Info` dates into XMP. The rest: take up
+per item.
 
 **5. Tagged-PDF structure generation.** PDF/A *output* ships
 (`Chuvadi.Pdf.PdfA`), and hybrid `/StructTreeRoot` on real files resolves, but
@@ -495,11 +595,6 @@ Rasterizer note (not a Scrub defect): pattern fills are not anti-aliased,
 so an edge passing exactly through pixel centres can flip one row of
 pixels when Scrub splits the path at the box (seen with a rotated radial
 pattern; shifting the geometry by a fraction of a point removes it).
-
-### Embedding follow-ups
-**20. Interrupting single JBIG2 / CCITT image decodes.** Cancellation and
-the decoded-size limit are checked when such an image finishes decoding, not
-part-way (JPEG, Flate, LZW and the other filters are checked as they go).
 
 ### Rendering (major-version switch)
 **9. /UserUnit in the default renderers.** `PdfPage.UserUnit` is exposed

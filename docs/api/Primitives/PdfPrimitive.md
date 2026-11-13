@@ -53,6 +53,16 @@ Attempts to cast this primitive to <typeparamref name="T"/>. <typeparam name="T"
 
 **Returns:** This instance cast to <typeparamref name="T"/>, or `null` if the cast is not valid.
 
+### `Cast<T>`
+
+```csharp
+T Cast<T>() where T : PdfPrimitive
+```
+
+Casts this primitive to <typeparamref name="T"/>, throwing if the cast is not valid. <typeparam name="T">The target primitive type.</typeparam>
+
+**Returns:** This instance cast to <typeparamref name="T"/>. <exception cref="InvalidCastException"> Thrown when this primitive is not of type <typeparamref name="T"/>. </exception>
+
 ### `ToString`
 
 ```csharp

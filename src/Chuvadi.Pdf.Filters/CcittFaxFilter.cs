@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters;
 
@@ -101,6 +102,13 @@ public sealed class CcittFaxFilter : IStreamFilter
 
             while (_rows <= 0 || decodedRows < _rows)
             {
+                // 3.34.0 (#20): cancellation is checked as the rows decode
+                // (the output stream checks the decoded-size limit).
+                if ((decodedRows & 63) == 0)
+                {
+                    PdfWorkScope.ThrowIfCancellationRequested();
+                }
+
                 if (_byteAlign)
                 {
                     AlignToByte();

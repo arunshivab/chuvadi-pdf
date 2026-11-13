@@ -44,6 +44,14 @@ static IccProfile Parse(byte[] data)
 
 Parses an ICC profile from a byte buffer.
 
+### `ToSrgb`
+
+```csharp
+(double R, double G, double B) ToSrgb(ReadOnlySpan<double> input)
+```
+
+Converts source-space components to sRGB [0, 1].
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Color/IccProfile.cs`](../../../src/Chuvadi.Pdf.Color/IccProfile.cs)_

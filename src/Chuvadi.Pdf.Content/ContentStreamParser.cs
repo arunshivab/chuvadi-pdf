@@ -70,6 +70,13 @@ public sealed class ContentStreamParser
     // ── Public API ────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Why parsing stopped early (3.34.0, #52a), or null: syntax damage
+    /// (an unterminated string, for example) ends the content; the text
+    /// before it is returned.
+    /// </summary>
+    internal string? DamagedReason { get; private set; }
+
+    /// <summary>
     /// Parses one or more content streams and returns extracted text fragments.
     /// </summary>
     /// <param name="streams">
@@ -128,7 +135,16 @@ public sealed class ContentStreamParser
         {
             while (true)
             {
-                PdfToken token = tokenizer.Read();
+                PdfToken token;
+                try
+                {
+                    token = tokenizer.Read();
+                }
+                catch (PdfParseException ex)
+                {
+                    DamagedReason ??= ex.Message;
+                    break;
+                }
 
                 if (token.IsEndOfStream)
                 {
@@ -158,7 +174,16 @@ public sealed class ContentStreamParser
 
                     while (true)
                     {
-                        PdfToken inner = tokenizer.Read();
+                        PdfToken inner;
+                        try
+                        {
+                            inner = tokenizer.Read();
+                        }
+                        catch (PdfParseException ex)
+                        {
+                            DamagedReason ??= ex.Message;
+                            break;
+                        }
 
                         if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
                         {
@@ -195,7 +220,16 @@ public sealed class ContentStreamParser
                 // marked content can read /ActualText.
                 if (token.Type == PdfTokenType.DictionaryStart)
                 {
-                    operands.Add(ReadInlineDictionary(tokenizer, 0));
+                    try
+                    {
+                        operands.Add(ReadInlineDictionary(tokenizer, 0));
+                    }
+                    catch (PdfParseException ex)
+                    {
+                        DamagedReason ??= ex.Message;
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -680,7 +714,25 @@ public sealed class ContentStreamParser
             return;
         }
 
-        byte[] content = DecodeStream(stream);
+        byte[] content;
+        try
+        {
+            content = DecodeStream(stream);
+        }
+        catch (FilterException ex)
+        {
+            // 3.34.0 (#52c): a form whose data is damaged gives the text
+            // decoded before the damage, or none, and the rest of the page
+            // is still read; the extractor warns.
+            DamagedReason ??= "form " + name + ": " + ex.Message;
+            if (ex.PartialOutput is not { Length: > 0 } partial || HasFilterChain(stream))
+            {
+                return;
+            }
+
+            content = partial;
+        }
+
         PdfDictionary? formResources =
             ResolveDictionary(stream.Dictionary, PdfName.Resources) ?? resources;
 
@@ -931,6 +983,11 @@ public sealed class ContentStreamParser
         return _resolver.Resolve(value) as PdfDictionary;
     }
 
+    // True when the stream has more than one filter, so a partial output
+    // from a failed filter may not be fully decoded.
+    private static bool HasFilterChain(PdfStream stream) =>
+        stream.Dictionary.TryGetValue(PdfName.Filter, out PdfPrimitive? filter) && filter is PdfArray { Count: > 1 };
+
     private byte[] DecodeStream(PdfStream stream)
     {
         PdfDictionary dict = stream.Dictionary;
@@ -968,7 +1025,21 @@ public sealed class ContentStreamParser
 
     // ── Operand helpers ───────────────────────────────────────────────────
 
+    // 3.34.0 (#52a): a token that cannot become a value (an empty name)
+    // reads as null, so the operator using it is skipped as malformed.
     private static PdfPrimitive TokenToPrimitive(PdfToken token)
+    {
+        try
+        {
+            return TokenToPrimitiveCore(token);
+        }
+        catch (PdfParseException)
+        {
+            return PdfNull.Value;
+        }
+    }
+
+    private static PdfPrimitive TokenToPrimitiveCore(PdfToken token)
     {
         switch (token.Type)
         {

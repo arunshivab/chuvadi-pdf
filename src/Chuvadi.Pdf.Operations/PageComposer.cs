@@ -299,7 +299,7 @@ public sealed class PageComposer
                 if (form.SourceResources is not null)
                 {
                     formDict.Set(PdfName.Resources, ObjectImporter.DeepCopyDictionary(
-                        form.SourceResources, form.SourceDocIndex, idRemap));
+                        form.SourceResources, form.SourceDocIndex, idRemap, nullUnmapped: true));
                 }
 
                 formDict.Set(PdfName.Length, form.Body.Length);
@@ -324,7 +324,7 @@ public sealed class PageComposer
 
                     int newId = idRemap[key];
                     PdfPrimitive valueCopy = ObjectImporter.DeepCopyPrimitive(
-                        refObj.Value, form.SourceDocIndex, idRemap);
+                        refObj.Value, form.SourceDocIndex, idRemap, nullUnmapped: true);
                     allObjects.Add(new PdfIndirectObject(new PdfObjectId(newId, 0), valueCopy));
                 }
             }

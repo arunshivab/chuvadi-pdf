@@ -16,4 +16,10 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Filters\Chuvadi.Pdf.Filters.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.DisplayList" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.Raster" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Images.Tests" />
+  </ItemGroup>
+
 </Project>

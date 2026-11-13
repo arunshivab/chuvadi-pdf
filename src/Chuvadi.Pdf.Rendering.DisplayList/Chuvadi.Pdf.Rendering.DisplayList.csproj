@@ -22,4 +22,8 @@
     <ProjectReference Include="..\Chuvadi.Pdf.Rendering.Walking\Chuvadi.Pdf.Rendering.Walking.csproj" />
     <ProjectReference Include="..\Chuvadi.Pdf.Annotations\Chuvadi.Pdf.Annotations.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Svg" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.Wpf" />
+  </ItemGroup>
 </Project>

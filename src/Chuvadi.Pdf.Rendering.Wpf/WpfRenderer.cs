@@ -90,10 +90,15 @@ public sealed class WpfRenderer
         MatrixTransform pageFlip = new(new Matrix(1, 0, 0, -1, -boxX, boxY + boxH));
         dc.PushTransform(pageFlip);
 
-        // The clip and the page flip are the two base pushes; ops never pop them.
+        // The clip and the page flip are the two base pushes; ops never pop
+        // them. 3.34.0 (#40, Q10, D-231): each scope (a q/Q group or an
+        // opacity group) counts the clips pushed inside it, and closing the
+        // scope pops them with it, as the SVG renderer does. Before, ClipOp
+        // was ignored, so content drew outside its clip.
         const int BaseDepth = 2;
-        Stack<int> pushDepth = new();
         int currentDepth = BaseDepth;
+        Stack<int> clipsPerScope = new();
+        clipsPerScope.Push(0);
 
         foreach (RenderOp op in list)
         {
@@ -103,16 +108,39 @@ public sealed class WpfRenderer
                 case TextOp t: DrawText(dc, t); break;
                 case ImageOp i: DrawImage(dc, i); break;
                 case TransformOp xf:
-                    if (xf.Push) { dc.PushTransform(Transform.Identity); pushDepth.Push(currentDepth); currentDepth++; }
-                    else if (currentDepth > BaseDepth) { dc.Pop(); currentDepth--; }
+                    if (xf.Push)
+                    {
+                        dc.PushTransform(Transform.Identity);
+                        currentDepth++;
+                        clipsPerScope.Push(0);
+                    }
+                    else
+                    {
+                        CloseScope(dc, clipsPerScope, ref currentDepth, BaseDepth);
+                    }
+
                     break;
                 case OpacityOp op2:
-                    if (op2.Push) { dc.PushOpacity(op2.Alpha); currentDepth++; }
-                    else if (currentDepth > BaseDepth) { dc.Pop(); currentDepth--; }
+                    if (op2.Push)
+                    {
+                        dc.PushOpacity(op2.Alpha);
+                        currentDepth++;
+                        clipsPerScope.Push(0);
+                    }
+                    else
+                    {
+                        CloseScope(dc, clipsPerScope, ref currentDepth, BaseDepth);
+                    }
+
                     break;
-                case ClipOp:
-                    // Not implemented in v1 — clipping mid-frame requires Geometry-based
-                    // push which interacts with the transform stack. Phase 2.2.
+                case ClipOp c:
+                    if (ClipGeometry(c) is Geometry clip)
+                    {
+                        dc.PushClip(clip);
+                        currentDepth++;
+                        clipsPerScope.Push(clipsPerScope.Pop() + 1);
+                    }
+
                     break;
                 case BlendModeOp:
                     // WPF doesn't expose PDF blend modes directly. Phase 2.2 will
@@ -125,48 +153,143 @@ public sealed class WpfRenderer
         return visual;
     }
 
+    // Pops the clips pushed in the innermost scope, then the scope's own push.
+    private static void CloseScope(DrawingContext dc, Stack<int> clipsPerScope, ref int currentDepth, int baseDepth)
+    {
+        if (clipsPerScope.Count <= 1)
+        {
+            return; // an unmatched pop: the base scope is never closed
+        }
+
+        int clips = clipsPerScope.Pop();
+        for (int k = 0; k < clips && currentDepth > baseDepth; k++)
+        {
+            dc.Pop();
+            currentDepth--;
+        }
+
+        if (currentDepth > baseDepth)
+        {
+            dc.Pop();
+            currentDepth--;
+        }
+    }
+
+    // The clip region of a ClipOp: its path with its fill rule, or for a
+    // stroke-outline clip (a stroke painted with a pattern) the outline of
+    // the stroked path. Null when the path is empty.
+    private static Geometry? ClipGeometry(ClipOp op)
+    {
+        StreamGeometry path = BuildGeometry(op.Geometry);
+        if (path.IsEmpty())
+        {
+            return null;
+        }
+
+        if (op.Stroke is StrokeStyle stroke)
+        {
+            Pen pen = new(Brushes.Black, stroke.LineWidth > 0 ? stroke.LineWidth : 1.0);
+            return path.GetWidenedPathGeometry(pen);
+        }
+
+        path.FillRule = op.FillRule == FillRule.EvenOdd ? System.Windows.Media.FillRule.EvenOdd : System.Windows.Media.FillRule.Nonzero;
+        path.Freeze();
+        return path;
+    }
+
     private static void DrawPath(DrawingContext dc, PathOp op)
     {
-        StreamGeometry sg = new();
-        using (StreamGeometryContext ctx = sg.Open())
-        {
-            bool started = false;
-            foreach (PathSegment seg in op.Geometry.Segments)
-            {
-                switch (seg.Command)
-                {
-                    case PathCommand.MoveTo:
-                        ctx.BeginFigure(new Point(seg.X1, seg.Y1), isFilled: true, isClosed: false);
-                        started = true;
-                        break;
-                    case PathCommand.LineTo:
-                        if (started) { ctx.LineTo(new Point(seg.X1, seg.Y1), isStroked: true, isSmoothJoin: false); }
-                        break;
-                    case PathCommand.CubicTo:
-                        if (started)
-                        {
-                            ctx.BezierTo(new Point(seg.X1, seg.Y1),
-                                new Point(seg.X2, seg.Y2),
-                                new Point(seg.X3, seg.Y3),
-                                isStroked: true, isSmoothJoin: false);
-                        }
-                        break;
-                    case PathCommand.Close:
-                        // StreamGeometry closes via the isClosed flag at BeginFigure;
-                        // there's no mid-path close. WPF auto-closes when next BeginFigure
-                        // or end-of-figure happens. For our purposes we accept the slight
-                        // visual difference.
-                        break;
-                    default: break;
-                }
-            }
-        }
+        StreamGeometry sg = BuildGeometry(op.Geometry);
         sg.FillRule = op.FillRule == FillRule.EvenOdd ? System.Windows.Media.FillRule.EvenOdd : System.Windows.Media.FillRule.Nonzero;
         Brush? fill = op.Mode is PaintMode.Fill or PaintMode.FillAndStroke
             ? new SolidColorBrush(WpfColor(op.FillColor)) : null;
         Pen? pen = op.Mode is PaintMode.Stroke or PaintMode.FillAndStroke
             ? new Pen(new SolidColorBrush(WpfColor(op.StrokeColor)), op.Stroke?.LineWidth ?? 1) : null;
         dc.DrawGeometry(fill, pen, sg);
+    }
+
+    private static StreamGeometry BuildGeometry(Chuvadi.Pdf.Rendering.DisplayList.PathGeometry geometry)
+    {
+        // StreamGeometry takes "closed" when a figure begins, so each figure's
+        // segments are gathered first and the figure is begun knowing whether
+        // it ends with a closepath (3.34.0). Before, closepath was ignored, so
+        // a stroked closed path (a rectangle from `re`) lost its closing edge.
+        // After a closepath the current point is the figure's start (PDF
+        // 32000-1:2008 §8.5.2.1), so a segment that follows starts a new
+        // figure there.
+        StreamGeometry sg = new();
+        using (StreamGeometryContext ctx = sg.Open())
+        {
+            List<PathSegment> figure = new();
+            Point start = default;
+            bool open = false;
+
+            void Flush(bool closed)
+            {
+                if (!open)
+                {
+                    return;
+                }
+
+                ctx.BeginFigure(start, isFilled: true, isClosed: closed);
+                foreach (PathSegment s in figure)
+                {
+                    if (s.Command == PathCommand.LineTo)
+                    {
+                        ctx.LineTo(new Point(s.X1, s.Y1), isStroked: true, isSmoothJoin: false);
+                    }
+                    else
+                    {
+                        ctx.BezierTo(new Point(s.X1, s.Y1), new Point(s.X2, s.Y2), new Point(s.X3, s.Y3),
+                            isStroked: true, isSmoothJoin: false);
+                    }
+                }
+
+                figure.Clear();
+                open = false;
+            }
+
+            Point last = default;
+            bool haveStart = false;
+            foreach (PathSegment seg in geometry.Segments)
+            {
+                switch (seg.Command)
+                {
+                    case PathCommand.MoveTo:
+                        Flush(closed: false);
+                        start = new Point(seg.X1, seg.Y1);
+                        last = start;
+                        open = true;
+                        haveStart = true;
+                        break;
+                    case PathCommand.LineTo:
+                    case PathCommand.CubicTo:
+                        if (!open && haveStart)
+                        {
+                            start = last;
+                            open = true;
+                        }
+
+                        if (open)
+                        {
+                            figure.Add(seg);
+                            last = seg.Command == PathCommand.LineTo ? new Point(seg.X1, seg.Y1) : new Point(seg.X3, seg.Y3);
+                        }
+
+                        break;
+                    case PathCommand.Close:
+                        Point figureStart = start;
+                        Flush(closed: true);
+                        last = figureStart;
+                        break;
+                    default: break;
+                }
+            }
+
+            Flush(closed: false);
+        }
+
+        return sg;
     }
 
     private static void DrawText(DrawingContext dc, TextOp op)
@@ -211,6 +334,16 @@ public sealed class WpfRenderer
         // JPEG passthrough via WPF's BitmapDecoder.
         if (op.Format == ImageFormat.Jpeg)
         {
+            // 3.34.0 (Phase B N3): a CMYK JPEG is decoded from its stored
+            // channels through /Decode; WPF's decoder applied the Adobe
+            // inverted-channel rule and ignored /Decode.
+            byte[]? cmyk = CmykJpegSamples.Read(op);
+            if (cmyk is not null)
+            {
+                return BitmapSource.Create(op.Width, op.Height, 96, 96, PixelFormats.Rgb24, null,
+                    CmykToRgb(cmyk, op.Width, op.Height), op.Width * 3);
+            }
+
             using MemoryStream ms = new(op.PixelData);
             BitmapImage img = new();
             img.BeginInit();

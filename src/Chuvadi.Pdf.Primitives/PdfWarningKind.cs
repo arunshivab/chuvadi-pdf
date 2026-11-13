@@ -1,6 +1,6 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
-// PHASE: 3.27 — warnings for fallbacks (D-62, D-63)
+// PHASE: 3.27 — warnings for fallbacks (D-62, D-63); 3.34.0 ImageSkipped
 
 namespace Chuvadi.Pdf.Primitives;
 
@@ -41,4 +41,13 @@ public enum PdfWarningKind
     /// it); the subject names the operator (3.33.0).
     /// </summary>
     ContentOperatorSkipped,
+
+    /// <summary>
+    /// An image could not be drawn and is skipped: its format is not
+    /// supported yet (JPEG 2000), its data could not be decoded as an image,
+    /// its colour space or bit depth is not supported, or its <c>/Mask</c>
+    /// could not be read (the image is then left out rather than drawn
+    /// unmasked). The reason says which (3.34.0).
+    /// </summary>
+    ImageSkipped,
 }

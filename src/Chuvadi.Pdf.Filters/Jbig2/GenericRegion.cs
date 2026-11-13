@@ -13,6 +13,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters.Jbig2;
 
@@ -118,6 +119,12 @@ internal static class GenericRegion
 
         for (int y = 0; y < height; y++)
         {
+            // 3.34.0 (#20): cancellation is checked as the region decodes.
+            if ((y & 63) == 0)
+            {
+                PdfWorkScope.ThrowIfCancellationRequested();
+            }
+
             if (tpgdon)
             {
                 ltp ^= mq.Decode(cx, sltp) == 1;

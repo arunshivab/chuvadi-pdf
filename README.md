@@ -63,7 +63,7 @@ its own NuGet package, with a `Chuvadi.Pdf` meta-package for the common case.
 | Annotations (read + create)              | Chuvadi.Pdf.Annotations           |
 | Digital signatures (verify, sign, timestamp, LTV) | Chuvadi.Pdf.Signatures   |
 | Encryption (read + write, RC4/AES-128/AES-256) | Chuvadi.Pdf.Encryption       |
-| PDF/A conformance output                 | Chuvadi.Pdf.PdfA                  |
+| PDF/A conformance output (PDF/A-1b, 2b; a date with no time zone is reported, or written as UTC with `AssumeUtcForZonelessDates`) | Chuvadi.Pdf.PdfA |
 | High-level reader facade                 | Chuvadi.Pdf.Reader                |
 | Command-line tool (17 verbs)             | tools/Chuvadi.Pdf.Cli             |
 

@@ -43,39 +43,42 @@ public static class DocumentInfo
         string? subject = null,
         string? keywords = null)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-
-        Dictionary<string, string?> entries = new Dictionary<string, string?>(StringComparer.Ordinal);
-        AddIfSet(entries, "Title", title);
-        AddIfSet(entries, "Author", author);
-        AddIfSet(entries, "Subject", subject);
-        AddIfSet(entries, "Keywords", keywords);
-
-        DocumentRewriter rewriter = new DocumentRewriter(document);
-
-        // Start from a copy of the existing Info dictionary (if any) so entries
-        // not being changed (Creator, Producer, dates) survive.
-        PdfDictionary info = document.Info is not null
-            ? ObjectImporter.CopyDictionary(document.Info)
-            : new PdfDictionary();
-
-        foreach (KeyValuePair<string, string?> entry in entries)
+        PdfWriteGuard.Run(document, "updated", () =>
         {
-            PdfName key = PdfName.Intern(entry.Key);
-            if (entry.Value is null)
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+
+            Dictionary<string, string?> entries = new Dictionary<string, string?>(StringComparer.Ordinal);
+            AddIfSet(entries, "Title", title);
+            AddIfSet(entries, "Author", author);
+            AddIfSet(entries, "Subject", subject);
+            AddIfSet(entries, "Keywords", keywords);
+
+            DocumentRewriter rewriter = new DocumentRewriter(document);
+
+            // Start from a copy of the existing Info dictionary (if any) so entries
+            // not being changed (Creator, Producer, dates) survive.
+            PdfDictionary info = document.Info is not null
+                ? ObjectImporter.CopyDictionary(document.Info)
+                : new PdfDictionary();
+
+            foreach (KeyValuePair<string, string?> entry in entries)
             {
-                continue;
+                PdfName key = PdfName.Intern(entry.Key);
+                if (entry.Value is null)
+                {
+                    continue;
+                }
+
+                info.Set(key, new PdfString(entry.Value));
             }
 
-            info.Set(key, new PdfString(entry.Value));
-        }
+            PdfObjectId infoId = rewriter.AllocateId();
+            rewriter.AddObject(infoId, info);
+            rewriter.SetTrailerEntry(PdfName.Info, new PdfReference(infoId));
 
-        PdfObjectId infoId = rewriter.AllocateId();
-        rewriter.AddObject(infoId, info);
-        rewriter.SetTrailerEntry(PdfName.Info, new PdfReference(infoId));
-
-        rewriter.Write(output);
+            rewriter.Write(output);
+        });
     }
 
     private static void AddIfSet(Dictionary<string, string?> map, string key, string? value)

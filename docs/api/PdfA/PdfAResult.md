@@ -26,6 +26,14 @@ IReadOnlyList<string> Violations
 
 Messages describing conformance problems that could not be fixed.
 
+### `Warnings`
+
+```csharp
+IReadOnlyList<string> Warnings
+```
+
+Gets what the conversion changed or left out that the caller may want to know (3.34.0): for example an `/Info` date without a time zone left out of the XMP metadata, or written as UTC.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.PdfA/PdfAOptions.cs`](../../../src/Chuvadi.Pdf.PdfA/PdfAOptions.cs)_

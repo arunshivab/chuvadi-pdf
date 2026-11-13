@@ -30,6 +30,14 @@ const string Email = @"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]
 
 Email address. RFC-5322 inspired but conservative enough to avoid false positives.
 
+### `@"\b[A-TV-Z][0-9][0-9A-Z](?:\.[0-9A-Z]`
+
+```csharp
+const string Icd10Prefix = @"\b[A-TV-Z][0-9][0-9A-Z](?:\.[0-9A-Z]
+```
+
+ICD-10 code prefix. Matches the letter+two-digit prefix of any ICD-10 code, e.g. "E11" or "J45.901". Intentionally loose; tune downward if you want exact codes.
+
 ### `@"\b\d`
 
 ```csharp
@@ -127,14 +135,6 @@ const string UsPhone = @"\b(?:\(\d
 ```
 
 US phone number. Matches (XXX) XXX-XXXX, XXX-XXX-XXXX, and XXX.XXX.XXXX.
-
-### `@"\b[A-TV-Z][0-9][0-9A-Z]`
-
-```csharp
-const string Icd10Prefix = @"\b[A-TV-Z][0-9][0-9A-Z](?:\.[0-9A-Z]
-```
-
-ICD-10 code prefix. Matches the letter+two-digit prefix of any ICD-10 code, e.g. "E11" or "J45.901". Intentionally loose; tune downward if you want exact codes.
 
 ### `@"\b`
 

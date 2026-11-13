@@ -7,6 +7,7 @@
 // view used by the rest of the encryption subsystem.
 
 using System;
+using System.Collections.Generic;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Encryption;
@@ -17,6 +18,9 @@ namespace Chuvadi.Pdf.Encryption;
 /// </summary>
 public sealed class EncryptionDictionary
 {
+    // A /CFM that is missing or not known.
+    private const EncryptionAlgorithm UnknownCfm = (EncryptionAlgorithm)(-1);
+
     private EncryptionDictionary()
     {
     }
@@ -56,6 +60,32 @@ public sealed class EncryptionDictionary
 
     /// <summary>/EncryptMetadata entry (default true).</summary>
     public bool EncryptMetadata { get; private set; } = true;
+
+    // 3.34.0 (#52d): the algorithms the crypt filters named by /StmF, /StrF
+    // and /EFF select (ISO 32000-1 §7.6.5). /Identity selects None. Before
+    // V4 there are no crypt filters and all three are Algorithm. A missing
+    // /StmF or /StrF, or a name that /CF does not define with a known /CFM,
+    // keeps Algorithm (the behaviour before 3.34.0); a missing /EFF follows
+    // /StmF, as the standard says.
+    internal EncryptionAlgorithm StreamAlgorithm { get; private set; }
+
+    internal EncryptionAlgorithm StringAlgorithm { get; private set; }
+
+    internal EncryptionAlgorithm EmbeddedFileAlgorithm { get; private set; }
+
+    // The crypt filters /CF defines, by name, with a known /CFM, plus
+    // /Identity; a stream's own /Crypt filter names one of them (§7.4.10).
+    internal Dictionary<string, EncryptionAlgorithm> CryptFilters { get; } =
+        new Dictionary<string, EncryptionAlgorithm>(StringComparer.Ordinal)
+        {
+            ["Identity"] = EncryptionAlgorithm.None,
+        };
+
+    // True when strings and streams are not encrypted (both /Identity), so
+    // only embedded files are: the document itself can be read without the
+    // password (ISO 32000-1 §7.6.5, the unencrypted wrapper).
+    internal bool OnlyEmbeddedFilesEncrypted =>
+        StreamAlgorithm == EncryptionAlgorithm.None && StringAlgorithm == EncryptionAlgorithm.None;
 
     /// <summary>
     /// Parses an /Encrypt dictionary. Returns null when the dictionary is missing
@@ -108,7 +138,69 @@ public sealed class EncryptionDictionary
             return null;
         }
 
+        e.StreamAlgorithm = e.Algorithm;
+        e.StringAlgorithm = e.Algorithm;
+        e.EmbeddedFileAlgorithm = e.Algorithm;
+        if (e.V >= 4)
+        {
+            e.StreamAlgorithm = CryptFilter(dict, "StmF", e.Algorithm);
+            e.StringAlgorithm = CryptFilter(dict, "StrF", e.Algorithm);
+            e.EmbeddedFileAlgorithm = CryptFilter(dict, "EFF", e.StreamAlgorithm);
+            if (dict.TryGetValue(PdfName.Intern("CF"), out PdfPrimitive? cfPrim) && cfPrim is PdfDictionary cf)
+            {
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in cf)
+                {
+                    EncryptionAlgorithm algorithm = Cfm(entry.Value as PdfDictionary);
+                    if (algorithm != UnknownCfm)
+                    {
+                        e.CryptFilters[entry.Key.Value] = algorithm;
+                    }
+                }
+            }
+        }
+
         return e;
+    }
+
+    // The algorithm of the crypt filter that the name in /key selects.
+    private static EncryptionAlgorithm CryptFilter(PdfDictionary dict, string key, EncryptionAlgorithm fallback)
+    {
+        PdfName? name = dict.GetName(PdfName.Intern(key));
+        if (name is null)
+        {
+            return fallback;
+        }
+
+        if (name.Value == "Identity")
+        {
+            return EncryptionAlgorithm.None;
+        }
+
+        if (!dict.TryGetValue(PdfName.Intern("CF"), out PdfPrimitive? cfPrim)
+            || cfPrim is not PdfDictionary cf
+            || !cf.TryGetValue(name, out PdfPrimitive? filterPrim)
+            || filterPrim is not PdfDictionary filter)
+        {
+            return fallback;
+        }
+
+        EncryptionAlgorithm algorithm = Cfm(filter);
+        return algorithm == UnknownCfm ? fallback : algorithm;
+    }
+
+    // The algorithm a crypt filter dictionary's /CFM selects, or -1 when it
+    // is missing or not known.
+    private static EncryptionAlgorithm Cfm(PdfDictionary? filter)
+    {
+        PdfName? cfm = filter?.GetName(PdfName.Intern("CFM"));
+        return cfm?.Value switch
+        {
+            "None" => EncryptionAlgorithm.None,
+            "V2" => EncryptionAlgorithm.Rc4_128,
+            "AESV2" => EncryptionAlgorithm.Aes_128,
+            "AESV3" => EncryptionAlgorithm.Aes_256,
+            _ => UnknownCfm,
+        };
     }
 
     private static EncryptionAlgorithm DetectV4Cfm(PdfDictionary dict)

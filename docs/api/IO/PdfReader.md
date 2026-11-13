@@ -34,6 +34,38 @@ PdfObjectStore Objects
 
 Gets the lazy object store.
 
+### `Warnings`
+
+```csharp
+IReadOnlyList<string> Warnings
+```
+
+Gets the structural repairs made so far — page-tree objects recovered at open from a corrupt cross-reference table, and (3.21) objects whose cross-reference offset proved wrong when they were first loaded: recovered by scanning the file, read from a misnumbered definition, or treated as missing. Objects load lazily, so the list can grow after open; check it after the work (render, extract, save), not only at open. An empty list means no repair was needed.
+
+### `FileLength`
+
+```csharp
+long FileLength
+```
+
+Gets the total length of the underlying file in bytes.
+
+### `Catalog`
+
+```csharp
+PdfDictionary? Catalog
+```
+
+Gets the document Catalog dictionary, or null.
+
+### `Info`
+
+```csharp
+PdfDictionary? Info
+```
+
+Gets the document information dictionary, if present.
+
 ## Methods
 
 ### `Open`

@@ -58,25 +58,7 @@ public static class PageOperations
             throw new ArgumentNullException(nameof(documents));
         }
 
-        if (documents.Length == 0)
-        {
-            throw new OperationsException("At least one document is required for merge.");
-        }
-
-        PageBuilder builder = new PageBuilder();
-
-        for (int d = 0; d < documents.Length; d++)
-        {
-            PdfDocument doc = documents[d]
-                ?? throw new OperationsException("Null document in merge list.");
-
-            for (int i = 0; i < doc.PageCount; i++)
-            {
-                builder.AddPage(doc.Pages[i], doc.Objects, d);
-            }
-        }
-
-        builder.Write(output);
+        Merge(output, documents, new MergeOptions());
     }
 
     /// <summary>
@@ -97,45 +79,56 @@ public static class PageOperations
     /// </exception>
     public static void Merge(Stream output, IReadOnlyList<PdfDocument> documents, MergeOptions options)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(documents);
-        ArgumentNullException.ThrowIfNull(options);
-
-        if (documents.Count == 0)
+        PdfWriteGuard.Run(documents, "merged", () =>
         {
-            throw new OperationsException("At least one document is required for merge.");
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(documents);
+            ArgumentNullException.ThrowIfNull(options);
 
-        PageBuilder builder = new PageBuilder();
-        int[] pageOffsets = new int[documents.Count];
-        int runningOffset = 0;
-
-        for (int d = 0; d < documents.Count; d++)
-        {
-            PdfDocument doc = documents[d]
-                ?? throw new OperationsException("Null document in merge list.");
-
-            pageOffsets[d] = runningOffset;
-
-            for (int i = 0; i < doc.PageCount; i++)
+            if (documents.Count == 0)
             {
-                builder.AddPage(doc.Pages[i], doc.Objects, d);
+                throw new OperationsException("At least one document is required for merge.");
             }
 
-            runningOffset += doc.PageCount;
-        }
+            PageBuilder builder = new PageBuilder();
+            int[] pageOffsets = new int[documents.Count];
+            int runningOffset = 0;
 
-        if (options.PreserveOutlines)
-        {
-            List<OutlineNode> roots = BuildMergedOutline(documents, pageOffsets, options);
-
-            if (roots.Count > 0)
+            for (int d = 0; d < documents.Count; d++)
             {
-                builder.SetOutline(roots);
-            }
-        }
+                PdfDocument doc = documents[d]
+                    ?? throw new OperationsException("Null document in merge list.");
 
-        builder.Write(output);
+                pageOffsets[d] = runningOffset;
+
+                for (int i = 0; i < doc.PageCount; i++)
+                {
+                    builder.AddPage(doc.Pages[i], doc.Objects, d);
+                }
+
+                runningOffset += doc.PageCount;
+
+                if (options.FormFields != MergeFormFields.Drop && MergedAcroForm.Collect(doc, d) is FormSource form)
+                {
+                    builder.AddFormSource(form);
+                }
+            }
+
+            builder.FormFields = options.FormFields;
+            builder.Encryption = options.Encryption;
+
+            if (options.PreserveOutlines)
+            {
+                List<OutlineNode> roots = BuildMergedOutline(documents, pageOffsets, options);
+
+                if (roots.Count > 0)
+                {
+                    builder.SetOutline(roots);
+                }
+            }
+
+            builder.Write(output);
+        });
     }
 
     // ── Assemble ──────────────────────────────────────────────────────────
@@ -159,49 +152,52 @@ public static class PageOperations
     /// </exception>
     public static void Assemble(Stream output, IReadOnlyList<PageSelector> pages)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(pages);
-
-        if (pages.Count == 0)
+        PdfWriteGuard.Run(SourcesOf(pages), "assembled", () =>
         {
-            throw new OperationsException("At least one page is required for assembly.");
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(pages);
 
-        PageBuilder builder = new PageBuilder();
-
-        // Distinct source documents get a stable per-document index (by reference
-        // identity), so the object-number remap keeps each source's objects
-        // separate and a repeated document's shared objects are copied once.
-        Dictionary<PdfDocument, int> docIndices = new Dictionary<PdfDocument, int>();
-
-        for (int i = 0; i < pages.Count; i++)
-        {
-            PageSelector selector = pages[i];
-
-            if (selector.Document is null)
+            if (pages.Count == 0)
             {
-                throw new OperationsException("Null document in assembly list.");
+                throw new OperationsException("At least one page is required for assembly.");
             }
 
-            PdfDocument doc = selector.Document;
+            PageBuilder builder = new PageBuilder();
 
-            if (selector.PageIndex < 0 || selector.PageIndex >= doc.PageCount)
+            // Distinct source documents get a stable per-document index (by reference
+            // identity), so the object-number remap keeps each source's objects
+            // separate and a repeated document's shared objects are copied once.
+            Dictionary<PdfDocument, int> docIndices = new Dictionary<PdfDocument, int>();
+
+            for (int i = 0; i < pages.Count; i++)
             {
-                throw new OperationsException(
-                    $"Page index {selector.PageIndex} is out of range " +
-                    $"[0, {doc.PageCount}) for an assembly source.");
+                PageSelector selector = pages[i];
+
+                if (selector.Document is null)
+                {
+                    throw new OperationsException("Null document in assembly list.");
+                }
+
+                PdfDocument doc = selector.Document;
+
+                if (selector.PageIndex < 0 || selector.PageIndex >= doc.PageCount)
+                {
+                    throw new OperationsException(
+                        $"Page index {selector.PageIndex} is out of range " +
+                        $"[0, {doc.PageCount}) for an assembly source.");
+                }
+
+                if (!docIndices.TryGetValue(doc, out int docIndex))
+                {
+                    docIndex = docIndices.Count;
+                    docIndices[doc] = docIndex;
+                }
+
+                builder.AddPage(doc.Pages[selector.PageIndex], doc.Objects, docIndex);
             }
 
-            if (!docIndices.TryGetValue(doc, out int docIndex))
-            {
-                docIndex = docIndices.Count;
-                docIndices[doc] = docIndex;
-            }
-
-            builder.AddPage(doc.Pages[selector.PageIndex], doc.Objects, docIndex);
-        }
-
-        builder.Write(output);
+            builder.Write(output);
+        });
     }
 
     // ── Merged outline construction ───────────────────────────────────────
@@ -296,23 +292,26 @@ public static class PageOperations
     /// </returns>
     public static List<MemoryStream> SplitPages(PdfDocument document)
     {
-        if (document is null)
+        return PdfWriteGuard.Run(document, "split", () =>
         {
-            throw new ArgumentNullException(nameof(document));
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        List<MemoryStream> results = new List<MemoryStream>(document.PageCount);
+            List<MemoryStream> results = new List<MemoryStream>(document.PageCount);
 
-        for (int i = 0; i < document.PageCount; i++)
-        {
-            MemoryStream ms = new MemoryStream();
-            PageBuilder builder = new PageBuilder();
-            builder.AddPage(document.Pages[i], document.Objects);
-            builder.Write(ms);
-            results.Add(ms);
-        }
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                MemoryStream ms = new MemoryStream();
+                PageBuilder builder = new PageBuilder();
+                builder.AddPage(document.Pages[i], document.Objects);
+                builder.Write(ms);
+                results.Add(ms);
+            }
 
-        return results;
+            return results;
+        });
     }
 
     /// <summary>
@@ -328,37 +327,40 @@ public static class PageOperations
         int startIndex,
         int count)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "written", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
+            if (output is null)
+            {
+                throw new ArgumentNullException(nameof(output));
+            }
 
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        if (startIndex < 0 || startIndex >= document.PageCount)
-        {
-            throw new OperationsException(
-                $"startIndex {startIndex} is out of range [0, {document.PageCount}).");
-        }
+            if (startIndex < 0 || startIndex >= document.PageCount)
+            {
+                throw new OperationsException(
+                    $"startIndex {startIndex} is out of range [0, {document.PageCount}).");
+            }
 
-        if (count <= 0 || startIndex + count > document.PageCount)
-        {
-            throw new OperationsException(
-                $"count {count} is invalid for startIndex {startIndex} " +
-                $"with {document.PageCount} pages.");
-        }
+            if (count <= 0 || startIndex + count > document.PageCount)
+            {
+                throw new OperationsException(
+                    $"count {count} is invalid for startIndex {startIndex} " +
+                    $"with {document.PageCount} pages.");
+            }
 
-        PageBuilder builder = new PageBuilder();
+            PageBuilder builder = new PageBuilder();
 
-        for (int i = startIndex; i < startIndex + count; i++)
-        {
-            builder.AddPage(document.Pages[i], document.Objects);
-        }
+            for (int i = startIndex; i < startIndex + count; i++)
+            {
+                builder.AddPage(document.Pages[i], document.Objects);
+            }
 
-        builder.Write(output);
+            builder.Write(output);
+        });
     }
 
     // ── Delete ────────────────────────────────────────────────────────────
@@ -374,39 +376,42 @@ public static class PageOperations
         PdfDocument document,
         IEnumerable<int> pageIndices)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "written", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (pageIndices is null)
-        {
-            throw new ArgumentNullException(nameof(pageIndices));
-        }
-
-        HashSet<int> toDelete = new HashSet<int>(pageIndices);
-        PageBuilder builder = new PageBuilder();
-
-        for (int i = 0; i < document.PageCount; i++)
-        {
-            if (!toDelete.Contains(i))
+            if (output is null)
             {
-                builder.AddPage(document.Pages[i], document.Objects);
+                throw new ArgumentNullException(nameof(output));
             }
-        }
 
-        if (builder.PageCount == 0)
-        {
-            throw new OperationsException(
-                "All pages were deleted. A PDF must contain at least one page.");
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        builder.Write(output);
+            if (pageIndices is null)
+            {
+                throw new ArgumentNullException(nameof(pageIndices));
+            }
+
+            HashSet<int> toDelete = new HashSet<int>(pageIndices);
+            PageBuilder builder = new PageBuilder();
+
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                if (!toDelete.Contains(i))
+                {
+                    builder.AddPage(document.Pages[i], document.Objects);
+                }
+            }
+
+            if (builder.PageCount == 0)
+            {
+                throw new OperationsException(
+                    "All pages were deleted. A PDF must contain at least one page.");
+            }
+
+            builder.Write(output);
+        });
     }
 
     // ── Rotate ────────────────────────────────────────────────────────────
@@ -430,45 +435,48 @@ public static class PageOperations
         int degrees,
         IEnumerable<int>? pageIndices = null)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "written", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270)
-        {
-            throw new OperationsException(
-                $"Rotation must be 0, 90, 180, or 270 degrees. Got {degrees}.");
-        }
-
-        HashSet<int>? rotateSet = pageIndices is null
-            ? null
-            : new HashSet<int>(pageIndices);
-
-        PageBuilder builder = new PageBuilder();
-
-        for (int i = 0; i < document.PageCount; i++)
-        {
-            PdfPage page = document.Pages[i];
-
-            if (rotateSet is null || rotateSet.Contains(i))
+            if (output is null)
             {
-                int existing = page.Rotate;
-                int newRotate = (existing + degrees) % 360;
-                builder.AddPageWithRotation(page, document.Objects, newRotate);
+                throw new ArgumentNullException(nameof(output));
             }
-            else
-            {
-                builder.AddPage(page, document.Objects);
-            }
-        }
 
-        builder.Write(output);
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
+
+            if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270)
+            {
+                throw new OperationsException(
+                    $"Rotation must be 0, 90, 180, or 270 degrees. Got {degrees}.");
+            }
+
+            HashSet<int>? rotateSet = pageIndices is null
+                ? null
+                : new HashSet<int>(pageIndices);
+
+            PageBuilder builder = new PageBuilder();
+
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                PdfPage page = document.Pages[i];
+
+                if (rotateSet is null || rotateSet.Contains(i))
+                {
+                    int existing = page.Rotate;
+                    int newRotate = (existing + degrees) % 360;
+                    builder.AddPageWithRotation(page, document.Objects, newRotate);
+                }
+                else
+                {
+                    builder.AddPage(page, document.Objects);
+                }
+            }
+
+            builder.Write(output);
+        });
     }
 
     // ── Reorder ───────────────────────────────────────────────────────────
@@ -488,42 +496,45 @@ public static class PageOperations
         PdfDocument document,
         IReadOnlyList<int> newOrder)
     {
-        if (output is null)
+        PdfWriteGuard.Run(document, "written", () =>
         {
-            throw new ArgumentNullException(nameof(output));
-        }
-
-        if (document is null)
-        {
-            throw new ArgumentNullException(nameof(document));
-        }
-
-        if (newOrder is null)
-        {
-            throw new ArgumentNullException(nameof(newOrder));
-        }
-
-        if (newOrder.Count != document.PageCount)
-        {
-            throw new OperationsException(
-                $"newOrder has {newOrder.Count} entries but document has " +
-                $"{document.PageCount} pages.");
-        }
-
-        PageBuilder builder = new PageBuilder();
-
-        foreach (int idx in newOrder)
-        {
-            if (idx < 0 || idx >= document.PageCount)
+            if (output is null)
             {
-                throw new OperationsException(
-                    $"Page index {idx} in newOrder is out of range [0, {document.PageCount}).");
+                throw new ArgumentNullException(nameof(output));
             }
 
-            builder.AddPage(document.Pages[idx], document.Objects);
-        }
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
 
-        builder.Write(output);
+            if (newOrder is null)
+            {
+                throw new ArgumentNullException(nameof(newOrder));
+            }
+
+            if (newOrder.Count != document.PageCount)
+            {
+                throw new OperationsException(
+                    $"newOrder has {newOrder.Count} entries but document has " +
+                    $"{document.PageCount} pages.");
+            }
+
+            PageBuilder builder = new PageBuilder();
+
+            foreach (int idx in newOrder)
+            {
+                if (idx < 0 || idx >= document.PageCount)
+                {
+                    throw new OperationsException(
+                        $"Page index {idx} in newOrder is out of range [0, {document.PageCount}).");
+                }
+
+                builder.AddPage(document.Pages[idx], document.Objects);
+            }
+
+            builder.Write(output);
+        });
     }
 
     // ── PageBuilder (private helper) ──────────────────────────────────────
@@ -546,6 +557,23 @@ public static class PageOperations
         }
 
         internal int PageCount => _pages.Count;
+
+        // 3.34.0 (D-335): the merged inputs' forms, how clashing names are
+        // handled, and the output encryption (Merge only).
+        private readonly List<FormSource> _formSources = new List<FormSource>();
+
+        // (input, source annotation number) to the output page index, from
+        // each added page's /Annots (first page wins).
+        private readonly Dictionary<(int Doc, int Num), int> _annotPages = new Dictionary<(int Doc, int Num), int>();
+
+        internal MergeFormFields FormFields { get; set; } = MergeFormFields.Drop;
+
+        internal EncryptionOptions? Encryption { get; set; }
+
+        internal void AddFormSource(FormSource source)
+        {
+            _formSources.Add(source);
+        }
 
         internal void SetOutline(List<OutlineNode> roots)
         {
@@ -574,12 +602,68 @@ public static class PageOperations
                 pageCopy.Set(PdfName.Parent, PdfNull.Value);
             }
 
+            // 3.34.0: attributes the page inherits from its page-tree nodes
+            // (§7.7.3.4: /Resources, /MediaBox, /CropBox; /Rotate is set
+            // above) are written on the page itself, since the new page tree
+            // does not carry them. Before, a page that inherited them lost
+            // its fonts and images and was given US Letter (found by the
+            // before/after run on the Phase B test bench's Govdocs1 files).
+            PdfDictionary inherited = new PdfDictionary();
+            foreach (PdfName key in InheritedPageKeys)
+            {
+                if (!pageCopy.ContainsKey(key) && FindInherited(page.Dictionary, resolver, key) is PdfPrimitive value)
+                {
+                    pageCopy.Set(key, value);
+                    inherited.Set(key, value);
+                }
+            }
+
             // Copy referenced objects (Resources, Contents).
             List<PdfIndirectObject> referencedObjects = new List<PdfIndirectObject>();
-            ObjectImporter.CollectReferences(page.Dictionary, resolver, referencedObjects,
-                new HashSet<int>());
+            HashSet<int> visited = new HashSet<int>();
+            ObjectImporter.CollectReferences(page.Dictionary, resolver, referencedObjects, visited);
+            ObjectImporter.CollectReferences(inherited, resolver, referencedObjects, visited);
+
+            if (resolver.Resolve(page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annots) ? annots : PdfNull.Value) is PdfArray annotArray)
+            {
+                for (int a = 0; a < annotArray.Count; a++)
+                {
+                    if (annotArray[a] is PdfReference annotRef)
+                    {
+                        _annotPages.TryAdd((docIndex, annotRef.ObjectId.ObjectNumber), _pages.Count);
+                    }
+                }
+            }
 
             _pages.Add(new PageEntry(pageCopy, referencedObjects, docIndex));
+        }
+
+        private static readonly PdfName[] InheritedPageKeys =
+        {
+            PdfName.Intern("Resources"),
+            PdfName.Intern("MediaBox"),
+            PdfName.Intern("CropBox"),
+        };
+
+        // The value of an inheritable key on the nearest page-tree ancestor,
+        // as written there (a reference stays a reference), or null.
+        private static PdfPrimitive? FindInherited(PdfDictionary page, IPdfObjectResolver resolver, PdfName key)
+        {
+            HashSet<PdfDictionary> seen = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance) { page };
+            PdfDictionary current = page;
+            while (current.TryGetValue(PdfName.Parent, out PdfPrimitive? parentRef)
+                && resolver.Resolve(parentRef) is PdfDictionary parent
+                && seen.Add(parent))
+            {
+                if (parent.TryGetValue(key, out PdfPrimitive? value))
+                {
+                    return value;
+                }
+
+                current = parent;
+            }
+
+            return null;
         }
 
         internal void Write(Stream output)
@@ -627,6 +711,14 @@ public static class PageOperations
                 }
             }
 
+            foreach (FormSource form in _formSources)
+            {
+                foreach (PdfIndirectObject refObj in form.Objects)
+                {
+                    idRemap.TryAdd((form.DocIndex, refObj.Id.ObjectNumber), nextId++);
+                }
+            }
+
             // Build Pages root.
             PdfArray kidsArray = new PdfArray([]);
 
@@ -649,7 +741,7 @@ public static class PageOperations
                 // produce the final renumbered page, then set /Parent.
                 PdfDictionary pageDict =
                     (PdfDictionary)ObjectImporter.DeepCopyPrimitive(
-                        _pages[i].PageDict, _pages[i].DocIndex, idRemap);
+                        _pages[i].PageDict, _pages[i].DocIndex, idRemap, nullUnmapped: true);
                 pageDict.Set(PdfName.Parent, new PdfReference(pagesId));
                 allObjects.Add(new PdfIndirectObject(pageIds[i], pageDict));
             }
@@ -670,8 +762,21 @@ public static class PageOperations
                     addedOriginals.Add(key);
                     int newId = idRemap[key];
                     PdfPrimitive valueCopy =
-                        ObjectImporter.DeepCopyPrimitive(refObj.Value, entry.DocIndex, idRemap);
+                        ObjectImporter.DeepCopyPrimitive(refObj.Value, entry.DocIndex, idRemap, nullUnmapped: true);
                     allObjects.Add(new PdfIndirectObject(new PdfObjectId(newId, 0), valueCopy));
+                }
+            }
+
+            foreach (FormSource form in _formSources)
+            {
+                foreach (PdfIndirectObject refObj in form.Objects)
+                {
+                    if (addedOriginals.Add((form.DocIndex, refObj.Id.ObjectNumber)))
+                    {
+                        PdfPrimitive valueCopy = ObjectImporter.DeepCopyPrimitive(refObj.Value, form.DocIndex, idRemap, nullUnmapped: true);
+                        allObjects.Add(new PdfIndirectObject(
+                            new PdfObjectId(idRemap[(form.DocIndex, refObj.Id.ObjectNumber)], 0), valueCopy));
+                    }
                 }
             }
 
@@ -690,13 +795,28 @@ public static class PageOperations
                 catalogDict.Set(PdfName.Outlines, new PdfReference(outlineRootId));
             }
 
+            if (FormFields != MergeFormFields.Drop && _formSources.Count > 0)
+            {
+                Dictionary<(int Doc, int Num), PdfReference> widgetPages = new Dictionary<(int Doc, int Num), PdfReference>();
+                foreach (KeyValuePair<(int Doc, int Num), int> annot in _annotPages)
+                {
+                    widgetPages[annot.Key] = new PdfReference(pageIds[annot.Value]);
+                }
+
+                PdfDictionary? acroForm = MergedAcroForm.Build(_formSources, FormFields, allObjects, idRemap, widgetPages, ref nextId);
+                if (acroForm is not null)
+                {
+                    catalogDict.Set(PdfName.Intern("AcroForm"), acroForm);
+                }
+            }
+
             allObjects.Add(new PdfIndirectObject(catalogId, catalogDict));
 
             // Build trailer.
             PdfDictionary trailer = new PdfDictionary();
             trailer.Set(PdfName.Root, new PdfReference(catalogId));
 
-            PdfWriter.Write(output, allObjects, trailer);
+            PdfWriter.Write(output, allObjects, trailer, Encryption);
         }
 
         // ── Object collection ──────────────────────────────────────────────
@@ -859,5 +979,19 @@ public static class PageOperations
         bytes[1] = 0xFF;
         Array.Copy(utf16, 0, bytes, 2, utf16.Length);
         return new PdfString(bytes);
+    }
+
+    // The distinct source documents of an assembly, for PdfWriteGuard.
+    private static IEnumerable<PdfDocument> SourcesOf(IReadOnlyList<PageSelector>? pages)
+    {
+        if (pages is null)
+        {
+            yield break;
+        }
+
+        foreach (PageSelector page in pages)
+        {
+            yield return page.Document;
+        }
     }
 }

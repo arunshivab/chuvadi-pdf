@@ -1,5 +1,10 @@
 # Chuvadi PDF Library — 35-Item Roadmap & Status Handoff
 
+> **Superseded (3.34.0, D-339).** This roadmap is no longer maintained; its
+> status columns are stale. The current record is `docs/CAPABILITY-AUDIT.md`
+> (updated every release) and the open tickets in `docs/BACKLOG.md`. This
+> file is kept for history.
+
 > **Purpose of this document.** A self-contained briefing for a fresh chat to pick up
 > Chuvadi development. It captures: who/what Chuvadi is, the working agreement, the
 > current released state, and the full 35-item / 7-phase plan **with status verified

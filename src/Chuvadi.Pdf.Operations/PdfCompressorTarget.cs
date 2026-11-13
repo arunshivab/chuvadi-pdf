@@ -33,84 +33,87 @@ public static partial class PdfCompressor
     public static CompressToTargetResult CompressToTarget(
         PdfDocument document, Stream output, long targetBytes, CompressToTargetOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(output);
-        options ??= new CompressToTargetOptions();
-
-        if (options.MaxLevel is PdfCompressionLevel maxLevel)
+        return PdfWriteGuard.Run(document, "compressed", () =>
         {
-            return CompressToTargetByLevel(document, output, targetBytes, options, maxLevel);
-        }
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(output);
+            options ??= new CompressToTargetOptions();
 
-        int low = Math.Clamp(options.MinQuality, 1, 100);
-        int high = Math.Clamp(options.MaxQuality, low, 100);
-
-        byte[]? best = null;
-        int bestQuality = 0;
-
-        while (low <= high)
-        {
-            int mid = low + ((high - low) / 2);
-            (byte[] bytes, CompressionSkipReason skip) = CompressAt(document, options, mid);
-
-            if (skip != CompressionSkipReason.None)
+            if (options.MaxLevel is PdfCompressionLevel maxLevel)
             {
-                return WriteOriginal(document, output, targetBytes, skip);
+                return CompressToTargetByLevel(document, output, targetBytes, options, maxLevel);
             }
 
-            if (bytes.Length <= targetBytes)
-            {
-                best = bytes;
-                bestQuality = mid;
-                low = mid + 1; // fits — try higher quality
-            }
-            else
-            {
-                high = mid - 1; // too big — drop quality
-            }
-        }
+            int low = Math.Clamp(options.MinQuality, 1, 100);
+            int high = Math.Clamp(options.MaxQuality, low, 100);
 
-        if (best is not null)
-        {
-            output.Write(best, 0, best.Length);
+            byte[]? best = null;
+            int bestQuality = 0;
+
+            while (low <= high)
+            {
+                int mid = low + ((high - low) / 2);
+                (byte[] bytes, CompressionSkipReason skip) = CompressAt(document, options, mid);
+
+                if (skip != CompressionSkipReason.None)
+                {
+                    return WriteOriginal(document, output, targetBytes, skip);
+                }
+
+                if (bytes.Length <= targetBytes)
+                {
+                    best = bytes;
+                    bestQuality = mid;
+                    low = mid + 1; // fits — try higher quality
+                }
+                else
+                {
+                    high = mid - 1; // too big — drop quality
+                }
+            }
+
+            if (best is not null)
+            {
+                output.Write(best, 0, best.Length);
+                return new CompressToTargetResult
+                {
+                    FinalSize = best.Length,
+                    QualityUsed = bestQuality,
+                    TargetMet = true,
+                    SkipReason = CompressionSkipReason.None,
+                };
+            }
+
+            // No quality met the target: the document is at its vector floor —
+            // content streams and fonts dominate and no image re-encode can help.
+            (byte[] smallest, CompressionSkipReason minSkip) = CompressAt(document, options, options.MinQuality);
+            if (minSkip != CompressionSkipReason.None)
+            {
+                return WriteOriginal(document, output, targetBytes, minSkip);
+            }
+
+            // Opt-in rasterize fallback: replace each page with a JPEG raster,
+            // descending in DPI until the target is met. Never silent — the
+            // caller chose to trade selectable text for bounded size.
+            if (options.AllowRasterizeFallback)
+            {
+                CompressToTargetResult? rasterized = TryRasterizeToTarget(
+                    document, output, targetBytes, options, smallest);
+                if (rasterized is not null)
+                {
+                    return rasterized;
+                }
+            }
+
+            output.Write(smallest, 0, smallest.Length);
             return new CompressToTargetResult
             {
-                FinalSize = best.Length,
-                QualityUsed = bestQuality,
-                TargetMet = true,
+                FinalSize = smallest.Length,
+                QualityUsed = Math.Clamp(options.MinQuality, 1, 100),
+                TargetMet = smallest.Length <= targetBytes,
                 SkipReason = CompressionSkipReason.None,
             };
-        }
-
-        // No quality met the target: the document is at its vector floor —
-        // content streams and fonts dominate and no image re-encode can help.
-        (byte[] smallest, CompressionSkipReason minSkip) = CompressAt(document, options, options.MinQuality);
-        if (minSkip != CompressionSkipReason.None)
-        {
-            return WriteOriginal(document, output, targetBytes, minSkip);
-        }
-
-        // Opt-in rasterize fallback: replace each page with a JPEG raster,
-        // descending in DPI until the target is met. Never silent — the
-        // caller chose to trade selectable text for bounded size.
-        if (options.AllowRasterizeFallback)
-        {
-            CompressToTargetResult? rasterized = TryRasterizeToTarget(
-                document, output, targetBytes, options, smallest);
-            if (rasterized is not null)
-            {
-                return rasterized;
-            }
-        }
-
-        output.Write(smallest, 0, smallest.Length);
-        return new CompressToTargetResult
-        {
-            FinalSize = smallest.Length,
-            QualityUsed = Math.Clamp(options.MinQuality, 1, 100),
-            TargetMet = smallest.Length <= targetBytes,
-            SkipReason = CompressionSkipReason.None,
-        };
+        });
     }
 
     // Rasterizes every page to a JPEG image and writes an image-only PDF,

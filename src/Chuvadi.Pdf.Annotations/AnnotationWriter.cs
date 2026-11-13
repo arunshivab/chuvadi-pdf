@@ -37,82 +37,85 @@ public static class AnnotationWriter
         PdfDocument document,
         IEnumerable<PdfAnnotation> annotations)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(annotations);
-
-        PreloadAllObjects(document);
-
-        // Collect annotations by page index
-        Dictionary<int, List<PdfAnnotation>> byPage = new Dictionary<int, List<PdfAnnotation>>();
-
-        foreach (PdfAnnotation a in annotations)
+        PdfWriteGuard.Run(document, "annotated", () =>
         {
-            if (a.PageIndex < 0 || a.PageIndex >= document.PageCount)
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(annotations);
+
+            PreloadAllObjects(document);
+
+            // Collect annotations by page index
+            Dictionary<int, List<PdfAnnotation>> byPage = new Dictionary<int, List<PdfAnnotation>>();
+
+            foreach (PdfAnnotation a in annotations)
             {
-                throw new AnnotationException(
-                    $"Annotation page index {a.PageIndex} out of range (document has {document.PageCount} pages).");
+                if (a.PageIndex < 0 || a.PageIndex >= document.PageCount)
+                {
+                    throw new AnnotationException(
+                        $"Annotation page index {a.PageIndex} out of range (document has {document.PageCount} pages).");
+                }
+
+                if (!byPage.TryGetValue(a.PageIndex, out List<PdfAnnotation>? list))
+                {
+                    list = new List<PdfAnnotation>();
+                    byPage[a.PageIndex] = list;
+                }
+
+                list.Add(a);
             }
 
-            if (!byPage.TryGetValue(a.PageIndex, out List<PdfAnnotation>? list))
+            int nextObjectNum = FindNextObjectNumber(document);
+            Dictionary<int, PdfObjectId> pageIds = BuildPageIdMap(document);
+
+            List<PdfIndirectObject> newObjects = new List<PdfIndirectObject>();
+            HashSet<int> rewrittenPageNums = new HashSet<int>();
+
+            foreach (KeyValuePair<int, List<PdfAnnotation>> kvp in byPage)
             {
-                list = new List<PdfAnnotation>();
-                byPage[a.PageIndex] = list;
+                int pageIndex = kvp.Key;
+
+                if (!pageIds.TryGetValue(pageIndex, out PdfObjectId pageId))
+                {
+                    continue;
+                }
+
+                PdfPage page = document.Pages[pageIndex];
+                List<PdfReference> newAnnotRefs = new List<PdfReference>();
+
+                // Emit each annotation as an indirect object
+                foreach (PdfAnnotation annotation in kvp.Value)
+                {
+                    PdfObjectId annotId = new PdfObjectId(nextObjectNum++, 0);
+                    PdfDictionary annotDict = BuildAnnotationDictionary(annotation, pageId);
+                    newObjects.Add(new PdfIndirectObject(annotId, annotDict));
+                    newAnnotRefs.Add(new PdfReference(annotId));
+                }
+
+                // Build modified page dict: copy existing + append new annotations
+                PdfDictionary modifiedPage = CopyDictionary(page.Dictionary);
+                PdfArray annotsArray = BuildMergedAnnotsArray(page, document.Objects, newAnnotRefs);
+                modifiedPage.Set(PdfName.Intern("Annots"), annotsArray);
+
+                newObjects.Add(new PdfIndirectObject(pageId, modifiedPage));
+                rewrittenPageNums.Add(pageId.ObjectNumber);
             }
 
-            list.Add(a);
-        }
+            // Combine: new objects + untouched originals
+            List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
+            allObjects.AddRange(newObjects);
 
-        int nextObjectNum = FindNextObjectNumber(document);
-        Dictionary<int, PdfObjectId> pageIds = BuildPageIdMap(document);
-
-        List<PdfIndirectObject> newObjects = new List<PdfIndirectObject>();
-        HashSet<int> rewrittenPageNums = new HashSet<int>();
-
-        foreach (KeyValuePair<int, List<PdfAnnotation>> kvp in byPage)
-        {
-            int pageIndex = kvp.Key;
-
-            if (!pageIds.TryGetValue(pageIndex, out PdfObjectId pageId))
+            foreach (PdfIndirectObject obj in document.Objects.Objects)
             {
-                continue;
+                if (!rewrittenPageNums.Contains(obj.Id.ObjectNumber))
+                {
+                    allObjects.Add(obj);
+                }
             }
 
-            PdfPage page = document.Pages[pageIndex];
-            List<PdfReference> newAnnotRefs = new List<PdfReference>();
-
-            // Emit each annotation as an indirect object
-            foreach (PdfAnnotation annotation in kvp.Value)
-            {
-                PdfObjectId annotId = new PdfObjectId(nextObjectNum++, 0);
-                PdfDictionary annotDict = BuildAnnotationDictionary(annotation, pageId);
-                newObjects.Add(new PdfIndirectObject(annotId, annotDict));
-                newAnnotRefs.Add(new PdfReference(annotId));
-            }
-
-            // Build modified page dict: copy existing + append new annotations
-            PdfDictionary modifiedPage = CopyDictionary(page.Dictionary);
-            PdfArray annotsArray = BuildMergedAnnotsArray(page, document.Objects, newAnnotRefs);
-            modifiedPage.Set(PdfName.Intern("Annots"), annotsArray);
-
-            newObjects.Add(new PdfIndirectObject(pageId, modifiedPage));
-            rewrittenPageNums.Add(pageId.ObjectNumber);
-        }
-
-        // Combine: new objects + untouched originals
-        List<PdfIndirectObject> allObjects = new List<PdfIndirectObject>();
-        allObjects.AddRange(newObjects);
-
-        foreach (PdfIndirectObject obj in document.Objects.Objects)
-        {
-            if (!rewrittenPageNums.Contains(obj.Id.ObjectNumber))
-            {
-                allObjects.Add(obj);
-            }
-        }
-
-        PdfDictionary trailer = BuildTrailer(document);
-        PdfWriter.Write(output, allObjects, trailer);
+            PdfDictionary trailer = BuildTrailer(document);
+            PdfWriter.Write(output, allObjects, trailer);
+        });
     }
 
     // ── Dictionary builders ───────────────────────────────────────────────

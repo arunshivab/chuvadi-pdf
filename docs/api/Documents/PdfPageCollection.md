@@ -22,6 +22,14 @@ int Count => _count
 
 Gets the total number of pages in the document.
 
+### `this[]`
+
+```csharp
+PdfPage this[int index]
+```
+
+Gets the page at the given zero-based index. Pages are loaded lazily from the page tree. <exception cref="ArgumentOutOfRangeException"> Thrown when `index` is outside [0, Count). </exception>
+
 ## Methods
 
 ### `GetEnumerator`

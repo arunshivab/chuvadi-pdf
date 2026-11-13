@@ -59,7 +59,19 @@ internal static class ContentStreamWalker
 
         while (true)
         {
-            PdfToken token = tokenizer.Read();
+            PdfToken token;
+            try
+            {
+                token = tokenizer.Read();
+            }
+            catch (PdfParseException ex)
+            {
+                // 3.34.0 (#52a): syntax damage ends the content here; what
+                // came before is kept, as viewers do.
+                sink.ContentDamaged(ex.Message);
+                break;
+            }
+
             if (token.IsEndOfStream)
             {
                 PdfWorkScope.ThrowIfCancellationRequested();
@@ -88,7 +100,17 @@ internal static class ContentStreamWalker
                 int elements = 0;
                 while (true)
                 {
-                    PdfToken inner = tokenizer.Read();
+                    PdfToken inner;
+                    try
+                    {
+                        inner = tokenizer.Read();
+                    }
+                    catch (PdfParseException ex)
+                    {
+                        sink.ContentDamaged(ex.Message);
+                        return;
+                    }
+
                     if (inner.IsEndOfStream || inner.Type == PdfTokenType.ArrayEnd)
                     {
                         break;
@@ -118,6 +140,24 @@ internal static class ContentStreamWalker
             }
 
             PdfWorkScope.CountOperators();
+
+            // 3.34.0 (Phase B N4): an inline image (BI ... ID data EI) is read
+            // as one unit and handed to the sink. Before, its binary data was
+            // read as tokens: the image never drew, and a "<" or "(" in the
+            // data ended the rest of the content.
+            if (token.RawText == "BI")
+            {
+                operands.Clear();
+                if (!InlineImageReader.TryRead(tokenizer, content, out PdfDictionary image, out byte[] data, out string problem))
+                {
+                    sink.ContentDamaged(problem);
+                    break;
+                }
+
+                sink.InlineImage(image, data);
+                continue;
+            }
+
             Dispatch(token.RawText, operands, sink);
             operands.Clear();
         }
@@ -326,9 +366,17 @@ internal static class ContentStreamWalker
                 sink.EndText();
                 break;
             case "Tf":
+                // 3.34.0: the last two operands are the font and size (stray
+                // tokens before them are ignored), and a font operand that is
+                // not a name is skipped; before, SVG threw on it (found by
+                // fuzzing).
                 if (operands.Count >= 2)
                 {
-                    sink.SetFont(ContentStrings.ExtractName(operands[0]), Number(operands[1]));
+                    string fontName = ContentStrings.ExtractName(operands[^2]);
+                    if (fontName.Length > 0)
+                    {
+                        sink.SetFont(fontName, Number(operands[^1]));
+                    }
                 }
                 break;
             case "Td":

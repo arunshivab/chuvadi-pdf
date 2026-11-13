@@ -11,6 +11,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters.Jbig2;
 
@@ -55,6 +56,7 @@ internal sealed class Jbig2Decoder
 
         while (reader.HasBytes(11))
         {
+            PdfWorkScope.ThrowIfCancellationRequested(); // 3.34.0 (#20)
             SegmentHeader header = SegmentHeader.Read(reader);
 
             int dataEnd = header.DataLength == UnknownLength

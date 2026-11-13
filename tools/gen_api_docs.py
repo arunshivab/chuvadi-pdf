@@ -277,12 +277,28 @@ def parse_file(path: Path) -> list[TypeDecl]:
     return types
 
 
+def param_open_index(text: str) -> int:
+    """Index of the "(" opening a parameter list: the first "(" written right
+    after a name or a generic argument list ("Name(", "Name<T>("). A "(" after
+    a space opens a tuple type ("public (int Width, int Height) Size(...)")
+    and is not one (3.34.0, #51). -1 when there is none."""
+    for k, ch in enumerate(text):
+        if ch == "(" and k > 0 and (text[k - 1].isalnum() or text[k - 1] in "_><=!+-*/%&|^~"):
+            return k
+    return -1
+
+
 def param_list_end(text: str) -> int:
     """Index of the ")" closing the first parameter list, or -1 if still open."""
     depth = 0
     started = False
     in_string = False
+    start = param_open_index(text)
+    if start < 0:
+        return -1
     for k, ch in enumerate(text):
+        if k < start:
+            continue
         if ch == '"' and (k == 0 or text[k - 1] != "\\"):
             in_string = not in_string
         if in_string:
@@ -358,7 +374,8 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
         # before matching, so multi-line signatures are documented too. An
         # expression body that follows the parameter list ("=> …", possibly
         # itself spanning lines) is cut off: the signature ends at ")".
-        if re.match(r'^\s*public\b', line) and line.count("(") > line.count(")"):
+        if re.match(r'^\s*public\b', line) and (line.count("(") > line.count(")")
+                                                   or (param_open_index(line) >= 0 and param_list_end(line) < 0)):
             j = i
             joined = line.rstrip()
             while param_list_end(joined) < 0 and j + 1 < len(body_lines):
@@ -386,6 +403,15 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
             line = re.sub(r'\s+\)', ')', line)
             i = j
 
+        # 3.34.0 (#51): a property whose body opens on the next line
+        # ("public PdfRectangle MediaBox" then "{") is matched as if the brace
+        # ended its first line; before, such properties were left out.
+        if (re.match(r'^\s*public\b', line) and not re.search(r'[{;)]\s*$', line)
+                and i + 1 < len(body_lines) and body_lines[i + 1].strip() == "{"):
+            # An expression-bodied property whose value starts an initializer
+            # ("Name => new List<T>" then "{") ends at the name's expression.
+            line = line.rstrip() + (";" if "=>" in line else " {")
+
         mm = MEMBER_DECL.match(line)
         if mm:
             modifiers = mm.group("modifiers") or ""
@@ -407,7 +433,9 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
             # ("Box => OwnBox(\"Trim\");") is a property, not a method: the
             # name is the token before "=>", where no "(" appears.
             head = rest.split("=>")[0]
-            if "=>" in rest and "(" not in head and terminator == ";":
+            # 3.34.0 (#51): a "(" that opens a tuple type is not a parameter list.
+            has_params = param_open_index(rest + terminator) >= 0
+            if "=>" in rest and param_open_index(head) < 0 and terminator == ";":
                 members.append(Member(
                     kind="property",
                     name=head.strip().split()[-1],
@@ -415,12 +443,14 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
                     summary=clean_xml_refs(doc["summary"]),
                     is_static="static" in modifiers,
                 ))
-            elif "(" in rest or ends_with_close_paren:
+            elif has_params:
                 # Method or constructor
                 # `rest` may not contain the closing paren if it landed in terminator;
                 # use the whole concatenation for parsing the name
                 full = (rest + terminator).strip()
-                paren_idx = full.index("(") if "(" in full else len(full)
+                paren_idx = param_open_index(full)
+                if paren_idx < 0:
+                    paren_idx = len(full)
                 tokens_before_paren = full[:paren_idx].strip().split()
                 if not tokens_before_paren:
                     # Malformed or non-member match; skip
@@ -457,7 +487,8 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
                 # Property
                 tokens = rest.rstrip("{").strip().split()
                 if tokens:
-                    name = tokens[-1]
+                    # An indexer ("T this[int index]") is listed as this[].
+                    name = "this[]" if "this[" in rest else tokens[-1]
                     members.append(Member(
                         kind="property",
                         name=name,

@@ -49,30 +49,33 @@ public static class PageOverlay
         ColorF? background,
         float contentOpacity)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-
-        if (contentOpacity < 0f || contentOpacity > 1f)
+        PdfWriteGuard.Run(document, "stamped", () =>
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(contentOpacity), contentOpacity, "Opacity must be in [0, 1].");
-        }
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
 
-        HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
-
-        PageContentEditor editor = new PageContentEditor(document);
-
-        foreach (int pageIndex in targets)
-        {
-            if (pageIndex < 0 || pageIndex >= document.PageCount)
+            if (contentOpacity < 0f || contentOpacity > 1f)
             {
-                continue;
+                throw new ArgumentOutOfRangeException(
+                    nameof(contentOpacity), contentOpacity, "Opacity must be in [0, 1].");
             }
 
-            editor.Recolor(pageIndex, background, contentOpacity);
-        }
+            HashSet<int> targets = ResolveTargets(pageIndices, document.PageCount);
 
-        editor.Write(output);
+            PageContentEditor editor = new PageContentEditor(document);
+
+            foreach (int pageIndex in targets)
+            {
+                if (pageIndex < 0 || pageIndex >= document.PageCount)
+                {
+                    continue;
+                }
+
+                editor.Recolor(pageIndex, background, contentOpacity);
+            }
+
+            editor.Write(output);
+        });
     }
 
     private static HashSet<int> ResolveTargets(IEnumerable<int>? pageIndices, int pageCount)

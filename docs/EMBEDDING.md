@@ -111,6 +111,18 @@ using (PdfWorkScope.Enter(limits, cts.Token))
 Known gap: decoding a single JBIG2 or CCITT image is not interrupted part-way;
 it is checked when the image is finished.
 
+Since 3.34.0 the write paths (section 6 lists them) honour the same scope:
+they check its token for every object written or copied, every page and
+object the redactor visits, and every content operator they parse. Their
+methods take no token, so open a scope around the call:
+
+```csharp
+using (PdfWorkScope.Enter(null, cts.Token))
+{
+    FormFiller.Fill(output, doc, values);
+}
+```
+
 ## 5. Limits (A4)
 
 ```csharp
@@ -146,6 +158,12 @@ partial is returned.
   counted, so a call can allocate somewhat more than the ceiling before it
   trips. Leave headroom.
 - `MaxOutputPixels` is checked before the output buffer is allocated.
+
+Since 3.34.0 the write paths apply a document's limits too, for every
+document they read (both sources of a merge or a stamp, each document of an
+assembly), nested in any scope you opened. Before, a fill, merge, stamp or
+redaction ran without them, so a decompression bomb opened with
+`MaxDecodedStreamBytes` could still be expanded by the redactor.
 
 ## 6. Exceptions (malformed input)
 
@@ -184,6 +202,36 @@ The set covers the `PdfOpenOptions` overloads of `PdfDocument.Open` /
 section 4 (with or without a token). It was checked by mutation fuzzing
 (8,000 damaged variants of the test fixtures per run): no exception outside
 the table.
+
+### Write paths (3.34.0)
+
+The methods that write a new PDF from a document you opened follow the same
+table, with "could not be" naming the work in the message (for example
+"The document could not be filled: ..."): any failure outside the table is
+reported as `PdfCorruptionException`, with the original as
+`InnerException`. They are `PdfDocument.Save`,
+`OptionalContentWriter.SetVisibility`, `AnnotationWriter.Add`,
+`FormFiller.Fill`, `AnnotationFlattener.Flatten`, `DocumentInfo.Apply`,
+`HeaderFooter.Apply`, `Imposition.NUp` and `Booklet`, `OutlineWriter.Apply`,
+`PageCropper.Crop`, `PageOperations` (`Merge`, `Assemble`, `SplitPages`,
+`ExtractPages`, `DeletePages`, `RotatePages`, `ReorderPages`),
+`PageOverlay.Apply`, `PageStamper` (`Place`, `PlaceOnAll`, `PlaceMany`,
+`RemoveStamp`, `ReplaceStamp`), `PdfCompressor.Compress`,
+`PdfCompressor.CompressToTarget`, `PdfSanitizer.Sanitize`,
+`StandardFontEmbedder.Embed`, `TextStamper.Apply`, `PdfAWriter.Write`,
+`Redactor.Apply`, `WatermarkStamper.ApplyText` and `ApplyImage`, and
+`XfaRenderer.Render`.
+
+Besides the pass-through list above, two more pass through unchanged, because
+they report a call that does not fit the document rather than damage:
+`InvalidOperationException` where a method documents it, and
+`XfaRenderException` / `XfaScriptException` from `XfaRenderer.Render`.
+
+Before 3.34.0 a damaged input could make these methods throw, for example,
+`InvalidCastException` or `KeyNotFoundException`. The fuzz run has a
+`write-paths` target that opens each damaged variant and runs it through
+save, fill, merge, watermark, header/footer, flatten, compress, rotate and
+redact.
 
 ## 7. Threads
 

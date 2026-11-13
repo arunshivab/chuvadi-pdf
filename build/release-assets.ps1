@@ -13,7 +13,10 @@
     - the tag vX.Y.Z exists locally and on origin;
     - no GitHub release exists yet for the tag (it never replaces one);
     - the package folder holds exactly one Chuvadi.*.X.Y.Z.nupkg for every
-      src project and nothing else at that version.
+      src project and nothing else at that version;
+    - every package names the tag's commit in its nuspec <repository commit>
+      (3.34.0), so it was packed from the released source, not before the
+      release commit existed.
     It then writes SHA256SUMS.txt (lower-case hash, two spaces, file name;
     LF; UTF-8 without BOM; names in ordinal order, the format sha256sum -c
     reads), creates the release with --verify-tag (so it never makes a new
@@ -123,6 +126,40 @@ if ($extra.Count -gt 0) {
 [Array]::Sort($names, [StringComparer]::Ordinal)
 $files = @($names | ForEach-Object { (Resolve-Path (Join-Path $PackageDir $_)).Path })
 Write-Host "  Found all $($files.Count) packages." -ForegroundColor Gray
+
+# 4b. Every package was packed from the tag's commit (3.34.0).
+$tagCommit = (git rev-parse "refs/tags/$tag^{commit}").Trim()
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$wrongCommit = @()
+foreach ($file in $files) {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
+    try {
+        $entry = $zip.Entries | Where-Object { $_.FullName -notmatch '/' -and $_.FullName -like '*.nuspec' } | Select-Object -First 1
+        if ($null -eq $entry) {
+            $wrongCommit += "$([System.IO.Path]::GetFileName($file)): no nuspec"
+            continue
+        }
+        $reader = New-Object System.IO.StreamReader($entry.Open())
+        try {
+            [xml] $nuspec = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+        $repository = $nuspec.package.metadata.repository
+        $commit = if ($null -eq $repository) { "" } else { [string] $repository.commit }
+        if ($commit -ne $tagCommit) {
+            $wrongCommit += "$([System.IO.Path]::GetFileName($file)): commit '$commit'"
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+if ($wrongCommit.Count -gt 0) {
+    throw "These packages were not packed from $tag ($tagCommit). Check out the tag and run build\pack.ps1 again:`n  $($wrongCommit -join "`n  ")"
+}
+Write-Host "  Every package names $tag's commit $($tagCommit.Substring(0, 7))." -ForegroundColor Gray
 
 # 5. SHA256SUMS.txt in a fresh folder, so the uploaded file is named exactly that.
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "chuvadi-release-$Version"

@@ -31,6 +31,22 @@ ReadOnlyCollection<AccessDescription> Descriptions => new(_descriptions)
 
 The access descriptions.
 
+### `OcspUri`
+
+```csharp
+string? OcspUri
+```
+
+The first OCSP URI in this extension, or null when none exists.
+
+### `CaIssuersUri`
+
+```csharp
+string? CaIssuersUri
+```
+
+The first caIssuers URI, or null when none exists.
+
 ### `Oid`
 
 __static__

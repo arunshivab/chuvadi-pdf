@@ -34,6 +34,14 @@ AffineMatrix Multiply(AffineMatrix other)
 
 Returns this × `other` (this is applied after other in PDF terms).
 
+### `Apply`
+
+```csharp
+(double X, double Y) Apply(double x, double y)
+```
+
+Applies this matrix to a point.
+
 ### `ToSvgMatrix`
 
 ```csharp

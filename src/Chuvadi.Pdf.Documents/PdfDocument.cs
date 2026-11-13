@@ -14,6 +14,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Chuvadi.Pdf.Encryption;
+using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -49,6 +50,10 @@ public sealed class PdfDocument : IDisposable
     private OptionalContentVisibility? _defaultOptionalContent;
     private PdfPageCollection? _pages;
     private bool _disposed;
+
+    // 3.34.0 (#52g): opened with RepairIfDamaged, so a page tree that loops
+    // back on itself is walked to count its pages.
+    private bool _walkPageTreeIfLooped;
 
     private PdfDocument(PdfReader reader)
     {
@@ -183,7 +188,7 @@ public sealed class PdfDocument : IDisposable
         try
         {
             PdfReader reader = OpenReader(stream, options);
-            PdfDocument document = new PdfDocument(reader);
+            PdfDocument document = new PdfDocument(reader) { _walkPageTreeIfLooped = options.RepairIfDamaged };
             reader.Objects.OnWarning = options.OnWarning;
             return WithLimits(document, options.Limits);
         }
@@ -257,10 +262,23 @@ public sealed class PdfDocument : IDisposable
             return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
         }
 
-        string reason;
+        string? reason;
         try
         {
-            return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+            // 3.34.0 (#52d): a file can open yet have a catalog whose /Pages
+            // does not lead to a page tree, so every page access fails. With
+            // RepairIfDamaged that is checked on a probe (the stream left
+            // open) and repaired; a sound file is then opened normally.
+            using (PdfReader probe = password is null ? PdfReader.Open(stream, leaveOpen: true) : PdfReader.Open(stream, password, leaveOpen: true))
+            {
+                reason = PageTreeProblem(probe);
+            }
+
+            if (reason is null)
+            {
+                stream.Seek(0, SeekOrigin.Begin);
+                return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+            }
         }
         catch (Exception ex) when (IsStructureFailure(ex))
         {
@@ -276,12 +294,28 @@ public sealed class PdfDocument : IDisposable
         return repaired;
     }
 
+    // Why the page tree cannot be reached, or null when it can.
+    private static string? PageTreeProblem(PdfReader reader)
+    {
+        if (reader.Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root)
+            && reader.Objects.Resolve(root) is PdfDictionary catalog
+            && catalog.TryGetValue(PdfName.Pages, out PdfPrimitive? pages)
+            && reader.Objects.Resolve(pages) is PdfDictionary)
+        {
+            return null;
+        }
+
+        return "The catalog's /Pages entry does not resolve to a page tree.";
+    }
+
     // A failure to read the file's structure, which a repair may fix. A
     // password, limit, security-handler or cancellation failure is not.
+    // 3.34.0 (#52d): a stream that cannot be decoded while the file is
+    // opened (a cross-reference or object stream) is a structure failure.
     private static bool IsStructureFailure(Exception ex) => ex switch
     {
         PdfPasswordRequiredException => false,
-        PdfParseException or PdfCorruptionException => true,
+        PdfParseException or PdfCorruptionException or FilterException => true,
         PdfException or OperationCanceledException or OutOfMemoryException or ObjectDisposedException => false,
         IOException and not EndOfStreamException => false,
         _ => true,
@@ -477,7 +511,14 @@ public sealed class PdfDocument : IDisposable
             if (_pages is null)
             {
                 PdfDictionary? pagesDict = GetPagesRoot();
-                _pages = new PdfPageCollection(pagesDict, _reader.Objects, () => DefaultOptionalContent, () => StructTreeRoot, () => ResolveCatalogDictionary("AcroForm"));
+                _pages = new PdfPageCollection(
+                    pagesDict,
+                    _reader.Objects,
+                    () => DefaultOptionalContent,
+                    () => StructTreeRoot,
+                    () => ResolveCatalogDictionary("AcroForm"),
+                    _reader.AddWarningOnce,
+                    _walkPageTreeIfLooped);
             }
 
             return _pages;
@@ -843,7 +884,11 @@ public sealed class PdfDocument : IDisposable
     /// the file was repaired while loading — for example, a page-tree object
     /// recovered from a corrupt cross-reference table, or an object whose
     /// cross-reference offset was wrong (recovered by scanning, read from a
-    /// misnumbered definition, or treated as missing). Objects load lazily, so
+    /// misnumbered definition, or treated as missing). Since 3.34.0 it also
+    /// lists damaged object syntax that was read past, a page whose missing or
+    /// invalid MediaBox was taken as US Letter, a page tree that loops back on
+    /// itself, and a file opened without a password because only its embedded
+    /// files are encrypted. Objects load lazily, so
     /// the list can grow after open: check it after rendering, extracting or
     /// saving, not only at open. The document is usable, and writing it back
     /// out (merge, reorder, extract, save) emits a clean, repaired file.
@@ -872,33 +917,36 @@ public sealed class PdfDocument : IDisposable
     /// <param name="encryption">The encryption options, or null for no encryption.</param>
     public void Save(Stream output, EncryptionOptions? encryption = null)
     {
-        ArgumentNullException.ThrowIfNull(output);
-
-        PdfDictionary trailer = new PdfDictionary();
-        Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root);
-        Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? info);
-
-        if (root is not null)
+        PdfWriteGuard.Run(this, "saved", () =>
         {
-            trailer.Set(PdfName.Root, root);
-        }
+            ArgumentNullException.ThrowIfNull(output);
 
-        if (info is not null)
-        {
-            trailer.Set(PdfName.Info, info);
-        }
+            PdfDictionary trailer = new PdfDictionary();
+            Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root);
+            Trailer.TryGetValue(PdfName.Info, out PdfPrimitive? info);
 
-        // Collect every object reachable from the trailer rather than only the
-        // objects that happen to be materialized in the store. An opened
-        // document loads its objects lazily, so content streams are usually not
-        // resolved at save time; passing the bare store would drop them and emit
-        // a structurally valid but contentless file.
-        List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
-        HashSet<int> visited = new HashSet<int>();
-        CollectReachable(root, objects, visited);
-        CollectReachable(info, objects, visited);
+            if (root is not null)
+            {
+                trailer.Set(PdfName.Root, root);
+            }
 
-        PdfWriter.Write(output, objects, trailer, encryption);
+            if (info is not null)
+            {
+                trailer.Set(PdfName.Info, info);
+            }
+
+            // Collect every object reachable from the trailer rather than only the
+            // objects that happen to be materialized in the store. An opened
+            // document loads its objects lazily, so content streams are usually not
+            // resolved at save time; passing the bare store would drop them and emit
+            // a structurally valid but contentless file.
+            List<PdfIndirectObject> objects = new List<PdfIndirectObject>();
+            HashSet<int> visited = new HashSet<int>();
+            CollectReachable(root, objects, visited);
+            CollectReachable(info, objects, visited);
+
+            PdfWriter.Write(output, objects, trailer, encryption);
+        });
     }
 
     private void CollectReachable(PdfPrimitive? primitive, List<PdfIndirectObject> collected, HashSet<int> visited)
@@ -910,6 +958,7 @@ public sealed class PdfDocument : IDisposable
                 return;
             }
 
+            PdfWorkScope.ThrowIfCancellationRequested();
             PdfPrimitive resolved = Objects.Resolve(reference);
             collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
             CollectReachable(resolved, collected, visited);

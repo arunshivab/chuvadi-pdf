@@ -1,0 +1,78 @@
+%PDF-1.7
+%????
+1 0 obj
+<<
+/Type /Catalog
+/Pages 2 0 R
+>>
+endobj
+2 0 obj
+<<
+/Type /Pages
+/Kids [3 0 R]
+/Count 1
+>>
+endobj
+3 0 obj
+<<
+/Type /Page
+/Parent 2 0 R
+/MediaBox [0.0 0.0 595.0 842.0]
+/Resources <<
+/Font <<
+/Helvetica 5 0 R
+>>
+/ProcSet [/PDF /Text]
+>>
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 73
+>>
+stream
+q
+0 0 0 rg
+BT
+/Helvetica 12 Tf
+1 0 0 1 50 780 Tm
+(Hello) Tj
+ET
+Q
+
+endstream
+endobj
+5 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+/Encoding /WinAnsiEncoding
+>>
+endobj
+6 0 obj
+<<
+/Title <53696E676C6520706167652073656564>
+/Author <436875766164692E5064662E46757A7A>
+>>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000284 00000 n 
+0000000407 00000 n 
+0000000504 00000 n 
+trailer
+<<
+/Root 1 0 R
+/Info 6 0 R
+/Size 7
+>>
+
+startxref
+610
+%%EOF

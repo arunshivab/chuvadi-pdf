@@ -207,13 +207,21 @@ public sealed class RenderOptions
     /// render the same either way. <c>PageRasterizer.RenderRegion</c>
     /// is not affected: its region is in absolute user space.
     /// </summary>
+    /// <remarks>
+    /// To size a canvas or map points between the image and the page, use
+    /// <c>PageRasterizer.GetOutputSize</c>, <c>PdfPage.GetDisplayBox</c> and
+    /// <c>PdfPage.GetDisplayTransform</c> (3.34.0) rather than
+    /// <c>PdfPage.Width</c>, <c>Height</c> or <c>MediaBox</c>.
+    /// </remarks>
     public PdfDisplayBox DisplayBox { get; init; }
 
-    // The layer visibility these options select for a page.
+    // The layer visibility these options select for a page. 3.34.0 (#43):
+    // with AnnotationMode.Print, the layers' print state (/Usage /Print).
     internal OptionalContentVisibility VisibilityFor(PdfPage page) =>
         IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
-            : page.OptionalContent.WithOverrides(LayerVisibility).WithOverridesById(LayerVisibilityById);
+            : (AnnotationMode == Chuvadi.Pdf.Documents.AnnotationMode.Print ? page.OptionalContent.ForPrinting() : page.OptionalContent)
+                .WithOverrides(LayerVisibility).WithOverridesById(LayerVisibilityById);
 
     internal static int NormalizeRotation(int value, string name)
     {

@@ -16,7 +16,18 @@ internal static class ImageEncoder
     {
         if (op.Format == ImageFormat.Jpeg)
         {
-            return "data:image/jpeg;base64," + Convert.ToBase64String(op.PixelData);
+            // 3.34.0 (Phase B N3): a CMYK JPEG is decoded here from its stored
+            // channels through /Decode and embedded as PNG. Passed through,
+            // browsers applied the Adobe inverted-channel rule and ignored
+            // /Decode.
+            byte[]? cmyk = CmykJpegSamples.Read(op);
+            if (cmyk is null)
+            {
+                return "data:image/jpeg;base64," + Convert.ToBase64String(op.PixelData);
+            }
+
+            byte[] cmykPng = EncodePng(CmykToRgb(cmyk, op.Width, op.Height), op.Width, op.Height, 3);
+            return "data:image/png;base64," + Convert.ToBase64String(cmykPng);
         }
         if (op.Format == ImageFormat.Png)
         {
@@ -34,6 +45,13 @@ internal static class ImageEncoder
         };
         if (channels == 4)
         {
+            // 3.34.0: CMYK data shorter than the image is skipped, as the
+            // other formats are below; before, it threw (found by fuzzing).
+            if ((long)op.PixelData.Length < (long)op.Width * op.Height * 4)
+            {
+                return null;
+            }
+
             rgb = CmykToRgb(op.PixelData, op.Width, op.Height);
             channels = 3;
         }

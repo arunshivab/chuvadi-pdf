@@ -144,8 +144,10 @@ public static class TextShaper
 
     private sealed class FaceCache
     {
-        private readonly ConcurrentDictionary<string, ShapePlan> _plans =
-            new ConcurrentDictionary<string, ShapePlan>(StringComparer.Ordinal);
+        // 3.34.0 (#27): keyed by script and the feature set's cached toggle
+        // string, so finding the plan allocates nothing per call.
+        private readonly ConcurrentDictionary<(LipiScript Script, string Toggles), ShapePlan> _plans =
+            new ConcurrentDictionary<(LipiScript Script, string Toggles), ShapePlan>();
 
         private readonly ShapingFace _face;
 
@@ -156,8 +158,7 @@ public static class TextShaper
 
         internal ShapePlan Plan(LipiScript script, ShapingFeatures features)
         {
-            string key = script.ToString() + "|" + string.Join(",", features.Toggles());
-            return _plans.GetOrAdd(key, _ => new ShapePlan(_face, script, features));
+            return _plans.GetOrAdd((script, features.ToggleKey), _ => new ShapePlan(_face, script, features));
         }
     }
 }

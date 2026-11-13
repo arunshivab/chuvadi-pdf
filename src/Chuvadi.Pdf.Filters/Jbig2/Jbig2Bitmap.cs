@@ -4,6 +4,7 @@
 // PHASE: Phase 2 — item 22, JBIG2 decode.
 
 using System;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Filters.Jbig2;
 
@@ -15,6 +16,10 @@ namespace Chuvadi.Pdf.Filters.Jbig2;
 /// </summary>
 internal sealed class Jbig2Bitmap
 {
+    // Bitmaps from this size (one byte per pixel) are charged against the
+    // memory limit; symbol bitmaps are smaller and are not.
+    private const long LargeBitmap = 1 << 16;
+
     /// <summary>Initialises a zero-filled bitmap of the given dimensions.</summary>
     /// <param name="width">Width in pixels.</param>
     /// <param name="height">Height in pixels.</param>
@@ -25,9 +30,23 @@ internal sealed class Jbig2Bitmap
             throw new ArgumentOutOfRangeException(nameof(width), "Bitmap dimensions must be non-negative.");
         }
 
+        // 3.34.0 (#20): a region bitmap is charged against the memory limit
+        // (and checks cancellation) before it is allocated, so a page-sized
+        // region stops early instead of after its whole decode.
+        long size = (long)width * height;
+        if (size > Array.MaxLength)
+        {
+            throw new FilterException("JBIG2Decode", $"A {width} x {height} bitmap is too large.");
+        }
+
+        if (size >= LargeBitmap)
+        {
+            PdfWorkScope.ChargeMemory(size);
+        }
+
         Width = width;
         Height = height;
-        Data = new byte[width * height];
+        Data = new byte[size];
     }
 
     /// <summary>Width in pixels.</summary>

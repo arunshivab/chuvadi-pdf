@@ -319,6 +319,12 @@ public sealed class TextExtractor
         List<TextFragment> fragments = contentBytes.Length > 0
             ? parser.Parse(contentBytes)
             : new List<TextFragment>();
+        if (parser.DamagedReason is string damage)
+        {
+            _objects.OnWarning?.Invoke(new PdfWarning(
+                PdfWarningKind.StreamDamaged, page.PageNumber, "content",
+                damage + " The text before it is extracted; the rest is left out."));
+        }
 
         AppendAnnotationFragments(page, fragments);
         return fragments;
@@ -406,7 +412,9 @@ public sealed class TextExtractor
         }
     }
 
-    private OptionalContentVisibility VisibilityFor(PdfPage page) => OptionalContent ?? page.OptionalContent;
+    // 3.34.0 (#43): with AnnotationMode.Print, the layers' print state.
+    private OptionalContentVisibility VisibilityFor(PdfPage page) =>
+        OptionalContent ?? (AnnotationMode == AnnotationMode.Print ? page.OptionalContent.ForPrinting() : page.OptionalContent);
 
     private static bool HiddenByEntry(PdfDictionary dict, OptionalContentVisibility visibility) =>
         dict.TryGetValue(PdfName.Intern("OC"), out PdfPrimitive? oc) && !visibility.IsVisible(oc);

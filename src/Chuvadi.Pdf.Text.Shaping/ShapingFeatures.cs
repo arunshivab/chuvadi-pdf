@@ -165,6 +165,12 @@ public sealed class ShapingFeatures
     /// Returns the features whose setting differs from HarfBuzz's defaults:
     /// default features switched off, and optional features switched on.
     /// </summary>
+    // 3.34.0 (#27): the toggles as one string, made once per feature set (the
+    // set is immutable), for the plan cache key.
+    private string? _toggleKey;
+
+    internal string ToggleKey => _toggleKey ??= string.Join(",", Toggles());
+
     internal System.Collections.Generic.IEnumerable<(string Tag, bool On)> Toggles()
     {
         foreach (string tag in AllTags)

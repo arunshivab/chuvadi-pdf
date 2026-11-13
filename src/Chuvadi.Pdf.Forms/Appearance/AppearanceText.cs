@@ -483,7 +483,8 @@ internal sealed class AppearanceText
 
         // Writes the glyphs of one shaped segment from `pen` and returns the
         // pen after them. Each run of glyphs from one cluster is either one
-        // glyph whose ToUnicode entry is the cluster's text, or is wrapped in
+        // glyph whose ToUnicode entry is the cluster's text, glyphs each the
+        // cmap glyph of the cluster's code points in order, or is wrapped in
         // /ActualText (empty for a later run of a cluster already given).
         internal double Draw(AppearanceContent content, IReadOnlyList<ShapedGlyph> glyphs, string text, double pen, double baseline, double size)
         {
@@ -506,7 +507,9 @@ internal sealed class AppearanceText
 
                 string clusterText = text[start..ClusterEnd(starts, start, text.Length)];
                 bool first = emitted.Add(start);
-                bool plain = first && j - i == 1 && ClaimGlyphText(glyphs[i].GlyphId, clusterText);
+                bool plain = first && (j - i == 1
+                    ? ClaimGlyphText(glyphs[i].GlyphId, clusterText)
+                    : ClaimEachGlyph(glyphs, i, j, clusterText));
                 if (!plain)
                 {
                     content.BeginActualText(first ? clusterText : string.Empty);
@@ -578,6 +581,61 @@ internal sealed class AppearanceText
             _toUnicode[gid] = clusterText;
             return true;
         }
+
+        // 3.34.0: a cluster of several glyphs in logical order, one per code
+        // point (Tamil "சி" is ச then the vowel sign ி, or a contextual form
+        // of it that no code point reaches and that has no other text), is given its text glyph by glyph through
+        // ToUnicode, as an unshaped string would be, when each is drawn at
+        // its own width (no mark moved onto a base). Before, such a cluster
+        // was wrapped in /ActualText, and viewers that copy text span by span
+        // put a space between two such clusters. A reordered cluster (a
+        // pre-base vowel sign drawn first) still needs /ActualText.
+        private bool ClaimEachGlyph(IReadOnlyList<ShapedGlyph> glyphs, int from, int to, string clusterText)
+        {
+            if (_face is null)
+            {
+                return false;
+            }
+
+            List<int> codepoints = new List<int>();
+            for (int c = 0; c < clusterText.Length; c += char.IsSurrogatePair(clusterText, c) ? 2 : 1)
+            {
+                codepoints.Add(char.ConvertToUtf32(clusterText, c));
+            }
+
+            if (codepoints.Count != to - from)
+            {
+                return false;
+            }
+
+            for (int k = from; k < to; k++)
+            {
+                ShapedGlyph g = glyphs[k];
+                string cp = char.ConvertFromUtf32(codepoints[k - from]);
+                int cmapCount = g.GlyphId > 0 ? CmapCodePointCount(g.GlyphId) : 0;
+                bool mapsCleanly = cmapCount > 0
+                    ? cmapCount == 1 && _face.GetGlyphIndex(codepoints[k - from]) == g.GlyphId
+                    : !_toUnicode.TryGetValue(g.GlyphId, out string? claimed) || claimed == cp;
+                if (g.GlyphId <= 0 || !mapsCleanly || !Spacing(g, _face))
+                {
+                    return false;
+                }
+            }
+
+            for (int k = from; k < to; k++)
+            {
+                _toUnicode[glyphs[k].GlyphId] = char.ConvertFromUtf32(codepoints[k - from]);
+            }
+
+            return true;
+        }
+
+        // A glyph drawn where its own width says, unmoved: a viewer that
+        // rebuilds text from glyph positions sees no gap or overlap (a mark
+        // moved over its base does not qualify).
+        private static bool Spacing(ShapedGlyph g, FontFace face) =>
+            g.XOffset == 0 && g.YOffset == 0
+            && Math.Abs(g.XAdvance - (face.GetAdvanceWidth(g.GlyphId) * 1000.0 / face.UnitsPerEm)) < 0.5;
 
         // How many code points the face's cmap maps to the glyph.
         private int CmapCodePointCount(int gid)

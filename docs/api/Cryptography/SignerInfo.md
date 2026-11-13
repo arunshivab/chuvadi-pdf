@@ -93,6 +93,30 @@ bool HasSignedAttributes => SignedAttributes is not null
 
 True when this SignerInfo uses signed attributes (the standard CMS profile).
 
+### `MessageDigest`
+
+```csharp
+byte[]? MessageDigest
+```
+
+Convenience accessor: the value of the signed messageDigest attribute, or null when absent.
+
+### `AssertedContentType`
+
+```csharp
+ObjectIdentifier? AssertedContentType
+```
+
+Convenience accessor: the OID asserted by the signed contentType attribute, or null when absent. Per RFC 5652 §11.1, this must match SignedData's EncapsulatedContentInfo.eContentType.
+
+### `SigningTime`
+
+```csharp
+DateTimeOffset? SigningTime
+```
+
+Convenience accessor: the value of the signed signingTime attribute, or null when absent.
+
 ## Methods
 
 ### `FindSignerCertificate`

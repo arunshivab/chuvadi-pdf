@@ -209,6 +209,28 @@ internal static class FontEmbedder
                 }
             }
         }
+        else if (pdfFont is not null && format == "truetype" && descendant is null)
+        {
+            // 3.34.0 (#36): a simple TrueType font whose own Windows or
+            // Unicode cmap would lead the browser to another glyph than the
+            // one the raster renderer draws for a code (its ToUnicode
+            // contradicts its encoding: 6 of 1,092 pdf.js test files, none of
+            // the 417-file corpus) gets the same Unicode cmap as above, so the
+            // SVG shows the raster renderer's glyphs. A font whose cmap
+            // already agrees is embedded unchanged.
+            Dictionary<int, int>? remap = RasterCmapIfBrowserDiffers(fontBytes, pdfFont, IsSymbolic(descriptor), fontDict, resolver);
+            if (remap is not null)
+            {
+                try
+                {
+                    fontBytes = TrueTypeFontPatch.WithAugmentedCmap(fontBytes, remap);
+                }
+                catch (FontRenderingException)
+                {
+                    // Corrupt font program: embed it as it is.
+                }
+            }
+        }
 
         // v2.1.6 — wrap CFF font programs in an OpenType (OTTO) envelope.
         //
@@ -637,6 +659,144 @@ internal static class FontEmbedder
                 unicodeToGid[cp] = gid;
             }
         }
+    }
+
+    // 3.34.0 (#36): for a font whose ToUnicode contradicts its encoding on a
+    // code it uses (FirstChar to LastChar, a non-zero width), and where the
+    // browser, looking that code's SVG character up in the font's own cmap,
+    // would reach another glyph than the raster renderer draws for the code
+    // (EmbeddedGlyphs: the encoding's character first): a Unicode cmap mapping
+    // the character of each code the font uses to the raster glyph, the rest
+    // of the font's own Unicode mappings kept. Null when no such code exists,
+    // and the font is embedded unchanged. The browser uses a Unicode subtable
+    // when there is one, otherwise a (3,0) symbol subtable at U+F000 plus the
+    // character.
+    private static Dictionary<int, int>? RasterCmapIfBrowserDiffers(
+        byte[] program, PdfFont pdfFont, bool symbolic, PdfDictionary fontDict, IPdfObjectResolver resolver)
+    {
+        FontRenderer renderer;
+        try
+        {
+            renderer = new FontRenderer(program);
+        }
+        catch (Exception ex) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(ex))
+        {
+            return null;
+        }
+
+        bool unicodeCmap = HasCmapSubtable(program, unicode: true);
+        bool symbolCmap = HasCmapSubtable(program, unicode: false);
+        int Browser(int cp) =>
+            unicodeCmap ? renderer.GetGlyphIndexUnicode(cp)
+            : symbolCmap && cp <= 0xFF ? renderer.GetGlyphIndexForCode(cp, symbolic: true)
+            : 0;
+
+        int first = resolver.Resolve(fontDict.TryGetValue(PdfName.Intern("FirstChar"), out PdfPrimitive? fc) ? fc : PdfNull.Value) is PdfInteger fi ? fi.Value : 0;
+        PdfPrimitive widthsValue = resolver.Resolve(fontDict.TryGetValue(PdfName.Intern("Widths"), out PdfPrimitive? w) ? w : PdfNull.Value);
+        bool Used(int code)
+        {
+            if (widthsValue is not PdfArray widths)
+            {
+                return true;
+            }
+
+            int at = code - first;
+            return at >= 0 && at < widths.Count && resolver.Resolve(widths[at]) is not PdfInteger { Value: 0 };
+        }
+
+        Dictionary<int, int> map = new Dictionary<int, int>();
+        bool differs = false;
+        for (int code = 0; code < 256; code++)
+        {
+            int cp = SingleCodePoint(pdfFont.DecodeCode(code));
+            if (cp < 0x20 || !Used(code) || map.ContainsKey(cp))
+            {
+                continue;
+            }
+
+            int gid = EmbeddedGlyphs.ForSimpleCode(renderer, pdfFont, code, symbolic);
+            if (gid <= 0 || gid > 0xFFFF)
+            {
+                continue;
+            }
+
+            map[cp] = gid;
+            char byEncoding = pdfFont.GetEncodingCharacter(code);
+            differs |= byEncoding != '\0' && byEncoding != cp && Browser(cp) != gid;
+        }
+
+        if (!differs)
+        {
+            return null;
+        }
+
+        // Keep the font's own mappings for the other characters of the text
+        // (ligature decodes and anything else it maps).
+        for (int cp = 0x20; cp <= 0xFFFF; cp++)
+        {
+            if (!map.ContainsKey(cp) && !char.IsSurrogate((char)cp))
+            {
+                int gid = Browser(cp);
+                if (gid > 0)
+                {
+                    map[cp] = gid;
+                }
+            }
+        }
+
+        return map;
+    }
+
+    // Whether the font's cmap has a Unicode subtable (platform 0, or 3 with
+    // encoding 1 or 10), or with `unicode` false a (3,0) symbol subtable.
+    private static bool HasCmapSubtable(byte[] data, bool unicode)
+    {
+        if (!IsSfnt(data))
+        {
+            return false;
+        }
+
+        int numTables = (data[4] << 8) | data[5];
+        for (int i = 0; i < numTables; i++)
+        {
+            int entry = 12 + (i * 16);
+            if (entry + 16 > data.Length)
+            {
+                return false;
+            }
+
+            if (data[entry] == 'c' && data[entry + 1] == 'm' && data[entry + 2] == 'a' && data[entry + 3] == 'p')
+            {
+                long offset = ((long)data[entry + 8] << 24) | ((long)data[entry + 9] << 16) | ((long)data[entry + 10] << 8) | data[entry + 11];
+                if (offset + 4 > data.Length)
+                {
+                    return false;
+                }
+
+                int count = (data[offset + 2] << 8) | data[offset + 3];
+                for (int k = 0; k < count; k++)
+                {
+                    long record = offset + 4 + (k * 8);
+                    if (record + 4 > data.Length)
+                    {
+                        return false;
+                    }
+
+                    int platform = (data[record] << 8) | data[record + 1];
+                    int encoding = (data[record + 2] << 8) | data[record + 3];
+                    bool isUnicode = platform == 0 || (platform == 3 && (encoding == 1 || encoding == 10));
+                    bool isSymbol = platform == 3 && encoding == 0;
+                    if (unicode ? isUnicode : isSymbol)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        return false;
     }
 
     // For a simple CFF font: each code the /Encoding /Differences array

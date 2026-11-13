@@ -44,6 +44,14 @@ bool IsEmpty => _segments.Count == 0
 
 Returns true when the path contains no segments.
 
+### `CurrentPoint`
+
+```csharp
+PointF CurrentPoint
+```
+
+Gets the current point (last moveto or endpoint drawn to). <exception cref="InvalidOperationException"> Thrown when no current point exists (path is empty and no MoveTo has been issued). </exception>
+
 ## Methods
 
 ### `MoveTo`

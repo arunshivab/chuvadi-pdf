@@ -171,7 +171,7 @@ public sealed class SvgRenderer
 
         OptionalContentVisibility visibility = _opts.IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
-            : document.Pages[pageIndex].OptionalContent.WithOverrides(_opts.LayerVisibility).WithOverridesById(_opts.LayerVisibilityById);
+            : PageVisibility(document.Pages[pageIndex], _opts.AnnotationMode).WithOverrides(_opts.LayerVisibility).WithOverridesById(_opts.LayerVisibilityById);
         PageDisplayList list = DisplayListBuilder.Build(document, pageIndex, visibility, _opts.AnnotationMode);
 
         if (_opts.MaxVectorOps > 0
@@ -433,8 +433,10 @@ public sealed class SvgRenderer
                         w.OpenGroup();
                         clipsOpenedPerScope.Push(0);
                     }
-                    else
+                    else if (clipsOpenedPerScope.Count > 1)
                     {
+                        // 3.34.0: a pop with no matching push (a stray Q in
+                        // the content) is ignored; before, it threw.
                         int clipsToClose = clipsOpenedPerScope.Pop();
                         for (int i = 0; i < clipsToClose; i++) { w.CloseGroup(); }
                         w.CloseGroup();
@@ -450,8 +452,10 @@ public sealed class SvgRenderer
                         w.OpenGroup(extraAttrs: attrs);
                         clipsOpenedPerScope.Push(0);
                     }
-                    else
+                    else if (clipsOpenedPerScope.Count > 1)
                     {
+                        // 3.34.0: a pop with no matching push (a stray Q in
+                        // the content) is ignored; before, it threw.
                         int clipsToClose = clipsOpenedPerScope.Pop();
                         for (int i = 0; i < clipsToClose; i++) { w.CloseGroup(); }
                         w.CloseGroup();
@@ -465,8 +469,10 @@ public sealed class SvgRenderer
                         w.OpenGroup(extraAttrs: $"style=\"mix-blend-mode:{BlendModeCss(bm.Mode)}\"");
                         clipsOpenedPerScope.Push(0);
                     }
-                    else
+                    else if (clipsOpenedPerScope.Count > 1)
                     {
+                        // 3.34.0: a pop with no matching push (a stray Q in
+                        // the content) is ignored; before, it threw.
                         int clipsToClose = clipsOpenedPerScope.Pop();
                         for (int i = 0; i < clipsToClose; i++) { w.CloseGroup(); }
                         w.CloseGroup();
@@ -660,16 +666,25 @@ public sealed class SvgRenderer
 
         // On the page itself the shading paints the whole shown page box (3.32.0:
         // from the box's own corner, so pages whose box does not start at 0,0 are
-        // covered). Nested lists (transparency groups, soft masks, Type3 glyphs)
-        // keep their own size, as before 3.32.0: SVG does not yet apply those
-        // groups' masks to a shading, and painting it there would darken the page.
+        // covered). 3.34.0 (#41): in a nested list (a soft mask's group, a Type 3
+        // glyph, a pattern cell) it paints a large square, bounded by the clip
+        // groups open around it, as `sh` fills the current clip. Before, it
+        // painted a 0 by 0 rectangle, so a gradient soft mask hid what it masked.
         (double bx, double by, double bw, double bh) = ReferenceEquals(list, _pageList)
             ? _box
-            : (0, 0, list.MediaWidth, list.MediaHeight);
+            : (-NestedShadingReach, -NestedShadingReach, 2 * NestedShadingReach, 2 * NestedShadingReach);
         string rect = string.Format(CultureInfo.InvariantCulture,
             "M {0} {1} L {2} {1} L {2} {3} L {0} {3} Z", Num(bx), Num(by), Num(bx + bw), Num(by + bh));
         w.EmitPath(rect, "url(#" + id + ")", null, 0);
     }
+
+    // Half the side of the square a shading fills in a nested list, in that
+    // list's units (3.34.0, #41).
+    private const double NestedShadingReach = 20000;
+
+    // 3.34.0 (#43): with AnnotationMode.Print, the layers' print state.
+    private static OptionalContentVisibility PageVisibility(PdfPage page, AnnotationMode mode) =>
+        mode == AnnotationMode.Print ? page.OptionalContent.ForPrinting() : page.OptionalContent;
 
     private static string Num(double value) =>
         value.ToString("0.###", CultureInfo.InvariantCulture);

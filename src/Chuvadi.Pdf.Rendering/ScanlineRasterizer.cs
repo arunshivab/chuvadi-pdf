@@ -447,6 +447,18 @@ public sealed class ScanlineRasterizer
                 int winding = p1.Y > p0.Y ? 1 : -1;
                 edges.Add(new Edge(p0.X, p0.Y, p1.X, p1.Y, winding));
             }
+
+            // 3.34.0: a fill closes every open sub-path (§8.5.3.1), as the clip
+            // region already did. Before, the closing edge was left out, so a
+            // path drawn as m l l ... f without h filled nothing or the wrong
+            // area (found with the Phase B test-bench file safedocs-0176).
+            PointF first = subPath[0];
+            PointF last = subPath[subPath.Count - 1];
+            if (Math.Abs(first.Y - last.Y) >= 1e-6)
+            {
+                int closing = first.Y > last.Y ? 1 : -1;
+                edges.Add(new Edge(last.X, last.Y, first.X, first.Y, closing));
+            }
         }
 
         return edges;

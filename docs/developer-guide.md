@@ -32,6 +32,7 @@ every byte is parsed and every pixel is rendered in managed C#.
 18. [XFA forms](#18-xfa-forms)
 19. [PDF/A output](#19-pdf-a-output)
 20. [Module map](#20-module-map)
+21. [Behaviour changes within 3.x](#21-behaviour-changes-within-3x)
 
 ---
 
@@ -241,6 +242,22 @@ using FileStream output = File.Create("merged.pdf");
 PageOperations.Merge(output, a, b, c);   // params PdfDocument[]
 ```
 
+Since 3.34.0 a merge keeps the inputs' form fields: a top-level field whose
+name an earlier input already uses is renamed `name_2`, `name_3`, and so on.
+`MergeOptions` chooses otherwise, and can encrypt the result.
+`ShareSameName` makes fields with the same full name one field shown on
+every page (`patient.name` in two inputs is one field, below one
+`patient`):
+
+```csharp
+MergeOptions options = new MergeOptions
+{
+    FormFields = MergeFormFields.ShareSameName,   // or Drop, RenameOnConflict
+    Encryption = EncryptionOptions.Aes256("user-password", "owner-password"),
+};
+PageOperations.Merge(output, new[] { a, b }, options);
+```
+
 ### Split into one document per page
 
 ```csharp
@@ -318,6 +335,87 @@ FormFiller.Fill(output, doc, values);
 `FormFiller.Fill` sets `/NeedAppearances=true` so viewers regenerate field
 appearances with their own renderers — the most reliable cross-viewer result.
 
+Each field also lists its widgets (page, rectangle, on-state, export value),
+its choice options, its flags and its maximum length (3.34.0):
+
+```csharp
+foreach (FormField field in FormReader.GetLeafFields(doc))
+{
+    foreach (FormWidget widget in field.Widgets)
+    {
+        Console.WriteLine($"{field.FullyQualifiedName} on page {widget.PageIndex}, on-state {widget.OnState}");
+    }
+
+    bool required = (field.Flags & FormFieldFlags.Required) != 0;
+}
+```
+
+Values for buttons: a check box takes its own on-state, or `"Yes"`, `"On"` or
+`"true"` (any case), to tick it; a radio group takes the on-state or the
+export value (`/Opt`) of the button to choose. `"Off"`, `"false"` or an empty
+value clears either. Any other value throws `FormException`, naming the
+states the button has; pushbuttons are left alone. Text values in any script
+(Tamil included) are written as UTF-16 when they are not Latin-1.
+
+### Several values, checks and a result (3.34.0)
+
+A multi-select list box takes several export values through the overload
+that takes a list per field and returns a `FormFillResult`:
+
+```csharp
+Dictionary<string, IReadOnlyList<string>> many = new Dictionary<string, IReadOnlyList<string>>
+{
+    ["allergies"] = new[] { "PEN", "LAT" },
+    ["patient.name"] = new[] { "அருண்" },
+};
+FormFillResult result = FormFiller.Fill(output, doc, many, new FormFillOptions
+{
+    Validate = true,
+    UnknownFields = FormUnknownFields.Report,
+});
+foreach (string name in result.UnknownFields)
+{
+    Console.WriteLine($"No field named {name}");
+}
+```
+
+- Choice values are export values (`FormChoiceOption.ExportValue`), not
+  display texts. `/I` is set to the chosen options' indices.
+- `Validate` (default false in 3.x) refuses a choice value that is not an
+  option (an editable combo box takes any value) and text longer than
+  `MaxLength`, counted in Unicode code points. Nothing is ever truncated.
+- `UnknownFields`: `Ignore` (default), `Report` (this overload only) or
+  `Throw`.
+- A refused value throws `FormException` with `Reason`, `FieldName`,
+  `Value`, `ValidStates` and `MaxLength`: build your own message from them,
+  in the reader's language, rather than showing the English `Message`.
+- A text or choice fill removes the field's rich-text `/RV`.
+
+### Fill and flatten
+
+To hand on a form whose values can no longer be edited, fill it, then
+flatten the filled copy. The flattened values are page content: they print,
+extract as text and survive any viewer.
+
+```csharp
+using Chuvadi.Pdf.Operations;
+
+byte[] filled;
+using (MemoryStream buffer = new MemoryStream())
+{
+    FormFiller.Fill(buffer, doc, values);
+    filled = buffer.ToArray();
+}
+
+using PdfDocument filledDoc = PdfDocument.Open(new MemoryStream(filled));
+using FileStream flat = File.Create("form_final.pdf");
+AnnotationFlattener.Flatten(flat, filledDoc);
+```
+
+The filled copy keeps the source's document information and file identifier;
+pass `new FormFillOptions { Encryption = ... }` to encrypt it (an encrypted
+source is otherwise written unencrypted).
+
 ---
 
 ## 8. Redaction
@@ -346,6 +444,18 @@ Redactor.Apply(output, doc, options);
 Searching the output bytes for the redacted text returns nothing — the data is
 gone, not hidden. Coordinates are in PDF user space (origin bottom-left).
 
+`Redactor.ApplyWithReport` writes the same output and reports, per page, how
+many glyphs, images, paths, annotations, field values and alternate texts
+were removed (3.34.0):
+
+```csharp
+RedactionReport report = Redactor.ApplyWithReport(output, doc, options);
+foreach (PageRedactionReport page in report.Pages)
+{
+    Console.WriteLine($"page {page.PageIndex}: {page.GlyphsRemoved} glyphs, {page.ImagesBlanked + page.ImagesRemoved} images");
+}
+```
+
 ---
 
 ## 9. Watermarks
@@ -371,6 +481,12 @@ TextWatermarkOptions options = new TextWatermarkOptions("DRAFT")
 using FileStream output = File.Create("watermarked.pdf");
 WatermarkStamper.ApplyText(output, doc, options);
 ```
+
+By default the watermark is centred on the unrotated MediaBox. Set
+`PlaceInDisplaySpace = true` (3.34.0; also on `ImageWatermarkOptions` and
+`HeaderFooterOptions`) to centre it on the page as a viewer shows it: on the
+CropBox, with `RotationDegrees` measured from the upright view of a page
+that has `/Rotate`.
 
 ---
 
@@ -695,6 +811,25 @@ sets the document metadata PDF/A expects; `PdfAResult` describes what it did.
 Note that generating a `/StructTreeRoot` for PDF/UA (level A tagging) is not yet
 implemented — see `docs/BACKLOG.md`.
 
+PDF/A-1b dates (3.34.0): `xmp:CreateDate` and `xmp:ModifyDate` follow the
+`/Info` dates when those give a time zone. A date without one is left out of
+the XMP, because validators read a zone-less XMP date in their own local
+zone, and `PdfAResult.Warnings` says which date was left out and why. To
+write such dates as UTC instead (also with a warning), set the option:
+
+```csharp
+PdfAOptions options = new()
+{
+    Conformance = PdfAConformance.PdfA1B,
+    AssumeUtcForZonelessDates = true,
+};
+PdfAResult result = PdfAWriter.Write(output, doc, options);
+foreach (string warning in result.Warnings)
+{
+    Console.WriteLine(warning);
+}
+```
+
 ---
 
 ## 20. Module map
@@ -723,6 +858,52 @@ implemented — see `docs/BACKLOG.md`.
 
 The library has **zero external NuGet dependencies**; each package depends only
 on other Chuvadi packages and the .NET base class library.
+
+---
+
+## 21. Behaviour changes within 3.x
+
+These 3.x releases changed what existing calls produce. `CHANGELOG.md` has
+the details; where a release gives a way back to the earlier output, it is
+named here.
+
+| Release | What changed | Earlier output |
+|---|---|---|
+| 3.34.0 | `PageOperations.Merge` keeps the inputs' form fields (clashing names renamed `name_2`, ...) | `MergeOptions.FormFields = MergeFormFields.Drop` |
+| 3.34.0 | Text watermarks are centred by the real text width, so each one moves slightly | none |
+| 3.34.0 | `FormFiller` keeps `/Info` and the file `/ID`; non-Latin-1 values are written as UTF-16; check boxes and radios get their real on-states, and an unknown button value throws `FormException` | none (fixes) |
+| 3.34.0 | `FormFiller` removes a field's `/RV` when it writes a text or choice value, and sets `/I` to the chosen options (multi-select lists, or fields that had `/I`) or removes it when the value matches no option | none |
+| 3.34.0 | `FormFiller` writes the objects the catalog and `/Info` name (bookmarks, XMP, name trees), which a fill straight after opening used to leave out | none (fix) |
+| 3.34.0 | `PdfAWriter` (PDF/A-1b) writes `xmp:CreateDate` and `xmp:ModifyDate` from `/Info` dates that give a time zone | none |
+| 3.34.0 | Write paths apply the documents' `PdfLimits` and the caller's `PdfWorkScope`; unexpected failures are `PdfCorruptionException` | none |
+| 3.34.0 | Page operations write a reference to an object they did not copy as null | none (fix) |
+| 3.34.0 | The stamper and composer also write such references as null, and no longer follow a form XObject's `/Parent` | none (fix) |
+| 3.34.0 | Damaged content, fonts, forms, `ToUnicode` and object syntax are read past with a warning; a missing or invalid MediaBox reads as US Letter (it threw); a looping page tree's looping entry is skipped | none |
+| 3.34.0 | Crypt filters (`/StmF`, `/StrF`, `/EFF`, a stream's `/Crypt`) are honoured, and a file with only encrypted attachments opens without a password | none (fix) |
+| 3.34.0 | With `AnnotationMode.Print` the layers' print state applies; `AnnotationFlattener` keeps an annotation's layer | `LayerVisibility` overrides |
+| 3.34.0 | Raster: images are drawn through their full matrix; round joins, elliptical pens, and stroke widths in scaled forms; a soft mask set before a form's `Do` masks it; substitute fonts draw the encoding's glyph | none (fixes) |
+| 3.34.0 | SVG: shadings in soft-mask groups paint; an embedded TrueType font gets a cmap matching the raster glyphs when its own would differ | none (fixes) |
+| 3.34.0 | Redaction carries bookmarks and XMP, scrubbed by page-less patterns | none |
+| 3.34.0 | `PdfAWriter`: annotations made printable (Hidden ones removed), Type 1 subsets get `/CharSet`, XMP dates follow `/Info` | none |
+| 3.34.0 | A JBIG2 region of 64 KiB or more counts against `MaxMemoryBytes` (one byte per pixel while decoding) | none |
+| 3.34.0 | `PdfAWriter` (PDF/A-1b): an `/Info` date with no time zone is reported in `PdfAResult.Warnings`; `AssumeUtcForZonelessDates` writes it as UTC | default: left out of the XMP, as before |
+| 3.34.0 | Inline images are drawn (raster, SVG, WPF), and inline-image data no longer ends the rest of the page | none (fix) |
+| 3.34.0 | CMYK JPEGs are read through `/Decode`, not Adobe-inverted: files that do not invert now draw right; SVG embeds them as PNG | none (fix) |
+| 3.34.0 | Raster: text whose matrices scale it by more than 2 or less than 0.5 is hinted at its drawn size (Tf x text matrix x CTM; other text at Tf as before), and rotated or skewed text is not hinted; `/Mask` is applied; an embedded Type 1 font with a standard-14 name draws its own glyphs; image data that ends early is drawn | `Hinting = HintingMode.Off` (hinting only) |
+| 3.34.0 | LZW: real streams decode past 511 codes, and `FilterPipeline.Encode` writes standard LZW | none (fix) |
+| 3.34.0 | Merge, split and assemble write inherited `/Resources`, `/MediaBox` and `/CropBox` on each copied page | none (fix) |
+| 3.34.0 | Raster: a fill closes open sub-paths (`m l l f` without `h` now fills); a transparency-group form keeps the outer `/ca` | none (fixes) |
+| 3.34.0 | A skipped image is reported (`PdfWarningKind.ImageSkipped`); an indirect `/DecodeParms` is used; a page-tree kid that is not a dictionary is skipped with a warning; `xref` after white space or on one line is read without repair; a stream whose `/Length` does not end at `endstream` is read up to `endstream` | none (fixes) |
+| 3.32.0 | Raster, SVG and WPF output show the CropBox (intersected with the MediaBox), not the MediaBox: a different size and origin where the two differ. Use `PageRasterizer.GetOutputSize`, `PdfPage.GetDisplayBox` and `GetDisplayTransform` (3.34.0) to follow it | `DisplayBox = PdfDisplayBox.MediaBox` |
+| 3.32.0 | Redaction keeps the parts of a curved stroke outside the box | none |
+| 3.32.0 | Embedded font descriptors (`/StemV`, `/Flags`) follow one rule; invalid Flate streams are rejected | none |
+| 3.31.0 | Default (View) output shows form values when `/NeedAppearances` is true and draws widgets and comments that have no `/AP`; text extraction returns them | none |
+| 3.30.0 | The raster renderer draws text in fonts the PDF does not embed; font resource names are written as valid PDF names | none |
+| 3.29.0 | Layout-mode text follows the structure tree, reads columns and groups lines differently; superscripts and subscripts are marked | none |
+| 3.28.0 | `TextFragment` positions, widths and font sizes are in user space (they were in text space); rotated text reads as lines of its own | none |
+| 3.26.0, 3.27.0 | `TextShaper` became a port of HarfBuzz's layout engine; `ShapingFeatures.Cpsp` was false in 3.26.0 and is true again from 3.27.0 | none |
+| 3.21.0, 3.22.0 | Damaged cross-reference recovery and scrub residuals changed; redacted pages drop `/Thumb` and `/PieceInfo` | none |
+| 3.16.0 | `XfaRenderOptions.ScriptMode` defaults to `Full`: XFA scripts run | `ScriptMode = XfaScriptMode.None` |
 
 ---
 

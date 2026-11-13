@@ -190,6 +190,7 @@ public static class PdfWriter
 
         foreach (PdfIndirectObject obj in sortedObjects)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             long offset = output.Position;
             PdfIndirectObject toWrite = obj;
 
@@ -304,6 +305,7 @@ public static class PdfWriter
         int maxObjectNumber = 0;
         foreach (PdfIndirectObject obj in updates)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             long offset = output.Position;
             if (obj.Id.ObjectNumber > maxObjectNumber)
             {
@@ -753,6 +755,7 @@ public static class PdfWriter
         List<PdfIndirectObject> compressible = new List<PdfIndirectObject>();
         foreach (PdfIndirectObject obj in sortedObjects)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             if (obj.Id.ObjectNumber == encryptObjectNumber
                 || obj.Id.Generation != 0
                 || obj.Value is PdfStream)
@@ -797,6 +800,7 @@ public static class PdfWriter
         Dictionary<int, long> offsets = new Dictionary<int, long>();
         foreach (PdfIndirectObject obj in directAndContainers)
         {
+            PdfWorkScope.ThrowIfCancellationRequested();
             long offset = output.Position;
             PdfIndirectObject toWrite = obj;
 

@@ -124,7 +124,9 @@ public static class DisplayListBuilder
         }
 
         PdfPage page = document.Pages[pageIndex];
-        return new Builder(document, page.OptionalContent, annotations).BuildPage(page, flattenTransforms);
+        // 3.34.0 (#43): printing uses the layers' print state.
+        OptionalContentVisibility visibility = annotations == AnnotationMode.Print ? page.OptionalContent.ForPrinting() : page.OptionalContent;
+        return new Builder(document, visibility, annotations).BuildPage(page, flattenTransforms);
     }
 
     private sealed class Builder : IContentOperatorSink
@@ -164,6 +166,9 @@ public static class DisplayListBuilder
         private readonly HashSet<(DiagnosticKind, string)> _diagnosticKeys = new();
 
         private PdfDictionary? _resources;
+
+        // True while an inline image (BI ... EI) is being emitted.
+        private bool _drawingInlineImage;
         private int _formDepth;
 
         // Default coordinate space of the content stream currently being walked
@@ -206,6 +211,15 @@ public static class DisplayListBuilder
         // shared with sub-builders (forms, patterns, Type 3 glyphs).
         private HashSet<string> _warned = new HashSet<string>(StringComparer.Ordinal);
         private int? _pageNumber;
+
+        // 3.34.0 (#52a): content cut short by syntax damage.
+        public void ContentDamaged(string reason)
+        {
+            if (_doc.Objects.OnWarning is Action<PdfWarning> warn && _warned.Add("content damaged"))
+            {
+                warn(new PdfWarning(PdfWarningKind.StreamDamaged, _pageNumber, "content", reason + " What came before is drawn; the rest is left out."));
+            }
+        }
         private readonly List<bool> _hiddenStack = new();
         private int _hiddenDepth;
 
@@ -277,7 +291,8 @@ public static class DisplayListBuilder
             IReadOnlyList<RenderOp> ops = flattenTransforms ? WithoutTransformOps(_ops) : _ops;
             IReadOnlyList<TransparencyGroup> groups = FinishGroups(ops);
             PdfRectangle media = page.MediaBox;
-            PdfRectangle crop = Intersect(page.CropBox, media);
+            // 3.34.0 (D-334): the one shared rule for the shown box.
+            PdfRectangle crop = page.GetDisplayBox(PdfDisplayBox.CropBox);
             return new PageDisplayList(
                 ops, page.Width, page.Height, rotation, _fontDictsByKey, _diagnostics, layers)
             {
@@ -2910,6 +2925,54 @@ public static class DisplayListBuilder
                 return;
             }
 
+            EmitImage(stream, s);
+        }
+
+        /// <inheritdoc />
+        public void InlineImage(PdfDictionary dictionary, byte[] data)
+        {
+            // 3.34.0 (Phase B N4): inline images are drawn through the image
+            // XObject path. Before, they were not drawn at all.
+            // ImageOp.Source stays null for an inline image, as documented.
+            _drawingInlineImage = true;
+            try
+            {
+                EmitImage(new PdfStream(WithResourceColorSpace(dictionary), data), _stack.Current);
+            }
+            finally
+            {
+                _drawingInlineImage = false;
+            }
+        }
+
+        // An inline image may name its colour space in the resources'
+        // /ColorSpace (§8.9.7); the named entry is put in its place.
+        private PdfDictionary WithResourceColorSpace(PdfDictionary image)
+        {
+            if (!image.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? cs)
+                || cs is not PdfName name
+                || ResolvedColorSpace.Parse(name, _doc.Objects) is not null
+                || _resources is null
+                || !_resources.TryGetValue(PdfName.Intern("ColorSpace"), out PdfPrimitive? spacesRef)
+                || _doc.Objects.ResolveAs<PdfDictionary>(spacesRef ?? PdfNull.Value) is not PdfDictionary spaces
+                || !spaces.TryGetValue(name, out PdfPrimitive? entry)
+                || entry is null)
+            {
+                return image;
+            }
+
+            PdfDictionary copy = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> pair in image)
+            {
+                copy.Set(pair.Key, pair.Value);
+            }
+
+            copy.Set(PdfName.Intern("ColorSpace"), _doc.Objects.Resolve(entry));
+            return copy;
+        }
+
+        private void EmitImage(PdfStream stream, BuilderState s)
+        {
             int width = IntOf(stream.Dictionary, "Width", 0);
             int height = IntOf(stream.Dictionary, "Height", 0);
             int bpc = IntOf(stream.Dictionary, "BitsPerComponent", 8);
@@ -3033,7 +3096,7 @@ public static class DisplayListBuilder
                 SoftMaskHeight = softMaskHeight,
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
-                Source = stream,
+                Source = _drawingInlineImage ? null : stream,
                 Decode = ReadDecodeArray(stream.Dictionary),
                 IccProfileStream = FindIccProfile(stream.Dictionary),
                 JpegColorTransform = format == ImageFormat.Jpeg ? JpegInfo.ReadTransform(pixelData) : JpegColorTransform.None,
@@ -3176,7 +3239,7 @@ public static class DisplayListBuilder
                 SoftMaskHeight = height,
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
-                Source = stream,
+                Source = _drawingInlineImage ? null : stream,
                 Decode = ReadDecodeArray(stream.Dictionary),
                 IsStencilMask = true,
                 StencilColor = s.FillColor,

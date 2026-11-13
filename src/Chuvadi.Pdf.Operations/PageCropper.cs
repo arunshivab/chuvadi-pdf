@@ -57,10 +57,13 @@ public static class PageCropper
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     public static void Crop(Stream output, PdfDocument document, IReadOnlyList<PageCrop> crops)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(crops);
-        new Worker(document, crops).Write(output);
+        PdfWriteGuard.Run(document, "cropped", () =>
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(document);
+            ArgumentNullException.ThrowIfNull(crops);
+            new Worker(document, crops).Write(output);
+        });
     }
 
     // ── Implementation ────────────────────────────────────────────────────

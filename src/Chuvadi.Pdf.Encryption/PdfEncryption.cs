@@ -123,7 +123,7 @@ public static class PdfEncryption
             throw new PdfEncryptionException($"Unsupported encryption revision /R = {meta.R}.");
         }
 
-        return new Decryptor(fileKey, meta.Algorithm) { OpenedWith = openedWith };
+        return new Decryptor(fileKey, meta.StreamAlgorithm, meta.StringAlgorithm, meta.EmbeddedFileAlgorithm, meta.CryptFilters) { OpenedWith = openedWith };
     }
 
     private static PdfPasswordKind Kind(bool owner, string password) =>

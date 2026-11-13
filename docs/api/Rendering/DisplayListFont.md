@@ -110,6 +110,22 @@ string? Substitute
 
 For a font the PDF does not embed: the standard 14 font the raster renderer draws it with (chosen from the name, flags, `/FontWeight` and `/ItalicAngle`); null for an embedded font or a Type 3 font. Indic text in such a font is drawn by the raster renderer with the LiPi Sans face of its script from Chuvadi.Fonts, Bold when this name is bold.
 
+### `UnitsPerEm`
+
+```csharp
+int UnitsPerEm
+```
+
+The program's units per em: from the TrueType `head` table or the CFF font matrix; 1000 for Type 1, Type 3 and fonts that are not embedded.
+
+### `EmbeddingRights`
+
+```csharp
+FontEmbeddingRights EmbeddingRights
+```
+
+The embedding rights from the program's `OS/2` `fsType` (TrueType and OpenType programs); `FontEmbeddingPermission.Unknown` otherwise.
+
 ## Methods
 
 ### `GetProgram`

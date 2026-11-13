@@ -140,6 +140,21 @@ Converts an area in square default-user-space units into the drawing's units: th
 
 **Returns:** The measured area. <exception cref="InvalidOperationException">Thrown when the measure is not rectilinear.</exception>
 
+### `Coordinates`
+
+```csharp
+(PdfMeasurement X, PdfMeasurement Y) Coordinates(double x, double y)
+```
+
+Converts a point in default user space into the drawing's x/y coordinates, measured from the measure's origin.
+
+**Parameters**
+
+- `x` — Point x, in default user space.
+- `y` — Point y, in default user space.
+
+**Returns:** The x and y coordinates in the drawing's units. <exception cref="InvalidOperationException">Thrown when the measure is not rectilinear.</exception>
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Documents/PdfMeasure.cs`](../../../src/Chuvadi.Pdf.Documents/PdfMeasure.cs)_

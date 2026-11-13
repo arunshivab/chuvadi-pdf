@@ -232,6 +232,14 @@ public sealed class XrefTable
                 // Parse subsection header: first_object count
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
+                // 3.34.0: "xref 0 76" on one line (some writers put the first
+                // subsection header after the keyword) is read as the keyword
+                // and the header, as Poppler and MuPDF do.
+                if (parts.Length == 3 && parts[0] == "xref")
+                {
+                    parts = new[] { parts[1], parts[2] };
+                }
+
                 if (parts.Length != 2)
                 {
                     throw new PdfParseException(

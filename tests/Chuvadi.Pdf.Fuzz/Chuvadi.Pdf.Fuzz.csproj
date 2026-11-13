@@ -20,6 +20,10 @@
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Primitives\Chuvadi.Pdf.Primitives.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Authoring\Chuvadi.Pdf.Authoring.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Forms\Chuvadi.Pdf.Forms.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Operations\Chuvadi.Pdf.Operations.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Redaction\Chuvadi.Pdf.Redaction.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Watermark\Chuvadi.Pdf.Watermark.csproj" />
   </ItemGroup>
 
   <ItemGroup>

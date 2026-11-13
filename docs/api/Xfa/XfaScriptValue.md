@@ -56,6 +56,36 @@ Gets the referenced node, or null when this is not a node value.
 
 **Returns:** The node or null.
 
+### `ToStringValue`
+
+```csharp
+string ToStringValue() => Kind switch
+```
+
+Coerces this value to a string.
+
+**Returns:** The string form.
+
+### `ToNumber`
+
+```csharp
+double ToNumber() => Kind switch
+```
+
+Coerces this value to a number (NaN when not numeric).
+
+**Returns:** The numeric form.
+
+### `ToBoolean`
+
+```csharp
+bool ToBoolean() => Kind switch
+```
+
+Coerces this value to a boolean using JavaScript truthiness.
+
+**Returns:** The boolean form.
+
 ### `Equals`
 
 ```csharp
@@ -68,6 +98,14 @@ bool Equals(XfaScriptValue other)
 
 ```csharp
 override bool Equals(object? obj) => obj is XfaScriptValue other && Equals(other)
+```
+
+<inheritdoc />
+
+### `GetHashCode`
+
+```csharp
+override int GetHashCode() => Kind switch
 ```
 
 <inheritdoc />

@@ -13,3 +13,6 @@ using System.Runtime.CompilerServices;
 // 3.33.0 (ticket 39): damaged page content is drawn and read as far as it decodes.
 [assembly: InternalsVisibleTo("Chuvadi.Pdf.Rendering.Walking")]
 [assembly: InternalsVisibleTo("Chuvadi.Pdf.Text")]
+[assembly: InternalsVisibleTo("Chuvadi.Pdf.IO")]
+[assembly: InternalsVisibleTo("Chuvadi.Pdf.Content")]
+[assembly: InternalsVisibleTo("Chuvadi.Pdf.Fonts")]

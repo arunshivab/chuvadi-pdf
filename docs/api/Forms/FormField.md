@@ -64,6 +64,38 @@ bool IsLeaf => Children.Count == 0
 
 Returns true when this is a leaf field (no children).
 
+### `Widgets`
+
+```csharp
+IReadOnlyList<FormWidget> Widgets
+```
+
+Gets the field's widget annotations: where it is shown, and for a check box or radio button the state that turns each widget on (3.34.0). Empty for a field with no widget of its own (a parent of other fields).
+
+### `Options`
+
+```csharp
+IReadOnlyList<FormChoiceOption> Options
+```
+
+Gets a choice field's options (`/Opt`), in order (3.34.0). Empty for other fields.
+
+### `Flags`
+
+```csharp
+FormFieldFlags Flags
+```
+
+Gets the field flags (`/Ff`, inherited from ancestors when the field has none of its own) (3.34.0).
+
+### `MaxLength`
+
+```csharp
+int? MaxLength
+```
+
+Gets a text field's maximum length (`/MaxLen`, inherited), or null when it has none (3.34.0).
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Forms/FormField.cs`](../../../src/Chuvadi.Pdf.Forms/FormField.cs)_
