@@ -295,26 +295,47 @@ public sealed class WpfRenderer
     private static void DrawText(DrawingContext dc, TextOp op)
     {
         if (op.Glyphs.Count == 0) { return; }
+
+        // 3.35.0: invisible (mode 3) and clip-only (mode 7) text is not drawn.
+        if (op.RenderingMode is Chuvadi.Pdf.Rendering.DisplayList.TextRenderingMode.Invisible or Chuvadi.Pdf.Rendering.DisplayList.TextRenderingMode.Clip) { return; }
         System.Text.StringBuilder sb = new();
         foreach (DisplayListGlyph g in op.Glyphs) { sb.Append(g.Unicode); }
         string text = sb.ToString();
 
         Typeface tf = new(op.BaseFont);
+        SolidColorBrush fillBrush = new(WpfColor(op.FillColor));
         FormattedText ft = new(
             text,
             System.Globalization.CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
             tf,
             op.FontSize,
-            new SolidColorBrush(WpfColor(op.FillColor)),
+            fillBrush,
             1.0);
 
         // Compose the outer page-flip + run transform + local counter-flip.
+        // 3.35.0 (D-384 T1): horizontal scaling (Tz) widens the glyphs.
+        double th = op.HorizontalScaling != 0 && double.IsFinite(op.HorizontalScaling) ? op.HorizontalScaling : 1.0;
         AffineMatrix localFlip = new(1, 0, 0, -1, 0, 0);
-        AffineMatrix combined = localFlip.Multiply(op.Transform);
+        AffineMatrix combined = localFlip.Multiply(new AffineMatrix(th, 0, 0, 1, 0, 0)).Multiply(op.Transform);
         MatrixTransform xf = new(new Matrix(combined.A, combined.B, combined.C, combined.D, combined.E, combined.F));
         dc.PushTransform(xf);
-        dc.DrawText(ft, new Point(0, 0));
+        if (op.Stroke is Chuvadi.Pdf.Rendering.DisplayList.StrokeStyle stroke)
+        {
+            // 3.35.0 (D-384 T2): the stroking modes outline the glyphs with
+            // the op's line width, converted from page space to the run's
+            // units; modes 1 and 5 do not fill.
+            double unit = Math.Sqrt(Math.Abs(th * ((op.Transform.A * op.Transform.D) - (op.Transform.B * op.Transform.C))));
+            double width = unit > 0 && double.IsFinite(unit) ? (stroke.LineWidth > 0 ? stroke.LineWidth : 0.5) / unit : 0.5;
+            bool fills = op.RenderingMode is not (Chuvadi.Pdf.Rendering.DisplayList.TextRenderingMode.Stroke or Chuvadi.Pdf.Rendering.DisplayList.TextRenderingMode.StrokeAndClip);
+            Pen pen = new(new SolidColorBrush(WpfColor(op.StrokeColor)), width);
+            dc.DrawGeometry(fills ? fillBrush : null, pen, ft.BuildGeometry(new Point(0, 0)));
+        }
+        else
+        {
+            dc.DrawText(ft, new Point(0, 0));
+        }
+
         dc.Pop();
     }
 
@@ -331,6 +352,13 @@ public sealed class WpfRenderer
 
     private static BitmapSource? TryDecodeBitmap(ImageOp op)
     {
+        // 3.35.0 (backlog 62): an image with a soft mask is drawn with it as
+        // an alpha channel (raw or JPEG); before, WPF drew every image opaque.
+        if (op.SoftMaskAlpha is not null && op.BitsPerComponent == 8 && MaskedBitmap(op) is BitmapSource masked)
+        {
+            return masked;
+        }
+
         // JPEG passthrough via WPF's BitmapDecoder.
         if (op.Format == ImageFormat.Jpeg)
         {
@@ -378,6 +406,47 @@ public sealed class WpfRenderer
             return BitmapSource.Create(op.Width, op.Height, 96, 96, fmt, null, pixels, stride);
         }
         return null;
+    }
+
+    // The op's colour samples with its soft mask as alpha, as a BGRA bitmap,
+    // or null when the samples cannot be read.
+    private static BitmapSource? MaskedBitmap(ImageOp op)
+    {
+        byte[]? colour;
+        int channels;
+        if (op.Format == ImageFormat.Jpeg)
+        {
+            colour = JpegRgbSamples.Read(op);
+            channels = 3;
+        }
+        else if (op.Format == ImageFormat.Raw)
+        {
+            colour = op.ColorSpace == PdfColorSpace.DeviceCmyk
+                ? ((long)op.PixelData.Length >= (long)op.Width * op.Height * 4 ? CmykToRgb(op.PixelData, op.Width, op.Height) : null)
+                : op.PixelData;
+            channels = op.ColorSpace == PdfColorSpace.DeviceGray ? 1 : 3;
+        }
+        else
+        {
+            return null;
+        }
+
+        byte[]? rgba = colour is null
+            ? null
+            : MaskedPixels.Rgba(colour, channels, op.Width, op.Height, op.SoftMaskAlpha!, op.SoftMaskWidth, op.SoftMaskHeight);
+        if (rgba is null)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            (rgba[i], rgba[i + 2]) = (rgba[i + 2], rgba[i]);
+        }
+
+        BitmapSource bitmap = BitmapSource.Create(op.Width, op.Height, 96, 96, PixelFormats.Bgra32, null, rgba, op.Width * 4);
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private static byte[] CmykToRgb(byte[] cmyk, int width, int height)

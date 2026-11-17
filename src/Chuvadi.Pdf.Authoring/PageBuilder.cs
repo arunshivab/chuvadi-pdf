@@ -102,7 +102,11 @@ public sealed class PageBuilder
     /// <exception cref="ArgumentException">
     /// <paramref name="font"/> is not available (since 3.30; before, the text
     /// was written with a font that has no program and came out blank). The
-    /// message lists the names that are.
+    /// message lists the names that are. Also (since 3.35.0) when
+    /// <paramref name="font"/> is a standard font and <paramref name="text"/>
+    /// has a character WinAnsiEncoding lacks (Tamil, Greek or CJK, say): the
+    /// message names it and points to <see cref="PdfDocumentBuilder.AddFont"/>,
+    /// and nothing is drawn.
     /// </exception>
     public PageBuilder DrawText(
         string text, double x, double y, string font, double size, Color color)
@@ -118,6 +122,7 @@ public sealed class PageBuilder
         }
 
         RequireKnownFont(font);
+        RequireEncodable(text, font);
         Fonts.Add(font);
         _w.PushState();
         _w.SetFillRgb(color);
@@ -127,7 +132,7 @@ public sealed class PageBuilder
         }
         else
         {
-            _w.ShowTextAt(KeyFor(font), size, x, y, text);
+            _w.ShowTextAt(KeyFor(font), WinAnsiFont(font), size, x, y, text);
         }
 
         _w.PopState();
@@ -528,7 +533,13 @@ public sealed class PageBuilder
     /// <param name="lineHeight">The line height as a multiple of the font size.</param>
     /// <returns>Whether all text fit, and the text that did not.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="text"/> or <paramref name="font"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="font"/> is not available (since 3.30); the message lists the names that are.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="font"/> is not available (since 3.30); the message lists
+    /// the names that are. Also (since 3.35.0) when <paramref name="font"/> is a
+    /// standard font and <paramref name="text"/> has a character
+    /// WinAnsiEncoding lacks: the message names it and points to
+    /// <see cref="PdfDocumentBuilder.AddFont"/>, and nothing is drawn.
+    /// </exception>
     public TextBlockResult DrawTextBlock(
         string text,
         double x, double y, double width, double height,
@@ -539,6 +550,7 @@ public sealed class PageBuilder
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(font);
         RequireKnownFont(font);
+        RequireEncodable(text, font);
         Fonts.Add(font);
 
         List<string> lines = WordWrap(text, font, size, width);
@@ -563,7 +575,7 @@ public sealed class PageBuilder
 
             _w.PushState();
             _w.SetFillRgb(color);
-            _w.ShowTextAt(KeyFor(font), size, drawX, yCursor, line);
+            _w.ShowTextAt(KeyFor(font), WinAnsiFont(font), size, drawX, yCursor, line);
             _w.PopState();
 
             yCursor += lineGap;
@@ -1293,6 +1305,28 @@ public sealed class PageBuilder
     // font registered with the document (3.30, D-105). Any other name used to
     // be written as a font with no program and no widths, so its text came
     // out blank.
+    // The font's name when text for it is written through WinAnsiEncoding: a
+    // standard font other than Symbol and ZapfDingbats, not overridden by a
+    // registered font (3.35.0, AUT-01).
+    private string? WinAnsiFont(string font)
+    {
+        bool custom = _customFonts is not null && _customFonts.TryGet(font, out CustomFont _);
+        return !custom && Array.IndexOf(StandardFontNames, font) >= 0
+            && font is not (StandardFonts.Symbol or StandardFonts.ZapfDingbats)
+            ? font
+            : null;
+    }
+
+    // Throws when the text has a character the standard font cannot show
+    // (3.35.0, AUT-01); nothing is written.
+    private void RequireEncodable(string text, string font)
+    {
+        if (WinAnsiFont(font) is string standard)
+        {
+            WinAnsiEncoding.Encode(text, standard);
+        }
+    }
+
     private void RequireKnownFont(string font)
     {
         if (StandardFontNames.Contains(font) || (_customFonts is not null && _customFonts.TryGet(font, out _)))

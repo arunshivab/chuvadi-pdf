@@ -79,7 +79,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
 
         // /Count is untrusted input: a negative value counts as no pages, and
         // nothing is allocated per page until it is accessed.
-        _count = Math.Max(0, _pagesRoot.GetInteger(PdfName.Count, 0));
+        _count = Math.Max(0, CountOf(_pagesRoot));
 
         if (walkIfLooped)
         {
@@ -95,10 +95,12 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                     leaves.Add(leaf);
                 }
             }
-            catch (PdfCorruptionException)
+            catch (Exception ex) when (ex is PdfCorruptionException or PdfParseException)
             {
                 // Damaged in another way: pages are found through /Count, as
                 // without RepairIfDamaged, and fail when they are reached.
+                // 3.35.0 (B8): a kid whose object cannot be read is such a
+                // case too; before, it failed the open (stressful-0123).
                 looped = false;
             }
 
@@ -202,7 +204,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         // 3.34.0 (Phase B N9): a node without /Kids holds no pages, and a
         // kid that is not a dictionary is skipped, each with a warning; before,
         // either failed the page lookup, as Poppler and MuPDF do not.
-        PdfArray? kids = node.GetArray(PdfName.Kids);
+        PdfArray? kids = KidsOf(node);
         if (kids is null)
         {
             _warn?.Invoke(NoKidsWarning);
@@ -249,6 +251,18 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
+    // 3.35.0 (B8, N9): /Kids and /Count may be indirect references, as any
+    // value may (PDF 32000-1:2008 §7.3.10); they are resolved. Before, an
+    // indirect /Kids read as missing, so the page could not be found
+    // (stressful-0370, where Poppler and MuPDF draw the page).
+    private PdfArray? KidsOf(PdfDictionary node) =>
+        node.TryGetValue(PdfName.Kids, out PdfPrimitive? kids) ? _resolver.Resolve(kids ?? PdfNull.Value) as PdfArray : null;
+
+    private int CountOf(PdfDictionary node) =>
+        node.TryGetValue(PdfName.Count, out PdfPrimitive? count) && _resolver.Resolve(count ?? PdfNull.Value) is PdfInteger value
+            ? value.Value
+            : 0;
+
     // ── Private: page tree traversal ──────────────────────────────────────
 
     /// <summary>
@@ -269,7 +283,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                 "document may contain a cyclic /Kids reference.");
         }
 
-        PdfArray? kids = node.GetArray(PdfName.Kids);
+        PdfArray? kids = KidsOf(node);
         if (kids is null)
         {
             _warn?.Invoke(NoKidsWarning);
@@ -311,7 +325,7 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
                     continue;
                 }
 
-                int subtreeCount = kidDict.GetInteger(PdfName.Count, 0);
+                int subtreeCount = CountOf(kidDict);
 
                 if (targetIndex < localOffset + subtreeCount)
                 {

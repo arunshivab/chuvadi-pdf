@@ -303,6 +303,7 @@ python tools/gen_api_docs.py
 | [OpenTypeFontBuilder](Fonts/OpenTypeFontBuilder.md) | class | Wraps a raw CFF font program in an OpenType (OTTO) SFNT envelope with the synthesised tables a browser requires (`CFF `, `cmap`, `head`, `hhea`, `hmtx`, `maxp`, `name`, `OS/2`, `post`), so the font can be embedded in an SVG `@font-face` rule and located by semantic Unicode code point. |
 | [PdfFont](Fonts/PdfFont.md) | class | Represents a PDF font and provides character code to Unicode mapping for text extraction purposes. |
 | [PdfFontEncoding](Fonts/PdfFontEncoding.md) | class | Maps 1-byte character codes (0-255) to Unicode codepoints for simple fonts. |
+| [PredefinedCMap](Fonts/PredefinedCMap.md) | class | A predefined CMap (PDF 32000-1:2008 §9.7.5.2): the mapping a Type 0 font's `/Encoding` name selects, from character codes to CIDs. |
 | [RenderableFont](Fonts/RenderableFont.md) | class | A PDF font that supports both text decoding (character codes to Unicode) and glyph rendering (character codes to vector outlines + metrics). |
 | [Standard14GlyphWidths](Fonts/Standard14GlyphWidths.md) | class | Per-character widths for the PDF Standard 14 fonts. |
 | [Standard14Outlines](Fonts/Standard14Outlines.md) | class | Provides glyph outlines for the PDF Standard 14 fonts from an embedded resource, so they work even on hosts that lack the fonts (Blazor WASM, headless servers). |
@@ -551,6 +552,7 @@ python tools/gen_api_docs.py
 | [ClipOp](Rendering/ClipOp.md) | class | Pushes a clipping region. |
 | [ClipPath](Rendering/ClipPath.md) | struct | A clipping path applied to a single render operation. |
 | [ClipRegion](Rendering/ClipRegion.md) | class | A device-space clipping region used by `ScanlineRasterizer` to restrict where a fill is painted. |
+| [DecodedImage](Rendering/DecodedImage.md) | class | The result of `ImageDecoding.Decode(ImageOp)`: the pixels the raster route paints for an image, or the reason it paints none. |
 | [DiagnosticKind](Rendering/DiagnosticKind.md) | enum | Classifies a `RenderingDiagnostic`. |
 | [DisplayListBuilder](Rendering/DisplayListBuilder.DisplayList.md) | class | Builds a `PageDisplayList` by walking a page's content stream and translating each PDF operator to a `RenderOp`. |
 | [DisplayListBuilder](Rendering/DisplayListBuilder.Raster.md) | class | Builds a `PageDisplayList` from a `PdfPage` by interpreting the page's content stream. |
@@ -572,6 +574,7 @@ python tools/gen_api_docs.py
 | [GlyphPosition](Rendering/GlyphPosition.md) | record struct | The position of a single glyph in a `TextRun`. |
 | [GradientStop](Rendering/GradientStop.md) | struct | A single sampled gradient stop: an offset in [0, 1] and its colour. |
 | [HintingMode](Rendering/HintingMode.md) | enum | Controls how strongly the TrueType bytecode hinting interpreter adjusts glyph outlines before rasterization. |
+| [ImageDecoding](Rendering/ImageDecoding.md) | class | Decodes a display-list `ImageOp` into the pixels the raster route paints for it, through the same decoder the raster renderer uses, so the two outputs stay identical. |
 | [ImageFormat](Rendering/ImageFormat.md) | enum | Raster format of image pixel data. |
 | [ImageOp](Rendering/ImageOp.md) | class | Renders a raster image. |
 | [JpegColorTransform](Rendering/JpegColorTransform.md) | enum | The colour transform of a JPEG image (its Adobe APP14 marker, if any). |
@@ -647,6 +650,7 @@ python tools/gen_api_docs.py
 | [PdfSigner](Signatures/PdfSigner.md) | class | Adds a CMS signature to a PDF document and returns the signed bytes. |
 | [PdfSigningOptions](Signatures/PdfSigningOptions.md) | class | Options for `PdfSigner.Sign`. |
 | [SignatureAppearance](Signatures/SignatureAppearance.md) | class | Visible appearance for a signature field. |
+| [SignatureModifications](Signatures/SignatureModifications.md) | enum | What the file holds after the bytes a signature covers (3.35.0). |
 | [SignatureReader](Signatures/SignatureReader.md) | class | Reads digital-signature fields out of a PDF document's AcroForm tree. |
 | [SignatureSubFilter](Signatures/SignatureSubFilter.md) | class | Constants and helpers for the /SubFilter entry of a PDF signature dictionary. |
 | [SignatureVerificationResult](Signatures/SignatureVerificationResult.md) | class | The result of verifying a PDF digital signature. |

@@ -98,6 +98,14 @@ IReadOnlyList<ShadingStop> Stops
 
 The sampled gradient stops, in increasing offset order.
 
+### `Opacity`
+
+```csharp
+double Opacity
+```
+
+The constant fill alpha (`/ca`) in effect when the shading was painted, 0 to 1 (3.35.0). PDF 32000-1:2008 §11.6.4.4 applies it to `sh` and to shading patterns alike; 1.0 is opaque.
+
 ### `ShadingToPage`
 
 ```csharp

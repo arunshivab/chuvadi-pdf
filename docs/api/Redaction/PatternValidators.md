@@ -90,6 +90,38 @@ Validates a 10-digit US National Provider Identifier (NPI) using the Luhn checks
 
 **Returns:** `true` if the NPI checksum is valid.
 
+### `Bic`
+
+__static__
+
+```csharp
+static bool Bic(string value)
+```
+
+Validates the shape of a SWIFT / BIC code (3.35.0): 8 or 11 characters, four letters, then an ISO 3166 country code (or XK), then letters or digits. Spaces are ignored.
+
+**Parameters**
+
+- `value` — The candidate text.
+
+**Returns:** `true` if the code has a valid country code.
+
+### `Itin`
+
+__static__
+
+```csharp
+static bool Itin(string value)
+```
+
+Validates a US Individual Taxpayer Identification Number (3.35.0): nine digits starting with 9, whose fourth and fifth digits are in 50–65, 70–88, 90–92 or 94–99 (the ranges the IRS issues). Spaces and dashes are ignored.
+
+**Parameters**
+
+- `value` — The candidate text.
+
+**Returns:** `true` if the number can be an ITIN.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Redaction/PatternValidators.cs`](../../../src/Chuvadi.Pdf.Redaction/PatternValidators.cs)_

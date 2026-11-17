@@ -42,13 +42,23 @@ internal static class PageTree
         return map;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxPageTreeDepth = 1024;
+
     private static void Walk(
         PdfObjectStore objects,
         PdfDictionary node,
         Dictionary<int, PdfObjectId> map,
         ref int counter,
-        HashSet<int> visited)
+        HashSet<int> visited,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
+        if (depth > MaxPageTreeDepth)
+        {
+            return;
+        }
+
         if (!node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim))
         {
             return;
@@ -81,7 +91,7 @@ internal static class PageTree
             if (kid.TryGetValue(PdfName.Type, out PdfPrimitive? typePrim)
                 && typePrim is PdfName typeName && typeName.Value == "Pages")
             {
-                Walk(objects, kid, map, ref counter, visited);
+                Walk(objects, kid, map, ref counter, visited, depth + 1);
             }
             else
             {

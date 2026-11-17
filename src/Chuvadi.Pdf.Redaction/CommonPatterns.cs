@@ -37,7 +37,34 @@ public static class CommonPatterns
     /// ICD-10 code prefix. Matches the letter+two-digit prefix of any ICD-10 code,
     /// e.g. "E11" or "J45.901". Intentionally loose; tune downward if you want exact codes.
     /// </summary>
-    public const string Icd10Prefix = @"\b[A-TV-Z][0-9][0-9A-Z](?:\.[0-9A-Z]{1,4})?\b";
+    /// <remarks>
+    /// Since 3.35.0 the third character is a digit, or the letter of one of
+    /// the categories that have one (C4A, C7A, C7B, D3A, M1A, Z3A), so
+    /// tokens such as "B2B" and "T1D" no longer match. A bare three-character
+    /// token ("A12") still matches; <see cref="PatternSets.Medical"/> uses
+    /// <see cref="Icd10Code"/> and <see cref="Icd10Labeled"/> instead.
+    /// </remarks>
+    public const string Icd10Prefix = @"\b" + Icd10Category + @"(?:\.[0-9A-Z]{1,4})?\b";
+
+    /// <summary>
+    /// ICD-10 code with its decimal part, e.g. "J45.901" or "E11.9" (3.35.0).
+    /// A three-character category on its own ("E11") is matched only after a
+    /// label, by <see cref="Icd10Labeled"/>.
+    /// </summary>
+    public const string Icd10Code = @"\b" + Icd10Category + @"\.[0-9A-Z]{1,4}\b";
+
+    /// <summary>
+    /// ICD-10 code, with or without its decimal part, after a label ("ICD-10",
+    /// "ICD", "Dx", "diagnosis", any case, then optional ':' or '#'), e.g. the
+    /// "E11" in "Dx: E11" (3.35.0). Only the code is matched.
+    /// </summary>
+    public const string Icd10Labeled =
+        @"(?<=\b(?i:icd(?:[ -]?10)?(?:[ -]?cm)?|dx|diagnosis)\b[ \t]*[:#]?[ \t]*(?:(?i:code)\b[ \t]*[:#]?[ \t]*)?)"
+        + Icd10Category + @"(?:\.[0-9A-Z]{1,4})?\b";
+
+    // An ICD-10 category: a letter (U is reserved), a digit, and a digit or
+    // the letter of the few categories that have one.
+    private const string Icd10Category = @"(?:[A-TV-Z][0-9][0-9]|C4A|C7[AB]|D3A|M1A|Z3A)";
 
     /// <summary>
     /// Credit card primary account number. Matches 13-19 digits possibly grouped by
@@ -86,16 +113,30 @@ public static class CommonPatterns
     public const string AbaRouting = @"\b\d{9}\b";
 
     /// <summary>
-    /// SWIFT / BIC code: six letters, two alphanumerics, optional three-character
-    /// branch. Format-only.
+    /// SWIFT / BIC code: four letters (the bank), an ISO 3166 country code,
+    /// two alphanumerics (the location) and an optional three-character
+    /// branch. Pair with <see cref="PatternValidators.Bic"/>, which checks the
+    /// country code.
     /// </summary>
-    public const string Swift = @"\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b";
+    /// <remarks>
+    /// Since 3.35.0 a code is matched only where it cannot be an ordinary
+    /// capitalised word: when it contains a digit ("ICICINBB001",
+    /// "HDFCINBB0XX"), or when it follows a "BIC" or "SWIFT" label (any case,
+    /// then optional "code", ':' or '#'), as in "SWIFT: DEUTDEFF". Before,
+    /// any 8- or 11-letter capitalised word matched ("APPROVED",
+    /// "HOSPITAL"). Only the code is matched, not the label.
+    /// </remarks>
+    public const string Swift =
+        @"(?:(?<=\b(?i:bic|swift)\b(?:[ -]?(?i:code)\b)?[ \t]*[:#]?[ \t]*)[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?"
+        + @"|\b(?=[A-Z0-9]{8}(?:[A-Z0-9]{3})?\b)[A-Z]{6}(?=[A-Z0-9]{0,4}[0-9])[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b";
 
     /// <summary>US Employer Identification Number (EIN): XX-XXXXXXX.</summary>
     public const string Ein = @"\b\d{2}-\d{7}\b";
 
     /// <summary>
     /// US Individual Taxpayer Identification Number (ITIN): 9XX-XX-XXXX.
+    /// Pair with <see cref="PatternValidators.Itin"/>, which checks the middle
+    /// group (3.35.0).
     /// </summary>
     public const string Itin = @"\b9\d{2}-\d{2}-\d{4}\b";
 

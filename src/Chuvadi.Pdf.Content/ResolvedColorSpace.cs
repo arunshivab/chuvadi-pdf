@@ -568,7 +568,17 @@ public sealed class ResolvedColorSpace
 
         if (lookup is PdfStream stream)
         {
-            return DecodeStream(stream);
+            try
+            {
+                return DecodeStream(stream);
+            }
+            catch (FilterException damaged) when (damaged.PartialOutput is { Length: > 0 } partial)
+            {
+                // 3.35.0 (52c): a damaged lookup keeps the entries that
+                // decoded; the missing ones read as zero, as a short
+                // lookup string does.
+                return partial;
+            }
         }
 
         return Array.Empty<byte>();

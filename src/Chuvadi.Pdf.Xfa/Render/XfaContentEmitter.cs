@@ -111,8 +111,9 @@ internal static class XfaContentEmitter
         string fontName = ResolveFontName(box.Font);
         double size = box.Font?.Size > 0 ? box.Font.Size : DefaultFontSize;
         Color color = ParseColor(box.Font?.Color) ?? Colors.Black;
+        string text = ForStandardFont(box.Text!);
 
-        double textWidth = EstimateTextWidth(box.Text!, size);
+        double textWidth = EstimateTextWidth(text, size);
         double x = box.HAlign switch
         {
             XfaHAlign.Center => box.X + ((box.Width - textWidth) / 2.0),
@@ -129,7 +130,38 @@ internal static class XfaContentEmitter
             _ => box.Y + ascent,
         };
 
-        page.DrawText(box.Text!, x, y, fontName, size, color);
+        page.DrawText(text, x, y, fontName, size, color);
+    }
+
+    // 3.35.0 (AUT-01): the form's text is drawn with a standard font, which
+    // shows only WinAnsiEncoding characters. A line or paragraph separator is
+    // drawn as a space and any other character outside the encoding as '?',
+    // so a form renders as before; before, such a character was written as
+    // whatever its low byte meant.
+    private static string ForStandardFont(string text)
+    {
+        System.Text.StringBuilder? sb = null;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char ch = text[i];
+            bool pair = char.IsHighSurrogate(ch) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]);
+            int scalar = pair ? char.ConvertToUtf32(ch, text[i + 1]) : ch;
+            if (WinAnsiEncoding.CanEncode(scalar))
+            {
+                sb?.Append(ch);
+                continue;
+            }
+
+            sb ??= new System.Text.StringBuilder(text, 0, i, text.Length);
+            UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(ch);
+            sb.Append(category is UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator ? ' ' : '?');
+            if (pair)
+            {
+                i++;
+            }
+        }
+
+        return sb?.ToString() ?? text;
     }
 
     private static string ResolveFontName(XfaFont? font)

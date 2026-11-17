@@ -380,6 +380,54 @@ public static class PdfRepairer
     // bytes are taken from after "stream" up to "endstream", scanned without bound.
     // <paramref name="consumedEnd"/> reports the absolute byte position past the
     // object so the caller can prune header matches that fell inside stream binary.
+    // True when bytes[from, to) open more dictionaries ("<<") than they close
+    // (">>"), so a "stream" keyword at `to` sits inside an open dictionary.
+    // Literal strings are skipped; a hex string has no "<<" or ">>".
+    private static bool OpensMoreThanItCloses(byte[] bytes, int from, int to)
+    {
+        int depth = 0;
+        int strings = 0;
+        for (int i = from; i < to - 1; i++)
+        {
+            byte b = bytes[i];
+            if (b == (byte)'\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (b == (byte)'(')
+            {
+                strings++;
+                continue;
+            }
+
+            if (b == (byte)')' && strings > 0)
+            {
+                strings--;
+                continue;
+            }
+
+            if (strings > 0)
+            {
+                continue;
+            }
+
+            if (b == (byte)'<' && bytes[i + 1] == (byte)'<')
+            {
+                depth++;
+                i++;
+            }
+            else if (b == (byte)'>' && bytes[i + 1] == (byte)'>')
+            {
+                depth--;
+                i++;
+            }
+        }
+
+        return depth > 0;
+    }
+
     private static PdfIndirectObject? ParseObject(
         byte[] bytes, int start, int nextOffset, out bool truncated, out int consumedEnd)
     {
@@ -429,11 +477,28 @@ public static class PdfRepairer
         using (MemoryStream dictWindow = new MemoryStream(bytes, p, streamPos - p, writable: false))
         {
             PdfObjectParser dictParser = new PdfObjectParser(dictWindow);
-            PdfPrimitive dictValue = dictParser.ReadValue();
-            if (dictValue is not PdfDictionary parsed)
+            PdfPrimitive? dictValue;
+            try
             {
-                return null;
+                dictValue = dictParser.ReadValue();
             }
+            catch (PdfParseException)
+            {
+                dictValue = null;
+            }
+
+            if (dictValue is not PdfDictionary parsed || OpensMoreThanItCloses(bytes, p, streamPos))
+            {
+                // 3.35.0 (52h): the "stream" found belongs to a stream written
+                // directly inside the object's dictionary (as Poppler's
+                // mask.pdf does), not to the object itself. The whole object is
+                // then read as one value, which reads such a stream in place.
+                using MemoryStream window = new MemoryStream(bytes, start, e - start, writable: false);
+                PdfIndirectObject whole = new PdfObjectParser(window).ReadIndirectObject();
+                consumedEnd = nextOffset;
+                return whole;
+            }
+
             dict = parsed;
         }
 

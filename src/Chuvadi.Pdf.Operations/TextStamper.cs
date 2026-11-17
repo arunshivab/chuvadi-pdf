@@ -46,6 +46,10 @@ public static class TextStamper
     /// Thrown when <paramref name="output"/>, <paramref name="document"/>, or
     /// <paramref name="template"/> is null.
     /// </exception>
+    /// <exception cref="ArgumentException">
+    /// (Since 3.35.0) The resolved text has a character that the Helvetica it
+    /// is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written.
+    /// </exception>
     public static void Apply(
         Stream output,
         PdfDocument document,
@@ -126,6 +130,10 @@ public static class TextStamper
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="output"/>, <paramref name="document"/>,
     /// <paramref name="template"/>, or <paramref name="numbering"/> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// (Since 3.35.0) The resolved text has a character that the Helvetica it
+    /// is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written.
     /// </exception>
     public static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null)
     {

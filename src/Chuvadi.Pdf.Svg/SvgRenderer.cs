@@ -409,8 +409,24 @@ public sealed class SvgRenderer
                     FlushPendingFillRect(ref pendingFillRect, w);
                     FlushPendingPathBatch(ref pendingBatch, w);
                     int wrapT = OpenOpWrappers(t, w, familyByBaseFont, resolver);
+
+                    // 3.35.0: invisible text (render mode 3, the text layer of
+                    // a scanned page) and clip-only text (7) are kept in the
+                    // SVG, so it can still be found and selected, but not
+                    // shown; before, it was drawn in the fill colour.
+                    bool hidden = t.RenderingMode is TextRenderingMode.Invisible or TextRenderingMode.Clip;
+                    if (hidden)
+                    {
+                        w.OpenGroup(extraAttrs: "opacity=\"0\"");
+                    }
+
                     EmitTextWithSnap(t, w, familyByBaseFont,
                         ref accumulatedShift, ref prevLineY, ref prevEndX);
+                    if (hidden)
+                    {
+                        w.CloseGroup();
+                    }
+
                     CloseWrappers(w, wrapT);
                     break;
                 case ImageOp i:
@@ -675,7 +691,9 @@ public sealed class SvgRenderer
             : (-NestedShadingReach, -NestedShadingReach, 2 * NestedShadingReach, 2 * NestedShadingReach);
         string rect = string.Format(CultureInfo.InvariantCulture,
             "M {0} {1} L {2} {1} L {2} {3} L {0} {3} Z", Num(bx), Num(by), Num(bx + bw), Num(by + bh));
-        w.EmitPath(rect, "url(#" + id + ")", null, 0);
+        // 3.35.0: the constant alpha (/ca) the shading is painted with.
+        string? opacity = s.Opacity < 1.0 ? $"fill-opacity=\"{FormatOpacity(s.Opacity)}\"" : null;
+        w.EmitPath(rect, "url(#" + id + ")", null, 0, extraAttrs: opacity);
     }
 
     // Half the side of the square a shading fills in a nested list, in that
@@ -1257,12 +1275,55 @@ public sealed class SvgRenderer
             op.Transform.C, op.Transform.D,
             op.Transform.E + accumulatedShift, op.Transform.F);
         AffineMatrix localFlip = new(1, 0, 0, -1, 0, 0);
-        AffineMatrix combined = localFlip.Multiply(shifted);
+
+        // 3.35.0 (D-384 T1): horizontal scaling (Tz) widens the glyph shapes;
+        // the positions already include it, so they are given in the
+        // unscaled units of the element.
+        double th = op.HorizontalScaling != 0 && double.IsFinite(op.HorizontalScaling) ? op.HorizontalScaling : 1.0;
+        if (th != 1.0)
+        {
+            for (int k = 0; k < xPositions.Count; k++)
+            {
+                xPositions[k] /= th;
+            }
+        }
+
+        AffineMatrix combined = localFlip.Multiply(new AffineMatrix(th, 0, 0, 1, 0, 0)).Multiply(shifted);
         string transform = combined.ToSvgMatrix();
         string family = ResolveFamily(op.BaseFont, familyByBaseFont);
-        string fill = SrgbCss(op.FillColor);
+
+        // 3.35.0 (D-384 T2): the stroking render modes outline the glyphs
+        // with the op's line attributes, converted from page space to the
+        // element's units; modes 1 and 5 do not fill.
+        bool fills = op.RenderingMode is not (TextRenderingMode.Stroke or TextRenderingMode.StrokeAndClip);
+        string fill = fills ? SrgbCss(op.FillColor) : "none";
         (string? fontWeight, string? fontStyle) = ResolveStyleHints(op.Style);
         string? textExtra = TextOpacityAttrs(op);
+        if (op.Stroke is StrokeStyle textStroke)
+        {
+            double unit = Math.Sqrt(Math.Abs(th * ((op.Transform.A * op.Transform.D) - (op.Transform.B * op.Transform.C))));
+            if (unit > 0 && double.IsFinite(unit))
+            {
+                double[]? dashes = null;
+                if (textStroke.DashArray is double[] source)
+                {
+                    dashes = new double[source.Length];
+                    for (int k = 0; k < source.Length; k++)
+                    {
+                        dashes[k] = source[k] / unit;
+                    }
+                }
+
+                StrokeStyle local = textStroke with
+                {
+                    LineWidth = (textStroke.LineWidth > 0 ? textStroke.LineWidth : 0.5) / unit,
+                    DashArray = dashes,
+                    DashPhase = textStroke.DashPhase / unit,
+                };
+                string strokeAttrs = "stroke=\"" + SrgbCss(op.StrokeColor) + "\" " + StrokeMaskAttrs(local);
+                textExtra = textExtra is null ? strokeAttrs : textExtra + " " + strokeAttrs;
+            }
+        }
 
         // v3.31 — every character is placed at its PDF position, embedded
         // font or not. The PDF's /Widths, character and word spacing and TJ
@@ -1607,6 +1668,10 @@ public sealed class SvgRenderer
         PdfBlendMode.SoftLight => "soft-light",
         PdfBlendMode.Difference => "difference",
         PdfBlendMode.Exclusion => "exclusion",
+        PdfBlendMode.Hue => "hue",
+        PdfBlendMode.Saturation => "saturation",
+        PdfBlendMode.Color => "color",
+        PdfBlendMode.Luminosity => "luminosity",
         _ => "normal",
     };
 }

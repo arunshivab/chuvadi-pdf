@@ -45,7 +45,7 @@ Draws a single line of text. The top of the text aligns to `y`.
 - `size` — The font size in points.
 - `color` — The fill color.
 
-**Returns:** This page builder. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException"> `font` is not available (since 3.30; before, the text was written with a font that has no program and came out blank). The message lists the names that are. </exception>
+**Returns:** This page builder. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException"> `font` is not available (since 3.30; before, the text was written with a font that has no program and came out blank). The message lists the names that are. Also (since 3.35.0) when `font` is a standard font and `text` has a character WinAnsiEncoding lacks (Tamil, Greek or CJK, say): the message names it and points to `PdfDocumentBuilder.AddFont`, and nothing is drawn. </exception>
 
 **Remarks:** `font` is one of the standard 14 font names (`StandardFonts`), a name given to `PdfDocumentBuilder.AddTrueTypeFont(string, byte[])`, or `"Lipi"` (exactly, case-sensitive) after `PdfDocumentBuilder.UseLipiFonts`, which picks the LiPi Sans face for each script in the text. The per-script face names (`LiPi-Sans-Latin` and so on) are internal; use `"Lipi"`.
 
@@ -132,7 +132,7 @@ Draws word-wrapped text inside a rectangle. Returns a result indicating whether 
 - `align` — The horizontal alignment.
 - `lineHeight` — The line height as a multiple of the font size.
 
-**Returns:** Whether all text fit, and the text that did not. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException">`font` is not available (since 3.30); the message lists the names that are.</exception>
+**Returns:** Whether all text fit, and the text that did not. <exception cref="ArgumentNullException">`text` or `font` is null.</exception> <exception cref="ArgumentException"> `font` is not available (since 3.30); the message lists the names that are. Also (since 3.35.0) when `font` is a standard font and `text` has a character WinAnsiEncoding lacks: the message names it and points to `PdfDocumentBuilder.AddFont`, and nothing is drawn. </exception>
 
 ### `DrawHyperlink`
 

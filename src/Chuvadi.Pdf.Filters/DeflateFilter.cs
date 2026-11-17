@@ -624,8 +624,17 @@ internal sealed class DeflateInflater
 
         if (_bytePos + len > _start + _length)
         {
+            // 3.35.0 (52c): keep the bytes that are there, so a caller that
+            // uses the partial output (a short Indexed /Lookup, a damaged
+            // content stream) gets them too.
+            int remaining = _start + _length - _bytePos;
+            for (int i = 0; i < remaining; i++)
+            {
+                output.Add(_data[_bytePos++]);
+            }
+
             throw new FilterException("FlateDecode",
-                $"Stored block claims {len} bytes but only {_start + _length - _bytePos} remain.");
+                $"Stored block claims {len} bytes but only {remaining} remain.");
         }
 
         for (int i = 0; i < len; i++)

@@ -10,7 +10,7 @@ public sealed class Type1FontRenderer
 
 ## Remarks
 
-Outlines are produced in a 1000-unit em and scaled by the caller's point size. Glyph selection is by character code through the font dictionary's `/Encoding` (with `/Differences`) when present, otherwise the font program's built-in encoding, otherwise StandardEncoding.
+Outlines are produced in the program's glyph space and mapped by its `/FontMatrix` (1/1000 when the program gives none) and the caller's point size. Glyph selection is by character code through the font dictionary's `/Encoding` (with `/Differences`) when present, otherwise the font program's built-in encoding, otherwise StandardEncoding.
 
 ## Methods
 

@@ -118,6 +118,14 @@ Transform? ShadingToPage
 
 When set, the centres and radii are in shading space and this maps shading space to page space. Used for a radial shading under a transform that does not keep circles circular (unequal scaling or skew), where the circles become ellipses on the page. Null when the geometry is already in page space.
 
+### `Alpha`
+
+```csharp
+double Alpha
+```
+
+The constant alpha the shading is painted with, 0 to 1 (3.35.0): the fill alpha (`/ca`) in effect, times that of an enclosing transparency group. 1.0 is opaque.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/ShadeOp.cs)_

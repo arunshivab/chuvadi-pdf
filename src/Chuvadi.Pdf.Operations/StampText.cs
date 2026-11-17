@@ -5,6 +5,7 @@
 
 using System.Globalization;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Primitives;
 
@@ -46,38 +47,6 @@ internal static class StampText
         return units / 1000.0 * fontSize;
     }
 
-    /// <summary>Escapes a string for a PDF literal-string operand.</summary>
-    internal static string EscapePdfString(string text)
-    {
-        StringBuilder sb = new StringBuilder(text.Length);
-        foreach (char c in text)
-        {
-            switch (c)
-            {
-                case '(':
-                    sb.Append("\\(");
-                    break;
-                case ')':
-                    sb.Append("\\)");
-                    break;
-                case '\\':
-                    sb.Append("\\\\");
-                    break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                default:
-                    sb.Append(c);
-                    break;
-            }
-        }
-
-        return sb.ToString();
-    }
-
     /// <summary>
     /// Builds a text-showing content fragment (no surrounding q/Q) that places
     /// a single line at the given transform with the given colour and size.
@@ -86,7 +55,10 @@ internal static class StampText
         string text, Transform placement, double fontSize, ColorF color)
     {
         ColorF rgb = color.ToRgb();
-        string escaped = EscapePdfString(text);
+
+        // 3.35.0 (AUT-01): encoded through WinAnsiEncoding, the font's
+        // encoding; before, each character's low byte was written.
+        string escaped = WinAnsiEncoding.ToLiteralBody(WinAnsiEncoding.Encode(text, "Helvetica"));
 
         StringBuilder sb = new StringBuilder();
         sb.Append(Fmt(rgb.R)).Append(' ').Append(Fmt(rgb.G)).Append(' ')

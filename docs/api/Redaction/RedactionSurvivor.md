@@ -16,7 +16,7 @@ public sealed class RedactionSurvivor
 int PageIndex
 ```
 
-Gets the zero-based page index.
+Gets the zero-based page index, or -1 for content outside the pages (`RedactionSurvivorKind.DocumentText` and `RedactionSurvivorKind.Attachment`).
 
 ### `Kind`
 
@@ -32,7 +32,7 @@ Gets what kind of content this is.
 RectangleF Bounds
 ```
 
-Gets the content's bounding box in page space (points, origin bottom-left).
+Gets the content's bounding box in page space (points, origin bottom-left); empty for content outside the pages.
 
 ### `Text`
 
@@ -40,7 +40,7 @@ Gets the content's bounding box in page space (points, origin bottom-left).
 string? Text
 ```
 
-Gets the text: the glyph's Unicode for `RedactionSurvivorKind.Text`, the annotation's `/Contents` for `RedactionSurvivorKind.Annotation`, otherwise null.
+Gets the text: the glyph's Unicode for `RedactionSurvivorKind.Text`, the annotation's `/Contents` for `RedactionSurvivorKind.Annotation`, otherwise null. For `RedactionVerifier.VerifyPatterns`, the matched text (null for an annotation, and for an attachment that could not be checked).
 
 ---
 

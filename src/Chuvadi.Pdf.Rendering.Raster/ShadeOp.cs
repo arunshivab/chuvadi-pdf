@@ -116,4 +116,11 @@ public sealed class ShadeOp : RenderOp
     /// geometry is already in page space.
     /// </summary>
     public Transform? ShadingToPage { get; init; }
+
+    /// <summary>
+    /// The constant alpha the shading is painted with, 0 to 1 (3.35.0): the
+    /// fill alpha (<c>/ca</c>) in effect, times that of an enclosing
+    /// transparency group. 1.0 is opaque.
+    /// </summary>
+    public double Alpha { get; init; } = 1.0;
 }

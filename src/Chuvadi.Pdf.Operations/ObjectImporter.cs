@@ -28,65 +28,100 @@ internal static class ObjectImporter
         new Dictionary<(int Doc, int Num), int>();
 
     /// <summary>
-    /// Recursively gathers every indirect object reachable from
+    /// Gathers every indirect object reachable from
     /// <paramref name="primitive"/>, resolving references via
-    /// <paramref name="resolver"/>. Never follows <c>/Parent</c> (it forms a
-    /// cycle up the page tree).
+    /// <paramref name="resolver"/>, in depth-first order. Never follows
+    /// <c>/Parent</c> (it forms a cycle up the page tree). Iterative (3.35.0,
+    /// OPS-08): a long chain of linked objects cannot exhaust the stack.
     /// </summary>
     internal static void CollectReferences(
         PdfPrimitive primitive,
         IPdfObjectResolver resolver,
         List<PdfIndirectObject> collected,
-        HashSet<int> visited)
+        HashSet<int> visited) =>
+        CollectReferences(primitive, resolver, collected, visited, pages: null);
+
+    /// <summary>
+    /// Gathers as the four-argument overload does; with
+    /// <paramref name="pages"/> (3.35.0, OPS-01), a reference to a page or a
+    /// page-tree node is not followed: the page is recorded there by object
+    /// number, and the caller points the reference at its copy of that page,
+    /// or at nothing when the page is not kept. Before, a link, an
+    /// annotation's <c>/P</c> or any other key naming another page pulled
+    /// that page (and its content) into the output as a hidden object.
+    /// </summary>
+    internal static void CollectReferences(
+        PdfPrimitive primitive,
+        IPdfObjectResolver resolver,
+        List<PdfIndirectObject> collected,
+        HashSet<int> visited,
+        Dictionary<int, PdfDictionary>? pages)
     {
-        if (primitive is PdfReference reference)
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(primitive);
+        while (pending.Count > 0)
         {
-            int num = reference.ObjectId.ObjectNumber;
-
-            if (visited.Contains(num))
+            PdfPrimitive current = pending.Pop();
+            if (current is PdfReference reference)
             {
-                return;
-            }
-
-            visited.Add(num);
-            PdfWorkScope.ThrowIfCancellationRequested();
-            PdfPrimitive resolved = resolver.Resolve(reference);
-            collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
-            CollectReferences(resolved, resolver, collected, visited);
-        }
-        else if (primitive is PdfDictionary dict)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
-            {
-                if (entry.Key == PdfName.Parent)
-                {
-                    continue; // Never follow /Parent — it forms a cycle
-                }
-
-                CollectReferences(entry.Value, resolver, collected, visited);
-            }
-        }
-        else if (primitive is PdfArray array)
-        {
-            for (int i = 0; i < array.Count; i++)
-            {
-                CollectReferences(array[i], resolver, collected, visited);
-            }
-        }
-        else if (primitive is PdfStream stream)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
-            {
-                // 3.34.0 (#53): a stream's /Parent is not followed either, as
-                // for a dictionary; before, a form XObject with a /Parent
-                // pulled in the source's whole page tree.
-                if (entry.Key == PdfName.Parent)
+                int num = reference.ObjectId.ObjectNumber;
+                if (!visited.Add(num))
                 {
                     continue;
                 }
 
-                CollectReferences(entry.Value, resolver, collected, visited);
+                PdfWorkScope.ThrowIfCancellationRequested();
+                PdfPrimitive resolved = resolver.Resolve(reference);
+                if (pages is not null && resolved is PdfDictionary pageLike && IsPageOrNode(pageLike, resolver))
+                {
+                    pages[num] = pageLike;
+                    continue;
+                }
+
+                collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
+                pending.Push(resolved);
             }
+            else if (current is PdfDictionary dict)
+            {
+                PushValues(dict, pending);
+            }
+            else if (current is PdfArray array)
+            {
+                for (int i = array.Count - 1; i >= 0; i--)
+                {
+                    pending.Push(array[i]);
+                }
+            }
+            else if (current is PdfStream stream)
+            {
+                // 3.34.0 (#53): a stream's /Parent is not followed either, as
+                // for a dictionary; before, a form XObject with a /Parent
+                // pulled in the source's whole page tree.
+                PushValues(stream.Dictionary, pending);
+            }
+        }
+    }
+
+    // A page (/Type /Page) or page-tree node (/Type /Pages).
+    private static bool IsPageOrNode(PdfDictionary dict, IPdfObjectResolver resolver) =>
+        dict.TryGetValue(PdfName.Type, out PdfPrimitive? type)
+        && resolver.Resolve(type) is PdfName { Value: "Page" or "Pages" };
+
+    // Pushes the values other than /Parent in reverse, so they are taken in order.
+    private static void PushValues(PdfDictionary dict, Stack<PdfPrimitive> pending)
+    {
+        List<PdfPrimitive> values = new List<PdfPrimitive>(dict.Count);
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+        {
+            if (entry.Key != PdfName.Parent)
+            {
+                values.Add(entry.Value);
+            }
+        }
+
+        for (int i = values.Count - 1; i >= 0; i--)
+        {
+            pending.Push(values[i]);
         }
     }
 

@@ -67,7 +67,9 @@ internal static class PageTreeRecovery
             return;
         }
 
-        if (node.GetArray(PdfName.Kids) is not PdfArray kids)
+        // 3.35.0 (B8): /Kids may be an indirect reference.
+        PdfPrimitive? kidsValue = node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsEntry) ? kidsEntry : null;
+        if (kidsValue is null || store.Resolve(kidsValue) is not PdfArray kids)
         {
             return;
         }

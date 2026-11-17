@@ -59,7 +59,7 @@ public static class PdfRenderExtensions
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <returns>The page encoded as a PNG image.</returns>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static byte[] RenderPageToPng(this PdfDocument document, int pageIndex, double dpi = 150)
     {
         ImageFrame frame = RenderPageToFrame(document, pageIndex, dpi);
@@ -74,7 +74,7 @@ public static class PdfRenderExtensions
     /// <param name="output">Destination stream.</param>
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> or <paramref name="output"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static void RenderPageToPng(this PdfDocument document, int pageIndex, Stream output, double dpi = 150)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -89,7 +89,7 @@ public static class PdfRenderExtensions
     /// <param name="quality">JPEG quality, 1–100. Default: 85.</param>
     /// <returns>The page encoded as a JPEG image.</returns>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static byte[] RenderPageToJpeg(this PdfDocument document, int pageIndex, double dpi = 150, int quality = 85)
     {
         ImageFrame frame = RenderPageToFrame(document, pageIndex, dpi);
@@ -105,7 +105,7 @@ public static class PdfRenderExtensions
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <param name="quality">JPEG quality, 1–100. Default: 85.</param>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> or <paramref name="output"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static void RenderPageToJpeg(this PdfDocument document, int pageIndex, Stream output, double dpi = 150, int quality = 85)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -119,7 +119,7 @@ public static class PdfRenderExtensions
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <returns>The page encoded as a BMP image.</returns>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static byte[] RenderPageToBmp(this PdfDocument document, int pageIndex, double dpi = 150)
     {
         ImageFrame frame = RenderPageToFrame(document, pageIndex, dpi);
@@ -134,7 +134,7 @@ public static class PdfRenderExtensions
     /// <param name="output">Destination stream.</param>
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> or <paramref name="output"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static void RenderPageToBmp(this PdfDocument document, int pageIndex, Stream output, double dpi = 150)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -148,7 +148,7 @@ public static class PdfRenderExtensions
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <returns>The page encoded as a TIFF image.</returns>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static byte[] RenderPageToTiff(this PdfDocument document, int pageIndex, double dpi = 150)
     {
         ImageFrame frame = RenderPageToFrame(document, pageIndex, dpi);
@@ -161,7 +161,7 @@ public static class PdfRenderExtensions
     /// <param name="output">Destination stream.</param>
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> or <paramref name="output"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="pageIndex"/> is out of range. Also (since 3.35.0) when <paramref name="dpi"/> is not a positive finite number.</exception>
     public static void RenderPageToTiff(this PdfDocument document, int pageIndex, Stream output, double dpi = 150)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -176,6 +176,7 @@ public static class PdfRenderExtensions
     /// <param name="dpi">Rasterization resolution in dots per inch. Default: 150.</param>
     /// <returns>A multi-page TIFF containing one frame per page.</returns>
     /// <exception cref="ArgumentNullException">When <paramref name="document"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="dpi"/> is not a positive finite number (since 3.35.0).</exception>
     public static byte[] RenderToTiff(this PdfDocument document, double dpi = 150)
     {
         ArgumentNullException.ThrowIfNull(document);

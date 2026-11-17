@@ -26,6 +26,14 @@ IReadOnlyDictionary<int, string>? ToUnicodeMap => _toUnicodeMap
 
 The ToUnicode CMap mapping (source code → Unicode string) for this font, or `null` when the font has no ToUnicode entry.
 
+### `IsVertical`
+
+```csharp
+bool IsVertical => _cmap?.IsVertical ?? false
+```
+
+Gets whether the font writes vertically: a Type 0 font whose `/Encoding` is a vertical predefined CMap (`Identity-V`, `UniJIS-UTF16-V` and so on). `TryMeasure` then gives the vertical advance (normally negative). Since 3.35.0.
+
 ## Methods
 
 ### `FromDictionary`

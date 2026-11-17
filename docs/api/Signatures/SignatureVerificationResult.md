@@ -46,7 +46,7 @@ The signer's certificate, when located inside the CMS envelope.
 bool IntegrityVerified
 ```
 
-True iff the cryptographic signature checks out AND the signed bytes' digest matches the messageDigest signed attribute. This is the strict cryptographic answer regardless of whether the signer is to be believed.
+True iff the cryptographic signature checks out AND the signed bytes' digest matches the messageDigest signed attribute. This is the strict cryptographic answer for the signed bytes only, regardless of whether the signer is to be believed or the file was changed after signing (see `ModificationsAfterSigning` and `IsValid`).
 
 ### `TrustValidated`
 
@@ -104,13 +104,37 @@ CertificatePath? TimestampValidatedPath
 
 The validated path for the TSA's certificate, when `TimestampTrustValidated` is true. Null otherwise.
 
+### `ModificationsAfterSigning`
+
+```csharp
+SignatureModifications ModificationsAfterSigning
+```
+
+What the file holds after the bytes the signature covers (3.35.0): nothing, only later signatures and validation data, or other changes. Reported apart from `IntegrityVerified`, which checks only the signed bytes.
+
+### `TrustStatus`
+
+```csharp
+SignatureVerificationStatus TrustStatus
+```
+
+The trust finding on its own (3.35.0): `SignatureVerificationStatus.Valid` when the signer's certificate chains to a trust anchor, `SignatureVerificationStatus.TrustUnknown` when no trust store was supplied or the signature is not intact, else the trust failure (`SignatureVerificationStatus.TrustChainBroken`, `SignatureVerificationStatus.TrustChainCertificateRevoked` and so on). `Status` reports a change after signing ahead of trust; this keeps the trust answer visible.
+
+### `CoversWholeDocument`
+
+```csharp
+bool CoversWholeDocument
+```
+
+True when the signature's byte range covers the whole file (trailing white space aside), so nothing can have changed after signing (3.35.0).
+
 ### `IsValid`
 
 ```csharp
 bool IsValid => Status == SignatureVerificationStatus.Valid
 ```
 
-Convenience shorthand for `Status == Valid`.
+True when `Status` is `SignatureVerificationStatus.Valid`: the signature is intact, the file was not changed after signing beyond later signatures or validation data, and the signer's certificate chains to a trust anchor (3.35.0; before, an intact signature was valid without a trust store and after later changes).
 
 ---
 

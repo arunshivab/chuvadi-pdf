@@ -43,6 +43,23 @@ public static class PatternValidators
 
     private static readonly int[] AbaWeights = { 3, 7, 1, 3, 7, 1, 3, 7, 1 };
 
+    // ISO 3166-1 alpha-2 country codes, and XK (Kosovo), used in BICs.
+    private const string CountryCodes =
+        "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE "
+        + "BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD "
+        + "CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM "
+        + "DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF "
+        + "GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU "
+        + "ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN "
+        + "KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME "
+        + "MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA "
+        + "NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM "
+        + "PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI "
+        + "SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK "
+        + "TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI "
+        + "VN VU WF WS YE YT ZA ZM ZW "
+        + "XK ";
+
     /// <summary>
     /// Validates a number with the Luhn (mod-10) checksum, ignoring spaces and
     /// dashes. Used for payment card numbers.
@@ -165,6 +182,61 @@ public static class PatternValidators
         }
 
         return LuhnDigits("80840" + digits);
+    }
+
+    /// <summary>
+    /// Validates the shape of a SWIFT / BIC code (3.35.0): 8 or 11
+    /// characters, four letters, then an ISO 3166 country code (or XK), then
+    /// letters or digits. Spaces are ignored.
+    /// </summary>
+    /// <param name="value">The candidate text.</param>
+    /// <returns><see langword="true"/> if the code has a valid country code.</returns>
+    public static bool Bic(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        string compact = Compact(value);
+        if (compact.Length != 8 && compact.Length != 11)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < compact.Length; i++)
+        {
+            char ch = compact[i];
+            bool letter = ch >= 'A' && ch <= 'Z';
+            bool digit = ch >= '0' && ch <= '9';
+            if ((i < 6 && !letter) || (!letter && !digit))
+            {
+                return false;
+            }
+        }
+
+        string country = compact.Substring(4, 2);
+        return CountryCodes.Contains(country + " ", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Validates a US Individual Taxpayer Identification Number (3.35.0):
+    /// nine digits starting with 9, whose fourth and fifth digits are in
+    /// 50–65, 70–88, 90–92 or 94–99 (the ranges the IRS issues). Spaces and
+    /// dashes are ignored.
+    /// </summary>
+    /// <param name="value">The candidate text.</param>
+    /// <returns><see langword="true"/> if the number can be an ITIN.</returns>
+    public static bool Itin(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        string digits = DigitsOnly(value);
+        if (digits.Length != 9 || digits[0] != '9')
+        {
+            return false;
+        }
+
+        int group = ((digits[3] - '0') * 10) + (digits[4] - '0');
+        return (group >= 50 && group <= 65)
+            || (group >= 70 && group <= 88)
+            || (group >= 90 && group <= 92)
+            || (group >= 94 && group <= 99);
     }
 
     private static bool LuhnDigits(string digits)

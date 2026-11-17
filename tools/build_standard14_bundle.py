@@ -46,7 +46,7 @@ import struct, sys, os, pathlib
 # Lazy-import fontTools; emit a clear error if missing.
 try:
     from fontTools.ttLib import TTFont
-    from fontTools.pens.recordingPen import RecordingPen
+    from fontTools.pens.recordingPen import RecordingPen, DecomposingRecordingPen
     from fontTools.pens.qu2cuPen import Qu2CuPen
 except ImportError:
     print("ERROR: pip install fonttools", file=sys.stderr)
@@ -114,9 +114,17 @@ def extract_glyph(glyph_set, glyph_name, units_per_em):
     if glyph_name not in glyph_set:
         return None
     glyph = glyph_set[glyph_name]
+    # Composite glyphs (every accented letter in Liberation) are drawn as
+    # components; decompose them into outlines first (3.35.0, D-400 A1).
+    # Before, the components were recorded and then dropped, leaving the
+    # glyph empty. Note: another fontTools version can approximate a few
+    # curves differently; the 3.35.0 bundle kept the 3.34.0 outlines of the
+    # glyphs that were already drawn and added the 695 decomposed ones.
+    decomposed = DecomposingRecordingPen(glyph_set)
+    glyph.draw(decomposed)
     pen = RecordingPen()
     converter = Qu2CuPen(pen, max_err=max(0.5, units_per_em / 1000.0), all_cubic=True)
-    glyph.draw(converter)
+    decomposed.replay(converter)
     out = []
     for verb, args in pen.value:
         if verb == "moveTo":

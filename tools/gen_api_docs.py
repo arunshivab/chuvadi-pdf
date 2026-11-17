@@ -412,6 +412,23 @@ def parse_members(body_lines: list[str], type_kind: str) -> list[Member]:
             # ("Name => new List<T>" then "{") ends at the name's expression.
             line = line.rstrip() + (";" if "=>" in line else " {")
 
+        # 3.35.0 (backlog 58): a constant is matched by its declaration
+        # before the general member pattern, because a string value can hold
+        # "{" or "(" (a regex such as @"\b\d{3}") that the general pattern
+        # takes for a property body or a parameter list.
+        const_match = re.match(r'^\s*public\s+(?:new\s+)?const\s+\S+\s+(\w+)\s*=', line)
+        if const_match:
+            doc = parse_doc_block(doc_lines)
+            members.append(Member(
+                kind="field",
+                name=const_match.group(1),
+                signature=re.sub(r'^public\s+', '', line.strip().rstrip(";").strip()),
+                summary=clean_xml_refs(doc["summary"]),
+                is_static=False,
+            ))
+            i += 1
+            continue
+
         mm = MEMBER_DECL.match(line)
         if mm:
             modifiers = mm.group("modifiers") or ""

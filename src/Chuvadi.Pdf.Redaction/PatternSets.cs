@@ -20,26 +20,30 @@ public static class PatternSets
 {
     /// <summary>
     /// Financial identifiers: IBAN (mod-97), ABA routing (weighted), payment
-    /// card (Luhn), SWIFT/BIC, EIN, and ITIN.
+    /// card (Luhn), SWIFT/BIC (country code; with a digit or after a label,
+    /// 3.35.0), EIN, and ITIN (middle group, 3.35.0).
     /// </summary>
     public static IReadOnlyList<PatternRule> Financial => new List<PatternRule>
     {
         new PatternRule(CommonPatterns.Iban, null, PatternValidators.Iban),
         new PatternRule(CommonPatterns.AbaRouting, null, PatternValidators.AbaRouting),
         new PatternRule(CommonPatterns.CreditCard, null, PatternValidators.Luhn),
-        new PatternRule(CommonPatterns.Swift),
+        new PatternRule(CommonPatterns.Swift, null, PatternValidators.Bic),
         new PatternRule(CommonPatterns.Ein),
-        new PatternRule(CommonPatterns.Itin),
+        new PatternRule(CommonPatterns.Itin, null, PatternValidators.Itin),
     };
 
     /// <summary>
-    /// Medical identifiers: NPI (Luhn over the 80840 prefix) and ICD-10 code
-    /// prefixes.
+    /// Medical identifiers: NPI (Luhn over the 80840 prefix) and ICD-10 codes:
+    /// a code with its decimal part ("J45.901"), or any code after a label
+    /// ("Dx: E11"). Before 3.35.0 every letter-digit-character token
+    /// matched ("A12", "B2B", "T1D").
     /// </summary>
     public static IReadOnlyList<PatternRule> Medical => new List<PatternRule>
     {
         new PatternRule(CommonPatterns.Npi, null, PatternValidators.Npi),
-        new PatternRule(CommonPatterns.Icd10Prefix),
+        new PatternRule(CommonPatterns.Icd10Code),
+        new PatternRule(CommonPatterns.Icd10Labeled),
     };
 
     /// <summary>

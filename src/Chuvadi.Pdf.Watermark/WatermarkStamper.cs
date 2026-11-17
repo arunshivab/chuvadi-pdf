@@ -48,6 +48,11 @@ public static class WatermarkStamper
     /// <param name="output">The stream to write the watermarked PDF to.</param>
     /// <param name="document">The source document.</param>
     /// <param name="options">Watermark configuration.</param>
+    /// <exception cref="ArgumentException">
+    /// (Since 3.35.0) No font is supplied and the text has a character that
+    /// Helvetica cannot show (WinAnsiEncoding lacks it); nothing is written.
+    /// Supply <see cref="TextWatermarkOptions.FontData"/> for such text.
+    /// </exception>
     public static void ApplyText(
         Stream output,
         PdfDocument document,
@@ -246,7 +251,7 @@ public static class WatermarkStamper
         // hex string; the standard font uses a literal string.
         string showOp = glyphHex is not null
             ? $"<{glyphHex}> Tj"
-            : $"({EscapePdfString(options.Text)}) Tj";
+            : $"({WinAnsiEncoding.ToLiteralBody(WinAnsiEncoding.Encode(options.Text, "Helvetica"))}) Tj";
 
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("q");
@@ -329,21 +334,6 @@ public static class WatermarkStamper
     private static string SanitizeName(string name)
     {
         return name.Replace(" ", "").Replace("-", "_");
-    }
-
-    private static string EscapePdfString(string text)
-    {
-        StringBuilder sb = new StringBuilder(text.Length);
-
-        foreach (char c in text)
-        {
-            if (c == '(') { sb.Append(@"\("); }
-            else if (c == ')') { sb.Append(@"\)"); }
-            else if (c == '\\') { sb.Append(@"\\"); }
-            else { sb.Append(c); }
-        }
-
-        return sb.ToString();
     }
 }
 

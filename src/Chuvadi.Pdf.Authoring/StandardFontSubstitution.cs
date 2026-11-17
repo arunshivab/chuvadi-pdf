@@ -97,35 +97,45 @@ internal sealed class StandardFontSubstitution
     internal void ProcessResources(PdfDictionary resources)
     {
         ArgumentNullException.ThrowIfNull(resources);
-        if (!_visited.Add(resources))
-        {
-            return;
-        }
 
-        if (resources.TryGetValue(FontKey, out PdfPrimitive? fontsRef)
-            && _store.Resolve(fontsRef) is PdfDictionary fonts)
+        // A worklist rather than recursion (3.35.0, DOC-01): forms nested
+        // through many levels cannot exhaust the stack.
+        Stack<PdfDictionary> pending = new Stack<PdfDictionary>();
+        pending.Push(resources);
+        while (pending.Count > 0)
         {
-            foreach (PdfName key in new List<PdfName>(fonts.Keys))
+            PdfDictionary current = pending.Pop();
+            if (!_visited.Add(current))
             {
-                if (fonts.TryGetValue(key, out PdfPrimitive? value)
-                    && _store.Resolve(value) is PdfDictionary fontDict
-                    && Substitute(fontDict) is PdfObjectId id)
+                continue;
+            }
+
+            if (current.TryGetValue(FontKey, out PdfPrimitive? fontsRef)
+                && _store.Resolve(fontsRef) is PdfDictionary fonts)
+            {
+                foreach (PdfName key in new List<PdfName>(fonts.Keys))
                 {
-                    fonts.Set(key, new PdfReference(id));
+                    if (fonts.TryGetValue(key, out PdfPrimitive? value)
+                        && _store.Resolve(value) is PdfDictionary fontDict
+                        && Substitute(fontDict) is PdfObjectId id)
+                    {
+                        fonts.Set(key, new PdfReference(id));
+                    }
                 }
             }
-        }
 
-        if (resources.TryGetValue(XObjectKey, out PdfPrimitive? xobjRef)
-            && _store.Resolve(xobjRef) is PdfDictionary xobjects)
-        {
-            foreach (PdfPrimitive value in new List<PdfPrimitive>(xobjects.Values))
+            if (current.TryGetValue(XObjectKey, out PdfPrimitive? xobjRef)
+                && _store.Resolve(xobjRef) is PdfDictionary xobjects)
             {
-                if (_store.Resolve(value) is PdfStream form
-                    && form.Dictionary.TryGetValue(ResourcesKey, out PdfPrimitive? nestedRef)
-                    && _store.Resolve(nestedRef) is PdfDictionary nested)
+                List<PdfPrimitive> values = new List<PdfPrimitive>(xobjects.Values);
+                for (int i = values.Count - 1; i >= 0; i--)
                 {
-                    ProcessResources(nested);
+                    if (_store.Resolve(values[i]) is PdfStream form
+                        && form.Dictionary.TryGetValue(ResourcesKey, out PdfPrimitive? nestedRef)
+                        && _store.Resolve(nestedRef) is PdfDictionary nested)
+                    {
+                        pending.Push(nested);
+                    }
                 }
             }
         }

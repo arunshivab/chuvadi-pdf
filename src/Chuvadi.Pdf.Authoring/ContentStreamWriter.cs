@@ -142,16 +142,23 @@ internal sealed class ContentStreamWriter
 
     /// <summary>
     /// Emits a single-line text string at (x, yFromTop). The baseline lands
-    /// `fontSize` units below yFromTop.
+    /// `fontSize` units below yFromTop. With <paramref name="winAnsiFont"/>
+    /// (a standard font other than Symbol and ZapfDingbats) the text is
+    /// encoded through WinAnsiEncoding (3.35.0, AUT-01); the caller has
+    /// checked that it can be.
     /// </summary>
-    internal void ShowTextAt(string fontKey, double size, double x, double yFromTop, string text)
+    internal void ShowTextAt(string fontKey, string? winAnsiFont, double size, double x, double yFromTop, string text)
     {
+        string body = winAnsiFont is null
+            ? Escape(text)
+            : WinAnsiEncoding.ToLiteralBody(WinAnsiEncoding.Encode(text, winAnsiFont));
+
         // Place baseline at yFromTop + fontSize (so the top of the text aligns to yFromTop).
         double baselineY = FlipY(yFromTop + size);
         _sb.AppendLine("BT");
         _sb.AppendLine($"/{fontKey} {F(size)} Tf");
         _sb.AppendLine($"1 0 0 1 {F(x)} {F(baselineY)} Tm");
-        _sb.AppendLine($"({Escape(text)}) Tj");
+        _sb.AppendLine($"({body}) Tj");
         _sb.AppendLine("ET");
     }
 

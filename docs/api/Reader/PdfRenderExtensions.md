@@ -66,7 +66,7 @@ Renders one page to PNG bytes at the given DPI.
 - `pageIndex` — Zero-based page index.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
 
-**Returns:** The page encoded as a PNG image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+**Returns:** The page encoded as a PNG image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToPng`
 
@@ -83,7 +83,7 @@ Renders one page to PNG, writing to `output`.
 - `document` — The open PDF document.
 - `pageIndex` — Zero-based page index.
 - `output` — Destination stream.
-- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToJpeg`
 
@@ -102,7 +102,7 @@ Renders one page to JPEG bytes at the given DPI and quality.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
 - `quality` — JPEG quality, 1–100. Default: 85.
 
-**Returns:** The page encoded as a JPEG image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+**Returns:** The page encoded as a JPEG image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToJpeg`
 
@@ -120,7 +120,7 @@ Renders one page to JPEG, writing to `output`.
 - `pageIndex` — Zero-based page index.
 - `output` — Destination stream.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
-- `quality` — JPEG quality, 1–100. Default: 85. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+- `quality` — JPEG quality, 1–100. Default: 85. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToBmp`
 
@@ -138,7 +138,7 @@ Renders one page to BMP bytes at the given DPI.
 - `pageIndex` — Zero-based page index.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
 
-**Returns:** The page encoded as a BMP image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+**Returns:** The page encoded as a BMP image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToBmp`
 
@@ -155,7 +155,7 @@ Renders one page to BMP, writing to `output`.
 - `document` — The open PDF document.
 - `pageIndex` — Zero-based page index.
 - `output` — Destination stream.
-- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToTiff`
 
@@ -173,7 +173,7 @@ Renders one page to a single-page TIFF at the given DPI.
 - `pageIndex` — Zero-based page index.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
 
-**Returns:** The page encoded as a TIFF image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+**Returns:** The page encoded as a TIFF image. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderPageToTiff`
 
@@ -190,7 +190,7 @@ Renders one page to TIFF, writing to `output`.
 - `document` — The open PDF document.
 - `pageIndex` — Zero-based page index.
 - `output` — Destination stream.
-- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range.</exception>
+- `dpi` — Rasterization resolution in dots per inch. Default: 150. <exception cref="ArgumentNullException">When `document` or `output` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `pageIndex` is out of range. Also (since 3.35.0) when `dpi` is not a positive finite number.</exception>
 
 ### `RenderToTiff`
 
@@ -207,7 +207,7 @@ Renders every page to a single multi-page TIFF at the given DPI.
 - `document` — The open PDF document.
 - `dpi` — Rasterization resolution in dots per inch. Default: 150.
 
-**Returns:** A multi-page TIFF containing one frame per page. <exception cref="ArgumentNullException">When `document` is null.</exception>
+**Returns:** A multi-page TIFF containing one frame per page. <exception cref="ArgumentNullException">When `document` is null.</exception> <exception cref="ArgumentOutOfRangeException">When `dpi` is not a positive finite number (since 3.35.0).</exception>
 
 ---
 

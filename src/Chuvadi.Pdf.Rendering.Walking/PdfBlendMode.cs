@@ -34,4 +34,16 @@ public enum PdfBlendMode
     Difference = 10,
     /// <summary>Exclusion.</summary>
     Exclusion = 11,
+
+    /// <summary>Hue (non-separable; since 3.35.0).</summary>
+    Hue = 12,
+
+    /// <summary>Saturation (non-separable; since 3.35.0).</summary>
+    Saturation = 13,
+
+    /// <summary>Color (non-separable; since 3.35.0).</summary>
+    Color = 14,
+
+    /// <summary>Luminosity (non-separable; since 3.35.0).</summary>
+    Luminosity = 15,
 }

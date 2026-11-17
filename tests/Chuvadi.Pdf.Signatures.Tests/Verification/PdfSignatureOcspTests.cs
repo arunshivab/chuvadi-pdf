@@ -147,7 +147,7 @@ public sealed class PdfSignatureOcspTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 
@@ -163,7 +163,7 @@ public sealed class PdfSignatureOcspTests
             ExtraOcspResponses = new[] { good },
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 
@@ -179,7 +179,7 @@ public sealed class PdfSignatureOcspTests
             ExtraOcspResponses = new[] { revoked },
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
         r.IntegrityVerified.Should().BeTrue();
         r.TrustValidated.Should().BeFalse();
     }
@@ -196,7 +196,7 @@ public sealed class PdfSignatureOcspTests
             ExtraOcspResponses = new[] { revoked },
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 

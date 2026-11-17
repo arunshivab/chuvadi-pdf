@@ -627,8 +627,10 @@ public sealed class PhaseBRender3340Tests
         return ms.ToArray();
     }
 
+    // LiPi Sans carries no hinting programs: since 3.35.0 (D1) such fonts
+    // are hinted only when autohinting is asked for, as it is here.
     private static PixelBuffer Raster(PdfDocument doc, HintingMode hinting) =>
-        new PageRasterizer(doc.Objects, new RenderOptions { Dpi = 72, Hinting = hinting }).Rasterize(doc.Pages[0]);
+        new PageRasterizer(doc.Objects, new RenderOptions { Dpi = 72, Hinting = hinting, AutohintUnhintedFonts = true }).Rasterize(doc.Pages[0]);
 
     // The pixel at a device position (y down from the top of the page).
     private static (byte R, byte G, byte B) Pixel(PixelBuffer page, int x, int y)

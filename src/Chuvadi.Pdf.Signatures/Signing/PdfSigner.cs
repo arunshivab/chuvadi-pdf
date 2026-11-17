@@ -557,9 +557,19 @@ public static class PdfSigner
         objects.Add(new PdfIndirectObject(id, clonedPage));
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxPageTreeDepth = 1024;
+
     private static void CollectPageIds(
-        PdfPrimitive node, Chuvadi.Pdf.Objects.PdfObjectStore objects, List<PdfObjectId> sink)
+        PdfPrimitive node, Chuvadi.Pdf.Objects.PdfObjectStore objects, List<PdfObjectId> sink,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
+        if (depth > MaxPageTreeDepth)
+        {
+            return;
+        }
+
         if (node is not PdfReference nodeRef) { return; }
         PdfDictionary? dict = objects.ResolveAs<PdfDictionary>(nodeRef);
         if (dict is null) { return; }
@@ -575,7 +585,7 @@ public static class PdfSigner
             PdfArray? kids = objects.ResolveAs<PdfArray>(kidsVal);
             if (kids is not null)
             {
-                foreach (PdfPrimitive child in kids) { CollectPageIds(child, objects, sink); }
+                foreach (PdfPrimitive child in kids) { CollectPageIds(child, objects, sink, depth + 1); }
             }
         }
     }

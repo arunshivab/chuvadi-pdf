@@ -404,28 +404,28 @@ None open (39 shipped in 3.33.0).
 recover with it. Whether a viewer-style default should repair is a decision
 for 4.0. The rest of 52 shipped in 3.34.0.
 
-**54. Stroker joins and mitre limit (3.34.0 finding).** The raster stroker
+**54. [Done in 3.35.0] Stroker joins and mitre limit (3.34.0 finding).** The raster stroker
 draws a bevel join as a mitre and ignores `/ML` (it uses a fixed limit of
 8 × w/2). Seen while measuring 22 and 23.
 
-**55. Soft-mask gradient on three emoji pages (3.34.0 finding).** On the
+**55. [Done in 3.35.0, D-400: images averaged or interpolated when scaled; worked on PDFBOX-4355-0, the original pages were never identified] Soft-mask gradient on three emoji pages (3.34.0 finding).** On the
 rainbow-flag, face-palming and judge corpus pages, the SVG (since 41) and
 the raster renderer agree with each other but not with Poppler and MuPDF;
 a minimal case of the same construct matches Poppler, so the difference is
 elsewhere in those files. Find the construct first.
 
-**56. Tiling pattern with tiny steps (3.34.0 finding).** pdf.js
+**56. [Done in 3.35.0] Tiling pattern with tiny steps (3.34.0 finding).** pdf.js
 `tiling-pattern-tiny-steps-large.pdf` takes minutes in the raster renderer
 (it finishes, slowly; measure where the time goes).
 
-**57. `bug946506.pdf` text (3.34.0 finding).** The extracted text is
+**57. [Closed in 3.35.0: the text is right; its missing image was 62] `bug946506.pdf` text (3.34.0 finding).** The extracted text is
 garbled, also in 3.33.0. Not yet looked at.
 
-**58. API docs: constant names (3.34.0 finding).** `gen_api_docs.py`
+**58. [Done in 3.35.0] API docs: constant names (3.34.0 finding).** `gen_api_docs.py`
 mangles the names of some constants whose value is a regex pattern string
 (pre-existing; cosmetic).
 
-**59. Redaction: catalog entries nothing loaded (3.34.0 finding).** The
+**59. [Done in 3.35.0] Redaction: catalog entries nothing loaded (3.34.0 finding).** The
 redacted file's catalog keeps every entry of the source catalog, but only
 the objects the redactor loaded are written. 3.34.0 loads the outline, XMP,
 viewer preferences, page labels and layer configuration; an unloaded name
@@ -435,12 +435,12 @@ a reference could instead land on a new content stream). Decide: carry them
 (loaded and kept as they are, unscrubbed) or drop them from the catalog
 (fail closed). 0 corpus files affected after the 3.34.0 fix.
 
-**60. `/Mask` in SVG and WPF (3.34.0 finding, N7).** The raster renderer
+**60. [Done in 3.35.0] `/Mask` in SVG and WPF (3.34.0 finding, N7).** The raster renderer
 applies stencil and colour-key masks since 3.34.0; the SVG and WPF output
 still draw such images unmasked. The display list would carry the mask as
 it carries `/SMask`.
 
-**62. SVG and WPF: a JPEG behind another filter (3.34.0 finding).** The
+**62. [Done in 3.35.0] SVG and WPF: a JPEG behind another filter (3.34.0 finding).** The
 raster renderer decodes `[/FlateDecode /DCTDecode]` and JPEG soft masks
 since 3.34.0; the display list (SVG, WPF) still leaves such images out.
 
@@ -451,12 +451,12 @@ A Times-Roman that is not embedded draws nothing for `/fi` and `/fl` (and
 glyphs, though Liberation has them. Fix: add them to the bundle, or draw
 "f" + "i". Seen in govdocs1-0088 ("pro les" for "profiles").
 
-**64. Transparency groups composited off-screen (3.34.0 follow-up; planned
+**64. [Done in 3.35.0] Transparency groups composited off-screen (3.34.0 follow-up; planned
 3.35, D-370).** 3.34.0 applies the group alpha per object (exact unless
 objects in the group overlap). The full render-then-blend of a group goes
 into 3.35 with knockout groups, which need the same off-screen layer.
 
-**65. Hinting at the drawn size (3.34.0 finding; planned 3.35, D-377).**
+**65. [3.35.0: (a) autohinting off by default, (b) fixed; the drawn-size gate stays, measured with no clear gain (D3)] Hinting at the drawn size (3.34.0 finding; planned 3.35, D-377).**
 3.34.0 hints at the drawn size (Tf x text matrix x CTM) only when that scale
 is above 2 or below 0.5; ordinary text keeps 3.33.0's Tf size. Hinting all
 text at its drawn size brought out two older faults at 10 to 12 ppem, so it
@@ -474,12 +474,101 @@ every autohinted TrueType page, so it is measured on its own. See also 34.
 on safedocs-0286 (full `fpgm`/`prep`/`cvt`) has its bowl points pulled
 about 2 px down at 12 and 16 ppem. Not yet diagnosed. See also 33.
 
-**66. Writer precision and a clip edge on a pixel centre (3.34.0 finding,
+**66. [Done in 3.35.0] Writer precision and a clip edge on a pixel centre (3.34.0 finding,
 D-377).** The writer keeps 6 significant digits of a real number, so a soft
 mask's `/BBox` of 1.0833334 becomes 1.08333. On pdf.js issue18529 the clip
 edge then lands just below a pixel centre and one pixel row of the stroke is
 lost after saving (the clip samples each row at its centre). Cosmetic. Fix:
 write enough digits to round-trip, or give the clip edge partial coverage.
+
+**67. Blend modes over the unpainted page (3.35.0 finding). [3.35.0: done — pages with a blend mode other than Normal, Multiply or Darken paint over a transparent backdrop and are flattened onto the background.]** The raster
+renderer treats the unpainted page as opaque white, so a Difference, Screen
+or Overlay object over blank paper blends with white. Poppler and MuPDF
+treat the page as transparent (the object shows its own colour there), as
+Acrobat does. Fix: draw the page into a transparent buffer and flatten onto
+white at the end, with the AA blending kept consistent (pdf.js
+`transparency_group`).
+
+**68. stressful-0387 (3.34.0 bench B6, still open after C1).** Its groups
+blend in DeviceCMYK (`/CS /DeviceCMYK`) and use `/AIS`; neither is
+modelled, and the frog draws grey where Poppler draws green.
+
+**69. No bundled CJK font (3.35.0 note).** With E1 and E2, CJK text in an
+embedded font draws correctly; CJK text in a font that is not embedded
+still draws nothing, as Chuvadi bundles no CJK face.
+
+**70. SVG text under a mirroring matrix (3.35.0 finding).** pdf.js
+issue14415 draws its text mirrored in SVG (as in 3.34.0), where the raster
+renderer and Poppler draw it the right way round.
+
+**71. [Done in 3.35.0, D-399] A latest revision whose page tree reaches no page (B8, stressful-0123,
+3.35.0 finding).** An appended revision's object numbers do not match the
+body, so its page tree points at content streams; the file's earlier
+revision is intact. With `RepairIfDamaged`, when more than half of the
+latest page tree cannot be read, the most recent earlier revision that
+reads in full is opened, with a warning.
+
+**72. Audit A-08 and A-09 items outside D-396/D-397 (3.35.0, awaiting
+Arun).** Redaction: RED-06 (a partly redacted CMYK JPEG changes colour
+outside the box), RED-07 (a shared form drawn outside the box loses the
+same content; clone per use or report), RED-09 (`Verify` skips invisible
+text and reads with the renderer's interpreter), RED-10 (a page index past
+the end, or a redaction that removes nothing, is silent), RED-12 (`Apply`
+returns no report), RED-13 (`UsZip`, `UkNhsNumber` untested), RED-14
+(IDE0059 in `VectorSubtractor`). Signatures: SIG-04 (key and certificate
+mismatch signs silently), SIG-05/06 (two signing entry points, four input
+styles), SIG-07 (PAdES profile), SIG-08 (several CMS signers), SIG-09
+(untested timestamp and LTV discovery), SIG-10 (public building blocks),
+SIG-11 (RSA keys under 2048 bits accepted). Each needs its own Rule 5 list.
+
+**73. Content streams joined with a space (3.35.0 finding).** The walker
+joins a page's content streams with a space, so a string split across two
+streams (not allowed by §7.8.2, but drawn by viewers) shows a space at the
+split that Poppler does not show. Redaction matches such pages with spaces
+ignored as well; the renderers keep the space.
+
+**74. [Done in 3.35.0, D-400/D-402] Checker-confirmed audit items.** A1
+(accented letters in the standard fonts), AUT-01 (WinAnsi text), OPS-01
+(removed pages never written), DOC-01/OPS-08 (iterative object walks),
+GFX-01 (non-finite paths, DPI), XFA-01 (script nesting) and PDA-01 (PDF/A
+fails closed). Each has tests built from the Checker's probes.
+
+**75. [Done in 3.35.0, D-403] PDF/A-2b: annotations without an
+appearance.** veraPDF rule 6.3.3-1: in PDF/A-2b every annotation except
+Popup and Link (and zero-size ones) needs a normal appearance. A Text
+annotation with none (Checker probe I08) was written and failed; it is now
+part of the fail-closed check.
+
+**76. A CMYK output intent profile (3.35.0 finding).** `PdfAOptions.
+OutputIntentIccProfile` is documented as an RGB profile and the output
+intent's ICC stream is written with `/N 3`, so a CMYK profile gives a
+wrong output intent; and with an RGB intent the PDA-01 check rejects all
+DeviceCMYK. Supporting CMYK intents means reading `/N` from the profile
+header and allowing DeviceCMYK (and then rejecting DeviceRGB) under one.
+
+**77. Bookmarks deeper than 256 levels are dropped silently (3.35.0,
+DOC-01; after 3.35.0 per D-403).** `OutlineReader` stops at 256 levels,
+so `Merge` with `PreserveOutlines` keeps the first 256 levels of a deeper
+outline. There is no `PdfWarningKind` that fits; a warning would need a
+new kind.
+
+**78. [Done in 3.35.0, D-403] PDF/A self-check counted unused
+resources.** In run 3 two files that passed veraPDF before were refused:
+safedocs-0295 (unused ExtGState with `/ca 0.498`, 1b) and govdocs1-0063
+(unused `[/Pattern /DeviceCMYK]`, 2b). Transparency and colour are now
+checked only where the pages use them (`gs`, `cs`/`CS`, `scn` patterns,
+`sh`, `Do`, Type 3 glyphs, annotation appearances).
+
+**79. Downscaled bilevel scans (3.35.0, item 55).** Synthetic block scans
+drawn at a quarter size get one grey edge pixel where Poppler's edges are
+crisper (pdf.js perf_codecs_ccitt, perf_codecs_jbig2,
+perf_images_scan_bilevel). Real scanned text reads better than in 3.34.0.
+
+**80. Embed LiPi fonts in XFA rendering (D-403, after 3.35.0).** The XFA
+renderer draws form text in standard fonts, so in 3.35.0 a character
+WinAnsiEncoding lacks is drawn as `?` (a line or paragraph separator as a
+space). Forms with Tamil or other Indic text need the LiPi fonts embedded
+when the text calls for them.
 
 **61. CMYK to RGB (3.34.0 finding, N3).** CMYK images and colours use the
 plain subtractive formula; Poppler and MuPDF use a profile-like conversion
@@ -580,9 +669,12 @@ DisplayList reference. Deferred: touches the public surface of three packaged
 assemblies for zero user-visible gain; do it at a major-version boundary.
 
 ### Scrub-crop residuals
-**17. Remaining Scrub residuals (after 3.23).** Kept whole under Scrub:
-an ExtGState soft mask (`/SMask /G`) set under more than one placement;
-the glyph procedures of Type 3 fonts (and anything their resources hold);
+**17. Remaining Scrub residuals (after 3.35).** Kept whole under Scrub:
+an ExtGState soft mask (`/SMask /G`) past its 16th distinct placement (each
+placement up to then is scrubbed under a name of its own, 3.35); the glyph
+procedures of Type 3 glyphs the kept text shows (unshown ones are dropped
+with the resources only they used, 3.35), and all of them when a kept code
+has no `/Differences` name or a kept form draws with the page's resources;
 exponential (Type 2) and PostScript (Type 4) functions (no sampled data to
 trim); a radial shading whose painted area ends inside the box. Sampled
 functions keep a 2-sample margin. Where the visible parts of a tiling cell

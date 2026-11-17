@@ -84,7 +84,7 @@ public sealed class PdfWriterIncrementalSignedTests
         = new(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void WriteIncrementalUpdate_OnSignedPdf_OriginalSignatureRemainsValid()
+    public void WriteIncrementalUpdate_OnSignedPdf_SignedRevisionStaysIntactButIsReportedModified()
     {
         // Build, sign, then apply incremental update — original sig must still verify.
         RsaPrivateKey priv = RsaPrivateKey.FromPkcs8(Convert.FromHexString(Pkcs8Hex));
@@ -125,9 +125,15 @@ public sealed class PdfWriterIncrementalSignedTests
             TrustStore = trust,
             ValidationTime = SigningTime,
         });
-        r.IsValid.Should().BeTrue($"original signature must survive incremental update: {r.Message}");
-        r.IntegrityVerified.Should().BeTrue();
+        // 3.35.0 (D-396): the signed revision still verifies and its signer is
+        // trusted, but replacing /Info after signing is a change other than a
+        // later signature, so the signature is no longer valid as a whole.
+        r.IntegrityVerified.Should().BeTrue($"the signed revision must survive the update: {r.Message}");
         r.TrustValidated.Should().BeTrue();
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
+        r.ModificationsAfterSigning.Should().Be(SignatureModifications.Other);
+        r.Status.Should().Be(SignatureVerificationStatus.ModifiedAfterSigning);
+        r.IsValid.Should().BeFalse();
     }
 
     [Fact]

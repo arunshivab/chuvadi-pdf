@@ -70,6 +70,15 @@ public sealed class PdfOpenOptions
     /// An encrypted file keeps its encryption, but objects stored inside its
     /// object streams cannot be recovered.
     /// </para>
+    /// <para>
+    /// A file saved again with a broken last revision (3.35.0): when more than
+    /// half of the latest revision's page tree cannot be read as pages, and
+    /// an earlier revision of the file reads in full, the most recent such
+    /// revision is opened instead. <see cref="PdfDocument.Warnings"/> starts
+    /// with a line saying so; the changes made by the later revisions are not
+    /// shown. A latest revision with no pages at all is not damage and is
+    /// opened as it is.
+    /// </para>
     /// </remarks>
     public bool RepairIfDamaged { get; init; }
 }

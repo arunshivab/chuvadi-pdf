@@ -34,6 +34,11 @@ internal static class PageScrubber
         internal double[] Widths = Array.Empty<double>();
         internal double MissingWidth;
         internal double DefaultWidth = 500;
+
+        // 3.35.0 (backlog 17): a Type 3 font, and the codes the scrubbed
+        // content keeps; only their glyph procedures are written.
+        internal bool IsType3;
+        internal HashSet<int> KeptCodes = new HashSet<int>();
     }
 
     /// <summary>Mutable text-object state (PDF 32000-1 §9.4.1).</summary>
@@ -115,6 +120,11 @@ internal static class PageScrubber
         // Graphics states set by gs, with the CTM of each use (a soft mask's
         // group is placed in the CTM current when its state is set).
         Dictionary<string, List<Matrix3x3>> extGStateUses = new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
+
+        // 3.35.0 (backlog 17): a state whose soft mask draws a group, set
+        // under a second CTM, is set under a new name (here mapped to the
+        // state it copies) so each placement's group is scrubbed for it.
+        Dictionary<string, string> extGStateSources = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // The current fill and stroke pattern names (saved by q, restored by
         // Q), and for each pattern the page-space extent it is painted over
@@ -372,7 +382,7 @@ internal static class PageScrubber
                     {
                         if (operandTexts[ti].StartsWith('/'))
                         {
-                            string fontName = operandTexts[ti].TrimStart('/');
+                            string fontName = DecodeNameToken(operandTexts[ti]);
                             text.Font = ResolveMetrics(fontName, resources, resolver, fontCache);
                             break;
                         }
@@ -660,6 +670,13 @@ internal static class PageScrubber
                     if (op == "gs" && operandTexts.Count > 0 && operandTexts[^1].StartsWith('/'))
                     {
                         string stateName = DecodeNameToken(operandTexts[^1]);
+                        string placed = SoftMaskPlacementName(stateName, ctm, resources, resolver, extGStateUses, extGStateSources);
+                        if (placed != stateName)
+                        {
+                            operandTexts[^1] = operandTexts[^1] + placed.Substring(stateName.Length);
+                            stateName = placed;
+                        }
+
                         if (!extGStateUses.TryGetValue(stateName, out List<Matrix3x3>? stateUses))
                         {
                             stateUses = new List<Matrix3x3>();
@@ -682,12 +699,23 @@ internal static class PageScrubber
             output.Append("Q\n");
         }
 
+        Dictionary<string, HashSet<int>> type3Codes = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, FontMetrics?> font in fontCache)
+        {
+            if (font.Value is { IsType3: true })
+            {
+                type3Codes[font.Key] = font.Value.KeptCodes;
+            }
+        }
+
         return new ScrubResult(Encoding.Latin1.GetBytes(output.ToString()), newXObjects, referenced)
         {
+            Type3Codes = type3Codes,
             Patterns = patternNames,
             PatternExtents = patternExtents,
             ShadingUses = shadingUses,
             ExtGStateUses = extGStateUses,
+            ExtGStateSources = extGStateSources,
             BaseCtm = initialCtm,
             Box = (x0, y0, x1, y1),
             Depth = depth,
@@ -729,6 +757,14 @@ internal static class PageScrubber
         /// <summary>Graphics-state names the scrubbed content sets with gs, and the CTM of each use.</summary>
         internal Dictionary<string, List<Matrix3x3>> ExtGStateUses { get; init; } =
             new Dictionary<string, List<Matrix3x3>>(StringComparer.Ordinal);
+
+        /// <summary>Type 3 fonts the scrubbed content selects, and the codes it keeps of each.</summary>
+        internal Dictionary<string, HashSet<int>> Type3Codes { get; init; } =
+            new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+
+        /// <summary>Graphics-state names added for a further placement of a soft mask, and the state each copies.</summary>
+        internal Dictionary<string, string> ExtGStateSources { get; init; } =
+            new Dictionary<string, string>(StringComparer.Ordinal);
 
         /// <summary>Shading names the scrubbed content paints with sh, and the CTM of each use.</summary>
         internal Dictionary<string, List<Matrix3x3>> ShadingUses { get; init; } =
@@ -846,6 +882,7 @@ internal static class PageScrubber
             {
                 run.Append(EscapeByte(b));
                 keptAny = true;
+                font.KeptCodes.Add(code);
             }
             else
             {
@@ -912,6 +949,7 @@ internal static class PageScrubber
             metrics = new FontMetrics();
             PdfName? subtype = fontDict.Subtype;
             metrics.IsCid = subtype is not null && subtype.Value == "Type0";
+            metrics.IsType3 = subtype is not null && subtype.Value == "Type3";
 
             if (Res(resolver, fontDict.GetAs<PdfPrimitive>(PdfName.Intern("FirstChar"))) is PdfInteger first)
             {
@@ -937,6 +975,22 @@ internal static class PageScrubber
                 }
 
                 metrics.Widths = w;
+            }
+
+            // A Type 3 font's widths are in glyph space, mapped by its
+            // /FontMatrix (3.35.0; before, read as thousandths, which placed
+            // glyphs wrongly under any matrix but [0.001 0 0 0.001 0 0]).
+            if (metrics.IsType3
+                && Res(resolver, fontDict.GetAs<PdfPrimitive>(PdfName.Intern("FontMatrix"))) is PdfArray fm
+                && fm.Count >= 1 && NumOf(resolver, fm[0]) is double m0 && m0 > 0 && m0 < 1e6)
+            {
+                double scale = m0 * 1000.0;
+                for (int i = 0; i < metrics.Widths.Length; i++)
+                {
+                    metrics.Widths[i] *= scale;
+                }
+
+                metrics.MissingWidth *= scale;
             }
         }
 
@@ -1319,6 +1373,7 @@ internal static class PageScrubber
         }
 
         PdfDictionary xobjects = new PdfDictionary();
+        bool keptFormInheritsResources = false;
         if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("XObject"))) is PdfDictionary original)
         {
             foreach (PdfName key in original.Keys)
@@ -1326,6 +1381,9 @@ internal static class PageScrubber
                 if (result.ReferencedXObjects.Contains(key.Value))
                 {
                     xobjects.Set(key, original[key]);
+                    keptFormInheritsResources |= Res(resolver, original[key]) is PdfStream kept
+                        && kept.Dictionary.Subtype is PdfName { Value: "Form" }
+                        && !kept.Dictionary.ContainsKey(PdfName.Resources);
                 }
             }
         }
@@ -1336,6 +1394,33 @@ internal static class PageScrubber
         }
 
         copy.Set(PdfName.Intern("XObject"), xobjects);
+
+        // Type 3 fonts: only the glyph procedures of codes the scrubbed
+        // content keeps are written, and the font's resources keep only the
+        // names those procedures use (3.35.0, backlog 17; before, every
+        // glyph procedure and everything its resources held was kept).
+        // A form kept whole that has no resources of its own draws with these
+        // (an old form, §7.8.3); its text is not read here, so the fonts are
+        // then kept as they are.
+        if (!keptFormInheritsResources
+            && Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Font)) is PdfDictionary fonts)
+        {
+            PdfDictionary keptFonts = new PdfDictionary();
+            foreach (PdfName key in fonts.Keys)
+            {
+                PdfPrimitive value = fonts[key];
+                if (Res(resolver, value) is PdfDictionary font
+                    && font.Subtype is PdfName { Value: "Type3" })
+                {
+                    HashSet<int> codes = result.Type3Codes.TryGetValue(key.Value, out HashSet<int>? kept) ? kept : new HashSet<int>();
+                    value = PruneType3Font(font, codes, resolver) ?? value;
+                }
+
+                keptFonts.Set(key, value);
+            }
+
+            copy.Set(PdfName.Font, keptFonts);
+        }
 
         // Patterns and shadings: unused entries are pruned (their content
         // would stay in the file), used tiling-pattern cells are scrubbed to
@@ -1386,16 +1471,17 @@ internal static class PageScrubber
 
         // Graphics states: unused ones are pruned; a used one whose soft
         // mask draws a group (/SMask /G) has that group scrubbed to the box
-        // (placed by the CTM of its use; kept whole when it is set under
-        // different CTMs).
+        // (placed by the CTM of its use; a state set under several CTMs is
+        // set under a name per CTM, 3.35.0, and kept whole past 16).
         if (Res(resolver, copy.GetAs<PdfPrimitive>(PdfName.Intern("ExtGState"))) is PdfDictionary states)
         {
             PdfDictionary keptStates = new PdfDictionary();
-            foreach (PdfName key in states.Keys)
+            foreach (KeyValuePair<string, List<Matrix3x3>> use in result.ExtGStateUses)
             {
-                if (result.ExtGStateUses.TryGetValue(key.Value, out List<Matrix3x3>? uses))
+                string source = result.ExtGStateSources.TryGetValue(use.Key, out string? copied) ? copied : use.Key;
+                if (states.TryGetValue(PdfName.Intern(source), out PdfPrimitive? state))
                 {
-                    keptStates.Set(key, ScrubSoftMaskGroup(states[key], uses, result, resolver, allocate));
+                    keptStates.Set(PdfName.Intern(use.Key), ScrubSoftMaskGroup(state, use.Value, result, resolver, allocate));
                 }
             }
 
@@ -1470,6 +1556,202 @@ internal static class PageScrubber
 
         newState.Set(PdfName.Intern("SMask"), newMask);
         return newState;
+    }
+
+    // A copy of a Type 3 font with only the glyph procedures of the given
+    // codes, or null to keep the font as it is: when a kept code has no
+    // glyph name in /Encoding /Differences (its procedure cannot be told
+    // apart), or the procedures are not a dictionary.
+    private static PdfDictionary? PruneType3Font(PdfDictionary font, HashSet<int> codes, IPdfObjectResolver resolver)
+    {
+        if (Res(resolver, font.GetAs<PdfPrimitive>(PdfName.Intern("CharProcs"))) is not PdfDictionary procs)
+        {
+            return null;
+        }
+
+        Dictionary<int, string> names = new Dictionary<int, string>();
+        if (Res(resolver, font.GetAs<PdfPrimitive>(PdfName.Intern("Encoding"))) is PdfDictionary encoding
+            && Res(resolver, encoding.GetAs<PdfPrimitive>(PdfName.Intern("Differences"))) is PdfArray differences)
+        {
+            int code = 0;
+            foreach (PdfPrimitive item in differences)
+            {
+                PdfPrimitive entry = Res(resolver, item) ?? item;
+                if (entry is PdfInteger start)
+                {
+                    code = start.Value;
+                }
+                else if (entry is PdfName glyph)
+                {
+                    names[code++] = glyph.Value;
+                }
+            }
+        }
+
+        PdfDictionary keptProcs = new PdfDictionary();
+        foreach (int code in codes)
+        {
+            if (!names.TryGetValue(code, out string? glyph))
+            {
+                return null;
+            }
+
+            if (procs.TryGetValue(PdfName.Intern(glyph), out PdfPrimitive? proc))
+            {
+                keptProcs.Set(PdfName.Intern(glyph), proc);
+            }
+        }
+
+        PdfDictionary copy = new PdfDictionary();
+        foreach (PdfName key in font.Keys)
+        {
+            copy.Set(key, font[key]);
+        }
+
+        copy.Set(PdfName.Intern("CharProcs"), keptProcs);
+        if (Res(resolver, font.GetAs<PdfPrimitive>(PdfName.Resources)) is PdfDictionary fontResources)
+        {
+            HashSet<string>? used = NamesUsedBy(keptProcs, resolver);
+            if (used is not null)
+            {
+                copy.Set(PdfName.Resources, KeepNamedResources(fontResources, used, resolver));
+            }
+        }
+
+        return copy;
+    }
+
+    // Every name operand in the given content streams, or null when one
+    // cannot be decoded (its resources are then kept whole).
+    private static HashSet<string>? NamesUsedBy(PdfDictionary procs, IPdfObjectResolver resolver)
+    {
+        HashSet<string> used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (PdfName key in procs.Keys)
+        {
+            if (Res(resolver, procs[key]) is not PdfStream proc)
+            {
+                continue;
+            }
+
+            byte[] content;
+            try
+            {
+                content = DecodeFormContent(proc);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < content.Length; i++)
+            {
+                if (content[i] != (byte)'/')
+                {
+                    continue;
+                }
+
+                int end = i + 1;
+                while (end < content.Length && !IsNameDelimiter(content[end]))
+                {
+                    end++;
+                }
+
+                used.Add(DecodeNameToken(Encoding.Latin1.GetString(content, i, end - i)));
+                i = end - 1;
+            }
+        }
+
+        return used;
+    }
+
+    private static bool IsNameDelimiter(byte b) =>
+        b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or (byte)'\f' or 0
+            or (byte)'/' or (byte)'[' or (byte)']' or (byte)'(' or (byte)')' or (byte)'<' or (byte)'>'
+            or (byte)'{' or (byte)'}' or (byte)'%';
+
+    // The resources with, in each category dictionary, only the given names.
+    private static PdfDictionary KeepNamedResources(PdfDictionary resources, HashSet<string> names, IPdfObjectResolver resolver)
+    {
+        PdfDictionary kept = new PdfDictionary();
+        foreach (PdfName category in resources.Keys)
+        {
+            if (Res(resolver, resources[category]) is not PdfDictionary entries || category.Value == "ProcSet")
+            {
+                kept.Set(category, resources[category]);
+                continue;
+            }
+
+            PdfDictionary keptEntries = new PdfDictionary();
+            foreach (PdfName name in entries.Keys)
+            {
+                if (names.Contains(name.Value))
+                {
+                    keptEntries.Set(name, entries[name]);
+                }
+            }
+
+            kept.Set(category, keptEntries);
+        }
+
+        return kept;
+    }
+
+    // Most further placements of one soft-mask state given names of their own;
+    // past this the state is kept whole for its other placements, as before.
+    private const int MaxSoftMaskPlacements = 16;
+
+    // The name a gs sets: the state's own name for its first CTM (and for any
+    // state that is not a soft mask drawing a group), else a name of its own
+    // for each further CTM ("GS1_p1", ...), unused in the resources.
+    private static string SoftMaskPlacementName(
+        string stateName, Matrix3x3 ctm, PdfDictionary? resources, IPdfObjectResolver resolver,
+        Dictionary<string, List<Matrix3x3>> uses, Dictionary<string, string> sources)
+    {
+        if (!uses.TryGetValue(stateName, out List<Matrix3x3>? first) || first.Count == 0 || SameMatrix(first[0], ctm))
+        {
+            return stateName;
+        }
+
+        PdfDictionary? states = resources is null ? null : Res(resolver, resources.GetAs<PdfPrimitive>(PdfName.Intern("ExtGState"))) as PdfDictionary;
+        if (states is null
+            || !states.TryGetValue(PdfName.Intern(stateName), out PdfPrimitive? value)
+            || Res(resolver, value) is not PdfDictionary state
+            || Res(resolver, state.GetAs<PdfPrimitive>(PdfName.Intern("SMask"))) is not PdfDictionary mask
+            || Res(resolver, mask.GetAs<PdfPrimitive>(PdfName.Intern("G"))) is not PdfStream)
+        {
+            return stateName;
+        }
+
+        int placements = 0;
+        foreach (KeyValuePair<string, string> added in sources)
+        {
+            if (added.Value != stateName)
+            {
+                continue;
+            }
+
+            if (uses.TryGetValue(added.Key, out List<Matrix3x3>? at) && at.Count > 0 && SameMatrix(at[0], ctm))
+            {
+                return added.Key;
+            }
+
+            placements++;
+        }
+
+        if (placements >= MaxSoftMaskPlacements)
+        {
+            return stateName;
+        }
+
+        for (int k = placements + 1; ; k++)
+        {
+            string candidate = stateName + "_p" + k.ToString(CultureInfo.InvariantCulture);
+            if (!states.ContainsKey(PdfName.Intern(candidate)) && !uses.ContainsKey(candidate))
+            {
+                sources[candidate] = stateName;
+                return candidate;
+            }
+        }
     }
 
     private static bool SameMatrix(Matrix3x3 a, Matrix3x3 b) =>

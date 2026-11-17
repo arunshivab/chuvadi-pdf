@@ -264,8 +264,86 @@ public sealed class PageRasterizer
         // default; content outside it falls outside the buffer.
         Transform outer = Transform.CreateTranslation(-box.X1, -box.Y1);
         PageRasterizer painter = new PageRasterizer(_objects, options);
-        painter.PaintDisplayList(list, buffer, pageH, outer);
+        painter.PaintPageGroup(list, buffer, pageH, outer);
         return buffer;
+    }
+
+    // 3.35.0 (backlog 67): a page that uses a blend mode which changes white
+    // (any but Normal, Multiply and Darken; see WhiteNeutral) is painted over
+    // a transparent backdrop and then composited onto the background, as the
+    // page group is (§11.4.7: its initial backdrop is transparent). Blending
+    // against the background colour made a Difference group over unpainted
+    // white paper invert its colours (pdf.js transparency_group.pdf). Other
+    // pages paint straight onto the background, unchanged.
+    private void PaintPageGroup(PageDisplayList list, PixelBuffer buffer, double pageHeight, Transform outer)
+    {
+        if (!UsesBlendModes(list))
+        {
+            PaintDisplayList(list, buffer, pageHeight, outer);
+            return;
+        }
+
+        int width = buffer.Width;
+        int height = buffer.Height;
+        PdfWorkScope.ChargeMemory((long)width * height * 4);
+        PixelBuffer page = new PixelBuffer(width, height);
+        page.Clear(ColorF.Transparent);
+        PaintDisplayList(list, page, pageHeight, outer);
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                (byte b, byte g, byte r, byte a) = page.GetPixelBgra(x, y);
+                if (a != 0)
+                {
+                    buffer.BlendPixel(x, y, ColorF.FromRgb(r / 255f, g / 255f, b / 255f, a / 255f), _options.GammaCorrect);
+                }
+            }
+        }
+    }
+
+    // Normal, Multiply and Darken give the source colour over white, so over
+    // unpainted paper they draw the same whether the page counts as white or
+    // as transparent; such pages keep painting straight onto the background
+    // (annotation highlights are Multiply).
+    private static bool WhiteNeutral(PdfBlendMode mode) =>
+        mode is PdfBlendMode.Normal or PdfBlendMode.Multiply or PdfBlendMode.Darken;
+
+    // Looks through the list and every nested list it reaches, each list once
+    // (Type 3 glyphs and forms share lists, so a walk without the visited set
+    // could take exponential time on a deep shared structure).
+    private static bool UsesBlendModes(PageDisplayList root)
+    {
+        HashSet<PageDisplayList> visited = new HashSet<PageDisplayList>(ReferenceEqualityComparer.Instance);
+        Stack<PageDisplayList> pending = new Stack<PageDisplayList>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            PageDisplayList list = pending.Pop();
+            if (!visited.Add(list))
+            {
+                continue;
+            }
+
+            foreach (RenderOp op in list.Ops)
+            {
+                if (!WhiteNeutral(op.BlendMode))
+                {
+                    return true;
+                }
+
+                if (op is NestedDisplayListOp nested)
+                {
+                    pending.Push(nested.Inner);
+                }
+                else if (op is TilingFillOp tiling)
+                {
+                    pending.Push(tiling.Cell);
+                }
+            }
+        }
+
+        return false;
     }
 
     // The rendered page box: PdfPage.GetDisplayBox, the one rule the raster,
@@ -605,7 +683,7 @@ public sealed class PageRasterizer
 
         PageRasterizer painter = new PageRasterizer(_objects, options);
         Transform outer = Transform.CreateTranslation(-region.X, -region.Y);
-        painter.PaintDisplayList(list, buffer, region.Height, outer);
+        painter.PaintPageGroup(list, buffer, region.Height, outer);
     }
 
     // Sets pixels whose centres fall outside the clip path to fully transparent.
@@ -855,8 +933,24 @@ public sealed class PageRasterizer
 
         double sx = tileW / op.XStep;
         double sy = tileH / op.YStep;
-        int reachX = Math.Max(1, (int)Math.Ceiling(op.CellWidth / op.XStep));
-        int reachY = Math.Max(1, (int)Math.Ceiling(op.CellHeight / op.YStep));
+        double spanX = Math.Ceiling(op.CellWidth / op.XStep);
+        double spanY = Math.Ceiling(op.CellHeight / op.YStep);
+
+        // 3.35.0 (backlog 56): a step thousands of times smaller than the
+        // cell (pdf.js tiling-pattern-tiny-steps-large: a 1200-unit cell
+        // stepped by 0.001) would draw the cell millions of times into the
+        // period. Every point of the period is then covered by the cell's
+        // content shifted by some step, so the period takes the colour of
+        // that content: the cell is drawn once, and its covered pixels are
+        // averaged. Before, such a page took minutes (Poppler and MuPDF
+        // take minutes too).
+        if (!double.IsFinite(spanX) || !double.IsFinite(spanY) || ((2 * spanX) + 1) * ((2 * spanY) + 1) > MaxPeriodDraws)
+        {
+            return CoveredColourTile(op, tileW, tileH);
+        }
+
+        int reachX = Math.Max(1, (int)spanX);
+        int reachY = Math.Max(1, (int)spanY);
         for (int j = -reachY; j <= reachY; j++)
         {
             for (int i = -reachX; i <= reachX; i++)
@@ -866,6 +960,62 @@ public sealed class PageRasterizer
                     ((i * op.XStep) - op.CellOriginX) * sx,
                     ((j * op.YStep) - op.CellOriginY) * sy);
                 painter.PaintDisplayList(op.Cell, tile, tileH, cellToTile);
+            }
+        }
+
+        return tile;
+    }
+
+    // The most cell draws a repeat period may take before the period is
+    // filled with the cell's covered colour instead (3.35.0).
+    private const double MaxPeriodDraws = 4096;
+
+    // A period filled with the average colour of the pixels the cell's
+    // content covers, drawn once at up to 64 x 64 over the cell; transparent
+    // when the cell draws nothing.
+    private PixelBuffer CoveredColourTile(TilingFillOp op, int tileW, int tileH)
+    {
+        const int Side = 64;
+        PixelBuffer cell = new PixelBuffer(Side, Side);
+        PageRasterizer painter = new PageRasterizer(_objects, new RenderOptions
+        {
+            Dpi = 72,
+            AntiAlias = _options.AntiAlias,
+            GammaCorrect = _options.GammaCorrect,
+            Hinting = HintingMode.Off,
+        });
+        double cx = Side / Math.Max(op.CellWidth, 1e-9);
+        double cy = Side / Math.Max(op.CellHeight, 1e-9);
+        painter.PaintDisplayList(op.Cell, cell, Side, new Transform(cx, 0, 0, cy, -op.CellOriginX * cx, -op.CellOriginY * cy));
+
+        double b = 0, g = 0, r = 0, weight = 0;
+        for (int y = 0; y < Side; y++)
+        {
+            for (int x = 0; x < Side; x++)
+            {
+                (byte pb, byte pg, byte pr, byte pa) = cell.GetPixelBgra(x, y);
+                double w = pa / 255.0;
+                b += pb * w;
+                g += pg * w;
+                r += pr * w;
+                weight += w;
+            }
+        }
+
+        PixelBuffer tile = new PixelBuffer(tileW, tileH);
+        if (weight <= 0)
+        {
+            return tile;
+        }
+
+        byte fb = (byte)Math.Round(b / weight);
+        byte fg = (byte)Math.Round(g / weight);
+        byte fr = (byte)Math.Round(r / weight);
+        for (int y = 0; y < tileH; y++)
+        {
+            for (int x = 0; x < tileW; x++)
+            {
+                tile.SetPixelBgra(x, y, fb, fg, fr, 255);
             }
         }
 
@@ -1316,6 +1466,12 @@ public sealed class PageRasterizer
         // the Do applies to everything the form paints (PDF 32000-1:2008
         // §11.6.4.3). Its coverage is made in the space of the Do, then each
         // object of the form that sets no mask of its own uses it.
+        if (op.Layered)
+        {
+            PaintLayeredGroup(op, buffer, pageHeight, outerTransform, ambientClip);
+            return;
+        }
+
         float[]? outerMask = _ambientMask;
         if (op.SoftMask is not null)
         {
@@ -1331,6 +1487,262 @@ public sealed class PageRasterizer
             _ambientMask = outerMask;
         }
     }
+
+    // Most objects of a knockout group drawn one by one; past this the group
+    // is drawn as an ordinary layer.
+    private const int MaxKnockoutObjects = 256;
+
+    // 3.35.0 (backlog 64, D-370): a transparency group drawn into a layer of
+    // its own, then composited onto the page as one object with the group's
+    // alpha, blend mode and soft mask (PDF 32000-1:2008 §11.4).
+    //  - An isolated group starts from a transparent layer; the layer is
+    //    composited with the group's blend mode.
+    //  - A non-isolated group starts from a copy of what is under it, so its
+    //    objects blend with that backdrop; the result replaces the backdrop
+    //    where the group painted, weighted by the group's alpha and mask.
+    //    One composited with a blend mode other than Normal is drawn as
+    //    isolated (removing the backdrop from the group's result is not
+    //    modelled), which is what Poppler and MuPDF draw for such stacks.
+    //  - In a knockout group (§11.4.6) each object is drawn alone over the
+    //    group's initial backdrop and replaces, by its shape, what earlier
+    //    objects of the group painted.
+    private void PaintLayeredGroup(
+        NestedDisplayListOp op, PixelBuffer buffer,
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
+    {
+        float[]? mask = op.SoftMask is not null
+            ? GetSoftMask(op.SoftMask, buffer, pageHeight, outerTransform)
+            : _ambientMask;
+        int width = buffer.Width;
+        int height = buffer.Height;
+        PixelBuffer layer = new PixelBuffer(width, height);
+        bool isolated = op.Isolated || op.BlendMode != PdfBlendMode.Normal;
+        if (!isolated)
+        {
+            CopyPixels(buffer, layer, 0, 0, width, height);
+        }
+
+        float[]? outerMask = _ambientMask;
+        _ambientMask = null;
+        try
+        {
+            if (op.Knockout && op.Inner.Ops.Count > 1 && op.Inner.Ops.Count <= MaxKnockoutObjects)
+            {
+                PaintKnockoutObjects(op, layer, isolated ? null : buffer, pageHeight, outerTransform, ambientClip);
+            }
+            else
+            {
+                PaintNestedOpCore(op, layer, pageHeight, outerTransform, ambientClip);
+            }
+        }
+        finally
+        {
+            _ambientMask = outerMask;
+        }
+
+        float groupAlpha = (float)Math.Clamp(op.LayerAlpha, 0.0, 1.0);
+        ReadOnlySpan<byte> before = buffer.Pixels;
+        for (int y = 0; y < height; y++)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            for (int x = 0; x < width; x++)
+            {
+                (byte b, byte g, byte r, byte a) = layer.GetPixelBgra(x, y);
+                if (isolated)
+                {
+                    if (a == 0)
+                    {
+                        continue;
+                    }
+
+                    ColorF src = ColorF.FromRgb(r / 255f, g / 255f, b / 255f, a / 255f * groupAlpha);
+                    WriteBlended(buffer, x, y, src, op.BlendMode, mask, width);
+                    continue;
+                }
+
+                int o = ((y * width) + x) * 4;
+                if (before[o] == b && before[o + 1] == g && before[o + 2] == r && before[o + 3] == a)
+                {
+                    continue;
+                }
+
+                float weight = groupAlpha * (mask is null ? 1f : mask[(y * width) + x]);
+                if (weight <= 0f)
+                {
+                    continue;
+                }
+
+                LerpPixel(buffer, x, y, before.Slice(o, 4), b, g, r, a, weight);
+            }
+        }
+    }
+
+    // The objects of a knockout group, one at a time: each is drawn alone
+    // (over a copy of the backdrop for a non-isolated group, else over
+    // transparency) and its shape (drawn alone over transparency: its alpha
+    // over its largest alpha, which is its coverage for an object of constant
+    // alpha) decides how much it replaces of the layer.
+    private void PaintKnockoutObjects(
+        NestedDisplayListOp op, PixelBuffer layer, PixelBuffer? backdrop,
+        double pageHeight, Transform outerTransform, ClipRegion? ambientClip)
+    {
+        int width = layer.Width;
+        int height = layer.Height;
+        Transform innerToPage = op.CtmComposition.Multiply(outerTransform);
+        ClipRegion? parentClip = CombineClips(BuildClipRegion(op.Clips, pageHeight, outerTransform), ambientClip);
+        PixelBuffer shape = new PixelBuffer(width, height);
+        PixelBuffer? colour = backdrop is null ? null : new PixelBuffer(width, height);
+        if (colour is not null)
+        {
+            CopyPixels(backdrop!, colour, 0, 0, width, height);
+        }
+
+        foreach (RenderOp child in op.Inner.Ops)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            PageDisplayList single = new PageDisplayList(new[] { child }, 0, 0);
+            PaintDisplayList(single, shape, pageHeight, innerToPage, parentClip);
+            if (!Bounds(shape, out int x0, out int y0, out int x1, out int y1, out int maxAlpha))
+            {
+                continue;
+            }
+
+            if (colour is not null)
+            {
+                PaintDisplayList(single, colour, pageHeight, innerToPage, parentClip);
+            }
+
+            PixelBuffer source = colour ?? shape;
+            for (int y = y0; y <= y1; y++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    (byte _, byte _, byte _, byte sa) = shape.GetPixelBgra(x, y);
+                    if (sa == 0)
+                    {
+                        continue;
+                    }
+
+                    double f = Math.Min(1.0, (double)sa / maxAlpha);
+                    (byte sb, byte sg, byte sr, byte sourceAlpha) = source.GetPixelBgra(x, y);
+                    (byte lb, byte lg, byte lr, byte la) = layer.GetPixelBgra(x, y);
+                    if (colour is not null)
+                    {
+                        // Over the backdrop the object's colour is final:
+                        // replace the layer by its shape.
+                        layer.SetPixelBgra(x, y, Lerp(lb, sb, (float)f), Lerp(lg, sg, (float)f), Lerp(lr, sr, (float)f), Lerp(la, sourceAlpha, (float)f));
+                        continue;
+                    }
+
+                    // Over transparency, premultiplied: layer = object + (1 - shape) * layer.
+                    double s = sa / 255.0;
+                    double keep = (1.0 - f) * (la / 255.0);
+                    double outA = s + keep;
+                    if (outA <= 0.0)
+                    {
+                        layer.SetPixelBgra(x, y, 0, 0, 0, 0);
+                        continue;
+                    }
+
+                    layer.SetPixelBgra(
+                        x,
+                        y,
+                        Channel(((sb * s) + (lb * keep)) / outA),
+                        Channel(((sg * s) + (lg * keep)) / outA),
+                        Channel(((sr * s) + (lr * keep)) / outA),
+                        Channel(outA * 255.0));
+                }
+            }
+
+            // Reset the scratch buffers where the object drew.
+            for (int y = y0; y <= y1; y++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    shape.SetPixelBgra(x, y, 0, 0, 0, 0);
+                }
+            }
+
+            if (colour is not null)
+            {
+                CopyPixels(backdrop!, colour, x0, y0, x1, y1);
+            }
+        }
+    }
+
+    // The bounds of the pixels with any alpha, and the largest alpha.
+    private static bool Bounds(PixelBuffer buffer, out int x0, out int y0, out int x1, out int y1, out int maxAlpha)
+    {
+        x0 = int.MaxValue;
+        y0 = int.MaxValue;
+        x1 = -1;
+        y1 = -1;
+        maxAlpha = 0;
+        ReadOnlySpan<byte> pixels = buffer.Pixels;
+        int width = buffer.Width;
+        for (int i = 3; i < pixels.Length; i += 4)
+        {
+            byte a = pixels[i];
+            if (a == 0)
+            {
+                continue;
+            }
+
+            int index = i / 4;
+            int x = index % width;
+            int y = index / width;
+            x0 = Math.Min(x0, x);
+            x1 = Math.Max(x1, x);
+            y0 = Math.Min(y0, y);
+            y1 = Math.Max(y1, y);
+            maxAlpha = Math.Max(maxAlpha, a);
+        }
+
+        return x1 >= 0;
+    }
+
+    // Copies the pixels of the rectangle [x0, x1] x [y0, y1] (inclusive; the
+    // whole buffer when given 0, 0, width, height).
+    private static void CopyPixels(PixelBuffer from, PixelBuffer to, int x0, int y0, int x1, int y1)
+    {
+        int xEnd = Math.Min(x1, from.Width - 1);
+        int yEnd = Math.Min(y1, from.Height - 1);
+        for (int y = y0; y <= yEnd; y++)
+        {
+            for (int x = x0; x <= xEnd; x++)
+            {
+                (byte b, byte g, byte r, byte a) = from.GetPixelBgra(x, y);
+                to.SetPixelBgra(x, y, b, g, r, a);
+            }
+        }
+    }
+
+    // Mixes a pixel towards (b, g, r, a) by the weight with premultiplied
+    // colour, so a backdrop pixel that is still transparent adds no colour.
+    private static void LerpPixel(PixelBuffer buffer, int x, int y, ReadOnlySpan<byte> from, byte b, byte g, byte r, byte a, float weight)
+    {
+        double a0 = from[3] * (1.0 - weight);
+        double a1 = a * (double)weight;
+        double outA = a0 + a1;
+        if (outA <= 0.0)
+        {
+            buffer.SetPixelBgra(x, y, 0, 0, 0, 0);
+            return;
+        }
+
+        buffer.SetPixelBgra(
+            x,
+            y,
+            Channel(((from[0] * a0) + (b * a1)) / outA),
+            Channel(((from[1] * a0) + (g * a1)) / outA),
+            Channel(((from[2] * a0) + (r * a1)) / outA),
+            Channel(outA));
+    }
+
+    private static byte Lerp(byte from, byte to, float weight) =>
+        (byte)Math.Clamp((int)Math.Round(from + ((to - from) * weight)), 0, 255);
+
+    private static byte Channel(double v) => (byte)Math.Clamp((int)Math.Round(v), 0, 255);
 
     private void PaintNestedOpCore(
         NestedDisplayListOp op, PixelBuffer buffer,
@@ -1374,6 +1786,11 @@ public sealed class PageRasterizer
 
         float[]? smask = MaskFor(op, buffer, pageHeight, outerTransform);
         int smW = buffer.Width;
+        float alpha = (float)Math.Clamp(op.Alpha, 0.0, 1.0);
+        if (alpha <= 0f)
+        {
+            return;
+        }
 
         double scale = _options.Scale;
         Transform inverseOuter;
@@ -1449,7 +1866,7 @@ public sealed class PageRasterizer
                 }
 
                 ColorF color = SampleStops(op.Stops, t);
-                if (op.BlendMode == PdfBlendMode.Normal && smask is null)
+                if (op.BlendMode == PdfBlendMode.Normal && smask is null && alpha >= 1f)
                 {
                     buffer.SetPixelBgra(
                         px, py, ToByte(color.B), ToByte(color.G), ToByte(color.R), 255);
@@ -1458,7 +1875,7 @@ public sealed class PageRasterizer
                 {
                     WriteBlended(
                         buffer, px, py,
-                        ColorF.FromRgb(color.R, color.G, color.B, 1f), op.BlendMode, smask, smW);
+                        ColorF.FromRgb(color.R, color.G, color.B, alpha), op.BlendMode, smask, smW);
                 }
             }
         }
@@ -1640,9 +2057,10 @@ public sealed class PageRasterizer
 
         (byte db, byte dg, byte dr, byte da) = buffer.GetPixelBgra(x, y);
         double ab = da / 255.0;
-        double crR = ((1.0 - ab) * s.R) + (ab * BlendModes.Blend(mode, dr / 255.0, s.R));
-        double crG = ((1.0 - ab) * s.G) + (ab * BlendModes.Blend(mode, dg / 255.0, s.G));
-        double crB = ((1.0 - ab) * s.B) + (ab * BlendModes.Blend(mode, db / 255.0, s.B));
+        (double br, double bg, double bb) = BlendModes.BlendRgb(mode, (dr / 255.0, dg / 255.0, db / 255.0), (s.R, s.G, s.B));
+        double crR = ((1.0 - ab) * s.R) + (ab * br);
+        double crG = ((1.0 - ab) * s.G) + (ab * bg);
+        double crB = ((1.0 - ab) * s.B) + (ab * bb);
         buffer.BlendPixel(
             x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha), gammaCorrect: false);
     }
@@ -1825,6 +2243,12 @@ public sealed class PageRasterizer
         int dstX1 = Math.Min(buffer.Width - 1, (int)Math.Round(x + w));
         int dstY1 = Math.Min(buffer.Height - 1, (int)Math.Round(y + h));
 
+        // Source pixels per device pixel; an image drawn at least four times
+        // larger keeps its pixels sharp (nearest), as Poppler does.
+        double footX = frame.Width / w;
+        double footY = frame.Height / h;
+        bool smooth = footX > 0.25 && footY > 0.25;
+
         for (int py = dstY0; py <= dstY1; py++)
         {
             PdfWorkScope.ThrowIfCancellationRequested();
@@ -1844,14 +2268,26 @@ public sealed class PageRasterizer
                     continue;
                 }
 
-                double srcFracX = (px - x) / w;
-                double srcFracY = (py - y) / h;
-                int srcX = (int)(srcFracX * frame.Width);
-                int srcY = (int)(srcFracY * frame.Height);
-                srcX = Math.Max(0, Math.Min(frame.Width - 1, srcX));
-                srcY = Math.Max(0, Math.Min(frame.Height - 1, srcY));
-
-                (byte sb, byte sg, byte sr, byte sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
+                byte sb, sg, sr, sa;
+                if (smooth)
+                {
+                    // 3.35.0 (item 55): sampled at the device pixel's centre,
+                    // averaged when the image is drawn smaller than its
+                    // pixels and interpolated when it is drawn up to four
+                    // times larger.
+                    (sb, sg, sr, sa) = SampleSmooth(
+                        frame, (px + 0.5 - x) / w * frame.Width, (py + 0.5 - y) / h * frame.Height, footX, footY);
+                }
+                else
+                {
+                    double srcFracX = (px - x) / w;
+                    double srcFracY = (py - y) / h;
+                    int srcX = (int)(srcFracX * frame.Width);
+                    int srcY = (int)(srcFracY * frame.Height);
+                    srcX = Math.Max(0, Math.Min(frame.Width - 1, srcX));
+                    srcY = Math.Max(0, Math.Min(frame.Height - 1, srcY));
+                    (sb, sg, sr, sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
+                }
 
                 // Fold the constant ExtGState alpha (/ca) into the per-pixel alpha.
                 int effA = alpha >= 1.0 ? sa : (int)((sa * alpha) + 0.5);
@@ -1875,6 +2311,83 @@ public sealed class PageRasterizer
                 }
             }
         }
+    }
+
+    // A source sample at (sx, sy) in source pixels (pixel i covers [i, i+1)),
+    // for a device pixel covering footX by footY source pixels: the
+    // alpha-weighted mean of the pixels under it when it covers more than
+    // one along an axis, otherwise bilinear interpolation between the
+    // neighbouring pixel centres, with colour weighted by alpha so that
+    // transparent pixels add no colour.
+    private static (byte B, byte G, byte R, byte A) SampleSmooth(ImageFrame frame, double sx, double sy, double footX, double footY)
+    {
+        if (footX > 1 || footY > 1)
+        {
+            double hx = Math.Max(1, footX) / 2;
+            double hy = Math.Max(1, footY) / 2;
+            int x0 = Math.Clamp((int)Math.Floor(sx - hx + 0.5), 0, frame.Width - 1);
+            int x1 = Math.Clamp((int)Math.Floor(sx + hx + 0.5), x0 + 1, frame.Width);
+            int y0 = Math.Clamp((int)Math.Floor(sy - hy + 0.5), 0, frame.Height - 1);
+            int y1 = Math.Clamp((int)Math.Floor(sy + hy + 0.5), y0 + 1, frame.Height);
+            long sumB = 0, sumG = 0, sumR = 0, sumA = 0;
+            for (int yy = y0; yy < y1; yy++)
+            {
+                for (int xx = x0; xx < x1; xx++)
+                {
+                    (byte b, byte g, byte r, byte a) = frame.Pixels.GetPixelBgra(xx, yy);
+                    sumB += b * a;
+                    sumG += g * a;
+                    sumR += r * a;
+                    sumA += a;
+                }
+            }
+
+            long count = (long)(x1 - x0) * (y1 - y0);
+            if (sumA == 0)
+            {
+                return (0, 0, 0, 0);
+            }
+
+            return (
+                (byte)((sumB + (sumA / 2)) / sumA),
+                (byte)((sumG + (sumA / 2)) / sumA),
+                (byte)((sumR + (sumA / 2)) / sumA),
+                (byte)((sumA + (count / 2)) / count));
+        }
+
+        double fx = Math.Clamp(sx - 0.5, 0, frame.Width - 1);
+        double fy = Math.Clamp(sy - 0.5, 0, frame.Height - 1);
+        int ix = Math.Min((int)fx, frame.Width - 1);
+        int iy = Math.Min((int)fy, frame.Height - 1);
+        int jx = Math.Min(ix + 1, frame.Width - 1);
+        int jy = Math.Min(iy + 1, frame.Height - 1);
+        double tx = fx - ix;
+        double ty = fy - iy;
+        double wB = 0, wG = 0, wR = 0, wA = 0;
+        AddCorner(frame, ix, iy, (1 - tx) * (1 - ty), ref wB, ref wG, ref wR, ref wA);
+        AddCorner(frame, jx, iy, tx * (1 - ty), ref wB, ref wG, ref wR, ref wA);
+        AddCorner(frame, ix, jy, (1 - tx) * ty, ref wB, ref wG, ref wR, ref wA);
+        AddCorner(frame, jx, jy, tx * ty, ref wB, ref wG, ref wR, ref wA);
+        if (wA <= 0)
+        {
+            return (0, 0, 0, 0);
+        }
+
+        return (
+            (byte)Math.Clamp(Math.Round(wB / wA), 0, 255),
+            (byte)Math.Clamp(Math.Round(wG / wA), 0, 255),
+            (byte)Math.Clamp(Math.Round(wR / wA), 0, 255),
+            (byte)Math.Clamp(Math.Round(wA), 0, 255));
+    }
+
+    private static void AddCorner(ImageFrame frame, int x, int y, double weight, ref double b, ref double g, ref double r, ref double a)
+    {
+        (byte pb, byte pg, byte pr, byte pa) = frame.Pixels.GetPixelBgra(x, y);
+        double w = weight * pa;
+        b += pb * w;
+        g += pg * w;
+        r += pr * w;
+        a += w;
     }
 
     // Draws an image through a general matrix (3.34.0, #50): each device
@@ -1915,6 +2428,11 @@ public sealed class PageRasterizer
 
         // Inverse of [a c; b d].
         double ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+
+        // Source pixels per device pixel along the image's own axes.
+        double footX = frame.Width / (Math.Sqrt((a * a) + (b * b)) * scale);
+        double footY = frame.Height / (Math.Sqrt((c * c) + (d * d)) * scale);
+        bool smooth = footX > 0.25 && footY > 0.25;
         for (int py = dstY0; py <= dstY1; py++)
         {
             PdfWorkScope.ThrowIfCancellationRequested();
@@ -1940,9 +2458,18 @@ public sealed class PageRasterizer
                     continue;
                 }
 
-                int srcX = Math.Min(frame.Width - 1, (int)(u * frame.Width));
-                int srcY = Math.Min(frame.Height - 1, (int)((1 - v) * frame.Height));
-                (byte sb, byte sg, byte sr, byte sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
+                byte sb, sg, sr, sa;
+                if (smooth)
+                {
+                    // 3.35.0 (item 55): averaged or interpolated, as in CompositeImage.
+                    (sb, sg, sr, sa) = SampleSmooth(frame, u * frame.Width, (1 - v) * frame.Height, footX, footY);
+                }
+                else
+                {
+                    int srcX = Math.Min(frame.Width - 1, (int)(u * frame.Width));
+                    int srcY = Math.Min(frame.Height - 1, (int)((1 - v) * frame.Height));
+                    (sb, sg, sr, sa) = frame.Pixels.GetPixelBgra(srcX, srcY);
+                }
                 int effA = alpha >= 1.0 ? sa : (int)((sa * alpha) + 0.5);
                 if (effA <= 0)
                 {

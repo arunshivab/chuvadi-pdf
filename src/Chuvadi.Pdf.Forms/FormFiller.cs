@@ -502,6 +502,8 @@ public static class FormFiller
         }
     }
 
+    // Iterative (3.35.0, DOC-01/OPS-08): a long chain of linked objects
+    // (bookmarks, annotations through /Next) cannot exhaust the stack.
     private static void Visit(PdfObjectStore store, PdfPrimitive? p, HashSet<int> visited)
     {
         if (p is null)
@@ -509,43 +511,40 @@ public static class FormFiller
             return;
         }
 
-        if (p is PdfReference reference)
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(p);
+        while (pending.Count > 0)
         {
-            int num = reference.ObjectId.ObjectNumber;
-
-            if (!visited.Add(num))
+            switch (pending.Pop())
             {
-                return;
+                case PdfReference reference:
+                    if (visited.Add(reference.ObjectId.ObjectNumber))
+                    {
+                        pending.Push(store.Resolve(reference));
+                    }
+
+                    break;
+                case PdfArray array:
+                    for (int i = array.Count - 1; i >= 0; i--)
+                    {
+                        pending.Push(array[i]);
+                    }
+
+                    break;
+                case PdfStream stream:
+                    pending.Push(stream.Dictionary);
+                    break;
+                case PdfDictionary dictionary:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                    {
+                        pending.Push(entry.Value);
+                    }
+
+                    break;
             }
-
-            PdfPrimitive resolved = store.Resolve(reference);
-            Visit(store, resolved, visited);
-            return;
-        }
-
-        if (p is PdfArray arr)
-        {
-            for (int i = 0; i < arr.Count; i++)
-            {
-                Visit(store, arr[i], visited);
-            }
-            return;
-        }
-
-        if (p is PdfDictionary dict)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
-            {
-                Visit(store, entry.Value, visited);
-            }
-            return;
-        }
-
-        if (p is PdfStream stream)
-        {
-            Visit(store, stream.Dictionary, visited);
         }
     }
+
 
     // The on-state a button value selects, or null for "all off" (3.34.0).
     private static string? ChooseOnState(FormField field, string value)

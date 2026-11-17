@@ -10,7 +10,7 @@ public sealed class PatternRule
 
 ## Remarks
 
-Use this when the exact rectangles aren't known up front (e.g., "redact every SSN", "redact every email address"). At redaction time each text-showing operator's glyphs are decoded to Unicode (via the font's ToUnicode CMap) and matched against the pattern; matched glyphs are physically removed from the content stream, independent of layout geometry. A black (or caller-chosen) box is painted over each removed run when the overlay is enabled.
+Use this when the exact rectangles aren't known up front (e.g., "redact every SSN", "redact every email address"). At redaction time the page's text is read as a viewer shows it (glyphs decoded to Unicode through the font's ToUnicode CMap or encoding) and joined across text operators, form XObjects, tiling-pattern cells and Type 3 glyphs, once as drawn and once with a space wherever the layout leaves a word gap (3.35.0); the pattern is matched on both. The matched glyphs are physically removed from the content, and a black (or caller-chosen) box is painted over each removed run when the overlay is enabled. Annotations, and (for a rule with no page list) text outside the pages, are matched too.
 
 ## Constructors
 

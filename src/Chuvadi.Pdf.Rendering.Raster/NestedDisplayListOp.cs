@@ -58,4 +58,35 @@ public sealed class NestedDisplayListOp : RenderOp
 
     /// <summary>Gets the transform composing inner-space into the parent's user space.</summary>
     public Transform CtmComposition { get; }
+
+    /// <summary>
+    /// Gets whether the sub-list is a transparency group drawn into a layer
+    /// of its own and then composited as one object, with
+    /// <see cref="LayerAlpha"/>, <see cref="RenderOp.BlendMode"/> and
+    /// <see cref="RenderOp.SoftMask"/> (PDF 32000-1:2008 §11.4). When false
+    /// (the default), the group's alpha, blend mode and soft mask were given
+    /// to each object it paints. Since 3.35.0.
+    /// </summary>
+    public bool Layered { get; init; }
+
+    /// <summary>
+    /// Gets the constant alpha the layer is composited with (1 when not
+    /// <see cref="Layered"/>). Since 3.35.0.
+    /// </summary>
+    public double LayerAlpha { get; init; } = 1.0;
+
+    /// <summary>
+    /// Gets whether the group is a knockout group (<c>/K true</c>): each
+    /// object it paints replaces, rather than composites over, what earlier
+    /// objects of the group painted (PDF 32000-1:2008 §11.4.6). A knockout
+    /// group is always <see cref="Layered"/>. Since 3.35.0.
+    /// </summary>
+    public bool Knockout { get; init; }
+
+    /// <summary>
+    /// Gets whether the group is isolated (<c>/I true</c>): its layer starts
+    /// transparent rather than from what is under it (PDF 32000-1:2008
+    /// §11.4.5). Meaningful only when <see cref="Layered"/>. Since 3.35.0.
+    /// </summary>
+    public bool Isolated { get; init; }
 }

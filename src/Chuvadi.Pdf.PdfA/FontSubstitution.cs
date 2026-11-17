@@ -31,13 +31,15 @@ internal static class FontSubstitution
     /// How a font whose encoding is not WinAnsi is written (3.33.0, ticket 46,
     /// D-314): symbolic for PDF/A-1b, /Differences for PDF/A-2b.
     /// </param>
+    /// <param name="extraResources">Further resource dictionaries to process (made field appearances); may be null.</param>
     /// <exception cref="ArgumentNullException">A parameter is null.</exception>
     internal static void SubstituteStandard14(
         PdfDocument document,
         Func<PdfObjectId> allocate,
         Func<string, byte[]?> fontProvider,
         IList<string> violations,
-        NonWinAnsiForm form)
+        NonWinAnsiForm form,
+        IEnumerable<PdfDictionary>? extraResources = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(allocate);
@@ -52,6 +54,16 @@ internal static class FontSubstitution
         {
             PdfDictionary? resources = document.Pages[i].Resources;
             if (resources is not null)
+            {
+                session.ProcessResources(resources);
+            }
+        }
+
+        // 3.35.0 (backlog 49): the resources of appearances made for form
+        // fields, whose /DA fonts are often the standard 14 too.
+        if (extraResources is not null)
+        {
+            foreach (PdfDictionary resources in extraResources)
             {
                 session.ProcessResources(resources);
             }

@@ -147,6 +147,8 @@ public static class AnnotationFlattener
             }
         }
 
+        // Iterative (3.35.0, DOC-01/OPS-08): a long chain of linked objects
+        // (bookmarks, annotations through /Next) cannot exhaust the stack.
         private static void Visit(PdfObjectStore store, PdfPrimitive? primitive, HashSet<int> visited)
         {
             if (primitive is null)
@@ -154,42 +156,40 @@ public static class AnnotationFlattener
                 return;
             }
 
-            if (primitive is PdfReference reference)
+            Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+            pending.Push(primitive);
+            while (pending.Count > 0)
             {
-                if (!visited.Add(reference.ObjectId.ObjectNumber))
+                switch (pending.Pop())
                 {
-                    return;
-                }
+                    case PdfReference reference:
+                        if (visited.Add(reference.ObjectId.ObjectNumber))
+                        {
+                            pending.Push(store.Resolve(reference));
+                        }
 
-                PdfPrimitive resolved = store.Resolve(reference);
-                Visit(store, resolved, visited);
-                return;
-            }
+                        break;
+                    case PdfArray array:
+                        for (int i = array.Count - 1; i >= 0; i--)
+                        {
+                            pending.Push(array[i]);
+                        }
 
-            if (primitive is PdfArray array)
-            {
-                for (int i = 0; i < array.Count; i++)
-                {
-                    Visit(store, array[i], visited);
-                }
+                        break;
+                    case PdfStream stream:
+                        pending.Push(stream.Dictionary);
+                        break;
+                    case PdfDictionary dictionary:
+                        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                        {
+                            pending.Push(entry.Value);
+                        }
 
-                return;
-            }
-
-            if (primitive is PdfStream stream)
-            {
-                Visit(store, stream.Dictionary, visited);
-                return;
-            }
-
-            if (primitive is PdfDictionary dictionary)
-            {
-                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
-                {
-                    Visit(store, entry.Value, visited);
+                        break;
                 }
             }
         }
+
 
         internal void Write(Stream output)
         {
@@ -286,6 +286,7 @@ public static class AnnotationFlattener
             return result;
         }
 
+        // Iterative (3.35.0, OPS-08).
         private static void VisitReachable(
             PdfPrimitive? primitive,
             Dictionary<int, PdfIndirectObject> byNumber,
@@ -296,49 +297,46 @@ public static class AnnotationFlattener
                 return;
             }
 
-            if (primitive is PdfReference reference)
+            Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+            pending.Push(primitive);
+            while (pending.Count > 0)
             {
-                int number = reference.ObjectId.ObjectNumber;
-                if (!visited.Add(number))
+                switch (pending.Pop())
                 {
-                    return;
+                    case PdfReference reference:
+                        if (visited.Add(reference.ObjectId.ObjectNumber) && byNumber.TryGetValue(reference.ObjectId.ObjectNumber, out PdfIndirectObject? target))
+                        {
+                            pending.Push(target.Value);
+                        }
+
+                        break;
+                    case PdfDictionary dictionary:
+                        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                        {
+                            pending.Push(entry.Value);
+                        }
+
+                        break;
+                    case PdfArray array:
+                        for (int i = 0; i < array.Count; i++)
+                        {
+                            pending.Push(array[i]);
+                        }
+
+                        break;
+                    case PdfStream stream:
+                        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+                        {
+                            pending.Push(entry.Value);
+                        }
+
+                        break;
+                    default:
+                        break;
                 }
-
-                if (byNumber.TryGetValue(number, out PdfIndirectObject? target))
-                {
-                    VisitReachable(target.Value, byNumber, visited);
-                }
-
-                return;
-            }
-
-            switch (primitive)
-            {
-                case PdfDictionary dictionary:
-                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
-                    {
-                        VisitReachable(entry.Value, byNumber, visited);
-                    }
-
-                    break;
-                case PdfArray array:
-                    for (int i = 0; i < array.Count; i++)
-                    {
-                        VisitReachable(array[i], byNumber, visited);
-                    }
-
-                    break;
-                case PdfStream stream:
-                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
-                    {
-                        VisitReachable(entry.Value, byNumber, visited);
-                    }
-
-                    break;
-                default:
-                    break;
             }
         }
+
 
         private bool ShouldRemoveAcroForm()
         {

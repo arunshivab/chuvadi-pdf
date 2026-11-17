@@ -53,7 +53,7 @@ public sealed class RenderOptions
         AntiAlias = true;
         GammaCorrect = true;
         Hinting = HintingMode.Light;
-        AutohintUnhintedFonts = true;
+        AutohintUnhintedFonts = false;
     }
 
     /// <summary>
@@ -62,7 +62,26 @@ public sealed class RenderOptions
     /// Typical values: 72 (screen), 96 (Windows default), 150, 300 (print).
     /// Default: 150.
     /// </summary>
-    public double Dpi { get; init; }
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value is not a finite number greater than zero (3.35.0, GFX-01;
+    /// before, NaN or infinity ended the process and 0 or a negative value
+    /// gave an empty image).
+    /// </exception>
+    public double Dpi
+    {
+        get => _dpi;
+        init
+        {
+            if (!double.IsFinite(value) || value <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(Dpi), value, "Dpi must be a finite number greater than zero.");
+            }
+
+            _dpi = value;
+        }
+    }
+
+    private readonly double _dpi;
 
     /// <summary>
     /// Gets or initialises the background colour painted before page content.
@@ -133,7 +152,10 @@ public sealed class RenderOptions
     /// <summary>
     /// Gets or initialises whether fonts that carry no hinting programs are
     /// grid-fitted by the geometric autohinter (Y axis only) when hinting is
-    /// enabled. Fonts with their own bytecode are unaffected. Default: true.
+    /// enabled. Fonts with their own bytecode are unaffected. Default: false
+    /// since 3.35.0 (D1): such fonts are drawn unhinted, as Poppler, MuPDF
+    /// and pdf.js draw them, which measured closer to Poppler on most pages
+    /// of the hinting corpus; it was true before.
     /// </summary>
     public bool AutohintUnhintedFonts { get; init; }
 

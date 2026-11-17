@@ -39,8 +39,7 @@ public static class PdfEncryption
         }
 
         EncryptionDictionary meta = EncryptionDictionary.Parse(encryptDict)
-            ?? throw new PdfEncryptionException(
-                "Unsupported /Encrypt dictionary (not a standard security handler).");
+            ?? throw new PdfEncryptionException(UnsupportedMessage(encryptDict));
 
         byte[]? fileKey;
         PdfPasswordKind openedWith;
@@ -130,4 +129,23 @@ public static class PdfEncryption
         owner ? PdfPasswordKind.Owner
         : string.IsNullOrEmpty(password) ? PdfPasswordKind.NoPassword
         : PdfPasswordKind.User;
+
+    // 3.35.0 (52d): says which part of the dictionary is unsupported, instead
+    // of always "not a standard security handler".
+    private static string UnsupportedMessage(PdfDictionary encryptDict)
+    {
+        PdfName? filter = encryptDict.GetName(PdfName.Intern("Filter"));
+        if (filter is null || filter.Value != "Standard")
+        {
+            return "Unsupported /Encrypt dictionary (not a standard security handler).";
+        }
+
+        string v = encryptDict.TryGetValue(PdfName.Intern("V"), out PdfPrimitive? vp) && vp is PdfInteger vi
+            ? vi.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "(missing)";
+        string r = encryptDict.TryGetValue(PdfName.Intern("R"), out PdfPrimitive? rp) && rp is PdfInteger ri
+            ? ri.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "(missing)";
+        return $"Unsupported /Encrypt dictionary: standard security handler with /V {v} /R {r}.";
+    }
 }

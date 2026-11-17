@@ -64,12 +64,22 @@ public static class SignatureReader
         return signatures;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxFieldDepth = 1024;
+
     private static void WalkFieldArray(
         PdfArray fields,
         IPdfObjectResolver resolver,
         List<PdfSignature> output,
-        string? parentName)
+        string? parentName,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
+        if (depth > MaxFieldDepth)
+        {
+            return;
+        }
+
         foreach (PdfPrimitive entry in fields)
         {
             PdfPrimitive resolvedEntry = resolver.Resolve(entry);
@@ -82,7 +92,7 @@ public static class SignatureReader
             PdfArray? kids = ResolveEntry<PdfArray>(resolver, fieldDict, NameKids);
             if (kids is not null && kids.Count > 0 && LooksLikeFieldNode(resolver, kids))
             {
-                WalkFieldArray(kids, resolver, output, qualifiedName);
+                WalkFieldArray(kids, resolver, output, qualifiedName, depth + 1);
             }
 
             // Lift if this is a signature field with a value.

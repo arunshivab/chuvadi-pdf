@@ -153,9 +153,19 @@ public static class FormReader
         return map;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxFieldDepth = 1024;
+
     private static FormField? ReadField(
-        PdfPrimitive fieldRef, ReadContext context, string parentName, Inherited inherited)
+        PdfPrimitive fieldRef, ReadContext context, string parentName, Inherited inherited,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
+        if (depth > MaxFieldDepth)
+        {
+            return null;
+        }
+
         PdfObjectStore store = context.Store;
         PdfObjectId objId = ExtractObjectId(fieldRef);
         PdfDictionary? fieldDict = store.ResolveAs<PdfDictionary>(fieldRef);
@@ -205,7 +215,7 @@ public static class FormReader
 
                     if (kidDict.TryGetValue(PdfName.Intern("T"), out _))
                     {
-                        FormField? child = ReadField(kids[i], context, fullName, own);
+                        FormField? child = ReadField(kids[i], context, fullName, own, depth + 1);
 
                         if (child is not null)
                         {

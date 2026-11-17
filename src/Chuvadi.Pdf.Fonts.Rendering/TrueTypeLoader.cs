@@ -1291,7 +1291,7 @@ public sealed class TrueTypeLoader
     {
         try
         {
-            _ = EnsureHintingInterpreter(ppem);
+            EnsureHintingInterpreter(ppem).BackwardCompatibility = light;
 
             RawGlyph? carrier = BuildHintedComposite(glyphId, depth: 1, out Zone? zone);
             if (carrier is null || zone is null)
@@ -1636,6 +1636,10 @@ public sealed class TrueTypeLoader
         {
             HintingInterpreter hintInterp = EnsureHintingInterpreter(ppem);
 
+            // 3.35.0 (D2): light hinting runs the program in backward
+            // compatibility mode (no X moves), so its Y fitting matches the
+            // unhinted X positions the outline keeps.
+            hintInterp.BackwardCompatibility = light;
             Zone zone = hintInterp.HintGlyph(raw);
 
             Path outline = BuildHintedPath(raw, zone, light);
