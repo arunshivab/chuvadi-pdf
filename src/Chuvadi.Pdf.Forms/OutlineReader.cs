@@ -73,13 +73,17 @@ public static class OutlineReader
 
     // ── Outline tree traversal ────────────────────────────────────────────
 
+    // Deepest bookmark nesting read (3.35.0, DOC-01).
+    private const int MaxDepth = 256;
+
     private static void WalkSiblings(
         PdfDocument document,
         PdfPrimitive startPrim,
         PdfObjectStore store,
         DestinationResolver destinations,
         HashSet<int> visited,
-        List<OutlineItem> result)
+        List<OutlineItem> result,
+        int depth = 0)
     {
         PdfPrimitive? current = startPrim;
 
@@ -105,9 +109,11 @@ public static class OutlineReader
             // Recurse into children
             List<OutlineItem> children = new List<OutlineItem>();
 
-            if (dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
+            // 3.35.0 (DOC-01): bookmarks nested deeper than MaxDepth levels
+            // are not read; before, a deep enough nesting ended the process.
+            if (depth < MaxDepth && dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
             {
-                WalkSiblings(document, firstChild, store, destinations, visited, children);
+                WalkSiblings(document, firstChild, store, destinations, visited, children, depth + 1);
             }
 
             result.Add(new OutlineItem(title, destination?.PageIndex ?? -1, children)

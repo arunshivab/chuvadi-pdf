@@ -28,7 +28,7 @@ Applies a text watermark to all (or specified) pages of a document and writes th
 
 - `output` — The stream to write the watermarked PDF to.
 - `document` — The source document.
-- `options` — Watermark configuration.
+- `options` — Watermark configuration. <exception cref="ArgumentException"> (Since 3.35.0) No font is supplied and the text has a character that Helvetica cannot show (WinAnsiEncoding lacks it); nothing is written. Supply `TextWatermarkOptions.FontData` for such text. </exception>
 
 ### `ApplyImage`
 

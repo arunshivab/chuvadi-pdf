@@ -19,8 +19,9 @@ namespace Chuvadi.Pdf.Fonts.Rendering;
 /// §9.6.2; Adobe Type 1 Font Format).
 /// </summary>
 /// <remarks>
-/// Outlines are produced in a 1000-unit em and scaled by the caller's point
-/// size. Glyph selection is by character code through the font dictionary's
+/// Outlines are produced in the program's glyph space and mapped by its
+/// <c>/FontMatrix</c> (1/1000 when the program gives none) and the caller's
+/// point size. Glyph selection is by character code through the font dictionary's
 /// <c>/Encoding</c> (with <c>/Differences</c>) when present, otherwise the
 /// font program's built-in encoding, otherwise StandardEncoding.
 /// </remarks>
@@ -35,14 +36,21 @@ public sealed class Type1FontRenderer
     private readonly Dictionary<int, GraphicsPath> _pathCache = new();
     private readonly Dictionary<int, double> _widthCache = new();
 
+    // The program's /FontMatrix (glyph space to text space). 3.35.0 (N15):
+    // read from the program instead of assuming 1/1000, so a 2048-unit
+    // program draws at its real size.
+    private readonly double[] _fontMatrix;
+
     private Type1FontRenderer(
         Dictionary<string, byte[]> charstrings,
         List<byte[]> subrs,
-        string[] encoding)
+        string[] encoding,
+        double[] fontMatrix)
     {
         _charstrings = charstrings;
         _subrs = subrs;
         _encoding = encoding;
+        _fontMatrix = fontMatrix;
     }
 
     /// <summary>
@@ -86,7 +94,7 @@ public sealed class Type1FontRenderer
         }
 
         string[] encoding = BuildEncoding(clear, fontDict, resolver);
-        return new Type1FontRenderer(charstrings, subrs, encoding);
+        return new Type1FontRenderer(charstrings, subrs, encoding, ParseFontMatrix(clear));
     }
 
     // 3.34.0 (#49d): the glyph names the program's /CharStrings defines, for
@@ -123,16 +131,70 @@ public sealed class Type1FontRenderer
             return new GraphicsPath();
         }
 
-        GraphicsPath unscaled = GetUnscaledPath(code, out double width1000);
-        advance = width1000 / 1000.0 * pointSize;
+        GraphicsPath unscaled = GetUnscaledPath(code, out double glyphWidth);
+        advance = glyphWidth * _fontMatrix[0] * pointSize;
 
         if (unscaled.IsEmpty)
         {
             return unscaled;
         }
 
-        double scale = pointSize / 1000.0;
-        return ScalePath(unscaled, scale);
+        return TransformPath(unscaled, _fontMatrix, pointSize);
+    }
+
+    // The /FontMatrix array in the program's cleartext part, or 1/1000 when
+    // it is missing, malformed or degenerate.
+    internal static double[] ParseFontMatrix(string clear)
+    {
+        double[] fallback = { 0.001, 0, 0, 0.001, 0, 0 };
+        int key = clear.IndexOf("/FontMatrix", StringComparison.Ordinal);
+        if (key < 0)
+        {
+            return fallback;
+        }
+
+        int open = key + "/FontMatrix".Length;
+        while (open < clear.Length && (clear[open] == ' ' || clear[open] == '\t' || clear[open] == '\r' || clear[open] == '\n'))
+        {
+            open++;
+        }
+
+        if (open >= clear.Length || (clear[open] != '[' && clear[open] != '{'))
+        {
+            return fallback;
+        }
+
+        char closer = clear[open] == '[' ? ']' : '}';
+        int close = clear.IndexOf(closer, open + 1);
+        if (close < 0)
+        {
+            return fallback;
+        }
+
+        string[] parts = clear.Substring(open + 1, close - open - 1)
+            .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 6)
+        {
+            return fallback;
+        }
+
+        double[] m = new double[6];
+        for (int i = 0; i < 6; i++)
+        {
+            if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out m[i])
+                || double.IsNaN(m[i]) || double.IsInfinity(m[i]))
+            {
+                return fallback;
+            }
+        }
+
+        double determinant = (m[0] * m[3]) - (m[1] * m[2]);
+        if (Math.Abs(determinant) < 1e-12 || Math.Abs(m[0]) < 1e-9)
+        {
+            return fallback;
+        }
+
+        return m;
     }
 
     private GraphicsPath GetUnscaledPath(int code, out double width1000)
@@ -1012,7 +1074,8 @@ public sealed class Type1FontRenderer
         return -1;
     }
 
-    private static GraphicsPath ScalePath(GraphicsPath source, double scale)
+    // Maps a glyph-space path through the font matrix and the point size.
+    private static GraphicsPath TransformPath(GraphicsPath source, double[] m, double pointSize)
     {
         GraphicsPath scaled = new();
         foreach (PathSegment seg in source.Segments)
@@ -1020,16 +1083,16 @@ public sealed class Type1FontRenderer
             switch (seg.Kind)
             {
                 case PathSegmentKind.MoveTo:
-                    scaled.MoveTo(seg.P0.X * scale, seg.P0.Y * scale);
+                    scaled.MoveTo(MapX(seg.P0, m, pointSize), MapY(seg.P0, m, pointSize));
                     break;
                 case PathSegmentKind.LineTo:
-                    scaled.LineTo(seg.P0.X * scale, seg.P0.Y * scale);
+                    scaled.LineTo(MapX(seg.P0, m, pointSize), MapY(seg.P0, m, pointSize));
                     break;
                 case PathSegmentKind.CubicBezierTo:
                     scaled.CubicBezierTo(
-                        new PointF((float)(seg.P0.X * scale), (float)(seg.P0.Y * scale)),
-                        new PointF((float)(seg.P1.X * scale), (float)(seg.P1.Y * scale)),
-                        new PointF((float)(seg.P2.X * scale), (float)(seg.P2.Y * scale)));
+                        new PointF((float)MapX(seg.P0, m, pointSize), (float)MapY(seg.P0, m, pointSize)),
+                        new PointF((float)MapX(seg.P1, m, pointSize), (float)MapY(seg.P1, m, pointSize)),
+                        new PointF((float)MapX(seg.P2, m, pointSize), (float)MapY(seg.P2, m, pointSize)));
                     break;
                 case PathSegmentKind.ClosePath:
                     scaled.ClosePath();
@@ -1040,4 +1103,8 @@ public sealed class Type1FontRenderer
         }
         return scaled;
     }
+
+    private static double MapX(PointF p, double[] m, double pointSize) => ((m[0] * p.X) + (m[2] * p.Y) + m[4]) * pointSize;
+
+    private static double MapY(PointF p, double[] m, double pointSize) => ((m[1] * p.X) + (m[3] * p.Y) + m[5]) * pointSize;
 }

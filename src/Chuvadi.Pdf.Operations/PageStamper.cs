@@ -678,8 +678,17 @@ public static class PageStamper
             return map;
         }
 
-        private void Walk(PdfDictionary node, Dictionary<int, PdfObjectId> map, ref int counter)
+        // Deepest nesting followed (3.35.0, DOC-01).
+        private const int MaxPageTreeDepth = 1024;
+
+        private void Walk(PdfDictionary node, Dictionary<int, PdfObjectId> map, ref int counter, int depth = 0)
         {
+            // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
+            if (depth > MaxPageTreeDepth)
+            {
+                return;
+            }
+
             if (!node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim))
             {
                 return;
@@ -706,7 +715,7 @@ public static class PageStamper
                 if (kid.TryGetValue(PdfName.Type, out PdfPrimitive? typePrim)
                     && typePrim is PdfName typeName && typeName.Value == "Pages")
                 {
-                    Walk(kid, map, ref counter);
+                    Walk(kid, map, ref counter, depth + 1);
                 }
                 else
                 {

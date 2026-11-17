@@ -114,6 +114,22 @@ double StrokeOpacity
 
 Constant stroke opacity (ExtGState /CA), 0..1. Default 1 (opaque).
 
+### `HorizontalScaling`
+
+```csharp
+double HorizontalScaling
+```
+
+The horizontal scaling (`Tz`) as a factor, 1.0 for 100 (3.35.0). The glyph shapes are `Transform` after a horizontal scale by this factor: a glyph's outline in text space is [`FontSize` × `HorizontalScaling`, 0, 0, `FontSize`, 0, 0] times its glyph-space outline, then `Transform`. It is not part of `Transform`, because the glyph positions (`DisplayListGlyph.X` and the advances) already include it. PDF 32000-1:2008 §9.3.4.
+
+### `Stroke`
+
+```csharp
+StrokeStyle? Stroke
+```
+
+For the stroking render modes (stroke, fill and stroke, and their clip forms: `1`, `2`, `5` and `6 Tr`), the line attributes with the width and dashes scaled to page space, as `PathOp.Stroke` (3.35.0); null for the other modes.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs`](../../../src/Chuvadi.Pdf.Rendering.DisplayList/RenderOp.cs)_

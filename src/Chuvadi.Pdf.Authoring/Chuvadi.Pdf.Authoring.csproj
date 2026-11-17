@@ -28,6 +28,7 @@
     <InternalsVisibleTo Include="Chuvadi.Pdf.Watermark" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Authoring.Tests" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Operations" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Xfa" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.PdfA.Tests" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Operations.Tests" />
   </ItemGroup>

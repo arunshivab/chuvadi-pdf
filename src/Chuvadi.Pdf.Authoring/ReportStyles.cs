@@ -5,7 +5,6 @@
 // Style types for the report layer: fonts, paragraphs, lists, page setup,
 // headers/footers, and page-number formatting.
 
-using System;
 using System.Text;
 
 namespace Chuvadi.Pdf.Authoring;
@@ -344,49 +343,5 @@ public static class PageNumberFormatter
             value /= 26;
         }
         return sb.ToString();
-    }
-}
-
-/// <summary>
-/// Maps common typographic Unicode characters to their WinAnsi code points so
-/// they render correctly under the Standard-14 WinAnsiEncoding fonts.
-/// </summary>
-internal static class WinAnsiText
-{
-    /// <summary>Maps typographic characters (bullets, dashes, smart quotes, ellipsis) to WinAnsi bytes.</summary>
-    internal static string Map(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        StringBuilder? sb = null;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char mapped = MapChar(text[i]);
-            if (mapped != text[i] && sb is null)
-            {
-                sb = new StringBuilder(text.Length);
-                sb.Append(text, 0, i);
-            }
-            sb?.Append(mapped);
-        }
-        return sb?.ToString() ?? text;
-    }
-
-    private static char MapChar(char ch)
-    {
-        switch (ch)
-        {
-            case '\u2022': return '\u0095';   // bullet
-            case '\u2013': return '\u0096';   // en dash
-            case '\u2014': return '\u0097';   // em dash
-            case '\u2018': return '\u0091';   // left single quote
-            case '\u2019': return '\u0092';   // right single quote
-            case '\u201C': return '\u0093';   // left double quote
-            case '\u201D': return '\u0094';   // right double quote
-            case '\u2026': return '\u0085';   // ellipsis
-            case '\u20AC': return '\u0080';   // euro sign
-            case '\u2122': return '\u0099';   // trade mark
-            default: return ch;
-        }
     }
 }

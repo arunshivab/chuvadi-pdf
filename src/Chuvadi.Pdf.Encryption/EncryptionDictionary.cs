@@ -110,6 +110,19 @@ public sealed class EncryptionDictionary
         e.V = GetInt(dict, "V", 0);
         e.R = GetInt(dict, "R", 0);
         e.KeyBits = GetInt(dict, "Length", 40);
+
+        // 3.35.0 (52d): /R 2 with no /V is read as /V 1 (40-bit RC4), as
+        // Poppler does; the password check still proves the key. A /V 1
+        // key is always 40 bits, whatever /Length says.
+        if (e.R == 2 && !dict.ContainsKey(PdfName.Intern("V")))
+        {
+            e.V = 1;
+        }
+
+        if (e.V == 1)
+        {
+            e.KeyBits = 40;
+        }
         e.Permissions = GetPermissions(dict);
         e.O = GetBytes(dict, "O");
         e.U = GetBytes(dict, "U");
@@ -126,7 +139,7 @@ public sealed class EncryptionDictionary
         // Determine algorithm
         e.Algorithm = (e.V, e.R) switch
         {
-            (1, 2) => EncryptionAlgorithm.Rc4_40,
+            (1, 2) or (1, 3) => EncryptionAlgorithm.Rc4_40,
             (2, _) => EncryptionAlgorithm.Rc4_128,
             (4, _) => DetectV4Cfm(dict),
             (5, _) => EncryptionAlgorithm.Aes_256,

@@ -434,6 +434,9 @@ internal static class MergedAcroForm
     // Two fields with named children: the later one's children join the
     // earlier one, and the later field object is dropped. laterInherited holds
     // what the later field inherits from its own ancestors.
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxMergeDepth = 1024;
+
     private static void MergeParents(
         string fullName,
         PdfDictionary earlier,
@@ -441,8 +444,15 @@ internal static class MergedAcroForm
         PdfDictionary later,
         int laterId,
         Dictionary<string, PdfPrimitive> laterInherited,
-        ShareState state)
+        ShareState state,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxMergeDepth is not followed.
+        if (depth > MaxMergeDepth)
+        {
+            return;
+        }
+
         Dictionary<string, PdfPrimitive> inherited = new Dictionary<string, PdfPrimitive>(laterInherited, StringComparer.Ordinal);
         foreach (string key in InheritableKeys)
         {
@@ -487,7 +497,7 @@ internal static class MergedAcroForm
             }
             else
             {
-                MergeParents(childName, earlierKid, earlierKidRef, kid, kidRef.ObjectId.ObjectNumber, inherited, state);
+                MergeParents(childName, earlierKid, earlierKidRef, kid, kidRef.ObjectId.ObjectNumber, inherited, state, depth + 1);
             }
         }
 

@@ -32,7 +32,7 @@ Stamps `template` onto the requested pages.
 - `fontSize` — Font size in points.
 - `color` — Text colour.
 - `filePath` — Source file path for the `{filename}`/`{filepath}` tokens, or null.
-- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, or `template` is null. </exception>
+- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, or `template` is null. </exception> <exception cref="ArgumentException"> (Since 3.35.0) The resolved text has a character that the Helvetica it is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written. </exception>
 
 ### `Apply`
 
@@ -57,7 +57,7 @@ Stamps `template` onto the requested pages, resolving the `{number}` token from 
 - `color` — Text colour.
 - `numbering` — The running numbering sequence used for `{number}`.
 - `filePath` — Source file path for the `{filename}`/`{filepath}` tokens, or null.
-- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, `template`, or `numbering` is null. </exception>
+- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, `template`, or `numbering` is null. </exception> <exception cref="ArgumentException"> (Since 3.35.0) The resolved text has a character that the Helvetica it is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written. </exception>
 
 ---
 

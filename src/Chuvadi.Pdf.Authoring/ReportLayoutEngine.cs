@@ -162,7 +162,7 @@ internal sealed class ReportLayoutEngine
             x = left + width - textWidth;
         }
 
-        _page!.DrawText(WinAnsiText.Map(line), x, _y, font, size, color);
+        _page!.DrawText(line, x, _y, font, size, color);
     }
 
     private void DrawJustifiedLine(
@@ -171,7 +171,7 @@ internal sealed class ReportLayoutEngine
         string[] words = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length <= 1)
         {
-            _page!.DrawText(WinAnsiText.Map(line), left, _y, font, size, color);
+            _page!.DrawText(line, left, _y, font, size, color);
             return;
         }
 
@@ -191,7 +191,7 @@ internal sealed class ReportLayoutEngine
         double x = left;
         foreach (string word in words)
         {
-            _page!.DrawText(WinAnsiText.Map(word), x, _y, font, size, color);
+            _page!.DrawText(word, x, _y, font, size, color);
             x += Measure(word, font, size) + gap;
         }
     }
@@ -222,10 +222,10 @@ internal sealed class ReportLayoutEngine
                 EnsureRoom(lineHeight);
                 if (i == 0)
                 {
-                    _page!.DrawText(WinAnsiText.Map(marker),
+                    _page!.DrawText(marker,
                         ContentLeft + style.MarkerIndent, _y, font, style.FontSize, style.Color);
                 }
-                _page!.DrawText(WinAnsiText.Map(lines[i]),
+                _page!.DrawText(lines[i],
                     textLeft, _y, font, style.FontSize, style.Color);
                 _y += lineHeight;
             }
@@ -709,7 +709,7 @@ internal sealed class ReportLayoutEngine
                     TextAlignment.Right => x + colWidths[c] - style.CellPadding - lw,
                     _ => x + style.CellPadding,
                 };
-                _page!.DrawText(WinAnsiText.Map(line), lx, yText, font, size, style.HeaderTextColor);
+                _page!.DrawText(line, lx, yText, font, size, style.HeaderTextColor);
                 yText += lineHeight;
             }
 
@@ -974,7 +974,7 @@ internal sealed class ReportLayoutEngine
                 TextAlignment.Right => x + w - pad - lw,
                 _ => x + pad,
             };
-            _page!.DrawText(WinAnsiText.Map(line), lx, yText, font, size, color);
+            _page!.DrawText(line, lx, yText, font, size, color);
             yText += lineHeight;
         }
     }

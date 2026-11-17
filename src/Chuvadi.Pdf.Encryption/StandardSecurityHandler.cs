@@ -127,7 +127,7 @@ public static class StandardSecurityHandler
         return true;
     }
 
-    private static byte[] ComputeUValueR4(byte[] key, byte[] firstFileId, int revision)
+    internal static byte[] ComputeUValueR4(byte[] key, byte[] firstFileId, int revision)
     {
         if (revision == 2)
         {

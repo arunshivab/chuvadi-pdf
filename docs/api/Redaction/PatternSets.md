@@ -22,7 +22,7 @@ __static__
 static IReadOnlyList<PatternRule> Financial => new List<PatternRule>
 ```
 
-Financial identifiers: IBAN (mod-97), ABA routing (weighted), payment card (Luhn), SWIFT/BIC, EIN, and ITIN.
+Financial identifiers: IBAN (mod-97), ABA routing (weighted), payment card (Luhn), SWIFT/BIC (country code; with a digit or after a label, 3.35.0), EIN, and ITIN (middle group, 3.35.0).
 
 ### `Medical`
 
@@ -32,7 +32,7 @@ __static__
 static IReadOnlyList<PatternRule> Medical => new List<PatternRule>
 ```
 
-Medical identifiers: NPI (Luhn over the 80840 prefix) and ICD-10 code prefixes.
+Medical identifiers: NPI (Luhn over the 80840 prefix) and ICD-10 codes: a code with its decimal part ("J45.901"), or any code after a label ("Dx: E11"). Before 3.35.0 every letter-digit-character token matched ("A12", "B2B", "T1D").
 
 ### `GeneralPii`
 

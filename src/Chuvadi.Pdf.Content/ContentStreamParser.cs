@@ -555,8 +555,11 @@ public sealed class ContentStreamParser
                     sb.Append(' ');
                 }
 
-                // Adjust text matrix horizontally (in text space, §9.4.4).
-                state.TextMatrix = Shift(state.TextMatrix, -displacement * th, 0);
+                // Adjust text matrix horizontally (in text space, §9.4.4);
+                // vertically for a vertical font (3.35.0, E2).
+                state.TextMatrix = state.Font.IsVertical
+                    ? Shift(state.TextMatrix, 0, -displacement)
+                    : Shift(state.TextMatrix, -displacement * th, 0);
             }
             else if (item is PdfReal realItem)
             {
@@ -567,7 +570,9 @@ public sealed class ContentStreamParser
                     sb.Append(' ');
                 }
 
-                state.TextMatrix = Shift(state.TextMatrix, -displacement * th, 0);
+                state.TextMatrix = state.Font.IsVertical
+                    ? Shift(state.TextMatrix, 0, -displacement)
+                    : Shift(state.TextMatrix, -displacement * th, 0);
             }
         }
 
@@ -624,6 +629,13 @@ public sealed class ContentStreamParser
         if (state.Font.TryMeasure(bytes, out double width, out int codes, out int spaces))
         {
             measured = true;
+            if (state.Font.IsVertical)
+            {
+                // Vertical writing (3.35.0, E2): ty = w1 × Tfs + Tc + Tw, no Th.
+                double ty = (width / 1000.0 * state.FontSize) + (state.CharacterSpacing * codes) + (state.WordSpacing * spaces);
+                return Shift(matrix, 0, ty);
+            }
+
             double tx = ((width / 1000.0 * state.FontSize) + (state.CharacterSpacing * codes) + (state.WordSpacing * spaces))
                 * (state.HorizontalScaling / 100.0);
             return Shift(matrix, tx, 0);

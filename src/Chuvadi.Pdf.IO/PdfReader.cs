@@ -31,6 +31,10 @@ public sealed class PdfReader : IDisposable
     private readonly RecoveryLog _recoveryLog;
     private bool _disposed;
 
+    // 3.35.0 (52h, D-385): lets objects loaded from now on read past damaged
+    // syntax (see RecoveryLog.LenientObjects); called for RepairIfDamaged.
+    internal void AllowLenientObjects() => _recoveryLog.LenientObjects = true;
+
     /// <summary>
     /// Gets which password opened the document (3.32.0), or null when the
     /// document is not encrypted.
@@ -273,6 +277,191 @@ public sealed class PdfReader : IDisposable
             repaired.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// For <c>PdfOpenOptions.RepairIfDamaged</c> (3.35.0, B8): opens the most
+    /// recent earlier revision of the file whose page tree reads in full,
+    /// when most of the latest revision's page tree cannot be read. Each earlier
+    /// revision ends at a <c>%%EOF</c> before the last; they are tried from
+    /// the latest back. Returns null when no earlier revision works.
+    /// <see cref="Warnings"/> starts with a line saying which revision is
+    /// shown and why.
+    /// </summary>
+    /// <param name="stream">The PDF; readable and seekable. Not disposed.</param>
+    /// <param name="password">The password, or null.</param>
+    internal static PdfReader? OpenEarlierRevision(Stream stream, string? password)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        stream.Position = 0;
+        byte[] data;
+        using (MemoryStream copy = new MemoryStream())
+        {
+            stream.CopyTo(copy);
+            data = copy.ToArray();
+        }
+
+        List<int> ends = RevisionEnds(data);
+
+        // The last %%EOF ends the latest revision, which is the one that failed.
+        for (int i = ends.Count - 2; i >= 0; i--)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            int end = ends[i];
+            MemoryStream prefix = new MemoryStream(data, 0, end, writable: false);
+            PdfReader? reader = null;
+            try
+            {
+                reader = OpenInternal(prefix, password, leaveOpen: false);
+                if (ReachablePages(reader, out int broken) > 0 && broken == 0)
+                {
+                    reader._recoveryLog.Add(
+                        "Most of the page tree of the file's latest revision cannot be read; the earlier revision ending at byte "
+                        + end.ToString(CultureInfo.InvariantCulture) + " of " + data.Length.ToString(CultureInfo.InvariantCulture)
+                        + " is shown instead. Changes made by the later revisions are not shown.");
+                    return reader;
+                }
+            }
+            catch (Exception ex) when (IsRevisionFailure(ex))
+            {
+                // This revision cannot be read either; try an earlier one.
+            }
+
+            reader?.Dispose();
+            prefix.Dispose();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Counts the pages the page tree reaches (3.35.0, B8), up to a bound;
+    /// <paramref name="broken"/> counts the leaves that cannot be read as a
+    /// page (a stream, an object that does not parse, a dictionary of
+    /// another type).
+    /// </summary>
+    internal static int ReachablePages(PdfReader reader, out int broken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        broken = 0;
+        if (!reader.Trailer.TryGetValue(PdfName.Root, out PdfPrimitive? root)
+            || reader.Objects.Resolve(root) is not PdfDictionary catalog
+            || !catalog.TryGetValue(PdfName.Pages, out PdfPrimitive? pagesValue))
+        {
+            broken = 1;
+            return 0;
+        }
+
+        const int MaxNodes = 1_000_000;
+        int pages = 0;
+        int visited = 0;
+        HashSet<PdfDictionary> seen = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(pagesValue);
+        while (pending.Count > 0 && visited++ < MaxNodes)
+        {
+            PdfPrimitive node;
+            try
+            {
+                node = reader.Objects.Resolve(pending.Pop());
+            }
+            catch (PdfException)
+            {
+                broken++;
+                continue;
+            }
+
+            if (node is not PdfDictionary dict)
+            {
+                broken++;
+                continue;
+            }
+
+            if (!seen.Add(dict))
+            {
+                continue;
+            }
+
+            PdfPrimitive kidsValue = dict.TryGetValue(PdfName.Kids, out PdfPrimitive? k) ? k : PdfNull.Value;
+            PdfPrimitive kids;
+            try
+            {
+                kids = reader.Objects.Resolve(kidsValue);
+            }
+            catch (PdfException)
+            {
+                broken++;
+                continue;
+            }
+
+            if (kids is PdfArray array)
+            {
+                foreach (PdfPrimitive kid in array)
+                {
+                    pending.Push(kid);
+                }
+
+                continue;
+            }
+
+            // A page says so, or (with no /Type) carries what a page carries.
+            bool isPage = dict.TryGetValue(PdfName.Type, out PdfPrimitive? type)
+                ? reader.Objects.Resolve(type) is PdfName { Value: "Page" }
+                : dict.ContainsKey(PdfName.Intern("Contents")) || dict.ContainsKey(PdfName.Intern("MediaBox"));
+            if (isPage)
+            {
+                pages++;
+            }
+            else
+            {
+                broken++;
+            }
+        }
+
+        return pages;
+    }
+
+    // A failure that means this earlier revision cannot be read; a limit or
+    // a password failure is not one and is passed on.
+    private static bool IsRevisionFailure(Exception ex) => ex switch
+    {
+        PdfLimitExceededException or PdfPasswordRequiredException => false,
+        PdfException or InvalidOperationException or ArgumentException or IndexOutOfRangeException or FormatException => true,
+        _ => false,
+    };
+
+    // The byte positions just past each "%%EOF" marker (and the end-of-line
+    // after it), in file order.
+    private static List<int> RevisionEnds(byte[] data)
+    {
+        List<int> ends = new List<int>();
+        ReadOnlySpan<byte> marker = "%%EOF"u8;
+        int from = 0;
+        while (from < data.Length)
+        {
+            int at = data.AsSpan(from).IndexOf(marker);
+            if (at < 0)
+            {
+                break;
+            }
+
+            int end = from + at + marker.Length;
+            if (end < data.Length && data[end] == (byte)'\r')
+            {
+                end++;
+            }
+
+            if (end < data.Length && data[end] == (byte)'\n')
+            {
+                end++;
+            }
+
+            ends.Add(end);
+            from = end;
+        }
+
+        return ends;
     }
 
     private static string DescribeRepair(string reason, RepairReport report)
@@ -523,7 +712,27 @@ public sealed class PdfReader : IDisposable
                 return (null, encryptObjectNumber, true);
             }
 
+            // 3.35.0 (52d): /R 2 with no /V is read as /V 1 on trust; when no
+            // password opens it, the dictionary is reported as malformed
+            // rather than asking for a password it may never accept.
+            if (string.IsNullOrEmpty(password)
+                && !encryptDict.ContainsKey(PdfName.Intern("V"))
+                && encryptDict.TryGetValue(PdfName.Intern("R"), out PdfPrimitive? missingVR)
+                && missingVR is PdfInteger { Value: 2 })
+            {
+                throw new PdfEncryptionException("Unsupported /Encrypt dictionary: /R 2 with no /V, and the empty password does not open it as /V 1.");
+            }
+
             throw new PdfPasswordRequiredException(passwordSupplied: !string.IsNullOrEmpty(password));
+        }
+
+        // 3.35.0 (52d): a /Standard dictionary with /R 2 and no /V was read
+        // as /V 1 (40-bit RC4); the password check confirmed the key.
+        if (!encryptDict.ContainsKey(PdfName.Intern("V"))
+            && encryptDict.TryGetValue(PdfName.Intern("R"), out PdfPrimitive? rPrim)
+            && rPrim is PdfInteger { Value: 2 })
+        {
+            recoveryLog.Add("The /Encrypt dictionary has /R 2 but no /V; it was read as /V 1 (40-bit RC4).");
         }
 
         bool encryptMetadata = true;

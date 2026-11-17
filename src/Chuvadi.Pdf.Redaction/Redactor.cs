@@ -48,8 +48,22 @@ namespace Chuvadi.Pdf.Redaction;
 ///   <item>Vector paths: the covered area is cut out of a painted path
 ///         (<see cref="VectorRedactionMode.SubtractPrecise"/>, the default);
 ///         a path that cannot be cut exactly is removed whole.</item>
-///   <item>Form XObjects and tiling patterns are rewritten the same way, in
-///         every place they are drawn.</item>
+///   <item>Form XObjects and tiling-pattern cells that a rectangle reaches
+///         are rewritten too. A form is shared: what is removed from it is
+///         removed wherever the form is drawn, including copies outside the
+///         rectangle (over-redaction, never under-redaction).</item>
+///   <item>Shadings painted with <c>sh</c> that a rectangle reaches are
+///         clipped out of it; a mesh shading (types 4 to 7), and a path
+///         filled with one, is removed whole (3.35.0).</item>
+///   <item>Text patterns (3.35.0): each pattern is matched on the text a
+///         viewer shows, joined across text operators and found inside form
+///         XObjects, tiling-pattern cells, Type 3 glyphs and annotation
+///         appearances. Each match becomes boxes inside the matched glyphs
+///         (one per line), which are then removed as rectangles are, in the
+///         page and in every form and cell drawn there; an annotation that
+///         holds a match (in its appearance, text entries or actions) is
+///         removed, and replacement text that matches is removed with the
+///         text it stands for.</item>
 ///   <item>Annotations whose rectangle meets a redaction are removed with the
 ///         objects only they use; a form widget there has its field value
 ///         and appearance cleared.</item>
@@ -60,6 +74,13 @@ namespace Chuvadi.Pdf.Redaction;
 ///   <item>Alternate text that describes removed content (<c>/ActualText</c>,
 ///         <c>/Alt</c>, <c>/E</c>, in marked content and in the structure
 ///         tree) is removed.</item>
+///   <item>Outside the pages (3.35.0): named destinations, document
+///         JavaScript, the open action and document actions are kept;
+///         scripts, URIs and alternate texts that match a pattern lose that
+///         text; in a pattern redaction attachments are kept only when they
+///         can be checked against the patterns and do not match
+///         (<see cref="RedactionOptions.KeepAttachments"/>); with rectangles
+///         only they are kept and listed as not scanned.</item>
 /// </list>
 /// <para>
 /// Conservative principle: when in doubt, remove. Over-redaction is preferred
@@ -89,27 +110,146 @@ public static class Redactor
     /// <param name="document">The source document.</param>
     /// <param name="options">The rectangles and patterns to redact.</param>
     /// <returns>One entry per rewritten page, in page order.</returns>
+    /// <remarks>
+    /// <para>
+    /// Patterns (3.35.0, D-396) match the page's text joined across text
+    /// operators, inside form XObjects, tiling-pattern cells and Type 3
+    /// glyphs, and in annotations (their appearances, text entries and
+    /// actions): an SSN drawn as two pieces is found, its glyphs are removed,
+    /// and an annotation that holds a match is removed (a widget's value is
+    /// cleared).
+    /// </para>
+    /// <para>
+    /// The result is checked before anything is written: the redacted
+    /// document is read back and every pattern is matched again. A match that
+    /// survives is redacted in a further pass; if any survives that, or a
+    /// match cannot be placed on the page (a pattern cell repeated thousands
+    /// of times), a <see cref="RedactionException"/> names the pages and the
+    /// number of matches (not their text), and nothing is written to
+    /// <paramref name="output"/> (fail closed).
+    /// <see cref="RedactionVerifier.VerifyPatterns"/> checks a result
+    /// independently.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="RedactionException">A pattern still matches in the redacted output.</exception>
     public static RedactionReport ApplyWithReport(
         Stream output,
         PdfDocument document,
         RedactionOptions options)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.Patterns.Count == 0)
+        {
+            return ApplyCore(output, document, options, null);
+        }
+
+        // Pattern matches found across operators, forms, Type 3 glyphs and
+        // annotations, per page; a further pass adds what survives the first.
+        Dictionary<int, PatternLocator.PageMatches> located = LocatePatterns(document, options.Patterns);
+        foreach (PatternLocator.PageMatches page in located.Values)
+        {
+            if (page.Unplaced.Count > 0)
+            {
+                throw new RedactionException(DescribeSurvivors(located));
+            }
+        }
+
+        const int MaxPasses = 3;
+        for (int pass = 1; ; pass++)
+        {
+            using MemoryStream buffer = new MemoryStream();
+            RedactionReport report = ApplyCore(buffer, document, options, located);
+            buffer.Position = 0;
+            Dictionary<int, PatternLocator.PageMatches> survivors;
+            using (PdfDocument written = PdfDocument.Open(new MemoryStream(buffer.ToArray(), writable: false), leaveOpen: false))
+            {
+                survivors = LocatePatterns(written, options.Patterns);
+            }
+
+            if (survivors.Count == 0)
+            {
+                buffer.Position = 0;
+                buffer.CopyTo(output);
+                return report;
+            }
+
+            bool annotationSurvives = false;
+            foreach (KeyValuePair<int, PatternLocator.PageMatches> page in survivors)
+            {
+                annotationSurvives |= page.Value.Annotations.Count > 0 || page.Value.Unplaced.Count > 0;
+                if (!located.TryGetValue(page.Key, out PatternLocator.PageMatches? earlier))
+                {
+                    earlier = new PatternLocator.PageMatches();
+                    located[page.Key] = earlier;
+                }
+
+                earlier.Boxes.AddRange(page.Value.Boxes);
+                earlier.OverlayBoxes.AddRange(page.Value.OverlayBoxes);
+            }
+
+            if (pass >= MaxPasses || annotationSurvives)
+            {
+                throw new RedactionException(DescribeSurvivors(survivors));
+            }
+        }
+    }
+
+    private static Dictionary<int, PatternLocator.PageMatches> LocatePatterns(PdfDocument document, IList<PatternRule> patterns)
+    {
+        Dictionary<int, PatternLocator.PageMatches> located = new Dictionary<int, PatternLocator.PageMatches>();
+        for (int p = 0; p < document.PageCount; p++)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            List<PatternRule> pagePatterns = PageApplicablePatterns(patterns, p);
+            if (pagePatterns.Count == 0)
+            {
+                continue;
+            }
+
+            PatternLocator.PageMatches matches = PatternLocator.Locate(document, p, pagePatterns);
+            if (matches.Any)
+            {
+                located[p] = matches;
+            }
+        }
+
+        return located;
+    }
+
+    private static string DescribeSurvivors(Dictionary<int, PatternLocator.PageMatches> survivors)
+    {
+        StringBuilder sb = new StringBuilder("Redaction could not remove every pattern match, so nothing was written:");
+        foreach (KeyValuePair<int, PatternLocator.PageMatches> page in survivors)
+        {
+            sb.Append(" page ").Append((page.Key + 1).ToString(CultureInfo.InvariantCulture)).Append(": ");
+            sb.Append(page.Value.Found.Count.ToString(CultureInfo.InvariantCulture)).Append(" match(es)");
+            if (page.Value.Annotations.Count > 0)
+            {
+                sb.Append(", ").Append(page.Value.Annotations.Count.ToString(CultureInfo.InvariantCulture)).Append(" in annotations");
+            }
+
+            if (page.Value.Unplaced.Count > 0)
+            {
+                sb.Append(", ").Append(page.Value.Unplaced.Count.ToString(CultureInfo.InvariantCulture))
+                    .Append(" in a pattern repeated too often to place");
+            }
+
+            sb.Append(';');
+        }
+
+        return sb.ToString();
+    }
+
+    private static RedactionReport ApplyCore(
+        Stream output,
+        PdfDocument document,
+        RedactionOptions options,
+        Dictionary<int, PatternLocator.PageMatches>? located)
+    {
         return PdfWriteGuard.Run(document, "redacted", () =>
         {
-            if (output is null)
-            {
-                throw new ArgumentNullException(nameof(output));
-            }
-
-            if (document is null)
-            {
-                throw new ArgumentNullException(nameof(document));
-            }
-
-            if (options is null)
-            {
-                throw new ArgumentNullException(nameof(options));
-            }
 
             // Force-load all reachable objects from the page graph. PdfObjectStore is lazy
             // and only contains resolved objects, so we must walk the graph before iterating.
@@ -122,6 +262,19 @@ public static class Redactor
             // rectangles here (that required a second, approximate layout pass that
             // could drift from the rewrite's own glyph positions).
             List<RedactionRect> allRects = new List<RedactionRect>(options.Rectangles);
+
+            // 3.35.0 (D-396): pattern matches across operators, forms and
+            // Type 3 glyphs become rectangles inside the matched glyphs.
+            if (located is not null)
+            {
+                foreach (KeyValuePair<int, PatternLocator.PageMatches> page in located)
+                {
+                    foreach (RectangleF box in page.Value.Boxes)
+                    {
+                        allRects.Add(new RedactionRect(page.Key, box));
+                    }
+                }
+            }
 
             // Group rectangles by page (with a parallel list of optional
             // in-place replacement strings, same index order as the rectangles).
@@ -226,6 +379,7 @@ public static class Redactor
             // — the form is only covered by the overlay, leaving it copyable.
             RedactRun run = new RedactRun(document.Objects, pipeline);
             run.VectorMode = options.VectorMode;
+            run.DocumentPatterns = DocumentWidePatterns(options.Patterns);
             Dictionary<int, int> formPages = new Dictionary<int, int>();
             for (int i = 0; i < work.Count; i++)
             {
@@ -270,7 +424,8 @@ public static class Redactor
                     redactedBytes[i] = rewritten.Bytes;
                     redactedMcids[i] = rewritten.RedactedMcids;
                     overlayBytes[i] = BuildOverlayWithPatterns(
-                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
+                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay,
+                        located is not null && located.TryGetValue(workPages[i], out PatternLocator.PageMatches? found) ? found : null);
                 }
             }
             else
@@ -291,7 +446,8 @@ public static class Redactor
                     redactedBytes[i] = rewritten.Bytes;
                     redactedMcids[i] = rewritten.RedactedMcids;
                     overlayBytes[i] = BuildOverlayWithPatterns(
-                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay);
+                        work[i], rewritten.OverlayBoxes, options.OverlayColor, options.DrawOverlay,
+                        located is not null && located.TryGetValue(workPages[i], out PatternLocator.PageMatches? found) ? found : null);
                 });
             }
 
@@ -319,7 +475,10 @@ public static class Redactor
                 RedactAnnotations(
                     modifiedPage, work[i].Page, work[i].Rects,
                     document.Objects, redactedAnnotRefs, annotRemovalCandidates,
-                    rewrittenFieldObjects, counts[i]);
+                    rewrittenFieldObjects, counts[i],
+                    located is not null && located.TryGetValue(workPages[i], out PatternLocator.PageMatches? pageMatches)
+                        ? pageMatches.Annotations
+                        : null);
                 PdfArray contents = new PdfArray([
                     new PdfReference(redactedId),
                     new PdfReference(overlayId),
@@ -511,6 +670,18 @@ public static class Redactor
             // object is left out with the rest of /Info.
             int documentMatches = DocumentTextScrubber.Scrub(document, options.Patterns, allObjects, pipeline);
 
+            // 3.35.0 (D-396, D-397): attachments, scripts, addresses and
+            // alternate texts outside the pages.
+            DocumentPartsScrubber.Result parts = DocumentPartsScrubber.Scrub(
+                options.Patterns, allObjects, trailer, pipeline, options.KeepAttachments);
+            documentMatches += parts.TextMatchesRemoved;
+
+            // 3.35.0 (backlog 59, D-385): catalog entries whose objects are
+            // not in the output (name trees, actions, an unloaded form) are
+            // dropped and reported, so the file names nothing it lacks and
+            // nothing unscrubbed is carried through.
+            List<string> catalogEntriesRemoved = DropUnwrittenCatalogEntries(allObjects, trailer);
+
             PdfWriter.Write(output, allObjects, trailer);
 
             List<PageRedactionReport> report = new List<PageRedactionReport>(work.Count);
@@ -519,7 +690,14 @@ public static class Redactor
                 report.Add(new PageRedactionReport(workPages[i], counts[i]));
             }
 
-            return new RedactionReport(report) { DocumentMatchesRemoved = documentMatches };
+            return new RedactionReport(report)
+            {
+                DocumentMatchesRemoved = documentMatches,
+                CatalogEntriesRemoved = catalogEntriesRemoved,
+                AttachmentsRemoved = parts.AttachmentsRemoved,
+                AttachmentsNotScanned = parts.AttachmentsNotScanned,
+                ScriptsRemoved = parts.ScriptsRemoved,
+            };
         });
     }
 
@@ -590,6 +768,10 @@ public static class Redactor
 
         // A named property list (BDC /Tag /Name) carrying replacement text.
         public PdfDictionary? NamedTextProperties { get; set; }
+
+        // 3.35.0 (D-396): the replacement text matched a pattern; the text
+        // shown inside the sequence is removed with it.
+        public bool MatchedPattern { get; set; }
     }
 
     // blankedImages receives the blanked copies of partly redacted images;
@@ -746,8 +928,12 @@ public static class Redactor
                         byte[] paintBytes = Encoding.Latin1.GetBytes(op + "\n");
                         sink.Write(paintBytes, 0, paintBytes.Length);
                     }
-                    else if (run.VectorMode == VectorRedactionMode.SubtractPrecise)
+                    else if (run.VectorMode == VectorRedactionMode.SubtractPrecise
+                        && !(IsFillOp(op) && IsMeshShadingPattern(state.FillPattern, resources, run.Store)))
                     {
+                        // A fill with a mesh shading pattern (types 4-7)
+                        // drops whole (3.35.0): its mesh is a picture whose
+                        // data under the box would stay in the file.
                         // Keep the provably untouched geometry; null means the
                         // construct was too doubtful to subtract precisely and
                         // the whole path drops (the legacy behaviour).
@@ -786,6 +972,34 @@ public static class Redactor
                 // state until the paint operator, re-emitting them after the
                 // state operator is semantically identical.
 
+                // 3.35.0 (D-396, audit RED-08): a shading painted with sh
+                // fills the whole clip, so one reaching a box is clipped to
+                // the outside of the boxes (a smooth axial or radial
+                // gradient keeps nothing of the area under a box); a mesh
+                // shading (types 4-7), a picture of its own, is removed.
+                if (op == "sh" && path.Buffer.Count == 0 && ShadingReachesBoxes(contexts))
+                {
+                    MemoryStream sink = Sink();
+                    if (ShadingTypeOf(pendingOperands, resources, run.Store) >= 4)
+                    {
+                        if (counts is not null)
+                        {
+                            counts.PathsRemoved++;
+                        }
+                    }
+                    else
+                    {
+                        WriteShadingOutsideBoxes(sink, state, contexts, pendingOperands);
+                        if (counts is not null)
+                        {
+                            counts.PathsCut++;
+                        }
+                    }
+
+                    pendingOperands.Clear();
+                    continue;
+                }
+
                 // Marked-content sequences: BDC (tag + property list), BMC (tag),
                 // EMC. A sequence carrying an inline /ActualText or /Alt is
                 // buffered so the property can be dropped if its body is redacted;
@@ -797,6 +1011,9 @@ public static class Redactor
                         ? ParseBdcMcid(pendingOperands, resources, run.Store)
                         : null;
                     bool carriesActualText = op == "BDC" && BdcHasInlineActualText(pendingOperands);
+                    PdfDictionary? namedText = op == "BDC"
+                        ? ResolveNamedTextProperties(pendingOperands, resources, run.Store)
+                        : null;
 
                     MarkedContentScope scope = new MarkedContentScope
                     {
@@ -804,10 +1021,18 @@ public static class Redactor
                         Operands = new List<PdfToken>(pendingOperands),
                         Mcid = mcid,
                         Buffer = carriesActualText ? new MemoryStream() : null,
-                        NamedTextProperties = op == "BDC"
-                            ? ResolveNamedTextProperties(pendingOperands, resources, run.Store)
-                            : null,
+                        NamedTextProperties = namedText,
                     };
+
+                    // 3.35.0 (D-396): replacement text that matches a pattern
+                    // is removed, and so is the text it stands for.
+                    if ((carriesActualText || namedText is not null)
+                        && ReplacementTextMatches(pendingOperands, namedText, patterns.Count > 0 ? patterns : run.DocumentPatterns))
+                    {
+                        scope.MatchedPattern = true;
+                        scope.Dropped = true;
+                        state.ReplacementTextMatchDepth++;
+                    }
 
                     if (!carriesActualText)
                     {
@@ -833,6 +1058,10 @@ public static class Redactor
 
                     MarkedContentScope scope = mcStack[mcStack.Count - 1];
                     mcStack.RemoveAt(mcStack.Count - 1);
+                    if (scope.MatchedPattern)
+                    {
+                        state.ReplacementTextMatchDepth--;
+                    }
 
                     if (scope.Buffer is MemoryStream body)
                     {
@@ -1146,6 +1375,77 @@ public static class Redactor
         }
 
         return null;
+    }
+
+    // True when the replacement text of a BDC (inline, or in its named
+    // property list) matches one of the patterns.
+    private static bool ReplacementTextMatches(
+        List<PdfToken> operands, PdfDictionary? named, IReadOnlyList<PatternRule> patterns)
+    {
+        if (patterns.Count == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i + 1 < operands.Count; i++)
+        {
+            PdfToken value = operands[i + 1];
+            if (operands[i].Type == PdfTokenType.Name && IsReplacementTextKey(operands[i].RawText)
+                && (value.Type == PdfTokenType.LiteralString || value.Type == PdfTokenType.HexString))
+            {
+                byte[] bytes = value.Type == PdfTokenType.LiteralString
+                    ? PdfString.DecodeLiteralToken(value.RawBytes)
+                    : PdfString.DecodeHexToken(value.RawBytes);
+                if (AnyPatternMatches(new PdfString(bytes).ToTextString(), patterns))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (named is not null)
+        {
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in named)
+            {
+                if (IsReplacementTextKey(entry.Key.Value) && entry.Value is PdfString text
+                    && AnyPatternMatches(text.ToTextString(), patterns))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static List<PatternRule> DocumentWidePatterns(IList<PatternRule> patterns)
+    {
+        List<PatternRule> rules = new List<PatternRule>();
+        foreach (PatternRule rule in patterns)
+        {
+            if (rule.PageIndices is null)
+            {
+                rules.Add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    internal static bool AnyPatternMatches(string text, IReadOnlyList<PatternRule> patterns)
+    {
+        foreach (PatternRule rule in patterns)
+        {
+            foreach (Match match in rule.Regex.Matches(text))
+            {
+                if (match.Length > 0 && (rule.Validator is null || rule.Validator(match.Value)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool BdcHasInlineActualText(List<PdfToken> operands)
@@ -3803,6 +4103,13 @@ public static class Redactor
     // two separate show operators is not matched here (a documented limitation).
     private static void MarkPatternDrops(string codes, RedactState state, bool[] drop)
     {
+        if (state.ReplacementTextMatchDepth > 0)
+        {
+            // Inside marked content whose replacement text matched (3.35.0).
+            Array.Fill(drop, true);
+            return;
+        }
+
         IReadOnlyList<PatternRule>? patterns = state.Patterns;
         if (patterns is null || patterns.Count == 0 || codes.Length == 0)
         {
@@ -3818,6 +4125,13 @@ public static class Redactor
                 : codes[i].ToString();
             for (int k = 0; k < unicode.Length; k++)
             {
+                // 3.35.0: a control character (a line break inside a string
+                // split across content streams) is no text a reader sees.
+                if (char.IsControl(unicode[k]))
+                {
+                    continue;
+                }
+
                 textBuilder.Append(unicode[k]);
                 glyphOfChar.Add(i);
             }
@@ -5290,10 +5604,28 @@ public static class Redactor
     // still physically removed, leaving a clean gap. (A render-faithful box for
     // those cases is tracked as follow-up work.)
     private static byte[] BuildOverlayWithPatterns(
-        RedactionWork work, List<RectangleF> patternBoxes, ColorF overlayColor, bool drawOverlay)
+        RedactionWork work, List<RectangleF> patternBoxes, ColorF overlayColor, bool drawOverlay,
+        PatternLocator.PageMatches? located = null)
     {
-        List<RectangleF> rects = new List<RectangleF>(work.Rects);
-        List<string?> replacements = new List<string?>(work.Replacements);
+        // 3.35.0: a located pattern match is removed through a box inside its
+        // glyphs, and covered by the glyphs' full box.
+        List<RectangleF> rects = new List<RectangleF>();
+        List<string?> replacements = new List<string?>();
+        HashSet<RectangleF> hitBoxes = located is null ? new HashSet<RectangleF>() : new HashSet<RectangleF>(located.Boxes);
+        for (int r = 0; r < work.Rects.Count; r++)
+        {
+            if (!hitBoxes.Contains(work.Rects[r]) || (r < work.Replacements.Count && work.Replacements[r] is not null))
+            {
+                rects.Add(work.Rects[r]);
+                replacements.Add(r < work.Replacements.Count ? work.Replacements[r] : null);
+            }
+        }
+
+        if (located is not null)
+        {
+            patternBoxes = new List<RectangleF>(patternBoxes);
+            patternBoxes.AddRange(located.OverlayBoxes);
+        }
 
         PdfRectangle crop = work.Page.CropBox;
         RectangleF pageRect = RectangleF.FromCorners(crop.X1, crop.Y1, crop.X2, crop.Y2);
@@ -5395,7 +5727,7 @@ public static class Redactor
         return [];
     }
 
-    private static byte[] DecodeStream(PdfStream stream, FilterPipeline pipeline)
+    internal static byte[] DecodeStream(PdfStream stream, FilterPipeline pipeline)
     {
         if (!stream.IsFiltered)
         {
@@ -5543,8 +5875,80 @@ public static class Redactor
                 Visit(document.Objects, entry, visited);
             }
         }
+
+        // 3.35.0 (D-396, audit RED-05): named destinations, attachments and
+        // document JavaScript (in /Names), the old-style /Dests, the open
+        // action and document actions, associated files, the portfolio and
+        // the base URI are kept; DocumentPartsScrubber removes what matches a
+        // pattern and the attachments that cannot be checked. The other
+        // name trees (page templates, appearance and web-capture names) hold
+        // content outside the page tree and are dropped (and reported).
+        foreach (string key in new[] { "Dests", "OpenAction", "AA", "AF", "Collection", "URI" })
+        {
+            if (catalog is not null && catalog.TryGetValue(PdfName.Intern(key), out PdfPrimitive? entry))
+            {
+                Visit(document.Objects, entry, visited);
+            }
+        }
+
+        if (catalog is not null && catalog.TryGetValue(PdfName.Intern("Names"), out PdfPrimitive? namesValue))
+        {
+            if (namesValue is PdfReference namesRef)
+            {
+                visited.Add(namesRef.ObjectId.ObjectNumber);
+            }
+
+            if (document.Objects.Resolve(namesValue) is PdfDictionary names)
+            {
+                foreach (string key in new[] { "Dests", "EmbeddedFiles", "JavaScript" })
+                {
+                    if (names.TryGetValue(PdfName.Intern(key), out PdfPrimitive? tree))
+                    {
+                        Visit(document.Objects, tree, visited);
+                    }
+                }
+            }
+        }
+
+        // 3.35.0 (backlog 59): the form dictionary, its default resources and
+        // its /Fields and /CO arrays are loaded so the form is kept; the field
+        // objects themselves are not, so a field on no page is not written and
+        // its entry is dropped (and reported). /XFA is never loaded.
+        if (catalog is not null && catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? acroForm))
+        {
+            PreloadAcroForm(document.Objects, acroForm, visited);
+        }
     }
 
+    private static void PreloadAcroForm(PdfObjectStore store, PdfPrimitive acroForm, HashSet<int> visited)
+    {
+        if (acroForm is PdfReference formRef)
+        {
+            visited.Add(formRef.ObjectId.ObjectNumber);
+        }
+
+        if (store.Resolve(acroForm) is not PdfDictionary form)
+        {
+            return;
+        }
+
+        if (form.TryGetValue(PdfName.Intern("DR"), out PdfPrimitive? dr))
+        {
+            Visit(store, dr, visited);
+        }
+
+        foreach (string key in new[] { "Fields", "CO" })
+        {
+            if (form.TryGetValue(PdfName.Intern(key), out PdfPrimitive? list) && list is PdfReference listRef)
+            {
+                visited.Add(listRef.ObjectId.ObjectNumber);
+                store.Resolve(listRef);
+            }
+        }
+    }
+
+    // Iterative (3.35.0, DOC-01/OPS-08): a long chain of linked objects
+    // (bookmarks, annotations through /Next) cannot exhaust the stack.
     private static void Visit(PdfObjectStore store, PdfPrimitive? p, HashSet<int> visited)
     {
         if (p is null)
@@ -5552,43 +5956,40 @@ public static class Redactor
             return;
         }
 
-        if (p is PdfReference reference)
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(p);
+        while (pending.Count > 0)
         {
-            int num = reference.ObjectId.ObjectNumber;
-
-            if (!visited.Add(num))
+            switch (pending.Pop())
             {
-                return;
+                case PdfReference reference:
+                    if (visited.Add(reference.ObjectId.ObjectNumber))
+                    {
+                        pending.Push(store.Resolve(reference));
+                    }
+
+                    break;
+                case PdfArray array:
+                    for (int i = array.Count - 1; i >= 0; i--)
+                    {
+                        pending.Push(array[i]);
+                    }
+
+                    break;
+                case PdfStream stream:
+                    pending.Push(stream.Dictionary);
+                    break;
+                case PdfDictionary dictionary:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                    {
+                        pending.Push(entry.Value);
+                    }
+
+                    break;
             }
-
-            PdfPrimitive resolved = store.Resolve(reference);
-            Visit(store, resolved, visited);
-            return;
-        }
-
-        if (p is PdfArray arr)
-        {
-            for (int i = 0; i < arr.Count; i++)
-            {
-                Visit(store, arr[i], visited);
-            }
-            return;
-        }
-
-        if (p is PdfDictionary dict)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
-            {
-                Visit(store, entry.Value, visited);
-            }
-            return;
-        }
-
-        if (p is PdfStream stream)
-        {
-            Visit(store, stream.Dictionary, visited);
         }
     }
+
 
     // ── Annotation redaction (R1) ─────────────────────────────────────────
 
@@ -5608,7 +6009,8 @@ public static class Redactor
         HashSet<int> redactedAnnotRefs,
         HashSet<int> removalCandidates,
         Dictionary<int, PdfDictionary> rewrittenFieldObjects,
-        RedactCounts counts)
+        RedactCounts counts,
+        HashSet<PdfDictionary>? matchedAnnotations = null)
     {
         if (!page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsPrim))
         {
@@ -5630,8 +6032,11 @@ public static class Redactor
                 continue;
             }
 
-            if (!TryGetAnnotationRect(annot, store, out RectangleF annotRect)
-                || !IntersectsAnyRect(annotRect, rects))
+            // 3.35.0 (D-396): an annotation holding a pattern match goes too.
+            bool matched = matchedAnnotations is not null && matchedAnnotations.Contains(annot);
+            if (!matched
+                && (!TryGetAnnotationRect(annot, store, out RectangleF annotRect)
+                    || !IntersectsAnyRect(annotRect, rects)))
             {
                 kept.Add(entry);
                 continue;
@@ -5827,6 +6232,228 @@ public static class Redactor
         return false;
     }
 
+    // Removes from the written catalog every entry that refers, directly or
+    // through written objects, to an object that is not written. Inside
+    // /AcroForm only the parts are dropped: /Fields entries for fields not
+    // written (fields with no widget on a page) and /XFA (form data that is
+    // not scrubbed). The catalog object is replaced by a copy; the source
+    // document is unchanged. Returns the names of what was dropped.
+    private static List<string> DropUnwrittenCatalogEntries(List<PdfIndirectObject> allObjects, PdfDictionary trailer)
+    {
+        List<string> removed = new List<string>();
+        if (!trailer.TryGetValue(PdfName.Root, out PdfPrimitive? rootRef) || rootRef is not PdfReference root)
+        {
+            return removed;
+        }
+
+        Dictionary<int, PdfPrimitive> written = new Dictionary<int, PdfPrimitive>();
+        int catalogIndex = -1;
+        for (int i = 0; i < allObjects.Count; i++)
+        {
+            written[allObjects[i].Id.ObjectNumber] = allObjects[i].Value;
+            if (allObjects[i].Id.ObjectNumber == root.ObjectId.ObjectNumber)
+            {
+                catalogIndex = i;
+            }
+        }
+
+        if (catalogIndex < 0 || allObjects[catalogIndex].Value is not PdfDictionary catalog)
+        {
+            return removed;
+        }
+
+        PdfDictionary copy = new PdfDictionary();
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in catalog)
+        {
+            string key = entry.Key.Value;
+            if (key is "Type" or "Pages")
+            {
+                copy.Set(entry.Key, entry.Value);
+                continue;
+            }
+
+            PdfPrimitive value = entry.Value;
+            if (key == "AcroForm")
+            {
+                value = PruneAcroForm(value, written, allObjects, removed);
+            }
+
+            if (key == "Names")
+            {
+                value = PruneNames(value, written, allObjects, removed);
+            }
+
+            if (Dangles(value, written))
+            {
+                removed.Add(key);
+                continue;
+            }
+
+            copy.Set(entry.Key, value);
+        }
+
+        if (removed.Count > 0)
+        {
+            allObjects[catalogIndex] = new PdfIndirectObject(allObjects[catalogIndex].Id, copy);
+        }
+
+        return removed;
+    }
+
+    // The /Names value with the name trees that are not written taken out
+    // (each reported as Names/<key>). An indirect names dictionary that is
+    // written is replaced by its pruned copy in allObjects.
+    private static PdfPrimitive PruneNames(PdfPrimitive value, Dictionary<int, PdfPrimitive> written, List<PdfIndirectObject> allObjects, List<string> removed)
+    {
+        PdfDictionary? names = value switch
+        {
+            PdfDictionary direct => direct,
+            PdfReference r when written.TryGetValue(r.ObjectId.ObjectNumber, out PdfPrimitive? target) => target as PdfDictionary,
+            _ => null,
+        };
+        if (names is null)
+        {
+            return value;
+        }
+
+        PdfDictionary pruned = new PdfDictionary();
+        bool changed = false;
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in names)
+        {
+            if (Dangles(entry.Value, written))
+            {
+                removed.Add("Names/" + entry.Key.Value);
+                changed = true;
+                continue;
+            }
+
+            pruned.Set(entry.Key, entry.Value);
+        }
+
+        if (!changed)
+        {
+            return value;
+        }
+
+        if (value is PdfReference namesRef)
+        {
+            for (int i = 0; i < allObjects.Count; i++)
+            {
+                if (allObjects[i].Id.ObjectNumber == namesRef.ObjectId.ObjectNumber)
+                {
+                    allObjects[i] = new PdfIndirectObject(allObjects[i].Id, pruned);
+                    written[namesRef.ObjectId.ObjectNumber] = pruned;
+                }
+            }
+
+            return value;
+        }
+
+        return pruned;
+    }
+
+    // The /AcroForm value with /XFA and the /Fields entries that are not
+    // written taken out. An indirect form dictionary that is written is
+    // replaced by its pruned copy in allObjects.
+    private static PdfPrimitive PruneAcroForm(PdfPrimitive value, Dictionary<int, PdfPrimitive> written, List<PdfIndirectObject> allObjects, List<string> removed)
+    {
+        PdfDictionary? form = value switch
+        {
+            PdfDictionary direct => direct,
+            PdfReference r when written.TryGetValue(r.ObjectId.ObjectNumber, out PdfPrimitive? target) => target as PdfDictionary,
+            _ => null,
+        };
+        if (form is null)
+        {
+            return value;
+        }
+
+        PdfDictionary pruned = new PdfDictionary();
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in form)
+        {
+            if (entry.Key.Value == "XFA")
+            {
+                removed.Add("AcroForm/XFA");
+                continue;
+            }
+
+            PdfPrimitive listValue = entry.Value is PdfReference lr && written.TryGetValue(lr.ObjectId.ObjectNumber, out PdfPrimitive? listTarget)
+                ? listTarget
+                : entry.Value;
+            if (entry.Key.Value is "Fields" or "CO" && listValue is PdfArray fields)
+            {
+                List<PdfPrimitive> kept = new List<PdfPrimitive>();
+                foreach (PdfPrimitive field in fields)
+                {
+                    if (field is PdfReference fr && !written.ContainsKey(fr.ObjectId.ObjectNumber))
+                    {
+                        removed.Add("AcroForm/" + entry.Key.Value + " " + fr.ObjectId.ObjectNumber.ToString(CultureInfo.InvariantCulture) + " 0 R");
+                        continue;
+                    }
+
+                    kept.Add(field);
+                }
+
+                pruned.Set(entry.Key, new PdfArray(kept));
+                continue;
+            }
+
+            pruned.Set(entry.Key, entry.Value);
+        }
+
+        if (value is PdfReference formRef)
+        {
+            for (int i = 0; i < allObjects.Count; i++)
+            {
+                if (allObjects[i].Id.ObjectNumber == formRef.ObjectId.ObjectNumber)
+                {
+                    allObjects[i] = new PdfIndirectObject(allObjects[i].Id, pruned);
+                    written[formRef.ObjectId.ObjectNumber] = pruned;
+                }
+            }
+
+            return value;
+        }
+
+        return pruned;
+    }
+
+    // True when a value refers to an object that is not written: the value
+    // itself, or a reference held directly in it (in a direct dictionary or
+    // array). References are not followed further: objects that are written
+    // were written whole by the steps above (a structure tree may still name
+    // a removed annotation, as before).
+    private static bool Dangles(PdfPrimitive value, Dictionary<int, PdfPrimitive> written)
+    {
+        switch (value)
+        {
+            case PdfReference reference:
+                return !written.ContainsKey(reference.ObjectId.ObjectNumber);
+            case PdfDictionary dict:
+                foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                {
+                    if (Dangles(entry.Value, written))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case PdfArray array:
+                foreach (PdfPrimitive item in array)
+                {
+                    if (Dangles(item, written))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
+
     private static PdfDictionary? FindCatalog(PdfDocument document)
     {
         foreach (PdfIndirectObject obj in document.Objects.Objects)
@@ -5935,6 +6562,131 @@ public static class Redactor
         return copy;
     }
 
+    private static bool IsFillOp(string op) => op is "f" or "F" or "f*" or "B" or "B*" or "b" or "b*";
+
+    private static bool ShadingReachesBoxes(IReadOnlyList<RedactContext> contexts)
+    {
+        foreach (RedactContext context in contexts)
+        {
+            if (context.Rects.Count > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The /ShadingType of the shading an sh operator names, or 0.
+    private static int ShadingTypeOf(List<PdfToken> operands, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (operands.Count == 0
+            || operands[^1].Type != PdfTokenType.Name
+            || resources is null
+            || !resources.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? sv)
+            || store.Resolve(sv) is not PdfDictionary shadings
+            || !shadings.TryGetValue(PdfName.Intern(operands[^1].RawText), out PdfPrimitive? entry))
+        {
+            return 0;
+        }
+
+        return ShadingTypeOf(store.Resolve(entry), store);
+    }
+
+    private static int ShadingTypeOf(PdfPrimitive shading, PdfObjectStore store)
+    {
+        PdfDictionary? dict = shading switch
+        {
+            PdfDictionary d => d,
+            PdfStream st => st.Dictionary,
+            _ => null,
+        };
+        if (dict is not null && dict.TryGetValue(PdfName.Intern("ShadingType"), out PdfPrimitive? tv)
+            && store.Resolve(tv) is PdfInteger type)
+        {
+            return type.Value;
+        }
+
+        return 0;
+    }
+
+    // True when the named fill pattern is a shading pattern with a mesh
+    // shading (types 4 to 7).
+    private static bool IsMeshShadingPattern(string? name, PdfDictionary? resources, PdfObjectStore store)
+    {
+        if (name is null
+            || resources is null
+            || !resources.TryGetValue(PdfName.Intern("Pattern"), out PdfPrimitive? pv)
+            || store.Resolve(pv) is not PdfDictionary patterns
+            || !patterns.TryGetValue(PdfName.Intern(name), out PdfPrimitive? entry))
+        {
+            return false;
+        }
+
+        PdfDictionary? pattern = store.Resolve(entry) switch
+        {
+            PdfDictionary d => d,
+            PdfStream st => st.Dictionary,
+            _ => null,
+        };
+        return pattern is not null
+            && pattern.TryGetValue(PdfName.Intern("Shading"), out PdfPrimitive? shading)
+            && ShadingTypeOf(store.Resolve(shading), store) >= 4;
+    }
+
+    // Writes "q <clip> sh Q": one even-odd clip per box (a large rectangle
+    // and the box), so the shading paints everywhere but inside the boxes,
+    // overlapping ones included. Boxes are mapped into the current user
+    // space through each context.
+    private static void WriteShadingOutsideBoxes(
+        MemoryStream sink, RedactState state, IReadOnlyList<RedactContext> contexts, List<PdfToken> operands)
+    {
+        StringBuilder sb = new StringBuilder("q\n");
+        foreach (RedactContext context in contexts)
+        {
+            if (context.Rects.Count == 0)
+            {
+                continue;
+            }
+
+            Transform toUser;
+            try
+            {
+                toUser = state.Ctm.Multiply(context.BaseCtm).Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                // A degenerate space shows nothing; paint nothing.
+                WriteRaw(sink, "q 0 0 m h W n Q\n");
+                return;
+            }
+
+            const double Far = 1e5;
+            foreach (RectangleF r in context.Rects)
+            {
+                AppendQuad(sb, toUser, -Far, -Far, Far, Far);
+                AppendQuad(sb, toUser, r.X, r.Y, r.X + r.Width, r.Y + r.Height);
+                sb.Append("W* n\n");
+            }
+        }
+
+        WriteRaw(sink, sb.ToString());
+        WriteTokens(sink, operands);
+        WriteRaw(sink, "sh\nQ\n");
+    }
+
+    private static void AppendQuad(StringBuilder sb, Transform m, double x0, double y0, double x1, double y1)
+    {
+        PointF a = m.TransformPoint(new PointF(x0, y0));
+        PointF b = m.TransformPoint(new PointF(x1, y0));
+        PointF c = m.TransformPoint(new PointF(x1, y1));
+        PointF d = m.TransformPoint(new PointF(x0, y1));
+        sb.Append(Fmt(a.X)).Append(' ').Append(Fmt(a.Y)).Append(" m ")
+            .Append(Fmt(b.X)).Append(' ').Append(Fmt(b.Y)).Append(" l ")
+            .Append(Fmt(c.X)).Append(' ').Append(Fmt(c.Y)).Append(" l ")
+            .Append(Fmt(d.X)).Append(' ').Append(Fmt(d.Y)).Append(" l h\n");
+    }
+
     private static string Fmt(double v)
     {
         return v.ToString("F6", CultureInfo.InvariantCulture);
@@ -5959,6 +6711,11 @@ internal sealed class RedactState
     }
 
     internal Transform Ctm { get; set; }
+
+    // 3.35.0: open marked-content sequences whose replacement text matched a
+    // pattern; the text shown in them is removed.
+    internal int ReplacementTextMatchDepth { get; set; }
+
     internal Transform TextMatrix { get; set; }
     // Running advance from the current text-line origin, in text space (0 at a
     // fresh Td / Tm / T*). The line position and orientation live in TextMatrix.
@@ -6243,6 +7000,12 @@ internal sealed class RedactRun
 
     /// <summary>How painted vector paths intersecting a region are removed.</summary>
     public VectorRedactionMode VectorMode { get; set; } = VectorRedactionMode.SubtractPrecise;
+
+    /// <summary>
+    /// The patterns with no page list, matched against the replacement text of
+    /// marked content in forms and pattern cells (3.35.0).
+    /// </summary>
+    public IReadOnlyList<PatternRule> DocumentPatterns { get; set; } = Array.Empty<PatternRule>();
 
     /// <summary>Form object number to the placements at which it is invoked.</summary>
     public Dictionary<int, List<RedactContext>> FormInvocations { get; } = new();

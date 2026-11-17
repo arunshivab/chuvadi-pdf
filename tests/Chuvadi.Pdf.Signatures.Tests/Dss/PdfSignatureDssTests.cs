@@ -153,7 +153,7 @@ public sealed class PdfSignatureDssTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
         r.IntegrityVerified.Should().BeTrue();
         r.TrustValidated.Should().BeFalse();
     }
@@ -170,7 +170,7 @@ public sealed class PdfSignatureDssTests
             AutoExtractDss = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 
@@ -184,7 +184,7 @@ public sealed class PdfSignatureDssTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 

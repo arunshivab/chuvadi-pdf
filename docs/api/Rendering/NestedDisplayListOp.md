@@ -44,6 +44,38 @@ Transform CtmComposition
 
 Gets the transform composing inner-space into the parent's user space.
 
+### `Layered`
+
+```csharp
+bool Layered
+```
+
+Gets whether the sub-list is a transparency group drawn into a layer of its own and then composited as one object, with `LayerAlpha`, `RenderOp.BlendMode` and `RenderOp.SoftMask` (PDF 32000-1:2008 §11.4). When false (the default), the group's alpha, blend mode and soft mask were given to each object it paints. Since 3.35.0.
+
+### `LayerAlpha`
+
+```csharp
+double LayerAlpha
+```
+
+Gets the constant alpha the layer is composited with (1 when not `Layered`). Since 3.35.0.
+
+### `Knockout`
+
+```csharp
+bool Knockout
+```
+
+Gets whether the group is a knockout group (`/K true`): each object it paints replaces, rather than composites over, what earlier objects of the group painted (PDF 32000-1:2008 §11.4.6). A knockout group is always `Layered`. Since 3.35.0.
+
+### `Isolated`
+
+```csharp
+bool Isolated
+```
+
+Gets whether the group is isolated (`/I true`): its layer starts transparent rather than from what is under it (PDF 32000-1:2008 §11.4.5). Meaningful only when `Layered`. Since 3.35.0.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Rendering.Raster/NestedDisplayListOp.cs`](../../../src/Chuvadi.Pdf.Rendering.Raster/NestedDisplayListOp.cs)_

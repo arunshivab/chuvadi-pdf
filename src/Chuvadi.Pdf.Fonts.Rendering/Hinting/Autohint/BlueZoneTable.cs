@@ -53,7 +53,12 @@ internal sealed class BlueZoneTable
     /// be considered a match when no band contains <paramref name="y"/>.
     /// </param>
     /// <returns>The matching <see cref="BlueZone"/>, or null.</returns>
-    internal BlueZone? FindZoneFor(double y, double tolerance)
+    internal BlueZone? FindZoneFor(double y, double tolerance) => FindZoneFor(y, tolerance, null);
+
+    // 3.35.0 (D1, backlog 65a): with isTop given, only zones of that kind
+    // are considered (a ceiling edge anchors to a top zone, a floor edge to
+    // a bottom zone).
+    internal BlueZone? FindZoneFor(double y, double tolerance, bool? isTop)
     {
         BlueZone? containing = null;
         BlueZone? nearest = null;
@@ -61,6 +66,11 @@ internal sealed class BlueZoneTable
 
         foreach (BlueZone zone in _zones)
         {
+            if (isTop is bool wanted && zone.IsTop != wanted)
+            {
+                continue;
+            }
+
             if (zone.Contains(y))
             {
                 // Prefer the band whose position is closest to y when several

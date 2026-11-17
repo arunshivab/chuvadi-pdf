@@ -10,7 +10,491 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
-## [3.34.0] - 2026-11-27
+## [3.35.0] - Unreleased
+
+Work in progress (D-385, D-384). Entries are added as each item lands.
+
+### Changed
+- **`RepairIfDamaged` opens an intact earlier revision** when more than half
+  of the latest revision's page tree cannot be read (B8, stressful-0123,
+  D-399). The file was saved again with a broken cross-reference section,
+  so its page tree pointed at streams and every page failed ("Page index 0
+  not found"). The most recent earlier revision that reads in full is
+  opened, and `Warnings` starts with a line saying which revision is shown
+  and that later changes are not. Without `RepairIfDamaged`, nothing
+  changes. A latest revision with no pages is opened as it is.
+
+- **Raster images are smoothed when scaled** (item 55, D-400). An image
+  drawn smaller than its pixels is averaged over the pixels each device
+  pixel covers. One drawn up to four times larger is interpolated between
+  pixel centres. Both weight colour by alpha, so transparent pixels add no
+  colour. An image drawn four or more times larger stays sharp (nearest
+  pixel), as in Poppler. A soft mask with more samples than its image is
+  averaged down. Before, every image was sampled at one pixel, so
+  soft-masked emoji (Chrome prints) had blocky edges with pale fringes. On
+  PDFBOX-4355-0's three emoji the mean difference from Poppler fell from
+  4.9, 6.6 and 8.5 to 2.2, 3.2 and 5.4. Every scaled image in the raster
+  output changes slightly; SVG and WPF are unchanged.
+
+### Security (D-396, D-397; audits A-08 and A-09, confirmed by the Checker)
+- **Pattern redaction finds text however it is drawn.** Before, a pattern
+  matched only inside one text operator at the top level of the page, so
+  an SSN drawn in two pieces, or inside a form, stayed on the page and the
+  report showed 0 glyphs. Patterns now match the text a viewer shows:
+  - joined across operators (split `Tj`/`TJ`, one glyph per `Tj`,
+    separate `BT` or `q`/`Q` blocks, a colour change between the parts,
+    the `'` and `"` operators, a string split across content streams);
+  - with a space wherever the layout leaves a word gap, so
+    `[(John)-333(Smith)] TJ` matches "John Smith";
+  - inside form XObjects (nested, with `/Matrix`), tiling-pattern cells,
+    Type 3 glyphs and annotation appearances, and on every layer.
+  Each match becomes boxes inside the matched glyphs, removed by the
+  rectangle path, which already reached forms and cells.
+- **Annotations, fields and replacement text.** An annotation whose text
+  entries (`/Contents`, `/T`, `/TU`, `/RC`, field values, `/MK` captions),
+  actions (URI, JavaScript, `/Next` chains) or file names match is removed;
+  a widget's value is cleared. `/ActualText`, `/Alt` and `/E` that match are
+  removed together with the text they stand for, in pages, forms and cells
+  and in the structure tree.
+- **Fail closed.** The output is read back and matched again before it is
+  written. A survivor gets a further pass; after three passes, or for a
+  match that cannot be placed (a pattern cell repeated thousands of times),
+  `RedactionException` is thrown and nothing is written. The message gives
+  pages and counts, never the matched text.
+- **The rest of the document is kept** (RED-05). Named destinations, document
+  JavaScript, `/OpenAction`, `/AA`, `/AF`, the portfolio and `/URI` are
+  written. Before, they were dropped or written as `null`. Scripts and URIs
+  that match a pattern lose their text (`RedactionReport.ScriptsRemoved`);
+  the action stays. Other name trees (page templates, appearance and
+  web-capture names) hold content outside the page tree and are dropped
+  and reported, for example `Names/Templates`.
+- **Pattern redaction removes attachments unless they can be checked**
+  (D-397). An attachment is kept only when every embedded file in it reads
+  as text and neither the text nor its name matches. Every other attachment
+  is removed and listed in `RedactionReport.AttachmentsRemoved`; a name that
+  matched is listed as `(name redacted)`.
+  `RedactionOptions.KeepAttachments = true` keeps those that could not be
+  checked and lists them in `RedactionReport.AttachmentsNotScanned`. An
+  attachment that matches is removed either way. With rectangles only (no
+  patterns) attachments are kept and listed in `AttachmentsNotScanned`
+  (D-398). Before, attachments were always dropped.
+- **Precise pattern sets** (RED-11).
+  - `CommonPatterns.Swift` needs a digit in the code or a "BIC"/"SWIFT"
+    label before it. `PatternSets.Financial` pairs it with the new
+    `PatternValidators.Bic` (ISO 3166 country code in letters 5 and 6).
+    "APPROVED" and "HOSPITAL" are no longer deleted; "DEUTDEFF" alone is
+    no longer matched either, while "SWIFT: DEUTDEFF" is.
+  - `PatternSets.Financial` pairs `Itin` with the new
+    `PatternValidators.Itin` (the IRS group ranges).
+  - `PatternSets.Medical` uses the new `CommonPatterns.Icd10Code` (a code
+    with its decimal part) and `CommonPatterns.Icd10Labeled` (any code
+    after "ICD-10", "Dx" or "diagnosis"). "A12", "B2B" and "T1D" are no
+    longer deleted. `Icd10Prefix` keeps its shape but no longer accepts a
+    letter as the third character except C4A, C7A, C7B, D3A, M1A and Z3A.
+  - Checked against 234,450 dictionary words in three cases: the three
+    sets match none of them.
+- **Shadings under a rectangle** (RED-08). A shading painted with `sh` that
+  reaches a rectangle is clipped out of it (counted in `PathsCut`). A mesh
+  shading (types 4 to 7), and a path filled with a mesh shading pattern,
+  is removed whole (`PathsRemoved`), since its data under the box would
+  stay in the file. Before, the shading was only covered by the box.
+- **`RedactionVerifier.VerifyPatterns`** (new): checks a pattern redaction.
+  It matches pages as the redactor does, then annotations, every string in
+  the document's objects, XMP, scripts, replacement text in content
+  streams and attachments. An attachment that cannot be read as text is
+  reported as not checkable. New survivor kinds: `DocumentText` and
+  `Attachment` (page index -1) and `Shading`.
+- **`RedactionVerifier.Verify` reports shadings** whose clip covers part of a
+  region. Before, shadings were never reported.
+- **Signatures: `IsValid` needs a trusted signer** (SIG-01). Under default
+  options (no trust store), a cryptographically intact signature is
+  `TrustUnknown` with `IsValid = false`; `IntegrityVerified` is still true.
+  New `SignatureVerificationResult.TrustStatus`.
+- **Signatures: changes after signing are detected** (SIG-02, SIG-03), in
+  every mode, with or without a trust store. The verifier compares the
+  signed revision with the whole file, object by object.
+  - Allowed after signing: further signatures, their fields, widgets and
+    appearances, DSS/LTV data, and the catalog, form and page entries that
+    hold them. These are reported as `ModificationsAfterSigning =
+    SignaturesOnly`, and the signature stays valid.
+  - Anything else gives `ModificationsAfterSigning = Other`, status
+    `ModifiedAfterSigning` and `IsValid = false`. That covers a replaced
+    page, new content, a changed `/Info`, a byte range whose gap is wider
+    than `/Contents`, one that does not start at 0, and one that leaves the
+    end of its revision unsigned.
+  - New `CoversWholeDocument`, true when the byte range ends at the end of
+    the file.
+  - Status order: integrity failures first, then `ModifiedAfterSigning`,
+    then trust.
+
+### Security and robustness (D-400, D-402; audits A-23, A-24, A-28, A-29,
+A-32, confirmed by the Checker)
+- **A removed page is never written** (OPS-01). `DeletePages`,
+  `ExtractPages` and `SplitPages` copied every object a kept page reached,
+  so a link's `/Dest` or GoTo, an annotation's `/P`, or any other key
+  pointing at a removed page pulled that page and its content back into the
+  file. A reference to a page is now followed only to a page that is
+  written: it points at that page's new object, and a reference to any
+  other page becomes `null` (a link to it goes nowhere).
+- **Long chains of objects no longer end the process** (DOC-01, OPS-08).
+  Every walk over a file's objects (save, flatten, merge, compress,
+  sanitise, PDF/A, redaction, form filling and the others) is iterative,
+  so 20,000 bookmarks side by side or nested each inside the last no longer
+  overflow the stack. Field trees, page trees and form merges stop at 1,024
+  levels and bookmarks are read 256 levels deep; deeper levels are left
+  out (a merge keeps the first 256 levels of a deeper outline).
+- **Over-long numbers no longer end the process when rendering** (GFX-01).
+  A coordinate too long for a double (`999…9` with 400 digits) became
+  infinity and sent the curve flattener into unbounded recursion. The
+  flattener is iterative with a depth cap; a fill, stroke or glyph whose
+  path is not finite is skipped with a `ContentOperatorSkipped` warning.
+  `RenderOptions.Dpi`, and the `dpi` of `RenderPageToPng` and the other
+  one-call renderers, throws `ArgumentOutOfRangeException` unless it is a
+  finite number greater than zero; before, NaN or infinity ended the
+  process and 0 or a negative value gave an empty image.
+- **Deeply nested XFA scripts fail as script errors** (XFA-01). The
+  JavaScript and FormCalc parsers stop at 100 levels of nesting with an
+  `XfaScriptException`, which the script runner reports like any other
+  script error; 10,000 nested brackets used to end the process.
+- **PDF/A fails closed** (PDA-01). `PdfAWriter.Write` checks, after its own
+  fixes and before writing, for what it cannot fix: in PDF/A-1b, a
+  constant opacity other than 1, a blend mode other than Normal or
+  Compatible, a soft mask, or a transparency group; in both levels,
+  DeviceCMYK colour (the output intent is RGB) unless `/DefaultCMYK` gives
+  it a colour space; LZW compression and embedded files anywhere in the
+  file; optional content in PDF/A-1b, and an optional content configuration
+  without a `/Name` in PDF/A-2b; file attachment annotations in PDF/A-1b;
+  and in PDF/A-2b an annotation other than Popup or Link (and not of zero
+  size) without a normal appearance. Transparency and colour count only
+  where a page uses them: its content, the forms, patterns, shadings,
+  images and Type 3 glyphs it draws, and its annotations' appearances; a
+  resource no page uses does not count. Each problem found is listed in
+  `PdfAResult.Violations`, `Succeeded` is false and nothing is written.
+  Before, such files were written and reported as conforming, and veraPDF
+  rejected them.
+
+### Fixed
+- **Accented letters in the standard fonts** (A1). 695 glyphs of the
+  bundled Standard 14 substitutes (most accented letters, such as é, ü and
+  Å) are composites, and the bundle builder wrote them empty, so text in a
+  non-embedded Helvetica, Times or Courier showed blanks where those letters
+  were. The builder now decomposes composites; `Standard14.bin` was rebuilt
+  for those glyphs only, so every other glyph is unchanged.
+- **Standard-font text is written in WinAnsiEncoding** (AUT-01).
+  `PageBuilder.DrawText` and `DrawTextBlock` with a standard font (other
+  than Symbol and ZapfDingbats), `TextStamper.Apply` and
+  `WatermarkStamper.ApplyText` without font data wrote the low byte of each
+  character, so €, dashes, curly quotes, bullets and the ellipsis came out
+  as other characters or nothing. They are now mapped through the WinAnsi
+  table. A character the table lacks (Tamil, Greek, CJK) throws an
+  `ArgumentException` that names it and points to `AddFont`, and nothing is
+  drawn; before, it was written as a wrong character. `ReportBuilder` no
+  longer pre-maps bullets, dashes, quotes and the ellipsis to WinAnsi codes
+  (the writer does it now), so a report in an added TrueType font shows
+  those characters instead of missing glyphs. The XFA renderer, which draws
+  form text in standard fonts, draws a line or paragraph separator as a
+  space and any other character outside WinAnsi as `?` instead of failing.
+- **Embedded Type 1 fonts draw at their own scale** (N15): the program's
+  `/FontMatrix` is read instead of assuming 1/1000, so a font with a
+  2048-unit em (govdocs1-0043) no longer draws about twice too big with its
+  letters overlapping. A missing or degenerate matrix still means 1/1000.
+- **More RC4-encrypted files open** (52d): `/Standard /V 1 /R 3` is read as
+  40-bit RC4 (Poppler, MuPDF and qpdf open such files), and `/R 2` with no
+  `/V` is read as `/V 1` with a recovery-log note. A `/V 1` key is always
+  40 bits, whatever `/Length` says. An unsupported `/V`/`/R` pair now says
+  which pair it is instead of "not a standard security handler"; a
+  `/R 2` dictionary with no `/V` that the empty password does not open is
+  reported as malformed rather than asking for a password.
+- **A stored Deflate block cut short keeps its bytes** (52c): a damaged
+  Indexed `/Lookup` (poppler-00013) keeps the entries that decoded, and the
+  missing ones read as zero, as a short lookup string does. Before, the page
+  failed.
+
+- **Bevel joins and the mitre limit in the raster stroker** (backlog 54):
+  a bevel join (`2 j`) is now bevelled, and a mitre join is bevelled when
+  its mitre ratio, 1 / sin(angle / 2), exceeds the graphics state's `/ML`
+  (`M` operator, default 10), per PDF 32000-1:2008 §8.4.3.5. Before, both
+  were mitred with a fixed limit of 8 half-widths measured from the wrong
+  point, so bevel joins showed sharp corners and `/ML` had no effect.
+  Round joins are unchanged.
+
+- **JPEG images behind another filter, and JPEG soft masks, in SVG and
+  WPF** (backlog 62): the display list takes an image's codec from its
+  last filter, so `[/FlateDecode /DCTDecode]` images are embedded (before,
+  they were left out); a soft mask stored as a JPEG is decoded and applied;
+  and a JPEG image with a soft mask carries the mask (`ImageOp.SoftMaskAlpha`
+  is now set for JPEG ops too). SVG embeds such a JPEG as an RGBA PNG.
+  **WPF now applies soft masks to all images** (raw and JPEG); before it drew
+  every image opaque. The raster renderer already handled all three since
+  3.34.0. A soft mask's `/Matte` is still applied to raw images only.
+
+- **Text rendering modes in the raster renderer** (D-384 G2, G3): modes 1,
+  2, 5 and 6 stroke the glyph outlines with the graphics state's line
+  width, join, cap, mitre limit and dash (before, they were filled), and
+  modes 4 to 7 add the glyphs to the clipping path at `ET` (PDF
+  32000-1:2008 §9.3.6). Before, modes 4 to 7 painted the glyphs and set no
+  clip, so a fill meant for the inside of the text covered the whole page.
+  Type 3 glyphs are filled as before. Text filled or stroked with a pattern
+  paints the pattern through the glyph outlines, as a path does; before, a
+  pattern fill drew nothing and a pattern stroke filled the glyphs black
+  (pdf.js `pattern_text_non_embedded_font`). A pattern cell that paints
+  itself again (text filled with the pattern inside a Type 3 glyph the cell
+  shows) paints nothing the second time, so such a page finishes (pdf.js
+  `ContentStreamCycleType3insideType3`).
+- **Horizontal scaling widens the glyphs in the raster renderer** (D-384
+  T1): `Tz` now scales the glyph shapes as well as the advances, as the
+  text rendering matrix has it (PDF 32000-1:2008 §9.4.4). Before, 150 `Tz`
+  text was drawn as normal-width letters spread apart. Every rendered page
+  that uses `Tz` other than 100 changes.
+- **Shadings honour constant alpha** (D-384, Print): `sh` and shading
+  patterns are painted with the fill alpha (`/ca`), or the stroke alpha for
+  a stroke pattern (§11.6.4.4), in the raster renderer and SVG. Before, a
+  half-opaque shading was painted opaque.
+- **A page tree whose `/Kids` or `/Count` is an indirect reference** (B8,
+  N9, stressful-0370): it is resolved, so the pages are found; before,
+  "Page index 0 not found in page tree". With `RepairIfDamaged`, a page
+  tree kid whose object cannot be read no longer fails the open (stressful-0123
+  now fails only at the page, as without repair).
+
+- **A stream written directly inside a dictionary keeps what follows it**
+  (52h): when a stream's data is read up to `endstream` (an indirect or
+  wrong `/Length`), the parser no longer takes the next token as
+  `endstream` too. For a stream inside a dictionary (Poppler's
+  `mask.pdf`) that token was the `>>` closing the dictionary, so the page
+  tree failed to load and the file did not open; it now opens and draws as
+  in Poppler.
+- **Damaged objects are read past when opened with `RepairIfDamaged`**
+  (52h, D-385): objects parsed later (lazily) then accept a value with no
+  key (skipped), a dictionary that runs into `stream` or `endobj` unclosed
+  (a `>>` written as `>`), and an array left open (closed where its object
+  ends), each with a recovery-log note. Without `RepairIfDamaged` these
+  still throw `PdfParseException`, as before. The in-memory repair also
+  reads such an object whole instead of splitting it at the inner stream.
+  pdf-differences `UnknownFilter-PageContentStream.pdf` and
+  stressful-0369 now draw.
+- **A one-element `/Decode` on a stencil mask** (`[1]`) is read as `[1 0]`,
+  as Poppler and MuPDF read it, in the raster renderer and the display
+  list.
+
+- **Tiling patterns with a step far smaller than the cell render at once**
+  (backlog 56): when one repeat period would need more than 4,096 draws of
+  the cell (pdf.js `tiling-pattern-tiny-steps-large.pdf`: a 1,200-unit cell
+  stepped by 0.001), the period is filled with the average colour of the
+  pixels the cell's content covers, since every point of it is covered.
+  Before, such a page took many minutes (Poppler and MuPDF also take
+  minutes); it now takes well under a second.
+
+- **Redacted files no longer name catalog objects they do not contain**
+  (backlog 59, D-385): after redaction, a catalog entry that refers to an
+  object not written (a name tree, an open action, and so on) is dropped.
+  The form is kept: its dictionary, default resources and `/Fields` and
+  `/CO` arrays are now loaded, and a field on no page is taken out of those
+  arrays. `/XFA` is always dropped, since it holds the form data in clear.
+  Each removal is listed in the new `RedactionReport.CatalogEntriesRemoved`
+  (for example "Names", "OpenAction", "AcroForm/XFA",
+  "AcroForm/Fields 12 0 R"); it is empty when nothing was removed.
+  Before, such entries stayed and pointed at missing objects. Entries
+  whose objects are written are unchanged.
+
+- **An image's `/Mask` is applied in the SVG and WPF outputs** (backlog 60):
+  a stencil mask (a 1-bit image, `/Decode [1 0]` honoured, at its own size)
+  and colour-key ranges (over 8-bit samples, palette indices for an Indexed
+  image, or a gray or RGB JPEG) become the image's alpha, as in the raster
+  renderer. The display list now carries this in `ImageOp.SoftMaskAlpha`
+  (`/SMask` still takes precedence), so other consumers of the display list
+  see it too. A stencil mask that cannot be decoded skips the image with an
+  `ImageSkipped` warning rather than drawing it unmasked. Before, `/Mask`
+  was ignored and the whole image was painted.
+
+- **Scrub closes two residuals** (backlog 17, D-385). A graphics state
+  whose soft mask draws a group, set under more than one CTM, is now set
+  under a name of its own for each further CTM (`/G0_p1`, ...; up to 16),
+  and each copy's group is scrubbed for its placement; before, the group
+  was kept whole. A Type 3 font now keeps only the glyph procedures of
+  codes the scrubbed text keeps, and its resources only the names those
+  procedures use; before, every procedure and everything its resources held
+  was kept. The font is kept as it is when a kept code has no
+  `/Encoding /Differences` name, or when a form kept whole has no resources
+  of its own (it draws with the page's). Type 3 glyph widths now follow the
+  font's `/FontMatrix` when deciding which glyphs lie in the box (they were
+  read as thousandths), and a `Tf` font name with `#` escapes is now
+  resolved. Scrubbed output bytes change for such pages.
+
+- **PDF/A conversion: form appearances and transfer functions** (backlog
+  49, D-385). `PdfAWriter` now gives every form widget with no appearance
+  one made from the field's value, and when the form's `/NeedAppearances`
+  is true it also remakes the appearances of text and choice fields (push
+  buttons, check boxes and radio buttons keep their designed ones, as the
+  renderers do), then removes `/NeedAppearances` (ISO 19005-1 §6.9,
+  ISO 19005-2 §6.4.1). The fonts of the new appearances are embedded like
+  the page fonts. `/TR`, and `/TR2` other than `/Default`, are removed from
+  every graphics state (ISO 19005-1 §6.2.8, ISO 19005-2 §6.2.5). Each
+  change is reported in `PdfAResult.Warnings`. On the 577-file conversion
+  corpus this clears every transfer-function and `NeedAppearances` failure
+  (16 files; 8 more pass PDF/A-2b and 3 more PDF/A-1b), with no new
+  failures. A viewer that remade a push button's appearance because of the
+  flag (Poppler) now shows the button's stored appearance instead.
+
+- **Transparency groups are composited as a whole when it matters**
+  (backlog 64, D-370, choice C1 (b)). The raster renderer draws a
+  transparency group into an off-screen layer and composites it with the
+  group's alpha, blend mode and soft mask when the group is a knockout
+  group, or when its alpha, blend mode or soft mask applies to more than
+  one object (overlapping objects then no longer show through each other).
+  Inside the layer, objects start from alpha 1 and the Normal blend mode,
+  as the specification says. An isolated group (`/I true`), or one
+  composited with a blend mode other than Normal, starts from a transparent
+  layer; any other starts from a copy of what is under it, so its objects
+  blend with that backdrop, and its result replaces the backdrop by the
+  group's alpha and mask. Knockout groups (`/K true`) now knock out: each
+  object is drawn alone over the group's initial backdrop and replaces, by
+  its shape, what earlier objects of the group painted (up to 256 objects;
+  past that the group is drawn as an ordinary layer). Every other group is
+  drawn as in 3.34.0, pixel for pixel. Memory rises by one page-sized buffer
+  per layered group while it draws (three for a knockout group).
+  `NestedDisplayListOp` gains `Layered`, `LayerAlpha`, `Knockout` and
+  `Isolated` (additive). On the pdf.js knockout tests the output now matches
+  MuPDF (Poppler does not implement knockout); `knockout_smask` follows the
+  specification (a soft mask is opacity, not shape) where both references
+  ignore the knockout.
+- **Blend modes over the unpainted page** (backlog 67): a page that uses a
+  blend mode other than Normal, Multiply or Darken is painted over a
+  transparent backdrop and then onto the background (PDF 32000-1:2008
+  §11.4.7), so a Difference or Screen object over blank paper shows its own
+  colour, as in Acrobat, Poppler and MuPDF; before, it blended with white
+  and a Difference group came out inverted (pdf.js `transparency_group`).
+  Such a page takes one more page-sized buffer while it draws; other pages
+  are drawn exactly as before. A layered non-isolated group now mixes back
+  with premultiplied colour, so a transparent backdrop adds no colour.
+- **Hue, Saturation, Color and Luminosity blend modes** (C2). The raster
+  renderer applies the non-separable formulas of §11.3.5.3 and the SVG
+  output writes the matching `mix-blend-mode`; before, all four were drawn
+  as Normal. `PdfBlendMode` gains `Hue`, `Saturation`, `Color` and
+  `Luminosity` (additive), `BlendModes.FromName` maps their names, and
+  `BlendModes.BlendRgb` and `BlendModes.IsNonSeparable` are new.
+- **Predefined CJK CMaps** (E1, D-352). A Type 0 font whose `/Encoding`
+  names a predefined CMap of the Adobe-GB1, -CNS1, -Japan1 or -Korea1
+  collections (`90ms-RKSJ-H`, `UniGB-UTF16-H`, `KSCms-UHC-H`, `B5pc-H` and
+  the rest of Table 118, and their newer siblings: 121 tables, with the
+  UTF-8 and UTF-32 forms read through the UTF-16 ones) is now read code by
+  code through that CMap: one- and two-byte Shift-JIS, EUC, GBK and UHC
+  codes and Unicode codes select the right CID. This applies to the raster
+  renderer, the structured display list (SVG, WPF), text extraction and
+  text widths. Before, every code was taken as two bytes and as a CID,
+  which drew the wrong glyphs and read the wrong text. Text with no
+  ToUnicode CMap now comes from a Unicode CMap's own codes, or from the CID
+  through the collection's Unicode CMaps read backwards (§9.10.2), also for
+  `Identity-H` fonts of those four collections; where a CID maps from
+  several characters, a radical, compatibility ideograph or vertical
+  presentation form gives way to the ordinary character (日, not ⽇; 、,
+  not ︑). pdf.js `90ms_rksj_h_sample` now reads "日本語テスト" (it read
+  "{eXg"), and `perf_text_cjk_nonembedded` reads its Japanese and Chinese
+  text (it read Latin noise). The tables are generated
+  from Adobe's cmap-resources release 20231115 (BSD-3-Clause; notice in
+  `THIRD-PARTY-NOTICES.md`, licence shipped in the package) by
+  `tools/gen_cjk_cmaps.py`, and add about 480 KB to `Chuvadi.Pdf.Fonts`.
+  `PredefinedCMap` is new (additive). Vertical CMaps (`-V`) are read
+  the same way.
+- **Vertical writing** (E2). Text in a Type 0 font with a vertical CMap
+  (`Identity-V`, `UniJIS-UTF16-V`, `90ms-RKSJ-V` and the other `-V` CMaps)
+  is laid out down the page: each glyph is placed by its position vector
+  and the text moves by its vertical advance (§9.7.4.3: `/W2`, else `/DW2`,
+  default `[880 -1000]`, with the position vector's x half the glyph's
+  width), and `TJ` numbers move the text vertically. This applies to the
+  raster renderer, the structured display list (each vertical glyph is a
+  text op of its own, placed where it draws, so SVG and WPF follow) and
+  text extraction (fragment positions). `PdfFont.IsVertical` is new
+  (additive). Before, such text was laid out horizontally. Checked against
+  MuPDF on pdf.js `vertical.pdf` and `issue11555.pdf` (Poppler draws
+  neither without its Japanese language pack). Chuvadi bundles no CJK font,
+  so CJK text in a font that is not embedded still draws nothing.
+- **Light hinting no longer bends glyphs at small sizes** (D2, backlog
+  65b). Light (Y-only) hinting, the default, took the Y coordinates of a
+  full X and Y run of the font's program and paired them with unhinted X
+  coordinates, so instructions that placed points with X in mind pulled
+  bowls out of shape (Arial "D" on safedocs-0286 at 12 and 16 ppem: the
+  bowl lost its top and bottom curves). The program now runs in backward
+  compatibility mode for light hinting, as FreeType's v40 interpreter does:
+  glyph points do not move in X, IUP runs at most once per axis, and
+  nothing moves in Y after both. The "D" now matches FreeType's light
+  rendering pixel for pixel at both sizes. Full hinting is unchanged.
+- **Fonts without hinting programs are drawn unhinted by default** (D1,
+  backlog 65a). `RenderOptions.AutohintUnhintedFonts` now defaults to
+  false (it was true), as Poppler, MuPDF and pdf.js draw such fonts. On a
+  dedicated corpus of the 54 files (sample set, pdf.js and Arun's files)
+  whose pages use TrueType fonts with no `fpgm` or `prep`, drawing them
+  unhinted came closest to Poppler on 39 of 55 changed pages at 72 dpi and
+  33 of 56 at 96 dpi, against 8 and 14 for a fixed autohinter. The
+  autohinter is kept for callers who opt in, with three fixes: an outline's
+  orientation is taken from its signed area (TrueType outlines run
+  clockwise, so its strokes never paired and thin crossbars vanished),
+  edges anchor only to blue zones of their own kind, and a stroke whose two
+  ends are anchored separately keeps at least one pixel.
+- **SVG and WPF no longer show invisible text.** Text in render mode 3
+  (the text layer of a scanned, OCRed page) and mode 7 (clip only) was
+  drawn in the fill colour over the page. The SVG output now keeps it in a
+  group with `opacity="0"`, so it can still be searched and selected; WPF
+  does not draw it.
+- **SVG and WPF draw the text modes and `Tz`** (D-384 T1, T2): `Tz` widens
+  the glyphs; the stroking modes (1, 2, 5, 6) outline the glyphs with the
+  op's line width (modes 1 and 5 without fill); a text clip (modes 4 to 7)
+  clips what follows, through the display list's new clip op.
+
+### Changed
+- **Reals keep the digits they need when written** (backlog 66): the
+  writer uses the fewest significant digits from 6 to 9 that keep the value
+  to single precision (relative error at most 1e-7), instead of always 6.
+  A soft mask's `/BBox` of 1.0833334 now stays 1.0833334 (it was 1.08333,
+  which moved a clip edge across a pixel centre after saving; pdf.js
+  issue18529). Values that need no more than 6 digits are written as
+  before, and single-precision noise does not add digits (0.1f is "0.1").
+  Output bytes change only for reals that need 7 to 9 digits.
+  `PdfReal.ToString()` is unchanged (G6).
+- **`Chuvadi.Pdf.PdfA` depends on `Chuvadi.Pdf.Forms`** (backlog 49), for
+  the field appearance generator; the package brings `Chuvadi.Pdf.Forms`,
+  `Chuvadi.Pdf.Fonts` and `Chuvadi.Pdf.Text.Shaping` with it.
+- **`RedactionReport.CatalogEntriesRemoved`** is a new property (backlog
+  59, additive).
+- **`NestedDisplayListOp` gains `Layered`, `LayerAlpha`, `Knockout` and
+  `Isolated`** (backlog 64, additive). A layered op's `BlendMode` is the
+  group's.
+- **Display list text fields for Print** (D-384, additive):
+  `TextOp.HorizontalScaling` (`Tz`/100, default 1; the glyph shape is
+  `Transform` after [`FontSize` × `HorizontalScaling`, 0, 0, `FontSize`],
+  and `Transform` itself is unchanged); `TextOp.Stroke` (the page-space
+  line attributes for modes 1, 2, 5 and 6, else null); text in modes 4 to
+  7 now emits a `ClipOp` at `ET` with the glyph outlines (page space,
+  non-zero), carried in later ops' `Clips` until the matching `Q` (before,
+  no clip op and `Clips` stayed empty); `ShadingOp.Opacity` (default 1).
+- **`ShadeOp.Alpha`** (raster display list, additive; default 1).
+- **`ImageDecoding.Decode(ImageOp)`** (D-391 I1, additive, in
+  `Chuvadi.Pdf.Rendering`): the pixels of a display-list image exactly as
+  the raster route paints them, as a new `DecodedImage` (`Width`, `Height`,
+  `Pixels` as 8-bit straight RGBA in sRGB, top row first; `HasAlpha`;
+  `CanPassThroughJpeg` for a 1- or 3-component JPEG with no `/SMask`, no
+  `/Mask` and a default `/Decode`; `SkipReason`, the raster route's own text,
+  when it would not draw the image). It covers inline images, stencil masks
+  (in `ImageOp.StencilColor`), every colour space and bit depth the raster
+  route draws, `/Decode`, `/SMask` (on JPEGs too), `/Mask` and CMYK/YCCK
+  JPEGs. The raster route's image decoding moved, unchanged, into one
+  internal decoder that both use, so the two cannot drift. Replaces the
+  planned CMYK-samples method on `ImageOp` (A1).
+
+### Tooling
+- **API docs list constants by name** (backlog 58): `gen_api_docs.py`
+  matches a constant declaration before the general member pattern, so a
+  string value holding `{` or `(` (the regexes in `CommonPatterns`) no
+  longer cuts the name short or files the constant as a property. The
+  `CommonPatterns` page now lists all its patterns, and its
+  `LabeledValue` method, which the broken page had lost.
+
+### Docs
+- The 3.34.0 heading below gave the planned date, 2026-11-27; 3.34.0 was
+  released on 2026-11-13 (D-381). The v3.34.0 tag's copy of this file still
+  shows the planned date.
+
+---
+## [3.34.0] - 2026-11-13
 
 Shown-page geometry for callers (D-334), forms that read and fill fully
 (fields, widgets, options, flags; buttons and radios fixed; UTF-16 names and

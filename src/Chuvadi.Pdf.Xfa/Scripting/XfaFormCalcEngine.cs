@@ -354,7 +354,36 @@ public sealed class XfaFormCalcEngine
             Advance();
         }
 
+        // Deepest nesting of statements, brackets and unary operators
+        // (3.35.0, XFA-01). Deeper scripts fail as an ordinary script error;
+        // before, about 10,000 nested brackets ended the process.
+        private const int MaxNesting = 100;
+
+        private int _nesting;
+
+        private void Enter()
+        {
+            if (++_nesting > MaxNesting)
+            {
+                _nesting--;
+                throw new XfaScriptException("The script is nested more than " + MaxNesting.ToString(CultureInfo.InvariantCulture) + " levels deep.");
+            }
+        }
+
         private FcNode ParseStatement()
+        {
+            Enter();
+            try
+            {
+                return ParseStatementCore();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
+
+        private FcNode ParseStatementCore()
         {
             if (CheckKeyword("if"))
             {
@@ -518,7 +547,18 @@ public sealed class XfaFormCalcEngine
             return new FcWhile { Condition = condition, Body = body };
         }
 
-        private FcNode ParseExpression() => ParseOr();
+        private FcNode ParseExpression()
+        {
+            Enter();
+            try
+            {
+                return ParseOr();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
 
         private FcNode ParseOr()
         {
@@ -612,6 +652,19 @@ public sealed class XfaFormCalcEngine
         }
 
         private FcNode ParseUnary()
+        {
+            Enter();
+            try
+            {
+                return ParseUnaryCore();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
+
+        private FcNode ParseUnaryCore()
         {
             if (CheckKeyword("not") || CheckOp("-") || CheckOp("+"))
             {

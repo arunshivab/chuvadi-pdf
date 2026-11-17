@@ -117,6 +117,13 @@ internal static class HorizontalEdgeDetector
     private static List<Run> CollectRuns(RawGlyph glyph, double flatTolerance, double minExtent)
     {
         List<Run> runs = new();
+
+        // 3.35.0 (D1, backlog 65a): the outline's orientation from its signed
+        // area. Outer contours run counter-clockwise in CFF and clockwise in
+        // TrueType; a floor (ink above) runs left to right in the first and
+        // right to left in the second. Before, every outline was read as
+        // counter-clockwise, so TrueType strokes never paired.
+        bool clockwise = SignedArea(glyph) < 0;
         int contourStart = 0;
 
         foreach (int contourEnd in glyph.ContourEnds)
@@ -204,12 +211,31 @@ internal static class HorizontalEdgeDetector
                 runs.Add(new Run(
                     y: weightedY / weight,
                     extent: extent,
-                    isFloor: sumDx > 0,
+                    isFloor: clockwise ? sumDx < 0 : sumDx > 0,
                     points: points));
             }
         }
 
         return runs;
+    }
+
+    // Twice the signed area of all contours (positive: counter-clockwise).
+    private static double SignedArea(RawGlyph glyph)
+    {
+        double area = 0;
+        int contourStart = 0;
+        foreach (int contourEnd in glyph.ContourEnds)
+        {
+            for (int i = contourStart; i <= contourEnd; i++)
+            {
+                int j = i == contourEnd ? contourStart : i + 1;
+                area += (glyph.X[i] * glyph.Y[j]) - (glyph.X[j] * glyph.Y[i]);
+            }
+
+            contourStart = contourEnd + 1;
+        }
+
+        return area;
     }
 
     private static List<HorizontalEdge> GroupRuns(List<Run> runs, double groupTolerance)

@@ -604,9 +604,10 @@ public sealed class ScanlineRasterizer
 
         (byte db, byte dg, byte dr, byte da) = buffer.GetPixelBgra(x, y);
         double ab = da / 255.0;
-        double crR = ((1.0 - ab) * s.R) + (ab * BlendModes.Blend(mode, dr / 255.0, s.R));
-        double crG = ((1.0 - ab) * s.G) + (ab * BlendModes.Blend(mode, dg / 255.0, s.G));
-        double crB = ((1.0 - ab) * s.B) + (ab * BlendModes.Blend(mode, db / 255.0, s.B));
+        (double br, double bg, double bb) = BlendModes.BlendRgb(mode, (dr / 255.0, dg / 255.0, db / 255.0), (s.R, s.G, s.B));
+        double crR = ((1.0 - ab) * s.R) + (ab * br);
+        double crG = ((1.0 - ab) * s.G) + (ab * bg);
+        double crB = ((1.0 - ab) * s.B) + (ab * bb);
         buffer.BlendPixel(
             x, y, ColorF.FromRgb((float)crR, (float)crG, (float)crB, alpha), gamma);
     }

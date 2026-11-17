@@ -269,15 +269,40 @@ public sealed class PdfDocument : IDisposable
             // does not lead to a page tree, so every page access fails. With
             // RepairIfDamaged that is checked on a probe (the stream left
             // open) and repaired; a sound file is then opened normally.
+            bool mostlyBroken = false;
             using (PdfReader probe = password is null ? PdfReader.Open(stream, leaveOpen: true) : PdfReader.Open(stream, password, leaveOpen: true))
             {
                 reason = PageTreeProblem(probe);
+                // More than half the leaves cannot be read as pages. A tree
+                // with no leaves is a document with no pages, and earlier
+                // pages are not brought back.
+                if (reason is null)
+                {
+                    int pages = PdfReader.ReachablePages(probe, out int broken);
+                    mostlyBroken = broken > pages;
+                }
+            }
+
+            // 3.35.0 (B8, D-399): most of the latest revision's page tree
+            // cannot be read, while an earlier revision is intact: that
+            // revision is opened, with a warning.
+            if (mostlyBroken && PdfReader.OpenEarlierRevision(stream, password) is PdfReader earlier)
+            {
+                earlier.AllowLenientObjects();
+                if (!options.LeaveOpen)
+                {
+                    stream.Dispose();
+                }
+
+                return earlier;
             }
 
             if (reason is null)
             {
                 stream.Seek(0, SeekOrigin.Begin);
-                return password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+                PdfReader sound = password is null ? PdfReader.Open(stream, options.LeaveOpen) : PdfReader.Open(stream, password, options.LeaveOpen);
+                sound.AllowLenientObjects();
+                return sound;
             }
         }
         catch (Exception ex) when (IsStructureFailure(ex))
@@ -286,6 +311,7 @@ public sealed class PdfDocument : IDisposable
         }
 
         PdfReader repaired = PdfReader.OpenRepaired(stream, password, reason);
+        repaired.AllowLenientObjects();
         if (!options.LeaveOpen)
         {
             stream.Dispose();
@@ -949,45 +975,68 @@ public sealed class PdfDocument : IDisposable
         });
     }
 
+    // Every object reachable from a value, in depth-first order, never
+    // following /Parent. Iterative (3.35.0, DOC-01): a long chain of linked
+    // objects (bookmarks through /Next or /First) cannot exhaust the stack;
+    // before, about 15,000 bookmarks ended the process.
     private void CollectReachable(PdfPrimitive? primitive, List<PdfIndirectObject> collected, HashSet<int> visited)
     {
-        if (primitive is PdfReference reference)
+        if (primitive is null)
         {
-            if (!visited.Add(reference.ObjectId.ObjectNumber))
-            {
-                return;
-            }
-
-            PdfWorkScope.ThrowIfCancellationRequested();
-            PdfPrimitive resolved = Objects.Resolve(reference);
-            collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
-            CollectReachable(resolved, collected, visited);
+            return;
         }
-        else if (primitive is PdfDictionary dictionary)
+
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(primitive);
+        while (pending.Count > 0)
         {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+            PdfPrimitive current = pending.Pop();
+            if (current is PdfReference reference)
             {
-                if (entry.Key == PdfName.Parent)
+                if (!visited.Add(reference.ObjectId.ObjectNumber))
                 {
-                    continue; // never follow /Parent — it forms a cycle
+                    continue;
                 }
 
-                CollectReachable(entry.Value, collected, visited);
+                PdfWorkScope.ThrowIfCancellationRequested();
+                PdfPrimitive resolved = Objects.Resolve(reference);
+                collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
+                pending.Push(resolved);
+            }
+            else if (current is PdfDictionary dictionary)
+            {
+                PushValues(dictionary, pending, skipParent: true);
+            }
+            else if (current is PdfArray array)
+            {
+                for (int i = array.Count - 1; i >= 0; i--)
+                {
+                    pending.Push(array[i]);
+                }
+            }
+            else if (current is PdfStream stream)
+            {
+                PushValues(stream.Dictionary, pending, skipParent: false);
             }
         }
-        else if (primitive is PdfArray array)
+    }
+
+    // Pushes a dictionary's values in reverse, so they are taken in order.
+    private static void PushValues(PdfDictionary dictionary, Stack<PdfPrimitive> pending, bool skipParent)
+    {
+        List<PdfPrimitive> values = new List<PdfPrimitive>(dictionary.Count);
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
         {
-            for (int i = 0; i < array.Count; i++)
+            // Never follow /Parent: it forms a cycle.
+            if (!(skipParent && entry.Key == PdfName.Parent))
             {
-                CollectReachable(array[i], collected, visited);
+                values.Add(entry.Value);
             }
         }
-        else if (primitive is PdfStream stream)
+
+        for (int i = values.Count - 1; i >= 0; i--)
         {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
-            {
-                CollectReachable(entry.Value, collected, visited);
-            }
+            pending.Push(values[i]);
         }
     }
 

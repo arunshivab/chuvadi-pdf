@@ -25,5 +25,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Chuvadi.Pdf.Svg" />
     <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering.Wpf" />
+    <InternalsVisibleTo Include="Chuvadi.Pdf.Rendering" />
   </ItemGroup>
 </Project>

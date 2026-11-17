@@ -24,6 +24,10 @@ public enum PdfBlendMode
 | `SoftLight` | Soft light. |
 | `Difference` | Difference. |
 | `Exclusion` | Exclusion. |
+| `Hue` | Hue (non-separable; since 3.35.0). |
+| `Saturation` | Saturation (non-separable; since 3.35.0). |
+| `Color` | Color (non-separable; since 3.35.0). |
+| `Luminosity` | Luminosity (non-separable; since 3.35.0). |
 
 ---
 

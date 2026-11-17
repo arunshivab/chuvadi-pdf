@@ -88,9 +88,14 @@ public sealed class PdfSignatureVerifyEndToEndTests
         using PdfDocument doc = BuildPdfWithSignature(signedBytes, cms);
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc);
 
-        result.Status.Should().Be(SignatureVerificationStatus.Valid);
+        // 3.35.0 (D-396): the maths holds, but the fixture's /ByteRange
+        // [0 n n 0] signs only a prefix, and no trust store is given, so the
+        // signature is not valid.
         result.IntegrityVerified.Should().BeTrue();
-        result.IsValid.Should().BeTrue();
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.TrustUnknown);
+        result.ModificationsAfterSigning.Should().Be(SignatureModifications.Other);
+        result.Status.Should().Be(SignatureVerificationStatus.ModifiedAfterSigning);
+        result.IsValid.Should().BeFalse();
         result.SignerCertificate.Should().NotBeNull();
     }
 
@@ -117,8 +122,8 @@ public sealed class PdfSignatureVerifyEndToEndTests
         using PdfDocument doc = BuildPdfWithSignature(signedBytes, cms);
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc);
 
-        result.Status.Should().Be(SignatureVerificationStatus.Valid);
         result.IntegrityVerified.Should().BeTrue();
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.TrustUnknown);
     }
 
     [Fact]

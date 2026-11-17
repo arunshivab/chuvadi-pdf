@@ -10,8 +10,12 @@ namespace Chuvadi.Pdf.Signatures.Verification;
 public enum SignatureVerificationStatus
 {
     /// <summary>
-    /// The signature is cryptographically valid. If a trust store was supplied,
-    /// the signer's certificate chain also validates to a trust anchor.
+    /// The signature is cryptographically valid, nothing but later signatures
+    /// or validation data was added after signing, and the signer's
+    /// certificate chain validates to an anchor in the trust store. Since
+    /// 3.35.0 a signature is never valid without a trust store (see
+    /// <see cref="TrustUnknown"/>) or after other changes (see
+    /// <see cref="ModifiedAfterSigning"/>).
     /// </summary>
     Valid = 0,
 
@@ -57,4 +61,21 @@ public enum SignatureVerificationStatus
     /// but a certificate in the chain is on a Certificate Revocation List.
     /// </summary>
     TrustChainCertificateRevoked = 10,
+
+    /// <summary>
+    /// The signature is intact and the file was not changed after signing,
+    /// but no trust store was supplied, so who signed it is not verified
+    /// (3.35.0). Supply <see cref="SignatureVerifyOptions.TrustStore"/> to
+    /// evaluate the signer's certificate chain.
+    /// </summary>
+    TrustUnknown = 11,
+
+    /// <summary>
+    /// The signed revision is intact, but the file was changed after signing
+    /// in a way other than adding later signatures or validation data, or the
+    /// signature's byte range leaves part of the file unsigned (3.35.0). What
+    /// a reader sees is not what was signed; see
+    /// <see cref="SignatureVerificationResult.ModificationsAfterSigning"/>.
+    /// </summary>
+    ModifiedAfterSigning = 12,
 }

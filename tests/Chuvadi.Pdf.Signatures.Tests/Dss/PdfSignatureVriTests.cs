@@ -216,7 +216,7 @@ public sealed class PdfSignatureVriTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, opts);
-        r.Status.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
         r.IntegrityVerified.Should().BeTrue();
         r.TrustValidated.Should().BeFalse();
     }
@@ -232,7 +232,7 @@ public sealed class PdfSignatureVriTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, opts);
-        r.IsValid.Should().BeTrue();
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 

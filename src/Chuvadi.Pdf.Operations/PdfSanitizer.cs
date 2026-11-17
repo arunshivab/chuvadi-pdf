@@ -435,50 +435,60 @@ public static class PdfSanitizer
 
     // True when the action, and every action chained after it with /Next, is
     // in-document navigation (or a URI link when those are kept).
+    // A worklist rather than recursion (3.35.0, OPS-08): a long /Next chain
+    // cannot exhaust the stack.
     private static bool IsSafe(
         PdfDictionary action, Dictionary<int, PdfPrimitive> byNumber, SanitizeOptions options,
         HashSet<PdfDictionary> visited)
     {
-        if (!visited.Add(action))
+        Stack<PdfDictionary> pending = new Stack<PdfDictionary>();
+        pending.Push(action);
+        while (pending.Count > 0)
         {
-            return true;
-        }
+            PdfDictionary current = pending.Pop();
+            if (!visited.Add(current))
+            {
+                continue;
+            }
 
-        if (Resolve(action.GetAs<PdfPrimitive>(PdfName.Intern("S")), byNumber) is not PdfName type)
-        {
-            return false;
-        }
+            if (Resolve(current.GetAs<PdfPrimitive>(PdfName.Intern("S")), byNumber) is not PdfName type)
+            {
+                return false;
+            }
 
-        bool safe = type.Value switch
-        {
-            "Named" => Resolve(action.GetAs<PdfPrimitive>(PdfName.Intern("N")), byNumber) is PdfName n
-                && SafeNamedActions.Contains(n.Value),
-            "URI" => options.KeepUriLinks,
-            _ => SafeActions.Contains(type.Value),
-        };
-        if (!safe)
-        {
-            return false;
-        }
+            bool safe = type.Value switch
+            {
+                "Named" => Resolve(current.GetAs<PdfPrimitive>(PdfName.Intern("N")), byNumber) is PdfName n
+                    && SafeNamedActions.Contains(n.Value),
+                "URI" => options.KeepUriLinks,
+                _ => SafeActions.Contains(type.Value),
+            };
+            if (!safe)
+            {
+                return false;
+            }
 
-        switch (Resolve(action.GetAs<PdfPrimitive>(PdfName.Intern("Next")), byNumber))
-        {
-            case PdfDictionary nextAction:
-                return IsSafe(nextAction, byNumber, options, visited);
-            case PdfArray nextActions:
-                for (int i = 0; i < nextActions.Count; i++)
-                {
-                    if (Resolve(nextActions[i], byNumber) is not PdfDictionary chained
-                        || !IsSafe(chained, byNumber, options, visited))
+            switch (Resolve(current.GetAs<PdfPrimitive>(PdfName.Intern("Next")), byNumber))
+            {
+                case PdfDictionary nextAction:
+                    pending.Push(nextAction);
+                    break;
+                case PdfArray nextActions:
+                    for (int i = nextActions.Count - 1; i >= 0; i--)
                     {
-                        return false;
-                    }
-                }
+                        if (Resolve(nextActions[i], byNumber) is not PdfDictionary chained)
+                        {
+                            return false;
+                        }
 
-                return true;
-            default:
-                return true;
+                        pending.Push(chained);
+                    }
+
+                    break;
+            }
         }
+
+        return true;
     }
 
     private static PdfPrimitive? Resolve(PdfPrimitive? value, Dictionary<int, PdfPrimitive> byNumber) =>

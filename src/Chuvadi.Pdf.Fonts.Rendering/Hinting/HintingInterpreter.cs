@@ -770,10 +770,25 @@ internal sealed class HintingInterpreter
                 Intersect();
                 break;
             case OpIupX:
-                InterpolateUntouched(yDirection: false);
-                break;
             case OpIupY:
-                InterpolateUntouched(yDirection: true);
+                // Backward compatibility (Y-only hinting): IUP runs until it
+                // has been called on both axes, then no more (as FreeType's
+                // v40 interpreter does).
+                if (BackwardCompatibility && _iupXCalled && _iupYCalled)
+                {
+                    break;
+                }
+
+                if (op == OpIupY)
+                {
+                    _iupYCalled = true;
+                }
+                else
+                {
+                    _iupXCalled = true;
+                }
+
+                InterpolateUntouched(yDirection: op == OpIupY);
                 break;
             case OpMsirp0:
                 MoveStackIndirectRelative(setRp0: false);
@@ -1428,6 +1443,19 @@ internal sealed class HintingInterpreter
     }
 
     /// <summary>
+    /// Gets or sets backward-compatibility mode (3.35.0, D2): Y-only hinting
+    /// as FreeType's v40 interpreter does it. Glyph points do not move in X,
+    /// so the Y instructions work from the unhinted X positions; before, light
+    /// hinting took the Y of a full X+Y run and the X of the unhinted outline,
+    /// which pulled bowls out of shape at small sizes (Arial "D" at 12 ppem).
+    /// IUP runs at most once per axis, and nothing moves in Y after both.
+    /// </summary>
+    internal bool BackwardCompatibility { get; set; }
+
+    private bool _iupXCalled;
+    private bool _iupYCalled;
+
+    /// <summary>
     /// Hints a single glyph at the prepared size: builds the glyph zone by
     /// scaling the raw outline to 26.6, resets the graphics state, runs the
     /// glyph's instruction stream, and returns the fitted zone.
@@ -1438,6 +1466,8 @@ internal sealed class HintingInterpreter
     internal Zone HintGlyph(RawGlyph glyph)
     {
         ArgumentNullException.ThrowIfNull(glyph);
+        _iupXCalled = false;
+        _iupYCalled = false;
 
         int count = glyph.PointCount;
         Zone zone = new Zone(count, glyph.ContourEnds, glyph.OnCurve);
@@ -1585,10 +1615,23 @@ internal sealed class HintingInterpreter
             return;
         }
 
-        if (State.FreedomVectorX != 0)
+        // Backward compatibility: glyph points do not move in X (twilight
+        // points still do, as reference geometry), and nothing moves in Y once
+        // IUP has run on both axes.
+        bool glyphPoint = !ReferenceEquals(zone, _twilightZone);
+        if (State.FreedomVectorX != 0 && !(BackwardCompatibility && glyphPoint))
         {
             zone.CurrentX[point] += MulDiv(distance, State.FreedomVectorX, fdotp);
             zone.TouchedX[point] = true;
+        }
+        else if (State.FreedomVectorX != 0)
+        {
+            zone.TouchedX[point] = true;
+        }
+
+        if (State.FreedomVectorY != 0 && BackwardCompatibility && glyphPoint && _iupXCalled && _iupYCalled)
+        {
+            return;
         }
 
         if (State.FreedomVectorY != 0)
@@ -2291,13 +2334,14 @@ internal sealed class HintingInterpreter
                 continue;
             }
 
-            if (State.FreedomVectorX != 0)
+            bool glyphPoint = !ReferenceEquals(zone, _twilightZone);
+            if (State.FreedomVectorX != 0 && !(BackwardCompatibility && glyphPoint))
             {
                 zone.CurrentX[point] += F2Dot14.Mul(amount, State.FreedomVectorX);
                 zone.TouchedX[point] = true;
             }
 
-            if (State.FreedomVectorY != 0)
+            if (State.FreedomVectorY != 0 && !(BackwardCompatibility && glyphPoint && _iupXCalled && _iupYCalled))
             {
                 zone.CurrentY[point] += F2Dot14.Mul(amount, State.FreedomVectorY);
                 zone.TouchedY[point] = true;

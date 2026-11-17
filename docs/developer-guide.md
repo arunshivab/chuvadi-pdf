@@ -869,6 +869,31 @@ named here.
 
 | Release | What changed | Earlier output |
 |---|---|---|
+| 3.35.0 | Raster: fonts without hinting programs are drawn unhinted; light hinting no longer bends glyphs | `AutohintUnhintedFonts = true` (autohinting only) |
+| 3.35.0 | Raster: transparency groups whose alpha, blend mode or soft mask covers several objects are composited as a whole; knockout groups knock out; Hue, Saturation, Color and Luminosity blend modes are drawn | none |
+| 3.35.0 | Raster: a page with a blend mode other than Normal, Multiply or Darken blends over a transparent page, not white paper; text with a fill or stroke pattern paints the pattern | none (fixes) |
+| 3.35.0 | Raster: `Tz` widens glyph shapes; `sh` and shading patterns honour `/ca`. Display list: text in clip modes 4 to 7 emits a `ClipOp` and later ops carry it in `Clips` | none (fixes); display-list consumers see a new `ClipOp` after clip-mode text |
+| 3.35.0 | Type 0 fonts with predefined CJK CMaps are read through them (raster, SVG, WPF, text, widths); vertical CMaps lay text down the page | none (fixes) |
+| 3.35.0 | Text render modes: stroke modes stroke and clip modes clip (raster); invisible and clip-only text is hidden in SVG and WPF | none (fixes) |
+| 3.35.0 | SVG and WPF apply an image's `/Mask` and draw a JPEG behind another filter, with its soft mask | none (fixes) |
+| 3.35.0 | Redaction drops (and reports) catalog entries whose objects are not written, and the form's `/XFA`; named destinations, document JavaScript and `/OpenAction` are kept; name trees other than those and attachments are dropped | none |
+| 3.35.0 | Pattern redaction matches across text operators, with word-gap spaces, in forms, pattern cells, Type 3 glyphs and annotations (text, actions, appearances) and in replacement text; it throws `RedactionException` and writes nothing when a match survives | none (security fix) |
+| 3.35.0 | Pattern redaction removes attachments it cannot check against the patterns, and empties matching scripts and URIs; rectangle-only redaction keeps attachments and lists them as not scanned (before, attachments were always dropped) | `RedactionOptions.KeepAttachments = true` keeps unchecked attachments |
+| 3.35.0 | Redaction clips `sh` shadings out of the boxes and removes mesh shadings under them; `RedactionVerifier.Verify` reports shadings | none (fix) |
+| 3.35.0 | `PatternSets.Financial`: SWIFT needs a digit or a BIC/SWIFT label and a valid country code; ITIN checks its group. `PatternSets.Medical`: ICD-10 needs a decimal part or a label. `CommonPatterns.Swift` and `Icd10Prefix` are narrowed | none (keep the old regex text yourself if you want it) |
+| 3.35.0 | Signatures: `IsValid` is false under default options (`TrustUnknown`), and false when anything but signatures and DSS data changed after signing (`ModifiedAfterSigning`), with or without a trust store | `IntegrityVerified` for the cryptographic check alone |
+| 3.35.0 | Scrub keeps only the Type 3 glyph procedures of kept text, and scrubs a soft mask per placement | none |
+| 3.35.0 | `PdfAWriter`: form fields get appearances, `/NeedAppearances` is cleared, transfer functions are removed | none |
+| 3.35.0 | The writer keeps up to 9 significant digits of a real (6 before) | none |
+| 3.35.0 | With `RepairIfDamaged`, a file whose latest revision's page tree mostly cannot be read opens its intact earlier revision, with a warning | open without `RepairIfDamaged` |
+| 3.35.0 | Raster images drawn smaller are averaged, and drawn up to 4x larger are interpolated (alpha-weighted); larger stays nearest-pixel | none |
+| 3.35.0 | Accented letters in non-embedded standard fonts are drawn (they were blank) | none (fix) |
+| 3.35.0 | Standard-font text from `DrawText`, `DrawTextBlock`, `TextStamper` and `WatermarkStamper` is written in WinAnsiEncoding; a character outside it throws `ArgumentException` (it was written as a wrong character) | none; embed a font with `AddFont` (or `FontData`) for such text |
+| 3.35.0 | `DeletePages`, `ExtractPages` and `SplitPages` never write a removed page; references to it from kept pages become `null`, references to kept pages point at their new objects | none (security fix) |
+| 3.35.0 | Object walks are iterative; field and page trees stop at 1,024 levels and bookmarks are read 256 levels deep (merge keeps 256 levels of a deeper outline) | none (fix; these files used to end the process) |
+| 3.35.0 | A non-finite path is skipped with a warning when rendering; `RenderOptions.Dpi` and the one-call renderers' `dpi` throw `ArgumentOutOfRangeException` unless finite and above 0 | none |
+| 3.35.0 | XFA scripts nested more than 100 levels fail with `XfaScriptException` | none (fix) |
+| 3.35.0 | `PdfAWriter` fails closed (`Succeeded = false`, nothing written) on transparency (A-1b) or DeviceCMYK that a page uses, LZW, embedded files, optional content (A-1b; unnamed configuration in A-2b), file attachment annotations (A-1b) and annotations without an appearance (A-2b) | none (these files were written and failed validation) |
 | 3.34.0 | `PageOperations.Merge` keeps the inputs' form fields (clashing names renamed `name_2`, ...) | `MergeOptions.FormFields = MergeFormFields.Drop` |
 | 3.34.0 | Text watermarks are centred by the real text width, so each one moves slightly | none |
 | 3.34.0 | `FormFiller` keeps `/Info` and the file `/ID`; non-Latin-1 values are written as UTF-16; check boxes and radios get their real on-states, and an unknown button value throws `FormException` | none (fixes) |

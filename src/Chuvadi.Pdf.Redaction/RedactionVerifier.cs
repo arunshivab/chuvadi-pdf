@@ -29,8 +29,35 @@ public enum RedactionSurvivorKind
     /// <summary>A painted path (fill or stroke ink) that meets the region.</summary>
     Path,
 
-    /// <summary>An annotation whose rectangle meets the region.</summary>
+    /// <summary>
+    /// An annotation whose rectangle meets the region, or (for
+    /// <see cref="RedactionVerifier.VerifyPatterns"/>) whose appearance or
+    /// text entries match a pattern.
+    /// </summary>
     Annotation,
+
+    /// <summary>
+    /// Text outside the page content that matches a pattern (3.35.0): a
+    /// string anywhere in the document (bookmark title, document
+    /// information, action, name, alternate text), the XMP metadata, a
+    /// script, or replacement text in a content stream. Reported by
+    /// <see cref="RedactionVerifier.VerifyPatterns"/> with page index -1.
+    /// </summary>
+    DocumentText,
+
+    /// <summary>
+    /// An attachment (embedded file) that matches a pattern, or that cannot
+    /// be read as text and so cannot be checked (then
+    /// <see cref="RedactionSurvivor.Text"/> is null) (3.35.0). Reported by
+    /// <see cref="RedactionVerifier.VerifyPatterns"/> with page index -1.
+    /// </summary>
+    Attachment,
+
+    /// <summary>
+    /// A shading painted (with <c>sh</c>, or as a shading-pattern fill) that
+    /// meets the region (3.35.0).
+    /// </summary>
+    Shading,
 }
 
 /// <summary>One piece of content found inside a region.</summary>
@@ -44,19 +71,28 @@ public sealed class RedactionSurvivor
         Text = text;
     }
 
-    /// <summary>Gets the zero-based page index.</summary>
+    /// <summary>
+    /// Gets the zero-based page index, or -1 for content outside the pages
+    /// (<see cref="RedactionSurvivorKind.DocumentText"/> and
+    /// <see cref="RedactionSurvivorKind.Attachment"/>).
+    /// </summary>
     public int PageIndex { get; }
 
     /// <summary>Gets what kind of content this is.</summary>
     public RedactionSurvivorKind Kind { get; }
 
-    /// <summary>Gets the content's bounding box in page space (points, origin bottom-left).</summary>
+    /// <summary>
+    /// Gets the content's bounding box in page space (points, origin
+    /// bottom-left); empty for content outside the pages.
+    /// </summary>
     public RectangleF Bounds { get; }
 
     /// <summary>
     /// Gets the text: the glyph's Unicode for <see cref="RedactionSurvivorKind.Text"/>,
     /// the annotation's <c>/Contents</c> for <see cref="RedactionSurvivorKind.Annotation"/>,
-    /// otherwise null.
+    /// otherwise null. For <see cref="RedactionVerifier.VerifyPatterns"/>, the
+    /// matched text (null for an annotation, and for an attachment that
+    /// could not be checked).
     /// </summary>
     public string? Text { get; }
 }
@@ -106,8 +142,10 @@ public sealed class RedactionVerification
 /// Text is matched per glyph on an approximate ink box (the middle 80% of the
 /// glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph
 /// that merely abuts a rectangle is not reported. Invisible text (render mode
-/// 3 or clip-only), fully transparent paint and shadings are
-/// not reported.
+/// 3 or clip-only) and fully transparent paint are not reported. A shading
+/// is reported when its clip covers part of a region (3.35.0; before, shadings
+/// were not reported). <see cref="RedactionVerifier.VerifyPatterns"/> checks a
+/// pattern redaction (3.35.0).
 /// </remarks>
 public static class RedactionVerifier
 {
@@ -154,6 +192,37 @@ public static class RedactionVerifier
     }
 
     /// <summary>
+    /// Verifies that nothing in <paramref name="document"/> (typically the
+    /// output of a pattern redaction) still matches
+    /// <paramref name="patterns"/> (3.35.0): on each page the patterns apply
+    /// to, the text a viewer shows, matched as <see cref="Redactor"/> matches
+    /// it (across text operators, in form XObjects, tiling-pattern cells,
+    /// Type 3 glyphs and annotation appearances, with or without the spaces
+    /// the layout implies), and the annotations' text entries and actions;
+    /// and, for the patterns with no page list, everything outside the page
+    /// content: every string in the document's objects, the XMP metadata,
+    /// scripts, replacement text (<c>/ActualText</c>, <c>/Alt</c>, <c>/E</c>)
+    /// in content streams, and attachments. An attachment that cannot be read
+    /// as text is reported as a survivor with no text, since it cannot be
+    /// checked.
+    /// </summary>
+    /// <param name="document">The document to inspect.</param>
+    /// <param name="patterns">The patterns that must not match.</param>
+    /// <returns>The verification result: one survivor per match.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    public static RedactionVerification VerifyPatterns(PdfDocument document, IReadOnlyList<PatternRule> patterns)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(patterns);
+        foreach (PatternRule rule in patterns)
+        {
+            ArgumentNullException.ThrowIfNull(rule);
+        }
+
+        return new RedactionVerification(PatternVerifier.Find(document, patterns));
+    }
+
+    /// <summary>
     /// Lists everything page <paramref name="pageIndex"/> paints inside
     /// <paramref name="region"/>: glyphs, images, paths and annotations.
     /// </summary>
@@ -194,18 +263,26 @@ public static class RedactionVerifier
         // only inside the clip that precedes it (its filled path).
         Stack<ClipOp?> clips = new Stack<ClipOp?>();
         ClipOp? clip = null;
+
+        // Every clip in effect, for shadings (3.35.0).
+        Stack<List<ClipOp>> allClipsStack = new Stack<List<ClipOp>>();
+        List<ClipOp> allClips = new List<ClipOp>();
         foreach (RenderOp op in list)
         {
             switch (op)
             {
                 case TransformOp t when t.Push:
                     clips.Push(clip);
+                    allClipsStack.Push(allClips);
+                    allClips = new List<ClipOp>(allClips);
                     break;
                 case TransformOp:
                     clip = clips.Count > 0 ? clips.Pop() : null;
+                    allClips = allClipsStack.Count > 0 ? allClipsStack.Pop() : new List<ClipOp>();
                     break;
                 case ClipOp c:
                     clip = c;
+                    allClips.Add(c);
                     break;
                 case TilingPatternOp tp when depth < 8 && (clip is null || ClipMeetsRegions(clip, outer, regions)):
                     InspectTiles(tp, outer, pageIndex, regions, ignoreOverlays, into, depth);
@@ -231,6 +308,18 @@ public static class RedactionVerifier
                     break;
                 case Type3UseOp g when depth < 8:
                     InspectList(g.Glyph, g.Composition.Multiply(outer), pageIndex, regions, ignoreOverlays, into, depth + 1);
+                    break;
+                case ShadingOp shading when shading.Opacity > 0:
+                    // 3.35.0 (audit RED-08): a shading paints its clip.
+                    foreach (RectangleF r in regions)
+                    {
+                        if (ClipsCoverPartOf(allClips, outer, r))
+                        {
+                            into.Add(new RedactionSurvivor(pageIndex, RedactionSurvivorKind.Shading, r, null));
+                            break;
+                        }
+                    }
+
                     break;
             }
         }
@@ -471,6 +560,81 @@ public static class RedactionVerifier
 
     // Whether a clip region reaches into any region: its fill area for a
     // path clip, its outline's reach for a stroke-outline clip.
+    // True when some point of the region (sampled on a grid, inset slightly
+    // from its edges) is inside every clip under its fill rule. A stroked
+    // (text) clip counts as covering wherever it meets the region.
+    private static bool ClipsCoverPartOf(List<ClipOp> clips, AffineMatrix outer, RectangleF r)
+    {
+        List<(List<List<(double X, double Y)>> Subpaths, Chuvadi.Pdf.Rendering.DisplayList.FillRule Rule)> areas =
+            new List<(List<List<(double X, double Y)>> Subpaths, Chuvadi.Pdf.Rendering.DisplayList.FillRule Rule)>();
+        foreach (ClipOp clip in clips)
+        {
+            if (clip.Stroke is not null)
+            {
+                if (!ClipMeetsRegions(clip, outer, new List<RectangleF> { r }))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            areas.Add((Flatten(clip.Geometry, outer), clip.FillRule));
+        }
+
+        const int Steps = 8;
+        double inset = Math.Min(0.5, Math.Min(r.Width, r.Height) / 4);
+        for (int i = 0; i <= Steps; i++)
+        {
+            for (int j = 0; j <= Steps; j++)
+            {
+                double x = r.X + inset + ((r.Width - (2 * inset)) * i / Steps);
+                double y = r.Y + inset + ((r.Height - (2 * inset)) * j / Steps);
+                bool inAll = true;
+                foreach ((List<List<(double X, double Y)>> subpaths, Chuvadi.Pdf.Rendering.DisplayList.FillRule rule) in areas)
+                {
+                    if (!Inside(subpaths, rule, x, y))
+                    {
+                        inAll = false;
+                        break;
+                    }
+                }
+
+                if (inAll)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool Inside(List<List<(double X, double Y)>> subpaths, Chuvadi.Pdf.Rendering.DisplayList.FillRule rule, double x, double y)
+    {
+        int winding = 0;
+        int crossings = 0;
+        foreach (List<(double X, double Y)> poly in subpaths)
+        {
+            for (int k = 0; k < poly.Count; k++)
+            {
+                (double ax, double ay) = poly[k];
+                (double bx, double by) = poly[(k + 1) % poly.Count];
+                if ((ay <= y) != (by <= y))
+                {
+                    double cross = ax + ((y - ay) * (bx - ax) / (by - ay));
+                    if (cross > x)
+                    {
+                        crossings++;
+                        winding += by > ay ? 1 : -1;
+                    }
+                }
+            }
+        }
+
+        return rule == Chuvadi.Pdf.Rendering.DisplayList.FillRule.EvenOdd ? (crossings & 1) == 1 : winding != 0;
+    }
+
     private static bool ClipMeetsRegions(ClipOp clip, AffineMatrix outer, List<RectangleF> regions)
     {
         List<List<(double X, double Y)>> subpaths = Flatten(clip.Geometry, outer);

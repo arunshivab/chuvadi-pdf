@@ -53,7 +53,9 @@ public sealed class SignatureVerificationResult
     /// <summary>
     /// True iff the cryptographic signature checks out AND the signed bytes' digest
     /// matches the messageDigest signed attribute. This is the strict cryptographic
-    /// answer regardless of whether the signer is to be believed.
+    /// answer for the signed bytes only, regardless of whether the signer is to be
+    /// believed or the file was changed after signing (see
+    /// <see cref="ModificationsAfterSigning"/> and <see cref="IsValid"/>).
     /// </summary>
     public bool IntegrityVerified { get; }
 
@@ -103,6 +105,39 @@ public sealed class SignatureVerificationResult
     /// </summary>
     public CertificatePath? TimestampValidatedPath { get; }
 
-    /// <summary>Convenience shorthand for <c>Status == Valid</c>.</summary>
+    /// <summary>
+    /// What the file holds after the bytes the signature covers (3.35.0):
+    /// nothing, only later signatures and validation data, or other changes.
+    /// Reported apart from <see cref="IntegrityVerified"/>, which checks only
+    /// the signed bytes.
+    /// </summary>
+    public SignatureModifications ModificationsAfterSigning { get; init; } = SignatureModifications.Other;
+
+    /// <summary>
+    /// The trust finding on its own (3.35.0):
+    /// <see cref="SignatureVerificationStatus.Valid"/> when the signer's
+    /// certificate chains to a trust anchor,
+    /// <see cref="SignatureVerificationStatus.TrustUnknown"/> when no trust
+    /// store was supplied or the signature is not intact, else the trust
+    /// failure (<see cref="SignatureVerificationStatus.TrustChainBroken"/>,
+    /// <see cref="SignatureVerificationStatus.TrustChainCertificateRevoked"/>
+    /// and so on). <see cref="Status"/> reports a change after signing ahead
+    /// of trust; this keeps the trust answer visible.
+    /// </summary>
+    public SignatureVerificationStatus TrustStatus { get; init; } = SignatureVerificationStatus.TrustUnknown;
+
+    /// <summary>
+    /// True when the signature's byte range covers the whole file (trailing
+    /// white space aside), so nothing can have changed after signing (3.35.0).
+    /// </summary>
+    public bool CoversWholeDocument { get; init; }
+
+    /// <summary>
+    /// True when <see cref="Status"/> is <see cref="SignatureVerificationStatus.Valid"/>:
+    /// the signature is intact, the file was not changed after signing beyond
+    /// later signatures or validation data, and the signer's certificate
+    /// chains to a trust anchor (3.35.0; before, an intact signature was valid
+    /// without a trust store and after later changes).
+    /// </summary>
     public bool IsValid => Status == SignatureVerificationStatus.Valid;
 }

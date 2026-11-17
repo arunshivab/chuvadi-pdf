@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Rendering.DisplayList;
@@ -307,6 +308,26 @@ public sealed class TextOp : RenderOp
     /// Constant stroke opacity (ExtGState /CA), 0..1. Default 1 (opaque).
     /// </summary>
     public double StrokeOpacity { get; init; } = 1.0;
+
+    /// <summary>
+    /// The horizontal scaling (<c>Tz</c>) as a factor, 1.0 for 100 (3.35.0).
+    /// The glyph shapes are <see cref="Transform"/> after a horizontal
+    /// scale by this factor: a glyph's outline in text space is
+    /// [<see cref="FontSize"/> × <see cref="HorizontalScaling"/>, 0, 0,
+    /// <see cref="FontSize"/>, 0, 0] times its glyph-space outline, then
+    /// <see cref="Transform"/>. It is not part of <see cref="Transform"/>,
+    /// because the glyph positions (<see cref="DisplayListGlyph.X"/> and the
+    /// advances) already include it. PDF 32000-1:2008 §9.3.4.
+    /// </summary>
+    public double HorizontalScaling { get; init; } = 1.0;
+
+    /// <summary>
+    /// For the stroking render modes (stroke, fill and stroke, and their clip
+    /// forms: <c>1</c>, <c>2</c>, <c>5</c> and <c>6 Tr</c>), the line
+    /// attributes with the width and dashes scaled to page space, as
+    /// <see cref="PathOp.Stroke"/> (3.35.0); null for the other modes.
+    /// </summary>
+    public StrokeStyle? Stroke { get; init; }
 }
 
 /// <summary>The colour transform of a JPEG image (its Adobe APP14 marker, if any).</summary>
@@ -414,6 +435,13 @@ public sealed class ImageOp : RenderOp
 
     /// <summary>True for a CMYK or YCCK JPEG (four components, 3.31).</summary>
     public bool IsCmykJpeg => Format == ImageFormat.Jpeg && JpegComponents == 4;
+
+    // 3.35.0 (D-391 I1): the image as the raster route reads it (for an
+    // inline image, its dictionary with a named colour space resolved and its
+    // data), and the document's objects, for ImageDecoding.Decode.
+    internal PdfStream? DecodeSource { get; init; }
+
+    internal PdfObjectStore? DecodeObjects { get; init; }
 
     /// <summary>The ICC profile stream of an <c>/ICCBased</c> colour space (3.31), or null.</summary>
     public PdfStream? IccProfileStream { get; init; }
@@ -584,6 +612,13 @@ public sealed class ShadingOp : RenderOp
 
     /// <summary>The sampled gradient stops, in increasing offset order.</summary>
     public IReadOnlyList<ShadingStop> Stops { get; init; } = System.Array.Empty<ShadingStop>();
+
+    /// <summary>
+    /// The constant fill alpha (<c>/ca</c>) in effect when the shading was
+    /// painted, 0 to 1 (3.35.0). PDF 32000-1:2008 §11.6.4.4 applies it to
+    /// <c>sh</c> and to shading patterns alike; 1.0 is opaque.
+    /// </summary>
+    public double Opacity { get; init; } = 1.0;
 
     /// <summary>
     /// When set, the centres and radii are in shading space and this maps

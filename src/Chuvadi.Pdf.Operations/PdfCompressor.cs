@@ -938,9 +938,19 @@ public static partial class PdfCompressor
         return contents;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxPageTreeDepth = 1024;
+
     private static void WalkPageTree(
-        PdfPrimitive node, PdfObjectStore resolver, HashSet<int> contents, HashSet<int> visited)
+        PdfPrimitive node, PdfObjectStore resolver, HashSet<int> contents, HashSet<int> visited,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
+        if (depth > MaxPageTreeDepth)
+        {
+            return;
+        }
+
         if (node is PdfReference nodeRef && !visited.Add(nodeRef.ObjectNumber))
         {
             return;
@@ -960,7 +970,7 @@ public static partial class PdfCompressor
             {
                 for (int i = 0; i < kids.Count; i++)
                 {
-                    WalkPageTree(kids[i], resolver, contents, visited);
+                    WalkPageTree(kids[i], resolver, contents, visited, depth + 1);
                 }
             }
         }

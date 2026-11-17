@@ -618,11 +618,19 @@ public static class PageOperations
                 }
             }
 
-            // Copy referenced objects (Resources, Contents).
+            // Copy referenced objects (Resources, Contents). 3.35.0 (OPS-01):
+            // a reference to a page is not followed; Write points it at the
+            // copy of that page when it is kept, and at nothing when it is
+            // not, so a removed page never reaches the output.
             List<PdfIndirectObject> referencedObjects = new List<PdfIndirectObject>();
             HashSet<int> visited = new HashSet<int>();
-            ObjectImporter.CollectReferences(page.Dictionary, resolver, referencedObjects, visited);
-            ObjectImporter.CollectReferences(inherited, resolver, referencedObjects, visited);
+            Dictionary<int, PdfDictionary> pageRefs = new Dictionary<int, PdfDictionary>();
+            ObjectImporter.CollectReferences(page.Dictionary, resolver, referencedObjects, visited, pageRefs);
+            ObjectImporter.CollectReferences(inherited, resolver, referencedObjects, visited, pageRefs);
+            foreach (KeyValuePair<int, PdfDictionary> pageRef in pageRefs)
+            {
+                _pageRefs.TryAdd((docIndex, pageRef.Key), pageRef.Value);
+            }
 
             if (resolver.Resolve(page.Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annots) ? annots : PdfNull.Value) is PdfArray annotArray)
             {
@@ -635,8 +643,11 @@ public static class PageOperations
                 }
             }
 
-            _pages.Add(new PageEntry(pageCopy, referencedObjects, docIndex));
+            _pages.Add(new PageEntry(pageCopy, referencedObjects, docIndex, page.Dictionary));
         }
+
+        // References to pages met while copying, by (input, object number).
+        private readonly Dictionary<(int Doc, int Num), PdfDictionary> _pageRefs = new Dictionary<(int Doc, int Num), PdfDictionary>();
 
         private static readonly PdfName[] InheritedPageKeys =
         {
@@ -725,6 +736,20 @@ public static class PageOperations
             foreach (PdfObjectId pid in pageIds)
             {
                 kidsArray.Add(new PdfReference(pid));
+            }
+
+            // 3.35.0 (OPS-01): a reference to a kept page now names its copy
+            // (a link to it works); one to a page not kept is written as null.
+            foreach (KeyValuePair<(int Doc, int Num), PdfDictionary> pageRef in _pageRefs)
+            {
+                for (int i = 0; i < _pages.Count; i++)
+                {
+                    if (_pages[i].DocIndex == pageRef.Key.Doc && ReferenceEquals(_pages[i].Source, pageRef.Value))
+                    {
+                        idRemap[pageRef.Key] = pageIds[i].ObjectNumber;
+                        break;
+                    }
+                }
             }
 
             PdfDictionary pagesDict = new PdfDictionary();
@@ -828,12 +853,17 @@ public static class PageOperations
         internal PageEntry(
             PdfDictionary pageDict,
             List<PdfIndirectObject> referencedObjects,
-            int docIndex)
+            int docIndex,
+            PdfDictionary source)
         {
             PageDict = pageDict;
             ReferencedObjects = referencedObjects;
             DocIndex = docIndex;
+            Source = source;
         }
+
+        // The source page dictionary, to recognise references to it.
+        internal PdfDictionary Source { get; }
 
         internal PdfDictionary PageDict { get; }
         internal List<PdfIndirectObject> ReferencedObjects { get; }

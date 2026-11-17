@@ -53,6 +53,17 @@ public static class PdfSignatureVerifier
     /// Verifies <paramref name="signature"/> against the bytes it covers in
     /// <paramref name="document"/>.
     /// </summary>
+    /// <remarks>
+    /// Since 3.35.0 (D-396) <see cref="SignatureVerificationResult.IsValid"/>
+    /// requires all three: the signature is mathematically intact
+    /// (<see cref="SignatureVerificationResult.IntegrityVerified"/>), nothing
+    /// but later signatures or validation data was added after signing
+    /// (<see cref="SignatureVerificationResult.ModificationsAfterSigning"/>),
+    /// and the signer's certificate chains to an anchor in
+    /// <see cref="SignatureVerifyOptions.TrustStore"/>. Without a trust store
+    /// an intact, unmodified signature is
+    /// <see cref="SignatureVerificationStatus.TrustUnknown"/>, not valid.
+    /// </remarks>
     public static SignatureVerificationResult Verify(
         PdfSignature signature,
         PdfDocument document,
@@ -60,7 +71,79 @@ public static class PdfSignatureVerifier
     {
         ArgumentNullException.ThrowIfNull(signature);
         ArgumentNullException.ThrowIfNull(document);
-        _ = options ?? SignatureVerifyOptions.Default;
+        SignatureVerifyOptions opts = options ?? SignatureVerifyOptions.Default;
+        SignatureVerificationResult core = VerifyCryptographyAndTrust(signature, document, opts);
+        SignatureModificationAnalyzer.Outcome changes = SignatureModificationAnalyzer.Analyze(signature, document);
+        return Combine(core, changes, opts);
+    }
+
+    // The status, in order: an integrity failure first, then a change after
+    // signing, then trust (unknown without a trust store, or the trust
+    // failure). The modification and integrity findings are always reported
+    // in their own properties.
+    private static SignatureVerificationResult Combine(
+        SignatureVerificationResult core, SignatureModificationAnalyzer.Outcome changes, SignatureVerifyOptions opts)
+    {
+        SignatureVerificationStatus status = core.Status;
+        string message = core.Message;
+        if (core.IntegrityVerified)
+        {
+            if (changes.Kind == SignatureModifications.Other)
+            {
+                status = SignatureVerificationStatus.ModifiedAfterSigning;
+                message = changes.Message + " The signed revision itself is intact. " + core.Message;
+            }
+            else if (core.Status == SignatureVerificationStatus.Valid && opts.TrustStore is null)
+            {
+                status = SignatureVerificationStatus.TrustUnknown;
+                message = "The signature is intact, but no trust store was supplied, so who signed it is not verified. "
+                    + changes.Message;
+            }
+            else if (core.Status == SignatureVerificationStatus.Valid)
+            {
+                message = core.Message + " " + changes.Message;
+            }
+        }
+
+        return new SignatureVerificationResult(
+            status,
+            message,
+            core.SignerCertificate,
+            core.IntegrityVerified,
+            core.TrustValidated,
+            core.ValidatedPath,
+            core.TimestampValidated,
+            core.SignatureTimestamp,
+            core.TimestampCertificate,
+            core.TimestampTrustValidated,
+            core.TimestampValidatedPath)
+        {
+            ModificationsAfterSigning = changes.Kind,
+            CoversWholeDocument = changes.CoversWholeDocument,
+            TrustStatus = TrustFinding(core, opts),
+        };
+    }
+
+    private static SignatureVerificationStatus TrustFinding(SignatureVerificationResult core, SignatureVerifyOptions opts)
+    {
+        if (!core.IntegrityVerified)
+        {
+            return SignatureVerificationStatus.TrustUnknown;
+        }
+
+        if (core.Status == SignatureVerificationStatus.Valid)
+        {
+            return opts.TrustStore is null ? SignatureVerificationStatus.TrustUnknown : SignatureVerificationStatus.Valid;
+        }
+
+        return core.Status;
+    }
+
+    private static SignatureVerificationResult VerifyCryptographyAndTrust(
+        PdfSignature signature,
+        PdfDocument document,
+        SignatureVerifyOptions? options)
+    {
 
         if (!signature.IsCmsBased)
         {
@@ -218,7 +301,7 @@ public static class PdfSignatureVerifier
         {
             return new SignatureVerificationResult(
                 SignatureVerificationStatus.Valid,
-                "Signature is cryptographically valid. (No trust store supplied; certificate trust was not evaluated.)",
+                "The signature is cryptographically valid.",
                 signerCert,
                 integrityVerified: true,
                 trustValidated: false,

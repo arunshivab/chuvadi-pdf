@@ -203,7 +203,7 @@ public sealed class PdfSignatureTsaTrustTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, opts);
-        r.IsValid.Should().BeTrue();
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeTrue();
         r.TimestampTrustValidated.Should().BeFalse();
         r.TimestampValidatedPath.Should().BeNull();
@@ -220,7 +220,7 @@ public sealed class PdfSignatureTsaTrustTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, opts);
-        r.IsValid.Should().BeTrue();
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeTrue();
         r.TimestampTrustValidated.Should().BeTrue();
         r.TimestampValidatedPath.Should().NotBeNull();
@@ -240,7 +240,7 @@ public sealed class PdfSignatureTsaTrustTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, opts);
-        r.IsValid.Should().BeTrue();
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeTrue();
         r.TimestampTrustValidated.Should().BeFalse();
     }

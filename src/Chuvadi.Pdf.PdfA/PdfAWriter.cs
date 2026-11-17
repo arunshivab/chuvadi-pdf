@@ -7,13 +7,16 @@
 // with Liberation substitutes, strips JavaScript, adds an sRGB output intent and
 // pdfaid XMP metadata, and serialises with a classic cross-reference table and
 // the correct header version. When an unfixable conformance problem remains,
-// nothing is written and the result reports the violations.
+// nothing is written and the result reports the violations (3.35.0, PDA-01:
+// including transparency in PDF/A-1b, DeviceCMYK without a CMYK output
+// intent, optional content, embedded files and LZW compression).
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Forms;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -69,7 +72,14 @@ public static class PdfAWriter
             NonWinAnsiForm form = options.Conformance == PdfAConformance.PdfA1B
                 ? NonWinAnsiForm.Symbolic
                 : NonWinAnsiForm.Differences;
-            FontSubstitution.SubstituteStandard14(document, Allocate, LiberationFaces.Get, violations, form);
+            // 3.35.0 (backlog 49): form fields get the appearances a viewer
+            // would make, and /NeedAppearances is cleared (ISO 19005-1
+            // §6.9, ISO 19005-2 §6.4.1); the graphics states lose their
+            // transfer functions (ISO 19005-1 §6.2.8, ISO 19005-2 §6.2.5).
+            List<PdfDictionary> generatedResources = GenerateFieldAppearances(document, catalog, store, Allocate, warnings);
+            RemoveTransferFunctions(store, rootRef, warnings);
+
+            FontSubstitution.SubstituteStandard14(document, Allocate, LiberationFaces.Get, violations, form, generatedResources);
             StripJavaScript(catalog, store);
 
             // 3.34.0 (#49c): every annotation is printable and visible
@@ -139,6 +149,11 @@ public static class PdfAWriter
             store.Add(new PdfIndirectObject(metadataId, new PdfStream(metadataDict, xmp)));
             catalog.Set(PdfName.Intern("Metadata"), new PdfReference(metadataId));
             catalog.Remove(PdfName.Intern("Version"));
+
+            // 3.35.0 (PDA-01): what the fixes above cannot remove is checked
+            // before anything is written, so a file that would not conform is
+            // reported instead of written as if it did.
+            PdfAConformanceCheck.Run(document, rootRef, store, options.Conformance, violations);
 
             if (violations.Count > 0)
             {
@@ -237,6 +252,243 @@ public static class PdfAWriter
     private const int FlagPrint = 0x4;
     private const int FlagNoView = 0x20;
     private const int FlagToggleNoView = 0x100;
+
+    // Makes an appearance for each widget that has none, and, when the form's
+    // /NeedAppearances is true, for every text and choice field (buttons keep
+    // their designed state appearances, as viewers do); then clears the flag.
+    // Returns the new appearances' resources, for font embedding.
+    private static List<PdfDictionary> GenerateFieldAppearances(
+        PdfDocument document, PdfDictionary catalog, PdfObjectStore store, Func<PdfObjectId> allocate, List<string> warnings)
+    {
+        List<PdfDictionary> resources = new List<PdfDictionary>();
+        if (!catalog.TryGetValue(PdfName.Intern("AcroForm"), out PdfPrimitive? formRef)
+            || store.Resolve(formRef) is not PdfDictionary acroForm)
+        {
+            return resources;
+        }
+
+        bool needAppearances = store.Resolve(acroForm.TryGetValue(PdfName.Intern("NeedAppearances"), out PdfPrimitive? na) ? na : PdfNull.Value)
+            is PdfBoolean { Value: true };
+        int made = 0;
+        for (int i = 0; i < document.PageCount; i++)
+        {
+            if (!document.Pages[i].Dictionary.TryGetValue(PdfName.Intern("Annots"), out PdfPrimitive? annotsRef)
+                || store.Resolve(annotsRef) is not PdfArray annots)
+            {
+                continue;
+            }
+
+            foreach (PdfPrimitive entry in annots)
+            {
+                if (store.Resolve(entry) is not PdfDictionary widget
+                    || store.Resolve(widget.TryGetValue(PdfName.Subtype, out PdfPrimitive? st) ? st : PdfNull.Value) is not PdfName { Value: "Widget" })
+                {
+                    continue;
+                }
+
+                string? type = InheritedName(widget, "FT", store);
+                bool hasAppearance = store.Resolve(widget.TryGetValue(PdfName.Intern("AP"), out PdfPrimitive? ap) ? ap : PdfNull.Value) is PdfDictionary;
+                if (type is null or "Sig" || (hasAppearance && !(needAppearances && type is "Tx" or "Ch")))
+                {
+                    continue;
+                }
+
+                PdfStream? stream;
+                try
+                {
+                    stream = FieldAppearanceGenerator.Generate(widget, store, acroForm, store.OnWarning, i + 1);
+                }
+                catch (Exception ex) when (!PdfWorkScope.IsAbort(ex) && ex is not OutOfMemoryException)
+                {
+                    warnings.Add("A form field's appearance on page " + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + " could not be made (" + ex.GetType().Name + "); its stored appearance is kept.");
+                    continue;
+                }
+
+                if (stream is null)
+                {
+                    continue;
+                }
+
+                Externalise(stream.Dictionary, store, allocate);
+                PdfObjectId id = allocate();
+                store.Add(new PdfIndirectObject(id, stream));
+                if (store.Resolve(stream.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? res) ? res : PdfNull.Value) is PdfDictionary streamResources)
+                {
+                    resources.Add(streamResources);
+                }
+
+                PdfDictionary appearance = new PdfDictionary();
+                if (type == "Btn")
+                {
+                    // A button's normal appearance is a dictionary of states.
+                    string state = store.Resolve(widget.TryGetValue(PdfName.Intern("AS"), out PdfPrimitive? asv) ? asv : PdfNull.Value) is PdfName asName
+                        ? asName.Value
+                        : "Off";
+                    PdfDictionary states = new PdfDictionary();
+                    states.Set(PdfName.Intern(state), new PdfReference(id));
+                    appearance.Set(PdfName.Intern("N"), states);
+                    widget.Set(PdfName.Intern("AS"), PdfName.Intern(state));
+                }
+                else
+                {
+                    appearance.Set(PdfName.Intern("N"), new PdfReference(id));
+                }
+
+                widget.Set(PdfName.Intern("AP"), appearance);
+                made++;
+            }
+        }
+
+        if (acroForm.ContainsKey(PdfName.Intern("NeedAppearances")))
+        {
+            acroForm.Remove(PdfName.Intern("NeedAppearances"));
+            warnings.Add("/NeedAppearances was removed from the form; " + made.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " field appearance(s) were made from the field values.");
+        }
+        else if (made > 0)
+        {
+            warnings.Add(made.ToString(System.Globalization.CultureInfo.InvariantCulture) + " form field(s) with no appearance were given one made from the field value.");
+        }
+
+        return resources;
+    }
+
+    // Moves every stream held directly inside a dictionary or array into an
+    // object of its own (a written file can hold a stream only as an object).
+    private static void Externalise(PdfDictionary dict, PdfObjectStore store, Func<PdfObjectId> allocate)
+    {
+        foreach (PdfName key in new List<PdfName>(dict.Keys))
+        {
+            PdfPrimitive? replaced = ExternaliseValue(dict[key], store, allocate);
+            if (replaced is not null)
+            {
+                dict.Set(key, replaced);
+            }
+        }
+    }
+
+    // The reference to use in place of a direct stream, or null to keep the value.
+    private static PdfPrimitive? ExternaliseValue(PdfPrimitive value, PdfObjectStore store, Func<PdfObjectId> allocate)
+    {
+        switch (value)
+        {
+            case PdfStream stream:
+                Externalise(stream.Dictionary, store, allocate);
+                PdfObjectId id = allocate();
+                store.Add(new PdfIndirectObject(id, stream));
+                return new PdfReference(id);
+            case PdfDictionary dict:
+                Externalise(dict, store, allocate);
+                return null;
+            case PdfArray array:
+                List<PdfPrimitive> items = new List<PdfPrimitive>(array.Count);
+                bool changed = false;
+                foreach (PdfPrimitive element in array)
+                {
+                    PdfPrimitive? item = ExternaliseValue(element, store, allocate);
+                    changed |= item is not null;
+                    items.Add(item ?? element);
+                }
+
+                return changed ? new PdfArray(items) : null;
+            default:
+                return null;
+        }
+    }
+
+    private static string? InheritedName(PdfDictionary field, string key, PdfObjectStore store)
+    {
+        PdfDictionary? d = field;
+        for (int depth = 0; d is not null && depth < 32; depth++)
+        {
+            if (d.TryGetValue(PdfName.Intern(key), out PdfPrimitive? v) && store.Resolve(v) is PdfName name)
+            {
+                return name.Value;
+            }
+
+            d = d.TryGetValue(PdfName.Intern("Parent"), out PdfPrimitive? parent) ? store.Resolve(parent) as PdfDictionary : null;
+        }
+
+        return null;
+    }
+
+    // Removes /TR, and /TR2 other than /Default, from every graphics state the
+    // file reaches through a resource dictionary's /ExtGState.
+    private static void RemoveTransferFunctions(PdfObjectStore store, PdfPrimitive root, List<string> warnings)
+    {
+        int removed = 0;
+        HashSet<int> visitedObjects = new HashSet<int>();
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            PdfPrimitive item = pending.Pop();
+            if (item is PdfReference reference)
+            {
+                if (visitedObjects.Add(reference.ObjectId.ObjectNumber))
+                {
+                    pending.Push(store.Resolve(reference));
+                }
+
+                continue;
+            }
+
+            PdfDictionary? dict = item switch
+            {
+                PdfDictionary d => d,
+                PdfStream s => s.Dictionary,
+                _ => null,
+            };
+            if (dict is null)
+            {
+                if (item is PdfArray array)
+                {
+                    foreach (PdfPrimitive element in array)
+                    {
+                        pending.Push(element);
+                    }
+                }
+
+                continue;
+            }
+
+            if (dict.TryGetValue(PdfName.Intern("ExtGState"), out PdfPrimitive? statesRef)
+                && store.Resolve(statesRef) is PdfDictionary states)
+            {
+                foreach (PdfPrimitive stateValue in states.Values)
+                {
+                    if (store.Resolve(stateValue) is not PdfDictionary state)
+                    {
+                        continue;
+                    }
+
+                    if (state.Remove(PdfName.Intern("TR")))
+                    {
+                        removed++;
+                    }
+
+                    if (state.TryGetValue(PdfName.Intern("TR2"), out PdfPrimitive? tr2)
+                        && store.Resolve(tr2) is not PdfName { Value: "Default" })
+                    {
+                        state.Remove(PdfName.Intern("TR2"));
+                        removed++;
+                    }
+                }
+            }
+
+            foreach (PdfPrimitive child in dict.Values)
+            {
+                pending.Push(child);
+            }
+        }
+
+        if (removed > 0)
+        {
+            warnings.Add(removed.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " transfer function(s) were removed from graphics states; colours they adjusted are drawn as stored.");
+        }
+    }
 
     // 3.34.0 (#49c): PDF/A wants every annotation printable and shown. An
     // annotation that is neither shown nor printed (Hidden, or Invisible) is
@@ -544,48 +796,67 @@ public static class PdfAWriter
         }
     }
 
+    // Depth-first, in the same order as before; iterative (3.35.0, DOC-01).
     private static void CollectReachable(
         PdfObjectStore store,
         PdfPrimitive? primitive,
         List<PdfIndirectObject> collected,
         HashSet<int> visited)
     {
-        if (primitive is PdfReference reference)
+        if (primitive is null)
         {
-            if (!visited.Add(reference.ObjectId.ObjectNumber))
-            {
-                return;
-            }
-
-            PdfPrimitive resolved = store.Resolve(reference);
-            collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
-            CollectReachable(store, resolved, collected, visited);
+            return;
         }
-        else if (primitive is PdfDictionary dictionary)
+
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(primitive);
+        while (pending.Count > 0)
         {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+            PdfPrimitive current = pending.Pop();
+            if (current is PdfReference reference)
             {
-                if (entry.Key == PdfName.Parent)
+                if (!visited.Add(reference.ObjectId.ObjectNumber))
                 {
                     continue;
                 }
 
-                CollectReachable(store, entry.Value, collected, visited);
+                PdfPrimitive resolved = store.Resolve(reference);
+                collected.Add(new PdfIndirectObject(reference.ObjectId, resolved));
+                pending.Push(resolved);
             }
-        }
-        else if (primitive is PdfArray array)
-        {
-            for (int i = 0; i < array.Count; i++)
+            else if (current is PdfDictionary dictionary)
             {
-                CollectReachable(store, array[i], collected, visited);
+                PushReversed(dictionary, pending, skipParent: true);
             }
-        }
-        else if (primitive is PdfStream stream)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in stream.Dictionary)
+            else if (current is PdfArray array)
             {
-                CollectReachable(store, entry.Value, collected, visited);
+                for (int i = array.Count - 1; i >= 0; i--)
+                {
+                    pending.Push(array[i]);
+                }
+            }
+            else if (current is PdfStream stream)
+            {
+                PushReversed(stream.Dictionary, pending, skipParent: false);
             }
         }
     }
+
+    private static void PushReversed(PdfDictionary dictionary, Stack<PdfPrimitive> pending, bool skipParent)
+    {
+        List<PdfPrimitive> values = new List<PdfPrimitive>(dictionary.Count);
+        foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+        {
+            if (!(skipParent && entry.Key == PdfName.Parent))
+            {
+                values.Add(entry.Value);
+            }
+        }
+
+        for (int i = values.Count - 1; i >= 0; i--)
+        {
+            pending.Push(values[i]);
+        }
+    }
+
 }

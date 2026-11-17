@@ -10,7 +10,7 @@ public static class RedactionVerifier
 
 ## Remarks
 
-Text is matched per glyph on an approximate ink box (the middle 80% of the glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph that merely abuts a rectangle is not reported. Invisible text (render mode 3 or clip-only), fully transparent paint and shadings are not reported.
+Text is matched per glyph on an approximate ink box (the middle 80% of the glyph's advance, from the baseline to 0.7 em), so a neighbouring glyph that merely abuts a rectangle is not reported. Invisible text (render mode 3 or clip-only) and fully transparent paint are not reported. A shading is reported when its clip covers part of a region (3.35.0; before, shadings were not reported). `RedactionVerifier.VerifyPatterns` checks a pattern redaction (3.35.0).
 
 ## Methods
 
@@ -30,6 +30,23 @@ Verifies that the regions of `rectangles` are empty in `document` (typically the
 - `rectangles` — The regions that must be empty.
 
 **Returns:** The verification result. <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+
+### `VerifyPatterns`
+
+__static__
+
+```csharp
+static RedactionVerification VerifyPatterns(PdfDocument document, IReadOnlyList<PatternRule> patterns)
+```
+
+Verifies that nothing in `document` (typically the output of a pattern redaction) still matches `patterns` (3.35.0): on each page the patterns apply to, the text a viewer shows, matched as `Redactor` matches it (across text operators, in form XObjects, tiling-pattern cells, Type 3 glyphs and annotation appearances, with or without the spaces the layout implies), and the annotations' text entries and actions; and, for the patterns with no page list, everything outside the page content: every string in the document's objects, the XMP metadata, scripts, replacement text (`/ActualText`, `/Alt`, `/E`) in content streams, and attachments. An attachment that cannot be read as text is reported as a survivor with no text, since it cannot be checked.
+
+**Parameters**
+
+- `document` — The document to inspect.
+- `patterns` — The patterns that must not match.
+
+**Returns:** The verification result: one survivor per match. <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
 
 ### `ExtractWithin`
 

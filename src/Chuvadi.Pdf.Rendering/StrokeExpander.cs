@@ -250,29 +250,64 @@ public sealed class StrokeExpander
             }
             else if (havePrev && left.Count > 0)
             {
-                // Mitre the join: intersect the previous and current offset
-                // lines on each side. Fall back to the current segment's start
-                // offset (bevel) when the lines are parallel or the mitre is
-                // excessively long.
+                // 3.35.0 (backlog 54): a mitre or bevel join. The inner side
+                // of the turn is always mitred (its offset lines meet). The
+                // outer side is mitred for a mitre join whose mitre length
+                // over line width, 1 / sin(phi / 2), is within /ML
+                // (PDF 32000-1:2008 §8.4.3.5); otherwise, and always for a
+                // bevel join, it is bevelled: the previous segment's offset
+                // end is kept and the current one's start follows it.
+                // Before, both joins were mitred with a fixed limit of 8.
+                double cross = (prevDx * curDy) - (prevDy * curDx);
+                bool outerIsLeft = cross < 0;
                 PointF prevL = left[left.Count - 1];
                 PointF prevR = right[right.Count - 1];
-
-                if (TryMitre(prevL, prevDx, prevDy, l0, curDx, curDy, halfWidth, out PointF mitL))
-                {
-                    left[left.Count - 1] = mitL;
-                }
-                else
+                bool straight = !TryMitre(prevL, prevDx, prevDy, l0, curDx, curDy, halfWidth, out PointF mitL)
+                    | !TryMitre(prevR, prevDx, prevDy, r0, curDx, curDy, halfWidth, out PointF mitR);
+                if (straight)
                 {
                     left[left.Count - 1] = l0;
-                }
-
-                if (TryMitre(prevR, prevDx, prevDy, r0, curDx, curDy, halfWidth, out PointF mitR))
-                {
-                    right[right.Count - 1] = mitR;
+                    right[right.Count - 1] = r0;
                 }
                 else
                 {
-                    right[right.Count - 1] = r0;
+                    PointF outerMitre = outerIsLeft ? mitL : mitR;
+                    double reach = Math.Sqrt(((outerMitre.X - p0.X) * (outerMitre.X - p0.X)) + ((outerMitre.Y - p0.Y) * (outerMitre.Y - p0.Y)));
+                    bool mitre = style.Join == LineJoin.Miter && reach <= halfWidth * Math.Max(1.0, style.MiterLimit);
+                    // As before, an inner intersection far behind the vertex
+                    // (a very sharp turn) is replaced by the offset start.
+                    if (outerIsLeft && Distance(mitR, r0) > halfWidth * 8.0)
+                    {
+                        mitR = r0;
+                    }
+                    else if (!outerIsLeft && Distance(mitL, l0) > halfWidth * 8.0)
+                    {
+                        mitL = l0;
+                    }
+                    if (outerIsLeft)
+                    {
+                        right[right.Count - 1] = mitR;
+                        if (mitre)
+                        {
+                            left[left.Count - 1] = mitL;
+                        }
+                        else
+                        {
+                            left.Add(l0);
+                        }
+                    }
+                    else
+                    {
+                        left[left.Count - 1] = mitL;
+                        if (mitre)
+                        {
+                            right[right.Count - 1] = mitR;
+                        }
+                        else
+                        {
+                            right.Add(r0);
+                        }
+                    }
                 }
             }
 
@@ -357,10 +392,13 @@ public sealed class StrokeExpander
         PointF innerStart = outerIsLeft ? r0 : l0;
         PointF prevInner = inner[inner.Count - 1];
         inner[inner.Count - 1] = TryMitre(prevInner, prevDx, prevDy, innerStart, curDx, curDy, halfWidth, out PointF mitre)
+            && Distance(mitre, innerStart) <= halfWidth * 8.0
             ? mitre
             : innerStart;
         return true;
     }
+
+    private static double Distance(PointF a, PointF b) => Math.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)));
 
     private static bool TryMitre(
         PointF prevOff, double prevDx, double prevDy,
@@ -378,10 +416,13 @@ public sealed class StrokeExpander
         double t = (((curOff.X - prevOff.X) * curDy) - ((curOff.Y - prevOff.Y) * curDx)) / denom;
         PointF p = new PointF(prevOff.X + (prevDx * t), prevOff.Y + (prevDy * t));
 
+        // A near-reversal puts the intersection far away; such a join is
+        // treated as straight (the caller then joins the offsets directly).
+        // Real limits are applied by the caller against /ML.
         double mdx = p.X - curOff.X;
         double mdy = p.Y - curOff.Y;
 
-        if (Math.Sqrt((mdx * mdx) + (mdy * mdy)) > halfWidth * 8.0)
+        if (Math.Sqrt((mdx * mdx) + (mdy * mdy)) > halfWidth * 1000.0)
         {
             return false;
         }

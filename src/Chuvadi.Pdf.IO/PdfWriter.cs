@@ -669,8 +669,13 @@ public static class PdfWriter
 
     private static void WriteReal(Stream output, double value)
     {
-        // Use up to 6 significant digits, no trailing zeros, no scientific notation.
-        string formatted = value.ToString("G6", CultureInfo.InvariantCulture);
+        // 3.35.0 (backlog 66, D-385): the fewest significant digits, from 6
+        // up to 9, that keep the value to single precision (relative error
+        // at most 1e-7). Before, every real kept only 6 digits, so a /BBox
+        // of 1.0833334 was written as 1.08333 and a clip edge moved across
+        // a pixel centre. Values computed in single precision still write
+        // short (0.1f is "0.1", not "0.100000001").
+        string formatted = ShortestReal(value);
 
         // 3.32.0 (D-278): G6 switches to an exponent (1E+06, 4.29496E+09,
         // 1E-05) for large and tiny values, which is not PDF syntax. Such
@@ -692,6 +697,23 @@ public static class PdfWriter
         }
 
         WriteAscii(output, formatted);
+    }
+
+    private static string ShortestReal(double value)
+    {
+        string formatted = value.ToString("G9", CultureInfo.InvariantCulture);
+        for (int digits = 6; digits < 9; digits++)
+        {
+            string candidate = value.ToString("G" + digits.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+            if (double.TryParse(candidate, NumberStyles.Float, CultureInfo.InvariantCulture, out double back)
+                && Math.Abs(back - value) <= Math.Abs(value) * 1e-7)
+            {
+                formatted = candidate;
+                break;
+            }
+        }
+
+        return formatted;
     }
 
     private static string EncodeName(string name)

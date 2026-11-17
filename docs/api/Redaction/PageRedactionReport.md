@@ -48,7 +48,7 @@ Gets the number of image placements removed whole.
 int PathsCut
 ```
 
-Gets the number of painted paths that had the redacted area cut out of them.
+Gets the number of painted paths that had the redacted area cut out of them, and (3.35.0) of shadings painted with `sh` that were clipped out of the redacted area.
 
 ### `PathsRemoved`
 
@@ -56,7 +56,7 @@ Gets the number of painted paths that had the redacted area cut out of them.
 int PathsRemoved
 ```
 
-Gets the number of painted paths removed whole.
+Gets the number of painted paths removed whole, and (3.35.0) of mesh shadings painted with `sh` under a redaction.
 
 ### `AnnotationsRemoved`
 

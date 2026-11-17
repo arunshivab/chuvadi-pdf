@@ -374,11 +374,21 @@ internal static class LinearizedWriter
         return cat;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxPageTreeDepth = 1024;
+
     private static void WalkPages(
         int nodeObjNum,
         Dictionary<int, PdfIndirectObject> byId,
-        List<int> result)
+        List<int> result,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
+        if (depth > MaxPageTreeDepth)
+        {
+            return;
+        }
+
         if (!byId.TryGetValue(nodeObjNum, out PdfIndirectObject? node) ||
             node.Value is not PdfDictionary dict)
         {
@@ -399,7 +409,7 @@ internal static class LinearizedWriter
             {
                 if (kids[i] is PdfReference r)
                 {
-                    WalkPages(r.ObjectId.ObjectNumber, byId, result);
+                    WalkPages(r.ObjectId.ObjectNumber, byId, result, depth + 1);
                 }
             }
         }

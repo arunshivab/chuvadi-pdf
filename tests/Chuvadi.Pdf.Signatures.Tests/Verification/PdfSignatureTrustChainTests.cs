@@ -125,12 +125,14 @@ public sealed class PdfSignatureTrustChainTests
         = new(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void Verify_NoTrustStore_ReturnsValidWithoutTrustValidation()
+    public void Verify_NoTrustStore_ReportsTrustUnknown()
     {
         using PdfDocument doc = BuildPdf();
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc);
 
-        result.Status.Should().Be(SignatureVerificationStatus.Valid);
+        // 3.35.0 (D-396): without a trust store the signer is not verified.
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.TrustUnknown);
+        result.IsValid.Should().BeFalse();
         result.IntegrityVerified.Should().BeTrue();
         result.TrustValidated.Should().BeFalse();
         result.ValidatedPath.Should().BeNull();
@@ -150,7 +152,7 @@ public sealed class PdfSignatureTrustChainTests
 
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc, options);
 
-        result.Status.Should().Be(SignatureVerificationStatus.Valid);
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         result.IntegrityVerified.Should().BeTrue();
         result.TrustValidated.Should().BeTrue();
         result.ValidatedPath.Should().NotBeNull();
@@ -171,7 +173,7 @@ public sealed class PdfSignatureTrustChainTests
 
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc, options);
 
-        result.Status.Should().Be(SignatureVerificationStatus.TrustChainBroken);
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainBroken);
         result.IntegrityVerified.Should().BeTrue();
         result.TrustValidated.Should().BeFalse();
     }
@@ -190,7 +192,7 @@ public sealed class PdfSignatureTrustChainTests
 
         SignatureVerificationResult result = doc.Signatures()[0].Verify(doc, options);
 
-        result.Status.Should().Be(SignatureVerificationStatus.TrustChainCertificateOutOfValidity);
+        result.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainCertificateOutOfValidity);
         result.IntegrityVerified.Should().BeTrue();
         result.TrustValidated.Should().BeFalse();
     }

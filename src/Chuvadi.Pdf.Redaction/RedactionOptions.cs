@@ -31,9 +31,14 @@ public sealed class RedactionOptions
     public IList<RedactionRect> Rectangles { get; init; }
 
     /// <summary>
-    /// Gets the list of regex patterns to redact. Each matching span across
-    /// extracted text on a targeted page is resolved to a device-space rectangle
-    /// and added to the redaction set.
+    /// Gets the list of regex patterns to redact. Each pattern is matched on
+    /// the text a viewer shows on each page it applies to, joined across text
+    /// operators and including form XObjects, tiling-pattern cells, Type 3
+    /// glyphs and annotations (3.35.0). Each match becomes boxes inside the
+    /// matched glyphs, removed as rectangles are; patterns with no page list
+    /// are also applied outside the pages (bookmarks, metadata, scripts,
+    /// addresses, alternate texts, attachments). See
+    /// <see cref="Redactor.ApplyWithReport"/>.
     /// </summary>
     public IList<PatternRule> Patterns { get; init; }
 
@@ -53,9 +58,14 @@ public sealed class RedactionOptions
     public bool DrawOverlay { get; init; }
 
     /// <summary>
-    /// Gets or initialises the padding (PDF points) added around each pattern-derived
-    /// rectangle to compensate for font-metric approximation. Default: 1.0.
+    /// Gets or initialises a padding in PDF points. Default: 1.0.
     /// </summary>
+    /// <remarks>
+    /// Not used: pattern matches are placed from the font's own glyph
+    /// positions, inside the matched glyphs, so no padding is needed and none
+    /// is applied. (Documented in 3.35.0; the value had no effect before
+    /// either.)
+    /// </remarks>
     public double PatternPadding { get; init; }
 
     /// <summary>
@@ -82,4 +92,21 @@ public sealed class RedactionOptions
     /// <c>-1</c> to use all available cores.
     /// </remarks>
     public int MaxDegreeOfParallelism { get; init; }
+
+    /// <summary>
+    /// Gets or initialises whether, in a pattern redaction, attachments
+    /// (embedded files) that cannot be checked against the patterns are kept
+    /// (3.35.0). Default: <see langword="false"/>: an attachment is kept only
+    /// when every file in it reads as text and neither the text nor its name
+    /// matches a document-wide pattern; any other attachment is removed,
+    /// because it can hold the very data being redacted, and is listed in
+    /// <see cref="RedactionReport.AttachmentsRemoved"/>. Set to
+    /// <see langword="true"/> to keep the attachments that could not be
+    /// checked; they are listed in <see cref="RedactionReport.AttachmentsNotScanned"/>.
+    /// An attachment that matches a pattern is removed either way. With no
+    /// patterns at all (rectangles only) attachments are always kept and
+    /// listed in <see cref="RedactionReport.AttachmentsNotScanned"/>, as there
+    /// is nothing to check them against.
+    /// </summary>
+    public bool KeepAttachments { get; init; }
 }

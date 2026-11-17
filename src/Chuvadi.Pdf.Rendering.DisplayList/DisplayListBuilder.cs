@@ -1144,12 +1144,120 @@ public static class DisplayListBuilder
             s.TextMatrix = AffineMatrix.Identity;
             s.TextLineMatrix = AffineMatrix.Identity;
             ResetGapTracking();
+            _textClip = null;
         }
 
         /// <inheritdoc />
         public void EndText()
         {
             ResetGapTracking();
+
+            // 3.35.0 (D-384 T3): glyphs shown in a clipping render mode (4 to
+            // 7) become one clip at ET, the union of their outlines in page
+            // space (PDF 32000-1:2008 §9.3.6), carried in later ops' Clips
+            // until the matching Q, as the raster renderer applies it.
+            if (_textClip is not null)
+            {
+                BuilderState s = _stack.Current;
+                Add(new ClipOp
+                {
+                    Geometry = _textClip,
+                    FillRule = FillRule.NonZero,
+                });
+                s.Clips = AppendClip(s.Clips, _textClip);
+                _textClip = null;
+            }
+        }
+
+        // The page-space glyph outlines shown in a clipping render mode since
+        // BT, or null when no text was shown in such a mode.
+        private PathGeometry? _textClip;
+
+        private static bool StrokesText(TextRenderingMode mode) =>
+            mode is TextRenderingMode.Stroke or TextRenderingMode.FillThenStroke
+                or TextRenderingMode.StrokeAndClip or TextRenderingMode.FillStrokeAndClip;
+
+        private void AddText(TextOp op)
+        {
+            Add(op);
+            if (op.RenderingMode >= TextRenderingMode.FillAndClip)
+            {
+                _textClip ??= new PathGeometry();
+                AppendGlyphOutlines(op, _textClip);
+            }
+        }
+
+        // Adds each glyph's outline in page space: glyph space scaled to text
+        // space by the font size and horizontal scaling, placed at the
+        // glyph's position, then the op's transform. An embedded program's
+        // outline is used when there is one, else the standard 14 substitute.
+        private static void AppendGlyphOutlines(TextOp op, PathGeometry target)
+        {
+            DisplayListFont? font = op.Font;
+            if (font is null)
+            {
+                return;
+            }
+
+            foreach (DisplayListGlyph glyph in op.Glyphs)
+            {
+                Chuvadi.Pdf.Graphics.Path? outline = null;
+                double unitsPerEm = 1000.0;
+                if (font.IsEmbedded)
+                {
+                    int glyphId = font.GetGlyphId(glyph.GlyphId);
+                    if (glyphId >= 0)
+                    {
+                        outline = font.GetGlyphOutline(glyphId)?.Outline;
+                        unitsPerEm = font.UnitsPerEm;
+                    }
+                }
+                else
+                {
+                    outline = font.GetSubstituteGlyphOutline(glyph.Code);
+                }
+
+                if (outline is null || outline.IsEmpty || unitsPerEm <= 0)
+                {
+                    continue;
+                }
+
+                double sx = op.FontSize * op.HorizontalScaling / unitsPerEm;
+                double sy = op.FontSize / unitsPerEm;
+                AffineMatrix place = new AffineMatrix(sx, 0, 0, sy, glyph.X, glyph.Y).Multiply(op.Transform);
+                foreach (Chuvadi.Pdf.Graphics.PathSegment seg in outline.Segments)
+                {
+                    switch (seg.Kind)
+                    {
+                        case Chuvadi.Pdf.Graphics.PathSegmentKind.MoveTo:
+                            {
+                                (double x, double y) = place.Apply(seg.P0.X, seg.P0.Y);
+                                target.MoveTo(x, y);
+                                break;
+                            }
+
+                        case Chuvadi.Pdf.Graphics.PathSegmentKind.LineTo:
+                            {
+                                (double x, double y) = place.Apply(seg.P0.X, seg.P0.Y);
+                                target.LineTo(x, y);
+                                break;
+                            }
+
+                        case Chuvadi.Pdf.Graphics.PathSegmentKind.CubicBezierTo:
+                            {
+                                (double x1, double y1) = place.Apply(seg.P0.X, seg.P0.Y);
+                                (double x2, double y2) = place.Apply(seg.P1.X, seg.P1.Y);
+                                (double x3, double y3) = place.Apply(seg.P2.X, seg.P2.Y);
+                                target.CubicTo(x1, y1, x2, y2, x3, y3);
+                                break;
+                            }
+
+                        case Chuvadi.Pdf.Graphics.PathSegmentKind.ClosePath:
+                            target.Close();
+                            break;
+                    }
+                }
+            }
         }
 
         /// <inheritdoc />
@@ -1445,7 +1553,26 @@ public static class DisplayListBuilder
         /// <inheritdoc />
         public void ShowTextArray(IReadOnlyList<TextArrayElement> elements)
         {
-            EmitTJ(elements, _stack.Current);
+            BuilderState s = _stack.Current;
+            if (s.FontKey is not null && s.Type3 is null && EncodingCMap(s.FontKey) is { IsVertical: true })
+            {
+                // Vertical writing: a number moves the text down (§9.4.3).
+                foreach (TextArrayElement element in elements)
+                {
+                    if (element.IsText)
+                    {
+                        EmitVerticalText(element.Text!, s);
+                    }
+                    else
+                    {
+                        s.TextMatrix = new AffineMatrix(1, 0, 0, 1, 0, -element.Adjustment / 1000.0 * s.FontSize).Multiply(s.TextMatrix);
+                    }
+                }
+
+                return;
+            }
+
+            EmitTJ(elements, s);
         }
 
         // ── IContentOperatorSink — XObjects ────────────────────────────
@@ -1626,7 +1753,7 @@ public static class DisplayListBuilder
             // The CTM at the sh operator maps shading space to page space. Path
             // coordinates in this builder are already baked to page space, so
             // the gradient geometry must be too.
-            EmitShadingOp(shadingRef, _stack.Current.Ctm);
+            EmitShadingOp(shadingRef, _stack.Current.Ctm, _stack.Current.FillAlpha);
         }
 
         // True when the transform keeps circles circular (rotation, uniform
@@ -1641,9 +1768,10 @@ public static class DisplayListBuilder
         }
 
         // Emits a ShadingOp for a shading dictionary under the given
-        // shading-space-to-page transform. An unsupported shading type (e.g.
+        // shading-space-to-page transform, with the constant alpha of the
+        // paint (fill for sh and fill patterns, stroke for stroke patterns). An unsupported shading type (e.g.
         // mesh shadings 4-7) skips the paint rather than failing the page.
-        private void EmitShadingOp(PdfPrimitive shadingRef, AffineMatrix ctm)
+        private void EmitShadingOp(PdfPrimitive shadingRef, AffineMatrix ctm, double opacity)
         {
             PdfShading shading;
             try
@@ -1666,6 +1794,7 @@ public static class DisplayListBuilder
                     {
                         BlendMode = _stack.Current.BlendMode,
                         SoftMask = _stack.Current.SoftMask,
+                        Opacity = opacity,
                         IsRadial = false,
                         ShadingToPage = ctm,
                         ShadingType = type,
@@ -1709,6 +1838,7 @@ public static class DisplayListBuilder
                 {
                     BlendMode = _stack.Current.BlendMode,
                     SoftMask = _stack.Current.SoftMask,
+                    Opacity = opacity,
                     IsRadial = true,
                     X0 = coords[0],
                     Y0 = coords[1],
@@ -1731,6 +1861,7 @@ public static class DisplayListBuilder
                 {
                     BlendMode = _stack.Current.BlendMode,
                     SoftMask = _stack.Current.SoftMask,
+                    Opacity = opacity,
                     IsRadial = true,
                     X0 = x0,
                     Y0 = y0,
@@ -1752,6 +1883,7 @@ public static class DisplayListBuilder
                 {
                     BlendMode = _stack.Current.BlendMode,
                     SoftMask = _stack.Current.SoftMask,
+                    Opacity = opacity,
                     IsRadial = false,
                     X0 = x0,
                     Y0 = y0,
@@ -1816,7 +1948,7 @@ public static class DisplayListBuilder
                     }
                     else
                     {
-                        EmitShadingOp(s.FillShadingPattern!, s.FillPatternMatrix);
+                        EmitShadingOp(s.FillShadingPattern!, s.FillPatternMatrix, s.FillAlpha);
                     }
 
                     Add(new TransformOp { Push = false, Ctm = s.Ctm });
@@ -1847,7 +1979,7 @@ public static class DisplayListBuilder
                     }
                     else
                     {
-                        EmitShadingOp(s.StrokeShadingPattern!, s.StrokePatternMatrix);
+                        EmitShadingOp(s.StrokeShadingPattern!, s.StrokePatternMatrix, s.StrokeAlpha);
                     }
 
                     Add(new TransformOp { Push = false, Ctm = s.Ctm });
@@ -2200,6 +2332,12 @@ public static class DisplayListBuilder
             if (s.FontKey is null) { return; }
             if (bytes.Length == 0) { return; }
 
+            if (s.Type3 is null && EncodingCMap(s.FontKey) is { IsVertical: true })
+            {
+                EmitVerticalText(bytes, s);
+                return;
+            }
+
             if (s.Type3 is Type3Font type3)
             {
                 EmitTextType3(bytes, s, type3);
@@ -2215,29 +2353,25 @@ public static class DisplayListBuilder
             double xAdvance = 0;
             int codeStep = composite ? 2 : 1;
 
-            for (int i = 0; i + codeStep <= bytes.Length; i += codeStep)
+            foreach ((int code, int glyphCode, int i, int codeLength) in Codes(bytes, codeStep, composite, s.FontKey))
             {
-                int code = composite
-                    ? ((bytes[i] << 8) | bytes[i + 1])
-                    : bytes[i];
+                string unicode = DecodeSingleCode(bytes, i, codeLength, s.FontKey);
 
-                string unicode = DecodeSingleCode(bytes, i, codeStep, s.FontKey);
-
-                double rawWidth = widths.GetWidth(code);   // font units (1000ths em)
+                double rawWidth = widths.GetWidth(glyphCode);   // font units (1000ths em)
                 double advance = (rawWidth / 1000.0) * s.FontSize
                                  + s.CharSpacing
                                  + (unicode == " " ? s.WordSpacing : 0.0);
                 advance *= s.HorizontalScaling / 100.0;
 
                 glyphs.Add(new DisplayListGlyph(
-                    GlyphId: code,
+                    GlyphId: glyphCode,
                     Unicode: unicode,
                     X: xAdvance,
                     Y: 0,
                     Advance: advance)
                 {
                     Code = code,
-                    CodeLength = codeStep,
+                    CodeLength = codeLength,
                 });
 
                 xAdvance += advance;
@@ -2262,7 +2396,7 @@ public static class DisplayListBuilder
             }
 
             AffineMatrix combined = RiseMatrix(s).Multiply(s.TextMatrix).Multiply(s.Ctm);
-            Add(new TextOp
+            AddText(new TextOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
@@ -2278,6 +2412,8 @@ public static class DisplayListBuilder
                 Style = s.Style,
                 FillOpacity = s.FillAlpha,
                 StrokeOpacity = s.StrokeAlpha,
+                HorizontalScaling = s.HorizontalScaling / 100.0,
+                Stroke = StrokesText(s.RenderingMode) ? StrokeStyleOf(s) : null,
             });
 
             // Advance text matrix by the total advance of this run.
@@ -2362,27 +2498,24 @@ public static class DisplayListBuilder
 
                     // Decode glyphs and accumulate into the pending fold.
                     List<DisplayListGlyph> decoded = new();
-                    for (int i = 0; i + codeStep <= bytes.Length; i += codeStep)
+                    foreach ((int code, int glyphCode, int i, int codeLength) in Codes(bytes, codeStep, composite, s.FontKey))
                     {
-                        int code = composite
-                            ? ((bytes[i] << 8) | bytes[i + 1])
-                            : bytes[i];
-                        string unicode = DecodeSingleCode(bytes, i, codeStep, s.FontKey);
-                        double rawWidth = widths.GetWidth(code);
+                        string unicode = DecodeSingleCode(bytes, i, codeLength, s.FontKey);
+                        double rawWidth = widths.GetWidth(glyphCode);
                         double advance = (rawWidth / 1000.0) * s.FontSize
                                          + s.CharSpacing
                                          + (unicode == " " ? s.WordSpacing : 0.0);
                         advance *= s.HorizontalScaling / 100.0;
 
                         decoded.Add(new DisplayListGlyph(
-                            GlyphId: code,
+                            GlyphId: glyphCode,
                             Unicode: unicode,
                             X: cursorX,
                             Y: 0,
                             Advance: advance)
                         {
                             Code = code,
-                            CodeLength = codeStep,
+                            CodeLength = codeLength,
                         });
                         cursorX += advance;
                     }
@@ -2482,7 +2615,7 @@ public static class DisplayListBuilder
         {
             if (pending.Count == 0) { return; }
 
-            Add(new TextOp
+            AddText(new TextOp
             {
                 BlendMode = _stack.Current.BlendMode,
                 SoftMask = _stack.Current.SoftMask,
@@ -2498,6 +2631,8 @@ public static class DisplayListBuilder
                 Style = s.Style,
                 FillOpacity = s.FillAlpha,
                 StrokeOpacity = s.StrokeAlpha,
+                HorizontalScaling = s.HorizontalScaling / 100.0,
+                Stroke = StrokesText(s.RenderingMode) ? StrokeStyleOf(s) : null,
             });
 
             AffineMatrix step = new(1, 0, 0, 1, cursorX, 0);
@@ -2508,6 +2643,166 @@ public static class DisplayListBuilder
             _prevRunEndY = s.TextMatrix.F;
             _prevRunEndedWithSpace = pending[pending.Count - 1].Unicode == " ";
         }
+
+        // A string's codes: one byte each for a simple font; for a Type 0
+        // font two-byte codes that are CIDs (Identity, an embedded CMap), or
+        // since 3.35.0 (E1) the codes of its predefined CMap with their CIDs.
+        // Each is (code, CID or code, start, length).
+        private IEnumerable<(int Code, int GlyphCode, int Start, int Length)> Codes(byte[] bytes, int codeStep, bool composite, string fontKey)
+        {
+            Chuvadi.Pdf.Fonts.PredefinedCMap? cmap = composite ? EncodingCMap(fontKey) : null;
+            if (cmap is null || cmap.Name.StartsWith("Identity-", StringComparison.Ordinal))
+            {
+                for (int i = 0; i + codeStep <= bytes.Length; i += codeStep)
+                {
+                    int code = composite ? ((bytes[i] << 8) | bytes[i + 1]) : bytes[i];
+                    yield return (code, code, i, codeStep);
+                }
+
+                yield break;
+            }
+
+            int at = 0;
+            while (at < bytes.Length)
+            {
+                int length = cmap.Next(bytes.AsSpan(at), out int code, out int cid);
+                yield return (code, cid, at, length);
+                at += length;
+            }
+        }
+
+        // 3.35.0 (E2): vertical writing (a -V CMap). Each glyph is its own
+        // text op, placed at the text origin less its position vector
+        // (§9.7.4.3, /W2 /DW2), so every output draws it where it belongs;
+        // the text then moves down by the glyph's vertical advance.
+        private void EmitVerticalText(byte[] bytes, BuilderState s)
+        {
+            string fontKey = s.FontKey!;
+            FontWidths widths = GetWidths(fontKey);
+            foreach ((int code, int cid, int start, int length) in Codes(bytes, 2, true, fontKey))
+            {
+                string unicode = DecodeSingleCode(bytes, start, length, fontKey);
+                (double w1, double vx, double vy) = VerticalMetrics(fontKey, cid, widths.GetWidth(cid));
+                AffineMatrix origin = new AffineMatrix(1, 0, 0, 1, -vx / 1000.0 * s.FontSize, -vy / 1000.0 * s.FontSize);
+                AffineMatrix combined = origin.Multiply(RiseMatrix(s)).Multiply(s.TextMatrix).Multiply(s.Ctm);
+                double ty = (w1 / 1000.0 * s.FontSize) + s.CharSpacing + (length == 1 && code == 32 ? s.WordSpacing : 0.0);
+                AddText(new TextOp
+                {
+                    BlendMode = _stack.Current.BlendMode,
+                    SoftMask = _stack.Current.SoftMask,
+                    FontKey = fontKey,
+                    BaseFont = s.BaseFont ?? "Helvetica",
+                    Font = s.Font,
+                    FontSize = s.FontSize,
+                    Glyphs = new[]
+                    {
+                        new DisplayListGlyph(GlyphId: cid, Unicode: unicode, X: 0, Y: 0, Advance: Math.Abs(ty))
+                        {
+                            Code = code,
+                            CodeLength = length,
+                        },
+                    },
+                    Transform = combined,
+                    RenderingMode = s.RenderingMode,
+                    FillColor = s.FillColor,
+                    StrokeColor = s.StrokeColor,
+                    Style = s.Style,
+                    FillOpacity = s.FillAlpha,
+                    StrokeOpacity = s.StrokeAlpha,
+                    HorizontalScaling = s.HorizontalScaling / 100.0,
+                    Stroke = StrokesText(s.RenderingMode) ? StrokeStyleOf(s) : null,
+                });
+                s.TextMatrix = new AffineMatrix(1, 0, 0, 1, 0, ty).Multiply(s.TextMatrix);
+            }
+
+            _hasPrevRunOnLine = false;
+        }
+
+        // A CID's vertical metrics (§9.7.4.3): (w1, vx, vy) from the
+        // descendant font's /W2, else /DW2 (default [880 -1000]) with vx half
+        // the horizontal width.
+        private (double W1, double Vx, double Vy) VerticalMetrics(string fontKey, int cid, double horizontalWidth)
+        {
+            if (!_verticalByKey.TryGetValue(fontKey, out (Dictionary<int, (double, double, double)> Map, double Vy, double W1) table))
+            {
+                Dictionary<int, (double, double, double)> map = new Dictionary<int, (double, double, double)>();
+                double dvy = 880;
+                double dw1 = -1000;
+                if (ResolveFontDict(fontKey) is PdfDictionary font
+                    && font.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? dfs)
+                    && _doc.Objects.Resolve(dfs) is PdfArray { Count: > 0 } descendants
+                    && _doc.Objects.Resolve(descendants[0]) is PdfDictionary cidFont)
+                {
+                    if (cidFont.TryGetValue(PdfName.Intern("DW2"), out PdfPrimitive? dw2Value)
+                        && _doc.Objects.Resolve(dw2Value) is PdfArray { Count: >= 2 } dw2)
+                    {
+                        dvy = NumberOf(_doc.Objects.Resolve(dw2[0]));
+                        dw1 = NumberOf(_doc.Objects.Resolve(dw2[1]));
+                    }
+
+                    if (cidFont.TryGetValue(PdfName.Intern("W2"), out PdfPrimitive? w2Value)
+                        && _doc.Objects.Resolve(w2Value) is PdfArray w2)
+                    {
+                        int i = 0;
+                        while (i + 1 < w2.Count && _doc.Objects.Resolve(w2[i]) is PdfInteger first)
+                        {
+                            PdfPrimitive next = _doc.Objects.Resolve(w2[i + 1]);
+                            if (next is PdfArray list)
+                            {
+                                for (int k = 0; k + 2 < list.Count; k += 3)
+                                {
+                                    map[first.Value + (k / 3)] = (NumberOf(_doc.Objects.Resolve(list[k])), NumberOf(_doc.Objects.Resolve(list[k + 1])), NumberOf(_doc.Objects.Resolve(list[k + 2])));
+                                }
+
+                                i += 2;
+                            }
+                            else if (next is PdfInteger last && i + 4 < w2.Count)
+                            {
+                                (double, double, double) value = (NumberOf(_doc.Objects.Resolve(w2[i + 2])), NumberOf(_doc.Objects.Resolve(w2[i + 3])), NumberOf(_doc.Objects.Resolve(w2[i + 4])));
+                                for (int c = first.Value; c <= last.Value && c - first.Value < 65536; c++)
+                                {
+                                    map[c] = value;
+                                }
+
+                                i += 5;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                table = (map, dvy, dw1);
+                _verticalByKey[fontKey] = table;
+            }
+
+            return table.Map.TryGetValue(cid, out (double W1, double Vx, double Vy) entry)
+                ? entry
+                : (table.W1, horizontalWidth / 2.0, table.Vy);
+        }
+
+        private readonly Dictionary<string, (Dictionary<int, (double, double, double)> Map, double Vy, double W1)> _verticalByKey =
+            new Dictionary<string, (Dictionary<int, (double, double, double)> Map, double Vy, double W1)>(StringComparer.Ordinal);
+
+        private Chuvadi.Pdf.Fonts.PredefinedCMap? EncodingCMap(string fontKey)
+        {
+            if (_encodingCMapByKey.TryGetValue(fontKey, out Chuvadi.Pdf.Fonts.PredefinedCMap? cached))
+            {
+                return cached;
+            }
+
+            Chuvadi.Pdf.Fonts.PredefinedCMap? cmap = ResolveFontDict(fontKey) is PdfDictionary font
+                && font.TryGetValue(PdfName.Intern("Encoding"), out PdfPrimitive? encoding)
+                && _doc.Objects.Resolve(encoding) is PdfName name
+                    ? Chuvadi.Pdf.Fonts.PredefinedCMap.Get(name.Value)
+                    : null;
+            _encodingCMapByKey[fontKey] = cmap;
+            return cmap;
+        }
+
+        private readonly Dictionary<string, Chuvadi.Pdf.Fonts.PredefinedCMap?> _encodingCMapByKey = new Dictionary<string, Chuvadi.Pdf.Fonts.PredefinedCMap?>(StringComparer.Ordinal);
 
         private FontWidths GetWidths(string fontKey)
         {
@@ -2989,15 +3284,19 @@ public static class DisplayListBuilder
                 return;
             }
 
-            string? filterName = ExtractFilterName(stream.Dictionary);
+            string? filterName = ExtractLastFilterName(stream.Dictionary);
             ImageFormat format;
             byte[] pixelData;
             PdfColorSpace cs = ExtractColorSpace(stream.Dictionary);
 
             if (filterName == "DCTDecode")
             {
+                // 3.35.0 (backlog 62): the codec is the LAST filter. Filters
+                // before it ([/FlateDecode /DCTDecode]) are decoded first;
+                // before, such an image was taken as raw data and left out.
                 format = ImageFormat.Jpeg;
-                pixelData = stream.RawBytes;
+                try { pixelData = CodecBytes(stream); }
+                catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { return; }
             }
             else
             {
@@ -3029,9 +3328,10 @@ public static class DisplayListBuilder
             int softMaskHeight = 0;
 
             // /SMask: a DeviceGray image whose samples are the base image's alpha
-            // channel. Only applied when the base is a decodable raw image (a JPEG
-            // base would need decoding before alpha can be attached).
-            if (format == ImageFormat.Raw
+            // channel. 3.35.0 (backlog 62): a JPEG base carries it too (the
+            // SVG and WPF outputs decode the JPEG to attach it), and a soft
+            // mask stored as a JPEG is decoded; before, both were dropped.
+            if ((format == ImageFormat.Raw || format == ImageFormat.Jpeg)
                 && stream.Dictionary.TryGetValue(PdfName.Intern("SMask"), out PdfPrimitive? smRef)
                 && _doc.Objects.Resolve(smRef) is PdfStream smStream)
             {
@@ -3043,7 +3343,9 @@ public static class DisplayListBuilder
                 {
                     try
                     {
-                        byte[] smPixels = ContentStreamLoader.Decode(smStream, _doc.Objects);
+                        byte[] smPixels = ExtractLastFilterName(smStream.Dictionary) == "DCTDecode"
+                            ? JpegRgbSamples.Gray(CodecBytes(smStream), smWidth, smHeight) ?? Array.Empty<byte>()
+                            : ContentStreamLoader.Decode(smStream, _doc.Objects);
                         if (smPixels.Length >= smWidth * smHeight)
                         {
                             if (IsDecodeInverted(smStream.Dictionary))
@@ -3065,7 +3367,7 @@ public static class DisplayListBuilder
                             // straight-alpha PNG is built, or colours render
                             // wrong (washed/shifted toward the matte).
                             double[]? matte = ReadMatte(smStream.Dictionary);
-                            if (matte is not null)
+                            if (matte is not null && format == ImageFormat.Raw)
                             {
                                 UnpremultiplyMatte(
                                     pixelData, width, height,
@@ -3077,6 +3379,20 @@ public static class DisplayListBuilder
                     {
                         softMaskAlpha = null;
                     }
+                }
+            }
+
+            // /Mask (when there is no /SMask, which takes precedence): a
+            // stencil image or colour-key ranges, carried as the alpha the
+            // outputs already apply. 3.35.0 (backlog 60): before, the mask was
+            // ignored and the whole image painted.
+            if (softMaskAlpha is null
+                && stream.Dictionary.TryGetValue(PdfName.Intern("Mask"), out PdfPrimitive? maskValue))
+            {
+                if (!ReadExplicitMask(stream.Dictionary, _doc.Objects.Resolve(maskValue), format, pixelData, indexSamples, width, height, cs,
+                        out softMaskAlpha, out softMaskWidth, out softMaskHeight))
+                {
+                    return;
                 }
             }
 
@@ -3097,6 +3413,8 @@ public static class DisplayListBuilder
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
                 Source = _drawingInlineImage ? null : stream,
+                DecodeSource = stream,
+                DecodeObjects = _doc.Objects,
                 Decode = ReadDecodeArray(stream.Dictionary),
                 IccProfileStream = FindIccProfile(stream.Dictionary),
                 JpegColorTransform = format == ImageFormat.Jpeg ? JpegInfo.ReadTransform(pixelData) : JpegColorTransform.None,
@@ -3240,6 +3558,8 @@ public static class DisplayListBuilder
                 Alpha = s.FillAlpha,
                 Transform = s.Ctm,
                 Source = _drawingInlineImage ? null : stream,
+                DecodeSource = stream,
+                DecodeObjects = _doc.Objects,
                 Decode = ReadDecodeArray(stream.Dictionary),
                 IsStencilMask = true,
                 StencilColor = s.FillColor,
@@ -3292,6 +3612,94 @@ public static class DisplayListBuilder
             return null;
         }
 
+        // Reads an image's /Mask into alpha. Returns false when a stencil mask
+        // cannot be decoded: the image is then skipped (with a warning) rather
+        // than painted unmasked, as the raster renderer does. Colour-key ranges
+        // apply to 8-bit samples (palette indices for an Indexed image) and to
+        // gray or RGB JPEGs; other images are drawn without them.
+        private bool ReadExplicitMask(
+            PdfDictionary dict, PdfPrimitive mask, ImageFormat format, byte[] pixelData, byte[]? indexSamples,
+            int width, int height, PdfColorSpace cs,
+            out byte[]? alpha, out int alphaWidth, out int alphaHeight)
+        {
+            alpha = null;
+            alphaWidth = 0;
+            alphaHeight = 0;
+            if (mask is PdfStream maskStream)
+            {
+                int mw = IntOf(maskStream.Dictionary, "Width", 0);
+                int mh = IntOf(maskStream.Dictionary, "Height", 0);
+                byte[]? bits = null;
+                if (mw > 0 && mh > 0)
+                {
+                    try { bits = ContentStreamLoader.Decode(maskStream, _doc.Objects); }
+                    catch (Exception abortCheck) when (!Chuvadi.Pdf.Primitives.PdfWorkScope.IsAbort(abortCheck)) { bits = null; }
+                }
+
+                // A mask not marked /ImageMask (an ordinary 1-bit gray image)
+                // shows the image where it is white, as Poppler and MuPDF read it.
+                bool zeroMasks = IsDecodeInverted(maskStream.Dictionary) != !BoolOf(maskStream.Dictionary, "ImageMask");
+                alpha = bits is null ? null : ExplicitMask.StencilAlpha(bits, mw, mh, zeroMasks);
+                if (alpha is null)
+                {
+                    if (_doc.Objects.OnWarning is Action<PdfWarning> warn && _warned.Add("image mask"))
+                    {
+                        warn(new PdfWarning(PdfWarningKind.ImageSkipped, _pageNumber, "image", "The image's /Mask could not be read; the image is skipped rather than drawn unmasked."));
+                    }
+
+                    return false;
+                }
+
+                alphaWidth = mw;
+                alphaHeight = mh;
+                return true;
+            }
+
+            if (mask is not PdfArray ranges)
+            {
+                return true;
+            }
+
+            byte[]? samples;
+            int components;
+            if (indexSamples is not null)
+            {
+                samples = indexSamples;
+                components = 1;
+            }
+            else if (format == ImageFormat.Jpeg)
+            {
+                samples = ExplicitMask.JpegSamples(pixelData, width, height, out components);
+            }
+            else
+            {
+                samples = IntOf(dict, "BitsPerComponent", 8) == 8 ? pixelData : null;
+                components = cs switch { PdfColorSpace.DeviceGray => 1, PdfColorSpace.DeviceRgb => 3, _ => 4 };
+            }
+
+            if (samples is null || ranges.Count < components * 2)
+            {
+                return true;
+            }
+
+            int[] lo = new int[components];
+            int[] hi = new int[components];
+            for (int c = 0; c < components; c++)
+            {
+                lo[c] = (int)Math.Round(NumberOf(ranges[2 * c]));
+                hi[c] = (int)Math.Round(NumberOf(ranges[(2 * c) + 1]));
+            }
+
+            alpha = ExplicitMask.ColorKeyAlpha(samples, width, height, components, lo, hi);
+            if (alpha is not null)
+            {
+                alphaWidth = width;
+                alphaHeight = height;
+            }
+
+            return true;
+        }
+
         private static bool BoolOf(PdfDictionary dict, string key)
         {
             return dict.TryGetValue(PdfName.Intern(key), out PdfPrimitive? value)
@@ -3309,6 +3717,14 @@ public static class DisplayListBuilder
                 double d1 = NumberOf(arr[1]);
                 return d0 == 1.0 && d1 == 0.0;
             }
+
+            // 3.35.0: a one-element /Decode ([1]) is read as [1 0], as the
+            // raster renderer, Poppler and MuPDF read it.
+            if (d is PdfArray single && single.Count == 1 && single[0] is PdfReal or PdfInteger)
+            {
+                return NumberOf(single[0]) >= 0.5;
+            }
+
             return false;
         }
 
@@ -3328,15 +3744,53 @@ public static class DisplayListBuilder
             return fallback;
         }
 
-        private static string? ExtractFilterName(PdfDictionary d)
+        // The last filter of a stream's /Filter (the codec of an image), or
+        // null when there is none.
+        private static string? ExtractLastFilterName(PdfDictionary d)
         {
             if (!d.TryGetValue(PdfName.Intern("Filter"), out PdfPrimitive? f)) { return null; }
             return f switch
             {
                 PdfName n => n.Value,
-                PdfArray arr when arr.Count > 0 && arr[0] is PdfName n2 => n2.Value,
+                PdfArray arr when arr.Count > 0 && arr[arr.Count - 1] is PdfName last => last.Value,
                 _ => null,
             };
+        }
+
+        // The encoded bytes of a codec stream: filters before the last one
+        // in a chain are decoded, the last (the codec) is not.
+        private byte[] CodecBytes(PdfStream stream)
+        {
+            if (stream.Filter is not PdfArray { Count: > 1 } filters)
+            {
+                return stream.RawBytes;
+            }
+
+            PdfDictionary outer = new PdfDictionary();
+            foreach (KeyValuePair<PdfName, PdfPrimitive> pair in stream.Dictionary)
+            {
+                outer.Set(pair.Key, pair.Value);
+            }
+
+            outer.Set(PdfName.Filter, new PdfArray(AllButLast(filters)));
+            if (stream.Dictionary.TryGetValue(PdfName.Intern("DecodeParms"), out PdfPrimitive? parms)
+                && _doc.Objects.Resolve(parms) is PdfArray { Count: > 1 } parmList)
+            {
+                outer.Set(PdfName.Intern("DecodeParms"), new PdfArray(AllButLast(parmList)));
+            }
+
+            return ContentStreamLoader.Decode(new PdfStream(outer, stream.RawBytes), _doc.Objects);
+        }
+
+        private static PdfPrimitive[] AllButLast(PdfArray array)
+        {
+            PdfPrimitive[] items = new PdfPrimitive[array.Count - 1];
+            for (int i = 0; i < items.Length; i++)
+            {
+                items[i] = array[i];
+            }
+
+            return items;
         }
 
         private static PdfColorSpace ExtractColorSpace(PdfDictionary d)

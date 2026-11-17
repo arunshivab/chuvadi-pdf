@@ -145,7 +145,7 @@ public sealed class PdfSignatureRevocationTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 
@@ -162,7 +162,7 @@ public sealed class PdfSignatureRevocationTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.TrustChainCertificateRevoked);
         r.IntegrityVerified.Should().BeTrue();
         r.TrustValidated.Should().BeFalse();
     }
@@ -180,7 +180,7 @@ public sealed class PdfSignatureRevocationTests
             AutoExtractCmsCrls = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
     }
 
@@ -200,7 +200,7 @@ public sealed class PdfSignatureRevocationTests
         // CRL.ThisUpdate is 2025-05-01; validation time of 2025-04-01 means the CRL
         // wasn't yet "in force" at that retroactive moment, so it's correctly skipped
         // and the signature is considered valid as of the validation time.
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
     }
 
     private static PdfDocument BuildPdf()

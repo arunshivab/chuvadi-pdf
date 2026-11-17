@@ -390,6 +390,14 @@ internal sealed class PdfObjectParser
         return _tokenizer.Read();
     }
 
+    // Puts a token read with NextToken back in front of the buffer
+    // (3.35.0). Only one token is pushed back at a time.
+    private void PushBack(PdfToken token)
+    {
+        _pending2 = _pending1;
+        _pending1 = token;
+    }
+
     private PdfToken PeekToken()
     {
         if (!_pending1.HasValue)
@@ -752,9 +760,14 @@ internal sealed class PdfObjectParser
         Log?.Add(string.Create(CultureInfo.InvariantCulture,
             $"Damaged object syntax at offset {offset}: {what} was {action}."));
 
+    // 3.35.0 (52h, D-385): true when damaged syntax inside objects is read
+    // past (the document was opened with RepairIfDamaged).
+    private bool Lenient => Log?.LenientObjects == true;
+
     private PdfPrimitive ReadDictionaryOrStream()
     {
         PdfDictionary dict = new PdfDictionary();
+        bool streamFollows = false;
 
         while (true)
         {
@@ -776,7 +789,32 @@ internal sealed class PdfObjectParser
                 // second word of a name written with a space in it) is
                 // skipped, with a warning, and the dictionary read on.
                 // A token that opens a value would leave its contents
-                // behind, so those still fail.
+                // behind, so those still fail, unless the document was opened
+                // with RepairIfDamaged (3.35.0): then a value with no key is
+                // read and dropped, and "stream" or "endobj" closes the
+                // dictionary (a ">>" written as ">").
+                if (Lenient && key.Type is PdfTokenType.StreamStart)
+                {
+                    Damaged("a dictionary not closed before \"stream\"", key.ByteOffset, "closed there");
+                    streamFollows = true;
+                    break;
+                }
+
+                if (Lenient && key.Type is PdfTokenType.ObjectEnd)
+                {
+                    Damaged("a dictionary not closed before \"endobj\"", key.ByteOffset, "closed there");
+                    PushBack(key);
+                    break;
+                }
+
+                if (Lenient && key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart)
+                {
+                    PushBack(key);
+                    _ = ReadValue();
+                    Damaged("a value with no key in a dictionary", key.ByteOffset, "skipped");
+                    continue;
+                }
+
                 if (key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart or PdfTokenType.StreamStart)
                 {
                     throw new PdfParseException(
@@ -798,24 +836,32 @@ internal sealed class PdfObjectParser
             dict.Set(PdfName.FromRawBytes(key.RawBytes), val);
         }
 
-        PdfToken after = PeekToken();
-
-        if (after.Type != PdfTokenType.StreamStart)
+        if (!streamFollows)
         {
-            return dict;
+            PdfToken after = PeekToken();
+
+            if (after.Type != PdfTokenType.StreamStart)
+            {
+                return dict;
+            }
+
+            NextToken(); // consume 'stream'
         }
 
-        NextToken(); // consume 'stream'
         ConsumeStreamLineEnding();
 
         int length = ResolveLength(dict);
         byte[] rawBytes = ReadStreamBytes(length);
 
-        PdfToken endstream = NextToken();
-
-        if (endstream.Type != PdfTokenType.StreamEnd)
+        // 3.35.0 (52h): "endstream" is consumed only when it is the next
+        // token. Reading up to "endstream" (an indirect or wrong /Length)
+        // already consumes it, and taking the next token anyway swallowed
+        // whatever followed: for a stream written directly inside a
+        // dictionary, the ">>" that closes the dictionary. A missing
+        // endstream is still tolerated.
+        if (PeekToken().Type == PdfTokenType.StreamEnd)
         {
-            // Tolerate missing endstream in malformed PDFs.
+            NextToken();
         }
 
         return new PdfStream(dict, rawBytes);
@@ -832,6 +878,14 @@ internal sealed class PdfObjectParser
             if (next.Type == PdfTokenType.ArrayEnd)
             {
                 NextToken();
+                break;
+            }
+
+            if (Lenient && next.Type is PdfTokenType.EndOfStream or PdfTokenType.ObjectEnd)
+            {
+                // 3.35.0 (52h, D-385): an array left open is closed where its
+                // object ends.
+                Damaged("an array not closed", next.ByteOffset, "closed at the end of its object");
                 break;
             }
 

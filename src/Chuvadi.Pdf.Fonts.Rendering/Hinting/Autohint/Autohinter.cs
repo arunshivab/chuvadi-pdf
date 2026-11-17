@@ -226,7 +226,10 @@ internal static class Autohinter
 
         foreach (HorizontalEdge edge in edges)
         {
-            BlueZone? zone = zones.FindZoneFor(edge.Y, tolerance);
+            // 3.35.0 (D1): only a zone of the edge's own kind (a ceiling to
+            // a top zone, a floor to a bottom zone); before, a crossbar's
+            // floor could snap to the x-height and collapse the bar.
+            BlueZone? zone = zones.FindZoneFor(edge.Y, tolerance, !edge.IsFloor);
             if (zone is null)
             {
                 continue;
@@ -293,6 +296,21 @@ internal static class Autohinter
 
             if (floor.IsFitted && ceiling.IsFitted)
             {
+                // 3.35.0 (D1): a stroke whose two ends were anchored
+                // separately keeps at least one pixel, moving the end that
+                // is not on a blue zone.
+                if (ceiling.FittedY - floor.FittedY < 1)
+                {
+                    if (ceiling.IsBlueAnchored && !floor.IsBlueAnchored)
+                    {
+                        floor.FittedY = ceiling.FittedY - 1;
+                    }
+                    else
+                    {
+                        ceiling.FittedY = floor.FittedY + 1;
+                    }
+                }
+
                 continue;
             }
             if (floor.IsFitted)

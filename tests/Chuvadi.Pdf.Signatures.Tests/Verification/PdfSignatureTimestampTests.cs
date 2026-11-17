@@ -210,7 +210,7 @@ public sealed class PdfSignatureTimestampTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TrustValidated.Should().BeTrue();
         r.TimestampValidated.Should().BeTrue();
         r.SignatureTimestamp.Should().NotBeNull();
@@ -227,7 +227,7 @@ public sealed class PdfSignatureTimestampTests
             ValidationTime = GoodTime,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeFalse();
         r.SignatureTimestamp.Should().BeNull();
     }
@@ -242,7 +242,7 @@ public sealed class PdfSignatureTimestampTests
             // No ValidationTime supplied — orchestrator should pick TST genTime.
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeTrue();
     }
 
@@ -257,7 +257,7 @@ public sealed class PdfSignatureTimestampTests
             AutoVerifySignatureTimestamp = false,
         };
         SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, options);
-        r.Status.Should().Be(SignatureVerificationStatus.Valid);
+        r.TrustStatus.Should().Be(SignatureVerificationStatus.Valid);
         r.TimestampValidated.Should().BeFalse();
     }
 

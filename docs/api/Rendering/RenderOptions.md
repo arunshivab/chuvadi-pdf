@@ -32,7 +32,7 @@ Default options: 150 DPI, opaque white background, light hinting.
 double Dpi
 ```
 
-Gets or initialises the output resolution in dots per inch. Higher values produce larger, sharper images. Typical values: 72 (screen), 96 (Windows default), 150, 300 (print). Default: 150.
+Gets or initialises the output resolution in dots per inch. Higher values produce larger, sharper images. Typical values: 72 (screen), 96 (Windows default), 150, 300 (print). Default: 150. <exception cref="ArgumentOutOfRangeException"> The value is not a finite number greater than zero (3.35.0, GFX-01; before, NaN or infinity ended the process and 0 or a negative value gave an empty image). </exception>
 
 ### `Background`
 
@@ -88,7 +88,7 @@ Gets or initialises the glyph hinting mode. Default: `HintingMode.Light`.
 bool AutohintUnhintedFonts
 ```
 
-Gets or initialises whether fonts that carry no hinting programs are grid-fitted by the geometric autohinter (Y axis only) when hinting is enabled. Fonts with their own bytecode are unaffected. Default: true.
+Gets or initialises whether fonts that carry no hinting programs are grid-fitted by the geometric autohinter (Y axis only) when hinting is enabled. Fonts with their own bytecode are unaffected. Default: false since 3.35.0 (D1): such fonts are drawn unhinted, as Poppler, MuPDF and pdf.js draw them, which measured closer to Poppler on most pages of the hinting corpus; it was true before.
 
 ### `AnnotationMode`
 

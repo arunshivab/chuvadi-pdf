@@ -145,76 +145,77 @@ public sealed class PathFlattener
 
     // ── Adaptive cubic Bezier subdivision ────────────────────────────────
 
+    // Deepest subdivision: at most 2^16 segments per curve (3.35.0, GFX-01).
+    private const int MaxDepth = 16;
+
     /// <summary>
-    /// Recursively subdivides a cubic Bezier curve until all segments
-    /// are within the flatness tolerance.
-    /// de Casteljau's algorithm for subdivision.
+    /// Subdivides a cubic Bezier curve until every piece is within the
+    /// flatness tolerance, or MaxDepth halvings deep (de Casteljau). Iterative,
+    /// so no input can exhaust the stack (3.35.0, GFX-01; before, it recursed
+    /// without a limit and a non-finite coordinate ended the process). A curve
+    /// with a coordinate that is not finite adds nothing.
     /// </summary>
     private void FlattenCubic(
         PointF p0, PointF p1, PointF p2, PointF p3,
         List<PointF> output)
     {
-        // Measure how far the control points deviate from the chord p0→p3.
-        // Use the max of the two control point deviations as the error estimate.
-        double dx = p3.X - p0.X;
-        double dy = p3.Y - p0.Y;
-        double len = Math.Sqrt(dx * dx + dy * dy);
-
-        double d1;
-        double d2;
-
-        if (len < 1e-10)
+        if (!IsFinite(p0) || !IsFinite(p1) || !IsFinite(p2) || !IsFinite(p3))
         {
-            d1 = Distance(p1, p0);
-            d2 = Distance(p2, p0);
-        }
-        else
-        {
-            double invLen = 1.0 / len;
-            // Signed distance of p1 from chord, then p2.
-            double nx = -dy * invLen;
-            double ny = dx * invLen;
-            d1 = Math.Abs(nx * (p1.X - p0.X) + ny * (p1.Y - p0.Y));
-            d2 = Math.Abs(nx * (p2.X - p0.X) + ny * (p2.Y - p0.Y));
-        }
-
-        double error = d1 > d2 ? d1 : d2;
-
-        if (error <= _flatness)
-        {
-            // Curve is flat enough — emit the endpoint.
-            output.Add(p3);
             return;
         }
 
-        // Subdivide at t = 0.5 using de Casteljau's algorithm.
-        double m01x = (p0.X + p1.X) * 0.5;
-        double m01y = (p0.Y + p1.Y) * 0.5;
-        double m12x = (p1.X + p2.X) * 0.5;
-        double m12y = (p1.Y + p2.Y) * 0.5;
-        double m23x = (p2.X + p3.X) * 0.5;
-        double m23y = (p2.Y + p3.Y) * 0.5;
-        double m012x = (m01x + m12x) * 0.5;
-        double m012y = (m01y + m12y) * 0.5;
-        double m123x = (m12x + m23x) * 0.5;
-        double m123y = (m12y + m23y) * 0.5;
-        double midx = (m012x + m123x) * 0.5;
-        double midy = (m012y + m123y) * 0.5;
+        Stack<(PointF P0, PointF P1, PointF P2, PointF P3, int Depth)> pending =
+            new Stack<(PointF P0, PointF P1, PointF P2, PointF P3, int Depth)>();
+        pending.Push((p0, p1, p2, p3, 0));
+        while (pending.Count > 0)
+        {
+            (PointF a, PointF b, PointF c, PointF d, int depth) = pending.Pop();
+            if (depth >= MaxDepth || Error(a, b, c, d) <= _flatness)
+            {
+                // Flat enough: emit the endpoint.
+                output.Add(d);
+                continue;
+            }
 
-        PointF mid = new PointF(midx, midy);
+            // Subdivide at t = 0.5.
+            double m01x = (a.X + b.X) * 0.5;
+            double m01y = (a.Y + b.Y) * 0.5;
+            double m12x = (b.X + c.X) * 0.5;
+            double m12y = (b.Y + c.Y) * 0.5;
+            double m23x = (c.X + d.X) * 0.5;
+            double m23y = (c.Y + d.Y) * 0.5;
+            double m012x = (m01x + m12x) * 0.5;
+            double m012y = (m01y + m12y) * 0.5;
+            double m123x = (m12x + m23x) * 0.5;
+            double m123y = (m12y + m23y) * 0.5;
+            PointF mid = new PointF((m012x + m123x) * 0.5, (m012y + m123y) * 0.5);
 
-        FlattenCubic(p0,
-            new PointF(m01x, m01y),
-            new PointF(m012x, m012y),
-            mid,
-            output);
-
-        FlattenCubic(mid,
-            new PointF(m123x, m123y),
-            new PointF(m23x, m23y),
-            p3,
-            output);
+            // The second half is pushed first so the first half is emitted first.
+            pending.Push((mid, new PointF(m123x, m123y), new PointF(m23x, m23y), d, depth + 1));
+            pending.Push((a, new PointF(m01x, m01y), new PointF(m012x, m012y), mid, depth + 1));
+        }
     }
+
+    // How far the control points deviate from the chord p0-p3.
+    private static double Error(PointF p0, PointF p1, PointF p2, PointF p3)
+    {
+        double dx = p3.X - p0.X;
+        double dy = p3.Y - p0.Y;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        if (len < 1e-10)
+        {
+            return Math.Max(Distance(p1, p0), Distance(p2, p0));
+        }
+
+        double invLen = 1.0 / len;
+        double nx = -dy * invLen;
+        double ny = dx * invLen;
+        double d1 = Math.Abs(nx * (p1.X - p0.X) + ny * (p1.Y - p0.Y));
+        double d2 = Math.Abs(nx * (p2.X - p0.X) + ny * (p2.Y - p0.Y));
+        return d1 > d2 ? d1 : d2;
+    }
+
+    private static bool IsFinite(PointF p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
 
     private static double Distance(PointF a, PointF b)
     {

@@ -55,6 +55,11 @@ public sealed class PdfFont
     private readonly int _maxByteCount;
     private FontWidths? _widths;
 
+    // 3.35.0 (E1): a Type 0 font's predefined CMap and its character
+    // collection's ordering, for codes the ToUnicode CMap does not map.
+    private PredefinedCMap? _cmap;
+    private string? _ordering;
+
     // PDF codes are conventionally up to 4 bytes; longer windows would
     // overflow a signed 32-bit code anyway. The fallback (when neither a
     // codespace range nor the mapping suggests a wider window) is 2 bytes
@@ -102,6 +107,28 @@ public sealed class PdfFont
         // For simple fonts, also parse the encoding as fallback.
         PdfFontEncoding? encoding = isComposite ? null : SimpleEncoding(fontDict, resolver);
 
+        PredefinedCMap? cmap = null;
+        string? ordering = null;
+        if (isComposite)
+        {
+            if (fontDict.TryGetValue(PdfName.Intern("Encoding"), out PdfPrimitive? encodingEntry)
+                && resolver.Resolve(encodingEntry) is PdfName encodingName)
+            {
+                cmap = PredefinedCMap.Get(encodingName.Value);
+            }
+
+            if (fontDict.TryGetValue(PdfName.Intern("DescendantFonts"), out PdfPrimitive? descendants)
+                && resolver.Resolve(descendants) is PdfArray { Count: > 0 } array
+                && resolver.Resolve(array[0]) is PdfDictionary cidFont
+                && cidFont.TryGetValue(PdfName.Intern("CIDSystemInfo"), out PdfPrimitive? infoEntry)
+                && resolver.Resolve(infoEntry) is PdfDictionary info
+                && info.TryGetValue(PdfName.Intern("Ordering"), out PdfPrimitive? orderingEntry)
+                && resolver.Resolve(orderingEntry) is PdfString orderingText)
+            {
+                ordering = Encoding.ASCII.GetString(orderingText.Bytes);
+            }
+        }
+
         return new PdfFont(
             toUnicode?.Mapping,
             toUnicode?.CodespaceRanges,
@@ -109,6 +136,8 @@ public sealed class PdfFont
             isComposite)
         {
             _widths = FontWidths.FromDictionary(fontDict, resolver),
+            _cmap = cmap,
+            _ordering = ordering,
         };
     }
 
@@ -241,6 +270,14 @@ public sealed class PdfFont
     }
 
     /// <summary>
+    /// Gets whether the font writes vertically: a Type 0 font whose
+    /// <c>/Encoding</c> is a vertical predefined CMap (<c>Identity-V</c>,
+    /// <c>UniJIS-UTF16-V</c> and so on). <see cref="TryMeasure"/> then gives
+    /// the vertical advance (normally negative). Since 3.35.0.
+    /// </summary>
+    public bool IsVertical => _cmap?.IsVertical ?? false;
+
+    /// <summary>
     /// Converts a sequence of bytes from a PDF text string operator to Unicode text.
     /// </summary>
     /// <param name="bytes">The raw bytes from a Tj, TJ, or similar operator.</param>
@@ -269,6 +306,40 @@ public sealed class PdfFont
         }
 
         StringBuilder sb = new StringBuilder(bytes.Length);
+
+        // 3.35.0 (E1): a Type 0 font with a predefined CMap other than
+        // Identity, or with Identity and no ToUnicode CMap, is read code by
+        // code through the CMap (§9.7.6.2). Each code's text comes from the
+        // ToUnicode CMap, else from the code itself for a Unicode CMap, else
+        // from its CID through the character collection (§9.10.2).
+        if (_cmap is not null
+            && (!_cmap.Name.StartsWith("Identity-", StringComparison.Ordinal)
+                || (_toUnicodeMap is null && _ordering is "GB1" or "CNS1" or "Japan1" or "Korea1")))
+        {
+            int at = 0;
+            while (at < bytes.Length)
+            {
+                int length = _cmap.Next(bytes.AsSpan(at), out int code, out int cid);
+                string? text = null;
+                if (_toUnicodeMap is not null && _toUnicodeMap.TryGetValue(code, out string? mapped))
+                {
+                    text = mapped;
+                }
+                else if (_cmap.IsUnicode)
+                {
+                    text = _cmap.CodeToUnicode(bytes.AsSpan(at, length));
+                }
+                else if (_ordering is not null)
+                {
+                    text = PredefinedCMap.CidToUnicode(_ordering, cid);
+                }
+
+                sb.Append(text);
+                at += length;
+            }
+
+            return sb.ToString();
+        }
 
         int i = 0;
 

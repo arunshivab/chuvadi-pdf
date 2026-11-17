@@ -19,6 +19,13 @@ internal sealed class RecoveryLog
     private readonly List<string> _entries = new List<string>();
     private readonly HashSet<string> _once = new HashSet<string>(StringComparer.Ordinal);
 
+    // 3.35.0 (52h, D-385): set when the document was opened with
+    // RepairIfDamaged. Objects parsed later (lazily) then read past damage
+    // that strict parsing refuses: a value where a dictionary key belongs,
+    // a dictionary that runs into "stream" or "endobj" unclosed, and an array
+    // that runs into "endobj" or the end of the data unclosed.
+    internal volatile bool LenientObjects;
+
     internal void Add(string message)
     {
         lock (_sync)

@@ -460,7 +460,36 @@ public sealed class XfaJavaScriptEngine
             }
         }
 
+        // Deepest nesting of statements, brackets and unary operators
+        // (3.35.0, XFA-01). Deeper scripts fail as an ordinary script error;
+        // before, about 10,000 nested brackets ended the process.
+        private const int MaxNesting = 100;
+
+        private int _nesting;
+
+        private void Enter()
+        {
+            if (++_nesting > MaxNesting)
+            {
+                _nesting--;
+                throw new XfaScriptException("The script is nested more than " + MaxNesting.ToString(CultureInfo.InvariantCulture) + " levels deep.");
+            }
+        }
+
         private JsStatement ParseStatement()
+        {
+            Enter();
+            try
+            {
+                return ParseStatementCore();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
+
+        private JsStatement ParseStatementCore()
         {
             if (Match(";"))
             {
@@ -621,7 +650,18 @@ public sealed class XfaJavaScriptEngine
             return new JsReturnStatement { Value = value };
         }
 
-        private JsExpr ParseExpression() => ParseAssignment();
+        private JsExpr ParseExpression()
+        {
+            Enter();
+            try
+            {
+                return ParseAssignment();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
 
         private JsExpr ParseAssignment()
         {
@@ -684,6 +724,19 @@ public sealed class XfaJavaScriptEngine
         }
 
         private JsExpr ParseUnary()
+        {
+            Enter();
+            try
+            {
+                return ParseUnaryCore();
+            }
+            finally
+            {
+                _nesting--;
+            }
+        }
+
+        private JsExpr ParseUnaryCore()
         {
             if (Current.Text is "!" or "-" or "+")
             {

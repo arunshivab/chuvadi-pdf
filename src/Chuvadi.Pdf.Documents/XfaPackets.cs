@@ -364,12 +364,22 @@ public sealed class XfaPackets
         return map;
     }
 
+    // Deepest nesting followed (3.35.0, DOC-01).
+    private const int MaxFieldDepth = 1024;
+
     private void WalkField(
         PdfPrimitive entry,
         string? parentName,
         Dictionary<PdfObjectId, int> annotPage,
-        Dictionary<string, XfaGeometry> map)
+        Dictionary<string, XfaGeometry> map,
+        int depth = 0)
     {
+        // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
+        if (depth > MaxFieldDepth)
+        {
+            return;
+        }
+
         PdfObjectId id = entry is PdfReference reference ? reference.ObjectId : PdfObjectId.Invalid;
         PdfDictionary? dictionary = _document.Objects.ResolveAs<PdfDictionary>(entry);
 
@@ -389,7 +399,7 @@ public sealed class XfaPackets
             {
                 for (int i = 0; i < kids.Count; i++)
                 {
-                    WalkField(kids[i], name, annotPage, map);
+                    WalkField(kids[i], name, annotPage, map, depth + 1);
                 }
             }
         }

@@ -368,7 +368,7 @@ public sealed class ReportBuilder
             x = contentLeft + contentWidth - textWidth;
         }
 
-        page.DrawText(WinAnsiText.Map(text), x, y, font, style.FontSize, style.Color);
+        page.DrawText(text, x, y, font, style.FontSize, style.Color);
 
         if (style.RuleLine)
         {

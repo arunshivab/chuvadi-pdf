@@ -41,6 +41,8 @@ internal static class ObjectGraphPreloader
         }
     }
 
+    // Iterative (3.35.0, DOC-01/OPS-08): a long chain of linked objects
+    // (bookmarks, annotations through /Next) cannot exhaust the stack.
     private static void Visit(PdfObjectStore store, PdfPrimitive? primitive, HashSet<int> visited)
     {
         if (primitive is null)
@@ -48,40 +50,38 @@ internal static class ObjectGraphPreloader
             return;
         }
 
-        if (primitive is PdfReference reference)
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(primitive);
+        while (pending.Count > 0)
         {
-            if (!visited.Add(reference.ObjectId.ObjectNumber))
+            switch (pending.Pop())
             {
-                return;
-            }
+                case PdfReference reference:
+                    if (visited.Add(reference.ObjectId.ObjectNumber))
+                    {
+                        pending.Push(store.Resolve(reference));
+                    }
 
-            PdfPrimitive resolved = store.Resolve(reference);
-            Visit(store, resolved, visited);
-            return;
-        }
+                    break;
+                case PdfArray array:
+                    for (int i = array.Count - 1; i >= 0; i--)
+                    {
+                        pending.Push(array[i]);
+                    }
 
-        if (primitive is PdfArray array)
-        {
-            for (int i = 0; i < array.Count; i++)
-            {
-                Visit(store, array[i], visited);
-            }
+                    break;
+                case PdfStream stream:
+                    pending.Push(stream.Dictionary);
+                    break;
+                case PdfDictionary dictionary:
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
+                    {
+                        pending.Push(entry.Value);
+                    }
 
-            return;
-        }
-
-        if (primitive is PdfStream stream)
-        {
-            Visit(store, stream.Dictionary, visited);
-            return;
-        }
-
-        if (primitive is PdfDictionary dictionary)
-        {
-            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dictionary)
-            {
-                Visit(store, entry.Value, visited);
+                    break;
             }
         }
     }
+
 }
