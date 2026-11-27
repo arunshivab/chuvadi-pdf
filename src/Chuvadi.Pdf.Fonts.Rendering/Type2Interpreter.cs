@@ -37,7 +37,13 @@ internal sealed class Type2Interpreter
     private bool _widthRead;
     private int _hintCount;
     private bool _contourOpen;
+    private int _callDepth;
     private Path _path = new();
+
+    // CFF limits subroutine nesting to 10 (Type 2 Charstring Format §3.2);
+    // 64 matches FreeType and leaves legitimate fonts untouched while stopping
+    // a charstring whose subroutines call each other without end (c23).
+    private const int MaxCallDepth = 64;
 
     internal Type2Interpreter(List<byte[]> globalSubrs, List<byte[]> localSubrs,
         int defaultWidthX, int nominalWidthX)
@@ -70,6 +76,27 @@ internal sealed class Type2Interpreter
         {
             _path.ClosePath();
             _contourOpen = false;
+        }
+    }
+
+    // Executes a called subroutine under a nesting-depth guard (c23): a CFF
+    // whose subroutines call one another endlessly stops here instead of
+    // overflowing the stack.
+    private bool CallSubr(byte[] cs)
+    {
+        if (_callDepth >= MaxCallDepth)
+        {
+            throw new FontRenderingException("A CFF charstring nests subroutine calls more than 64 deep.");
+        }
+
+        _callDepth++;
+        try
+        {
+            return Execute(cs);
+        }
+        finally
+        {
+            _callDepth--;
         }
     }
 
@@ -380,7 +407,7 @@ internal sealed class Type2Interpreter
                         int idx = subrIdx + bias;
                         if (idx >= 0 && idx < _lsubrs.Count)
                         {
-                            if (Execute(_lsubrs[idx])) { return true; }
+                            if (CallSubr(_lsubrs[idx])) { return true; }
                         }
                     }
                     return false;
@@ -395,7 +422,7 @@ internal sealed class Type2Interpreter
                         int idx = subrIdx + bias;
                         if (idx >= 0 && idx < _gsubrs.Count)
                         {
-                            if (Execute(_gsubrs[idx])) { return true; }
+                            if (CallSubr(_gsubrs[idx])) { return true; }
                         }
                     }
                     return false;

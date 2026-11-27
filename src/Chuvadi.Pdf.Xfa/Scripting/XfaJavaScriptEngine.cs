@@ -935,6 +935,7 @@ public sealed class XfaJavaScriptEngine
 
         private JsFlow ExecuteStatement(JsStatement statement, JsScope scope)
         {
+            _host.ChargeStep();
             switch (statement)
             {
                 case JsExpressionStatement expr:
@@ -1361,7 +1362,10 @@ public sealed class XfaJavaScriptEngine
                     // string; numeric addition otherwise.
                     if (IsStringy(left) || IsStringy(right))
                     {
-                        return XfaScriptValue.FromString(left.ToStringValue() + right.ToStringValue());
+                        string a = left.ToStringValue();
+                        string b = right.ToStringValue();
+                        XfaScriptHost.CheckStringLength((long)a.Length + b.Length);
+                        return XfaScriptValue.FromString(a + b);
                     }
 
                     return XfaScriptValue.FromNumber(left.ToNumber() + right.ToNumber());

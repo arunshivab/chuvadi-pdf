@@ -78,6 +78,21 @@ int GetGlyphIndexForCode(int code, bool symbolic)
 
 Resolves a raw single-byte (or symbol) character code to a glyph index, trying the symbol, Macintosh, and Unicode subtables in the order appropriate for `symbolic` fonts, then a direct code-as-glyph-index fallback for subset fonts whose code equals the GID. Returns 0 (.notdef) when nothing matches.
 
+### `GetGlyphIndexFromCmap`
+
+```csharp
+int GetGlyphIndexFromCmap(int code, bool symbolic)
+```
+
+Resolves a raw character code to a glyph index using only the font's cmap subtables (symbol, Macintosh, Unicode), in the order appropriate for `symbolic` fonts. Unlike `GetGlyphIndexForCode` this never falls back to treating the code as a glyph index, so a caller that must not guess a mapping gets a definite 0 (.notdef) when no subtable maps the code.
+
+**Parameters**
+
+- `code` — The raw single-byte character code.
+- `symbolic` — Whether the font's descriptor marks it symbolic.
+
+**Returns:** The glyph index, or 0 when no cmap subtable maps the code.
+
 ### `GetGlyphIndexUnicode`
 
 ```csharp

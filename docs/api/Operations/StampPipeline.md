@@ -10,13 +10,14 @@ public sealed class StampPipeline
 
 ## Constructors
 
-### `StampPipeline(PdfDocument document)`
+### `StampPipeline(PdfDocument document, byte[]? fontData = null)`
 
 Creates a pipeline that overlays content onto `document`.
 
 **Parameters**
 
 - `document` — The document to stamp.
+- `fontData` — (Since 3.36.0, D-412) Bytes of a TrueType/OpenType font to use as the primary face for every mark this pipeline draws (shaped and subset-embedded), or null to use the LiPi Sans face for each script with a Noto Emoji fallback. A header/footer added with its own `HeaderFooterOptions.FontData` overrides this for that band.
 
 ## Methods
 

@@ -62,21 +62,26 @@ internal static class PageTreeRecovery
         List<string> warnings,
         ref byte[]? fileBytes)
     {
-        if (depth > MaxPageTreeDepth)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // deep page tree cannot exhaust the call stack. Same visit order (so
+        // recovery warnings are recorded in the same order), cycle guard
+        // (visited) and MaxPageTreeDepth bound as the former recursion.
+        Stack<RecoveryFrame> stack = new Stack<RecoveryFrame>();
+        PushNode(stack, store, node, depth);
 
-        // 3.35.0 (B8): /Kids may be an indirect reference.
-        PdfPrimitive? kidsValue = node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsEntry) ? kidsEntry : null;
-        if (kidsValue is null || store.Resolve(kidsValue) is not PdfArray kids)
+        while (stack.Count > 0)
         {
-            return;
-        }
+            RecoveryFrame frame = stack.Peek();
+            if (frame.Index >= frame.Kids.Count)
+            {
+                stack.Pop();
+                continue;
+            }
 
-        for (int i = 0; i < kids.Count; i++)
-        {
-            if (kids.GetAs<PdfPrimitive>(i) is not PdfReference kidRef)
+            int i = frame.Index;
+            frame.Index++;
+
+            if (frame.Kids.GetAs<PdfPrimitive>(i) is not PdfReference kidRef)
             {
                 continue;
             }
@@ -94,7 +99,7 @@ internal static class PageTreeRecovery
                 // Sound node: recurse into intermediate /Pages, leave /Page.
                 if (IsPages(dict))
                 {
-                    Walk(reader, store, dict, depth + 1, visited, warnings, ref fileBytes);
+                    PushNode(stack, store, dict, frame.Depth + 1);
                 }
 
                 continue;
@@ -116,10 +121,40 @@ internal static class PageTreeRecovery
 
                 if (IsPages(recovered))
                 {
-                    Walk(reader, store, recovered, depth + 1, visited, warnings, ref fileBytes);
+                    PushNode(stack, store, recovered, frame.Depth + 1);
                 }
             }
         }
+    }
+
+    // Pushes a /Pages node's /Kids as a new frame, unless it is past the depth
+    // bound or has no resolvable /Kids array (/Kids may be indirect; B8).
+    private static void PushNode(
+        Stack<RecoveryFrame> stack, PdfObjectStore store, PdfDictionary node, int depth)
+    {
+        if (depth > MaxPageTreeDepth
+            || node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsEntry) is false
+            || store.Resolve(kidsEntry ?? PdfNull.Value) is not PdfArray kids)
+        {
+            return;
+        }
+
+        stack.Push(new RecoveryFrame(kids, depth));
+    }
+
+    private sealed class RecoveryFrame
+    {
+        internal RecoveryFrame(PdfArray kids, int depth)
+        {
+            Kids = kids;
+            Depth = depth;
+        }
+
+        internal PdfArray Kids { get; }
+
+        internal int Depth { get; }
+
+        internal int Index { get; set; }
     }
 
     private static bool IsPageOrPages(PdfDictionary dict)

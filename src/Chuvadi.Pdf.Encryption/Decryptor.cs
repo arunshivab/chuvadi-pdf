@@ -61,6 +61,14 @@ public sealed class Decryptor
     /// </summary>
     public PdfPasswordKind OpenedWith { get; init; }
 
+    // 3.36.0 (item 4): the stream encryption algorithm and a copy of the file
+    // key, so the reader can capture a SourceEncryptionLock that re-applies the
+    // same protection to a rewrite. Internal — the key never leaves the
+    // encryption assembly through the public surface.
+    internal EncryptionAlgorithm StreamAlgorithm => _algorithm;
+
+    internal byte[] CopyFileKey() => (byte[])_fileKey.Clone();
+
     /// <summary>Decrypts data belonging to a specific indirect object.</summary>
     /// <param name="data">Encrypted bytes (string contents or stream payload).</param>
     /// <param name="objectNumber">/N field of the indirect object.</param>

@@ -794,6 +794,7 @@ public sealed class XfaFormCalcEngine
 
         private XfaScriptValue Evaluate(FcNode node)
         {
+            _host.ChargeStep();
             switch (node)
             {
                 case FcLiteral literal:
@@ -1060,7 +1061,7 @@ public sealed class XfaFormCalcEngine
 
             return binary.Op switch
             {
-                "&" => XfaScriptValue.FromString(left.ToStringValue() + right.ToStringValue()),
+                "&" => Concat(left, right),
                 "+" => XfaScriptValue.FromNumber(left.ToNumber() + right.ToNumber()),
                 "-" => XfaScriptValue.FromNumber(left.ToNumber() - right.ToNumber()),
                 "*" => XfaScriptValue.FromNumber(left.ToNumber() * right.ToNumber()),
@@ -1073,6 +1074,14 @@ public sealed class XfaFormCalcEngine
                 ">=" => XfaScriptValue.FromBoolean(CompareValues(left, right) >= 0),
                 _ => XfaScriptValue.Undefined,
             };
+        }
+
+        private static XfaScriptValue Concat(XfaScriptValue left, XfaScriptValue right)
+        {
+            string a = left.ToStringValue();
+            string b = right.ToStringValue();
+            XfaScriptHost.CheckStringLength((long)a.Length + b.Length);
+            return XfaScriptValue.FromString(a + b);
         }
 
         private static bool Equal(XfaScriptValue left, XfaScriptValue right)

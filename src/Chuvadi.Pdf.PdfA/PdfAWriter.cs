@@ -20,6 +20,7 @@ using Chuvadi.Pdf.Forms;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
+using Chuvadi.Pdf.Rendering.Walking;
 
 namespace Chuvadi.Pdf.PdfA;
 
@@ -82,6 +83,11 @@ public static class PdfAWriter
             FontSubstitution.SubstituteStandard14(document, Allocate, LiberationFaces.Get, violations, form, generatedResources);
             StripJavaScript(catalog, store);
 
+            // 3.36.0 (PDA-01): the actions PDF/A forbids (and every /AA
+            // additional-actions entry) are removed from fields, widgets,
+            // pages and annotations, with a warning per kind.
+            StripForbiddenActions(rootRef, store, options.Conformance == PdfAConformance.PdfA1B, warnings);
+
             // 3.34.0 (#49c): every annotation is printable and visible
             // (ISO 19005-1 §6.5.3, ISO 19005-2 §6.3.2).
             PrepareAnnotations(document, store);
@@ -92,6 +98,29 @@ public static class PdfAWriter
             {
                 AddCharSets(document, store);
             }
+
+            // 3.36.0 (PDA-01): every embedded CID-font subset gets a /CIDSet
+            // rebuilt from its program (both parts require it); a program that
+            // cannot be read is a violation.
+            RebuildCidSets(document, store, Allocate, violations);
+
+            // 3.36.0 (PDA-01 part 3): a CID font whose declared /W widths do not
+            // match its embedded program's glyph advances (the ReportLab width
+            // bug, ISO 19005-2 §6.2.11.5) is refused; correcting the widths would
+            // move glyphs on the page, so it is a violation, not a fix.
+            CheckCidWidths(document, store, violations);
+
+            // 3.36.0 (PDA-01 part 3, D-417(2)=a): the same width-consistency rule
+            // (ISO 19005-2 §6.2.11.5) for simple embedded TrueType fonts. Only the
+            // glyphs actually shown on a page are checked — the codes the content
+            // streams render — because an unused /Widths entry whose cmap-mapped
+            // glyph disagrees is not a conformance failure (veraPDF checks rendered
+            // glyphs only), so checking every declared code would wrongly flag
+            // clean files. The mapping uses the font's cmap with no code-as-glyph
+            // fallback, and only symbolic fonts are checked (a non-symbolic font's
+            // codes are governed by its encoding, not the raw cmap), so a mapping
+            // that cannot be made unambiguously is skipped rather than guessed.
+            CheckSimpleFontWidths(document, store, violations);
 
             byte[] icc = options.OutputIntentIccProfile ?? SrgbIccProfile.Load();
             OutputIntentBuilder.Result intent = OutputIntentBuilder.Build(
@@ -245,6 +274,192 @@ public static class PdfAWriter
             names.Remove(PdfName.Intern("JavaScript"));
         }
     }
+
+    // PDA-01: the action types PDF/A forbids. ISO 19005-1 §6.6.1 (part 1) bars
+    // Launch, Sound, Movie, ResetForm, ImportData and JavaScript; ISO 19005-2
+    // §6.6.1 (part 2) also bars Hide, SetOCGState, Rendition, Trans and
+    // GoTo3DView. Named actions other than the four page moves are barred in
+    // both.
+    private static readonly HashSet<string> ForbiddenActionsPart1 = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "Launch", "Sound", "Movie", "ResetForm", "ImportData", "JavaScript",
+    };
+
+    private static readonly HashSet<string> ForbiddenActionsPart2 = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "Launch", "Sound", "Movie", "ResetForm", "ImportData", "JavaScript",
+        "Hide", "SetOCGState", "Rendition", "Trans", "GoTo3DView",
+    };
+
+    private static readonly HashSet<string> AllowedNamedActions = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "NextPage", "PrevPage", "FirstPage", "LastPage",
+    };
+
+    private static readonly PdfName ActionKey = PdfName.Intern("A");
+    private static readonly PdfName AdditionalActionsKey = PdfName.Intern("AA");
+    private static readonly PdfName OpenActionKey = PdfName.Intern("OpenAction");
+    private static readonly PdfName ActionSubtype = PdfName.Intern("S");
+    private static readonly PdfName NamedActionKey = PdfName.Intern("N");
+    private static readonly PdfName NextActionKey = PdfName.Intern("Next");
+
+    // PDA-01: removes the actions PDF/A forbids from every reachable object —
+    // fields, widgets, pages, annotations and the catalog — and the /AA
+    // additional-actions entries, which PDF/A bars outright. Each kind removed
+    // adds a warning. A forbidden action chained after an allowed one (/Next)
+    // is pruned from the chain. Orphaned action objects drop out when the
+    // writer re-collects the reachable objects before writing.
+    private static void StripForbiddenActions(
+        PdfPrimitive rootRef, PdfObjectStore store, bool partOne, List<string> warnings)
+    {
+        HashSet<string> forbidden = partOne ? ForbiddenActionsPart1 : ForbiddenActionsPart2;
+        SortedSet<string> removed = new SortedSet<string>(StringComparer.Ordinal);
+        HashSet<int> visitedRefs = new HashSet<int>();
+        HashSet<PdfDictionary> visitedDicts = new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance);
+        Stack<PdfPrimitive> pending = new Stack<PdfPrimitive>();
+        pending.Push(rootRef);
+
+        while (pending.Count > 0)
+        {
+            PdfWorkScope.ThrowIfCancellationRequested();
+            PdfPrimitive current = pending.Pop();
+            switch (current)
+            {
+                case PdfReference reference:
+                    if (visitedRefs.Add(reference.ObjectId.ObjectNumber))
+                    {
+                        pending.Push(store.Resolve(reference));
+                    }
+
+                    break;
+                case PdfStream stream:
+                    pending.Push(stream.Dictionary);
+                    break;
+                case PdfDictionary dict:
+                    if (!visitedDicts.Add(dict))
+                    {
+                        break;
+                    }
+
+                    StripActionsOnDictionary(dict, store, forbidden, removed);
+                    foreach (KeyValuePair<PdfName, PdfPrimitive> entry in dict)
+                    {
+                        if (entry.Key != PdfName.Parent)
+                        {
+                            pending.Push(entry.Value);
+                        }
+                    }
+
+                    break;
+                case PdfArray array:
+                    for (int i = array.Count - 1; i >= 0; i--)
+                    {
+                        pending.Push(array[i]);
+                    }
+
+                    break;
+            }
+        }
+
+        warnings.AddRange(removed);
+    }
+
+    private static void StripActionsOnDictionary(
+        PdfDictionary dict, PdfObjectStore store, HashSet<string> forbidden, SortedSet<string> removed)
+    {
+        if (dict.Remove(AdditionalActionsKey))
+        {
+            removed.Add("Removed an /AA additional-actions entry; PDF/A does not permit additional actions.");
+        }
+
+        if (dict.TryGetValue(ActionKey, out PdfPrimitive? action))
+        {
+            PdfPrimitive? kept = PruneAction(action, store, forbidden, removed, 0);
+            if (kept is null)
+            {
+                dict.Remove(ActionKey);
+            }
+            else
+            {
+                dict.Set(ActionKey, kept);
+            }
+        }
+
+        if (dict.TryGetValue(OpenActionKey, out PdfPrimitive? openAction))
+        {
+            PdfPrimitive? kept = PruneAction(openAction, store, forbidden, removed, 0);
+            if (kept is null)
+            {
+                dict.Remove(OpenActionKey);
+            }
+            else
+            {
+                dict.Set(OpenActionKey, kept);
+            }
+        }
+    }
+
+    // Returns the action to keep, or null when the action itself is forbidden
+    // (dropping it and its /Next chain). A kept action has its /Next chain
+    // pruned of forbidden actions. A value that is not an action dictionary
+    // (for example an /OpenAction destination array) is returned unchanged.
+    private static PdfPrimitive? PruneAction(
+        PdfPrimitive value, PdfObjectStore store, HashSet<string> forbidden, SortedSet<string> removed, int depth)
+    {
+        if (depth > 32 || store.Resolve(value) is not PdfDictionary action)
+        {
+            return value;
+        }
+
+        string? subtype = action.TryGetValue(ActionSubtype, out PdfPrimitive? s) && store.Resolve(s) is PdfName name
+            ? name.Value
+            : null;
+        if (subtype is not null && (forbidden.Contains(subtype) || (subtype == "Named" && !IsAllowedNamed(action, store))))
+        {
+            removed.Add("Removed a " + subtype + " action; PDF/A does not permit it.");
+            return null;
+        }
+
+        if (action.TryGetValue(NextActionKey, out PdfPrimitive? next))
+        {
+            PdfPrimitive? prunedNext = PruneNext(next, store, forbidden, removed, depth + 1);
+            if (prunedNext is null)
+            {
+                action.Remove(NextActionKey);
+            }
+            else
+            {
+                action.Set(NextActionKey, prunedNext);
+            }
+        }
+
+        return value;
+    }
+
+    private static PdfPrimitive? PruneNext(
+        PdfPrimitive value, PdfObjectStore store, HashSet<string> forbidden, SortedSet<string> removed, int depth)
+    {
+        if (store.Resolve(value) is PdfArray array)
+        {
+            PdfArray kept = new PdfArray([]);
+            foreach (PdfPrimitive item in array)
+            {
+                PdfPrimitive? pruned = PruneAction(item, store, forbidden, removed, depth);
+                if (pruned is not null)
+                {
+                    kept.Add(pruned);
+                }
+            }
+
+            return kept.Count > 0 ? kept : null;
+        }
+
+        return PruneAction(value, store, forbidden, removed, depth);
+    }
+
+    private static bool IsAllowedNamed(PdfDictionary action, PdfObjectStore store) =>
+        action.TryGetValue(NamedActionKey, out PdfPrimitive? n) && store.Resolve(n) is PdfName named
+        && AllowedNamedActions.Contains(named.Value);
 
     // Annotation flags, ISO 32000-1 §12.5.3 Table 165.
     private const int FlagInvisible = 0x1;
@@ -582,6 +797,643 @@ public static class PdfAWriter
 
             descriptor.Set(PdfName.Intern("CharSet"), new PdfString(System.Text.Encoding.Latin1.GetBytes(charSet.ToString())));
         }
+    }
+
+    private static readonly PdfName FontFile2Key = PdfName.Intern("FontFile2");
+    private static readonly PdfName FontFile3Key = PdfName.Intern("FontFile3");
+    private static readonly PdfName CidToGidMapKey = PdfName.Intern("CIDToGIDMap");
+    private static readonly PdfName CidSetKey = PdfName.Intern("CIDSet");
+    private static readonly PdfName DescendantFontsKey = PdfName.Intern("DescendantFonts");
+    private static readonly PdfName FontDescriptorKey = PdfName.Intern("FontDescriptor");
+
+    private readonly record struct CidFont(
+        PdfDictionary Descriptor, PdfObjectId DescriptorId, PdfDictionary CidFontDict, bool IsTrueType);
+
+    // PDA-01: a subset CID font must carry a /CIDSet marking the CIDs its
+    // embedded program contains (ISO 19005-1 §6.3.5-3, ISO 19005-2
+    // §6.2.11.4.2). Rebuilds it from the program for every embedded CID-font
+    // subset the pages use, replacing a missing or incomplete one. The file is
+    // refused when the program cannot be read.
+    private static void RebuildCidSets(
+        PdfDocument document, PdfObjectStore store, Func<PdfObjectId> allocate, List<string> violations)
+    {
+        HashSet<int> done = new HashSet<int>();
+        foreach (CidFont font in CollectCidFonts(document, store))
+        {
+            if (!done.Add(font.DescriptorId.ObjectNumber))
+            {
+                continue;
+            }
+
+            byte[]? cidSet;
+            try
+            {
+                cidSet = BuildCidSet(font, store);
+            }
+            catch (Exception ex) when (!PdfWorkScope.IsAbort(ex))
+            {
+                violations.Add(
+                    "A subset CID font's embedded program could not be read to rebuild its /CIDSet ("
+                    + ex.Message + "); PDF/A conformance cannot be assured.");
+                continue;
+            }
+
+            if (cidSet is null)
+            {
+                continue;
+            }
+
+            PdfObjectId id = allocate();
+            store.Add(new PdfIndirectObject(id, new PdfStream(new PdfDictionary(), cidSet)));
+            font.Descriptor.Set(CidSetKey, new PdfReference(id));
+        }
+    }
+
+    // PDA-01 part 3: refuses a CID font whose declared /W widths disagree with
+    // the embedded program's glyph advances by more than one unit (the gap is
+    // in 1000ths of an em, so one unit absorbs ordinary rounding). The
+    // ReportLab bug writes widths that do not match, which veraPDF rejects
+    // (ISO 19005-2 §6.2.11.5); correcting them would move glyphs, so the file
+    // is refused rather than silently rewritten.
+    private static void CheckCidWidths(PdfDocument document, PdfObjectStore store, List<string> violations)
+    {
+        HashSet<int> done = new HashSet<int>();
+        foreach (CidFont font in CollectCidFonts(document, store))
+        {
+            if (!done.Add(font.DescriptorId.ObjectNumber) || !WidthsMismatchProgram(font, store))
+            {
+                continue;
+            }
+
+            violations.Add(
+                "A CID font's /W widths do not match its embedded program's glyph advances, "
+                + "so PDF/A conformance cannot be assured; re-embed the font with correct widths.");
+        }
+    }
+
+    // A simple embedded TrueType font and the object number of its font
+    // dictionary (used to correlate with the glyphs the content streams show).
+    private readonly record struct SimpleTrueTypeFont(
+        int FontObjectNumber, PdfDictionary FontDict, PdfDictionary Descriptor);
+
+    private static void CheckSimpleFontWidths(PdfDocument document, PdfObjectStore store, List<string> violations)
+    {
+        List<SimpleTrueTypeFont> fonts = CollectSimpleTrueTypeFonts(document, store);
+        if (fonts.Count == 0)
+        {
+            return;
+        }
+
+        UsedGlyphCollector collector = new UsedGlyphCollector(store);
+        for (int i = 0; i < document.PageCount; i++)
+        {
+            PdfPage page = document.Pages[i];
+            collector.BeginPage(page.Resources);
+            byte[] content = ContentStreamLoader.Load(page.Contents, store, page.PageNumber);
+            ContentStreamWalker.Walk(content, collector);
+        }
+
+        IReadOnlyDictionary<int, HashSet<int>> used = collector.UsedCodes;
+        HashSet<int> done = new HashSet<int>();
+        foreach (SimpleTrueTypeFont font in fonts)
+        {
+            if (!done.Add(font.FontObjectNumber)
+                || !used.TryGetValue(font.FontObjectNumber, out HashSet<int>? codes)
+                || codes.Count == 0
+                || !SimpleWidthsMismatch(font, codes, store))
+            {
+                continue;
+            }
+
+            violations.Add(
+                "A simple TrueType font's /Widths do not match its embedded program's glyph "
+                + "advances for glyphs it renders, so PDF/A conformance cannot be assured; "
+                + "re-embed the font with correct widths.");
+        }
+    }
+
+    // True when any rendered code's declared width differs from the embedded
+    // program's advance for the cmap-mapped glyph by more than one unit (ISO
+    // 19005-2 §6.2.11.5, 1-unit tolerance). Codes the font's cmap does not map,
+    // and codes outside the /Widths range, are skipped rather than guessed.
+    private static bool SimpleWidthsMismatch(SimpleTrueTypeFont font, HashSet<int> codes, PdfObjectStore store)
+    {
+        if (store.Resolve(Lookup(font.FontDict, PdfName.Intern("FirstChar"))) is not PdfInteger firstChar
+            || store.Resolve(Lookup(font.FontDict, PdfName.Intern("Widths"))) is not PdfArray widths
+            || store.Resolve(Lookup(font.Descriptor, FontFile2Key)) is not PdfStream program)
+        {
+            return false;
+        }
+
+        Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader loader =
+            new Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader(Decode(program));
+        int unitsPerEm = loader.UnitsPerEm;
+        if (unitsPerEm <= 0)
+        {
+            return false;
+        }
+
+        // Only symbolic fonts are checked. A symbolic TrueType font has no
+        // /Encoding and selects glyphs straight from its cmap (ISO 32000-1
+        // §9.6.6.4), so the code→glyph mapping — and therefore the width
+        // comparison — is unambiguous. A non-symbolic font maps codes through a
+        // base encoding and an optional /Differences array to glyph names first,
+        // so its declared width belongs to the named glyph, not to the raw
+        // cmap[code] glyph; checking it without resolving that encoding would
+        // wrongly flag correct fonts, so a non-symbolic font is left for the
+        // renderer-accurate path and skipped here.
+        bool symbolic = store.Resolve(Lookup(font.Descriptor, PdfName.Intern("Flags"))) is PdfInteger flags
+            && (flags.Value & 4) != 0;
+        if (!symbolic)
+        {
+            return false;
+        }
+
+        int glyphCount = loader.NumGlyphs;
+        foreach (int code in codes)
+        {
+            int index = code - firstChar.Value;
+            if (index < 0 || index >= widths.Count || AsDouble(store.Resolve(widths[index])) is not double declared || declared == 0.0)
+            {
+                continue;
+            }
+
+            int gid = loader.GetGlyphIndexFromCmap(code, symbolic);
+            if (gid <= 0 || gid >= glyphCount)
+            {
+                continue;
+            }
+
+            double expected = Math.Round(loader.GetGlyphMetrics(gid).AdvanceWidth * 1000.0 / unitsPerEm);
+            if (Math.Abs(declared - expected) > 1.0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The simple embedded TrueType fonts (Subtype /TrueType with an embedded
+    // /FontFile2, /Widths and /FirstChar) the pages use, with their font
+    // dictionary object numbers.
+    private static List<SimpleTrueTypeFont> CollectSimpleTrueTypeFonts(PdfDocument document, PdfObjectStore store)
+    {
+        List<SimpleTrueTypeFont> result = new List<SimpleTrueTypeFont>();
+        HashSet<int> visited = new HashSet<int>();
+        Stack<PdfDictionary> resources = new Stack<PdfDictionary>();
+        for (int i = 0; i < document.PageCount; i++)
+        {
+            if (document.Pages[i].Resources is PdfDictionary r)
+            {
+                resources.Push(r);
+            }
+        }
+
+        while (resources.Count > 0)
+        {
+            PdfDictionary res = resources.Pop();
+            if (store.ResolveAs<PdfDictionary>(res.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? f) ? f : PdfNull.Value) is PdfDictionary fonts)
+            {
+                foreach (PdfPrimitive value in fonts.Values)
+                {
+                    if (value is not PdfReference fontRef
+                        || !visited.Add(fontRef.ObjectId.ObjectNumber)
+                        || store.Resolve(fontRef) is not PdfDictionary font
+                        || font.GetName(PdfName.Subtype)?.Value != "TrueType"
+                        || store.Resolve(font.TryGetValue(FontDescriptorKey, out PdfPrimitive? d) ? d : PdfNull.Value) is not PdfDictionary descriptor)
+                    {
+                        continue;
+                    }
+
+                    result.Add(new SimpleTrueTypeFont(fontRef.ObjectId.ObjectNumber, font, descriptor));
+                }
+            }
+
+            if (store.ResolveAs<PdfDictionary>(res.TryGetValue(PdfName.XObject, out PdfPrimitive? x) ? x : PdfNull.Value) is PdfDictionary xobjects)
+            {
+                foreach (PdfPrimitive value in xobjects.Values)
+                {
+                    if (value is PdfReference xref && visited.Add(xref.ObjectId.ObjectNumber)
+                        && store.Resolve(xref) is PdfStream formObj
+                        && store.ResolveAs<PdfDictionary>(formObj.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? fr) ? fr : PdfNull.Value) is PdfDictionary formResources)
+                    {
+                        resources.Push(formResources);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Collects, per font-dictionary object number, the single-byte codes the
+    // content streams actually render (text-rendering mode 3, invisible, is
+    // skipped, matching ISO 19005-2 §6.2.11.5). Form XObjects are walked too.
+    private sealed class UsedGlyphCollector : IContentOperatorSink
+    {
+        private readonly PdfObjectStore _store;
+        private readonly Dictionary<int, HashSet<int>> _used = new Dictionary<int, HashSet<int>>();
+        private readonly HashSet<int> _visitedForms = new HashSet<int>();
+        private PdfDictionary? _resources;
+        private int _currentFontObject = -1;
+        private int _renderMode;
+
+        internal UsedGlyphCollector(PdfObjectStore store)
+        {
+            _store = store;
+        }
+
+        internal IReadOnlyDictionary<int, HashSet<int>> UsedCodes => _used;
+
+        internal void BeginPage(PdfDictionary? resources)
+        {
+            _resources = resources;
+            _currentFontObject = -1;
+            _renderMode = 0;
+        }
+
+        public void SetFont(string name, double size)
+        {
+            _currentFontObject = -1;
+            if (SubDictionary(PdfName.Intern("Font")) is PdfDictionary fonts
+                && fonts.TryGetValue(PdfName.Intern(name), out PdfPrimitive? value)
+                && value is PdfReference fontRef)
+            {
+                _currentFontObject = fontRef.ObjectId.ObjectNumber;
+            }
+        }
+
+        public void SetTextRenderingMode(int mode)
+        {
+            _renderMode = mode;
+        }
+
+        public void ShowText(byte[] text)
+        {
+            Record(text);
+        }
+
+        public void MoveNextLineShowText(byte[] text)
+        {
+            Record(text);
+        }
+
+        public void SetSpacingMoveNextLineShowText(double wordSpacing, double charSpacing, byte[] text)
+        {
+            Record(text);
+        }
+
+        public void ShowTextArray(IReadOnlyList<TextArrayElement> elements)
+        {
+            foreach (TextArrayElement element in elements)
+            {
+                if (element.IsText && element.Text is byte[] bytes)
+                {
+                    Record(bytes);
+                }
+            }
+        }
+
+        public void InvokeXObject(string name)
+        {
+            if (SubDictionary(PdfName.XObject) is not PdfDictionary xobjects
+                || !xobjects.TryGetValue(PdfName.Intern(name), out PdfPrimitive? value)
+                || value is not PdfReference formRef
+                || !_visitedForms.Add(formRef.ObjectId.ObjectNumber)
+                || _store.Resolve(formRef) is not PdfStream form
+                || form.Dictionary.GetName(PdfName.Subtype)?.Value != "Form")
+            {
+                return;
+            }
+
+            PdfDictionary? outer = _resources;
+            int outerFont = _currentFontObject;
+            int outerMode = _renderMode;
+            _resources = form.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? fr)
+                && _store.ResolveAs<PdfDictionary>(fr) is PdfDictionary formResources
+                ? formResources
+                : outer;
+            ContentStreamWalker.Walk(ContentStreamLoader.Load(formRef, _store), this);
+            _resources = outer;
+            _currentFontObject = outerFont;
+            _renderMode = outerMode;
+        }
+
+        private PdfDictionary? SubDictionary(PdfName key)
+        {
+            if (_resources is null || !_resources.TryGetValue(key, out PdfPrimitive? value))
+            {
+                return null;
+            }
+
+            return _store.ResolveAs<PdfDictionary>(value);
+        }
+
+        private void Record(byte[] text)
+        {
+            if (_currentFontObject < 0 || _renderMode == 3 || text.Length == 0)
+            {
+                return;
+            }
+
+            if (!_used.TryGetValue(_currentFontObject, out HashSet<int>? codes))
+            {
+                codes = new HashSet<int>();
+                _used[_currentFontObject] = codes;
+            }
+
+            foreach (byte b in text)
+            {
+                codes.Add(b);
+            }
+        }
+    }
+
+    private static bool WidthsMismatchProgram(CidFont font, PdfObjectStore store)
+    {
+        Dictionary<int, double> declared = ParseCidWidths(font.CidFontDict, store);
+        if (declared.Count == 0)
+        {
+            return false;
+        }
+
+        int unitsPerEm;
+        Func<int, int> advanceForCid;
+        if (font.IsTrueType)
+        {
+            if (store.Resolve(Lookup(font.Descriptor, FontFile2Key)) is not PdfStream program)
+            {
+                return false;
+            }
+
+            Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader loader =
+                new Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader(Decode(program));
+            unitsPerEm = loader.UnitsPerEm;
+            int glyphCount = loader.NumGlyphs;
+            Func<int, int> cidToGid = BuildCidToGid(font.CidFontDict, store, glyphCount);
+            advanceForCid = cid =>
+            {
+                int gid = cidToGid(cid);
+                return gid >= 0 && gid < glyphCount ? loader.GetGlyphMetrics(gid).AdvanceWidth : -1;
+            };
+        }
+        else
+        {
+            if (store.Resolve(Lookup(font.Descriptor, FontFile3Key)) is not PdfStream program)
+            {
+                return false;
+            }
+
+            Chuvadi.Pdf.Fonts.Rendering.CffLoader loader =
+                new Chuvadi.Pdf.Fonts.Rendering.CffLoader(Decode(program));
+            unitsPerEm = loader.UnitsPerEm;
+            int glyphCount = loader.NumGlyphs;
+            bool cidKeyed = loader.IsCidFont;
+            IReadOnlyDictionary<int, int> cidToGid = loader.CidToGid;
+            advanceForCid = cid =>
+            {
+                int gid = cidKeyed ? (cidToGid.TryGetValue(cid, out int g) ? g : -1) : cid;
+                return gid >= 0 && gid < glyphCount ? loader.GetGlyphMetrics(gid).AdvanceWidth : -1;
+            };
+        }
+
+        if (unitsPerEm <= 0)
+        {
+            return false;
+        }
+
+        foreach (KeyValuePair<int, double> entry in declared)
+        {
+            int advance = advanceForCid(entry.Key);
+            if (advance < 0)
+            {
+                continue;
+            }
+
+            double expected = Math.Round(advance * 1000.0 / unitsPerEm);
+            if (Math.Abs(entry.Value - expected) > 1.0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Maps each CID that /W assigns a width to that width (in 1000ths of an em).
+    private static Dictionary<int, double> ParseCidWidths(PdfDictionary cidFontDict, PdfObjectStore store)
+    {
+        Dictionary<int, double> widths = new Dictionary<int, double>();
+        if (store.Resolve(Lookup(cidFontDict, PdfName.Intern("W"))) is not PdfArray w)
+        {
+            return widths;
+        }
+
+        int i = 0;
+        while (i < w.Count)
+        {
+            if (store.Resolve(w[i]) is not PdfInteger first)
+            {
+                i++;
+                continue;
+            }
+
+            if (i + 1 >= w.Count)
+            {
+                break;
+            }
+
+            PdfPrimitive second = store.Resolve(w[i + 1]);
+            if (second is PdfArray inner)
+            {
+                for (int j = 0; j < inner.Count; j++)
+                {
+                    if (AsDouble(store.Resolve(inner[j])) is double width)
+                    {
+                        widths[first.Value + j] = width;
+                    }
+                }
+
+                i += 2;
+            }
+            else if (i + 2 < w.Count && second is PdfInteger last && AsDouble(store.Resolve(w[i + 2])) is double range)
+            {
+                for (int c = first.Value; c <= last.Value && c - first.Value < 65536; c++)
+                {
+                    widths[c] = range;
+                }
+
+                i += 3;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return widths;
+    }
+
+    private static double? AsDouble(PdfPrimitive value) => value switch
+    {
+        PdfInteger i => i.Value,
+        PdfReal r => r.Value,
+        _ => null,
+    };
+
+    // A CID→GID mapping for a CIDFontType2 (Identity, or a /CIDToGIDMap stream).
+    private static Func<int, int> BuildCidToGid(PdfDictionary cidFontDict, PdfObjectStore store, int glyphCount)
+    {
+        if (store.Resolve(Lookup(cidFontDict, CidToGidMapKey)) is PdfStream mapStream)
+        {
+            byte[] map = Decode(mapStream);
+            return cid =>
+            {
+                int offset = cid * 2;
+                return offset + 1 < map.Length ? (map[offset] << 8) | map[offset + 1] : -1;
+            };
+        }
+
+        return cid => cid < glyphCount ? cid : -1;
+    }
+
+    // The bytes of a /CIDSet for the font, or null when there is no embedded
+    // program to read. Bit c (the high bit of byte c/8 first) is set for every
+    // CID the program contains.
+    private static byte[]? BuildCidSet(CidFont font, PdfObjectStore store)
+    {
+        SortedSet<int> present = new SortedSet<int>();
+        if (font.IsTrueType)
+        {
+            if (store.Resolve(Lookup(font.Descriptor, FontFile2Key)) is not PdfStream program)
+            {
+                return null;
+            }
+
+            Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader loader = new Chuvadi.Pdf.Fonts.Rendering.TrueTypeLoader(Decode(program));
+            int numGlyphs = loader.NumGlyphs;
+            if (store.Resolve(Lookup(font.CidFontDict, CidToGidMapKey)) is PdfStream mapStream)
+            {
+                byte[] map = Decode(mapStream);
+                for (int c = 0; (c * 2) + 1 < map.Length; c++)
+                {
+                    int gid = (map[c * 2] << 8) | map[(c * 2) + 1];
+                    if (c == 0 || (gid > 0 && gid < numGlyphs))
+                    {
+                        present.Add(c);
+                    }
+                }
+            }
+            else
+            {
+                for (int g = 0; g < numGlyphs; g++)
+                {
+                    present.Add(g);
+                }
+            }
+        }
+        else
+        {
+            if (store.Resolve(Lookup(font.Descriptor, FontFile3Key)) is not PdfStream program)
+            {
+                return null;
+            }
+
+            Chuvadi.Pdf.Fonts.Rendering.CffLoader loader = new Chuvadi.Pdf.Fonts.Rendering.CffLoader(Decode(program));
+            if (loader.IsCidFont)
+            {
+                foreach (int cid in loader.CidToGid.Keys)
+                {
+                    present.Add(cid);
+                }
+            }
+            else
+            {
+                for (int g = 0; g < loader.NumGlyphs; g++)
+                {
+                    present.Add(g);
+                }
+            }
+        }
+
+        if (present.Count == 0)
+        {
+            return null;
+        }
+
+        int maxCid = present.Max;
+        byte[] bits = new byte[(maxCid / 8) + 1];
+        foreach (int cid in present)
+        {
+            bits[cid / 8] |= (byte)(0x80 >> (cid % 8));
+        }
+
+        return bits;
+    }
+
+    private static PdfPrimitive Lookup(PdfDictionary dict, PdfName key) =>
+        dict.TryGetValue(key, out PdfPrimitive? value) && value is not null ? value : PdfNull.Value;
+
+    // The subset CID fonts (Type 0 with a CIDFontType0/2 descendant) the pages
+    // use, with their descriptors.
+    private static List<CidFont> CollectCidFonts(PdfDocument document, PdfObjectStore store)
+    {
+        List<CidFont> result = new List<CidFont>();
+        HashSet<int> visited = new HashSet<int>();
+        Stack<PdfDictionary> resources = new Stack<PdfDictionary>();
+        for (int i = 0; i < document.PageCount; i++)
+        {
+            if (document.Pages[i].Resources is PdfDictionary r)
+            {
+                resources.Push(r);
+            }
+        }
+
+        while (resources.Count > 0)
+        {
+            PdfDictionary res = resources.Pop();
+            if (store.ResolveAs<PdfDictionary>(res.TryGetValue(PdfName.Intern("Font"), out PdfPrimitive? f) ? f : PdfNull.Value) is PdfDictionary fonts)
+            {
+                foreach (PdfPrimitive value in fonts.Values)
+                {
+                    if (store.Resolve(value) is not PdfDictionary type0 || type0.GetName(PdfName.Subtype)?.Value != "Type0"
+                        || store.Resolve(type0.TryGetValue(DescendantFontsKey, out PdfPrimitive? df) ? df : PdfNull.Value) is not PdfArray descendants
+                        || descendants.Count == 0 || store.Resolve(descendants[0]) is not PdfDictionary cidFont)
+                    {
+                        continue;
+                    }
+
+                    string? subtype = cidFont.GetName(PdfName.Subtype)?.Value;
+                    if (subtype is not ("CIDFontType0" or "CIDFontType2")
+                        || !cidFont.TryGetValue(FontDescriptorKey, out PdfPrimitive? d) || d is not PdfReference descRef
+                        || !visited.Add(descRef.ObjectId.ObjectNumber) || store.Resolve(descRef) is not PdfDictionary descriptor)
+                    {
+                        continue;
+                    }
+
+                    // Every embedded CID font gets a /CIDSet rebuilt from its
+                    // program (required for a subset, permitted otherwise); a
+                    // font with no embedded program is skipped in BuildCidSet.
+                    result.Add(new CidFont(descriptor, descRef.ObjectId, cidFont, subtype == "CIDFontType2"));
+                }
+            }
+
+            if (store.ResolveAs<PdfDictionary>(res.TryGetValue(PdfName.XObject, out PdfPrimitive? x) ? x : PdfNull.Value) is PdfDictionary xobjects)
+            {
+                foreach (PdfPrimitive value in xobjects.Values)
+                {
+                    if (value is PdfReference xref && visited.Add(xref.ObjectId.ObjectNumber)
+                        && store.Resolve(xref) is PdfStream form
+                        && store.ResolveAs<PdfDictionary>(form.Dictionary.TryGetValue(PdfName.Resources, out PdfPrimitive? fr) ? fr : PdfNull.Value) is PdfDictionary formResources)
+                    {
+                        resources.Push(formResources);
+                    }
+                }
+            }
+        }
+
+        return result;
     }
 
     // The font descriptors of the simple Type 1 fonts the pages use.

@@ -1,10 +1,12 @@
 // Copyright 2025 Chuvadi Contributors
 // SPDX-License-Identifier: Apache-2.0
 // SPEC:  PDF 32000-1:2008 §9.7 — Composite (Type0) fonts
-// Regression coverage (LA-18): a text watermark with TextWatermarkOptions.
-// FontData embeds the supplied TrueType face as a Type0/CIDFontType2 font and
-// draws the text as Identity-H glyph IDs, so non-Latin (Indic) watermark text
-// can render with the caller's own font.
+// Coverage (LA-18, updated for 3.36.0 / D-412): a text watermark is shaped and
+// subset-embedded through the shared mark-text composer. With FontData the
+// supplied face is embedded as a Type0/CIDFontType2 (/FontFile2) font; without
+// it the LiPi Sans face is embedded the same way — the watermark is always an
+// embedded composite font, never the former standard Helvetica. The drawn text
+// uses Identity-H glyph shows.
 
 using System;
 using System.Collections.Generic;
@@ -12,7 +14,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Chuvadi.Pdf.Documents;
-using Chuvadi.Pdf.Fonts.Rendering;
 using Chuvadi.Pdf.IO;
 using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
@@ -23,7 +24,7 @@ namespace Chuvadi.Pdf.Watermark.Tests;
 
 public sealed class WatermarkFontEmbeddingTests
 {
-    private const string WatermarkText = "DRAFT\u00e9"; // includes non-ASCII 'é'
+    private const string WatermarkText = "DRAFTé"; // includes non-ASCII 'é'
 
     [Fact]
     public void FontData_EmbedsType0CidFontWithFontFile2()
@@ -31,10 +32,7 @@ public sealed class WatermarkFontEmbeddingTests
         using PdfDocument outDoc = StampAndReopen();
         PdfObjectStore store = outDoc.Objects;
 
-        PdfDictionary fonts = FontResource(store, outDoc.Pages[0].Dictionary);
-        fonts.Keys.Select(k => k.Value).Should().Contain("LiberationSerif");
-
-        PdfDictionary type0 = (store.Resolve(fonts[PdfName.Intern("LiberationSerif")]) as PdfDictionary)!;
+        PdfDictionary type0 = SingleFont(store, outDoc.Pages[0].Dictionary);
         NameOf(store, type0, "Subtype").Should().Be("Type0");
         NameOf(store, type0, "Encoding").Should().Be("Identity-H");
 
@@ -44,41 +42,35 @@ public sealed class WatermarkFontEmbeddingTests
 
         PdfDictionary descriptor = (store.Resolve(cidFont[PdfName.Intern("FontDescriptor")]) as PdfDictionary)!;
         descriptor.TryGetValue(PdfName.Intern("FontFile2"), out PdfPrimitive? _)
-            .Should().BeTrue("the TrueType program must be embedded as /FontFile2");
+            .Should().BeTrue("the supplied TrueType program must be embedded as /FontFile2");
     }
 
     [Fact]
-    public void FontData_DrawsTextAsIdentityHGlyphIds()
+    public void FontData_DrawsIdentityHGlyphShowsFromTheEmbeddedFont()
     {
-        byte[] ttf = LoadFixtureFont();
-        TrueTypeLoader loader = new TrueTypeLoader(ttf);
+        (string content, string resourceName) = WatermarkContentStream();
 
-        StringBuilder expected = new StringBuilder();
-        foreach (char c in WatermarkText)
-        {
-            int gid = loader.GetGlyphIndex(c);
-            if (gid < 0) { gid = 0; }
-            expected.Append(((gid >> 8) & 0xFF).ToString("X2"));
-            expected.Append((gid & 0xFF).ToString("X2"));
-        }
-
-        string content = WatermarkContentStream();
-        content.Should().Contain($"<{expected}> Tj");
-        content.Should().Contain("/LiberationSerif");
-        // Every glyph used here is real (non-.notdef).
-        expected.ToString().Should().NotContain("0000");
+        // The text is shaped, so it is drawn as per-glyph Identity-H hex shows
+        // against the embedded face's resource, not a single literal string.
+        content.Should().Contain("/" + resourceName);
+        content.Should().MatchRegex("<[0-9A-Fa-f]{4,}> Tj");
+        content.Should().NotContain("(DRAFT");
     }
 
     [Fact]
-    public void NoFontData_UsesStandardHelvetica()
+    public void NoFontData_EmbedsLipiType0FontNotStandardHelvetica()
     {
         using PdfDocument outDoc = StampAndReopen(embed: false);
         PdfObjectStore store = outDoc.Objects;
 
-        PdfDictionary fonts = FontResource(store, outDoc.Pages[0].Dictionary);
-        PdfDictionary helv = (store.Resolve(fonts[PdfName.Intern("Helvetica")]) as PdfDictionary)!;
-        NameOf(store, helv, "Subtype").Should().Be("Type1");
-        NameOf(store, helv, "BaseFont").Should().Be("Helvetica");
+        PdfDictionary type0 = SingleFont(store, outDoc.Pages[0].Dictionary);
+        NameOf(store, type0, "Subtype").Should().Be("Type0", "marks are always embedded as of 3.36.0");
+        NameOf(store, type0, "Encoding").Should().Be("Identity-H");
+
+        PdfArray descendants = (store.Resolve(type0[PdfName.Intern("DescendantFonts")]) as PdfArray)!;
+        PdfDictionary cidFont = (store.Resolve(descendants[0]) as PdfDictionary)!;
+        NameOf(store, cidFont, "Subtype").Should().Be("CIDFontType2");
+        NameOf(store, type0, "BaseFont").Should().NotBe("Helvetica");
     }
 
     private static PdfDocument StampAndReopen(bool embed = true)
@@ -101,7 +93,7 @@ public sealed class WatermarkFontEmbeddingTests
         return PdfDocument.Open(output, leaveOpen: true);
     }
 
-    private static string WatermarkContentStream()
+    private static (string Content, string ResourceName) WatermarkContentStream()
     {
         MemoryStream output = new MemoryStream();
         using (PdfDocument doc = PdfDocument.Open(BuildPlainPdf(), leaveOpen: true))
@@ -116,8 +108,10 @@ public sealed class WatermarkFontEmbeddingTests
 
         using PdfDocument outDoc = PdfDocument.Open(output, leaveOpen: true);
         PdfObjectStore store = outDoc.Objects;
-        PdfPrimitive contents = store.Resolve(outDoc.Pages[0].Dictionary[PdfName.Intern("Contents")]);
+        string resourceName = FontResource(store, outDoc.Pages[0].Dictionary)
+            .Keys.Select(k => k.Value).First();
 
+        PdfPrimitive contents = store.Resolve(outDoc.Pages[0].Dictionary[PdfName.Intern("Contents")]);
         List<PdfPrimitive> streamRefs = contents is PdfArray array
             ? array.ToList()
             : new List<PdfPrimitive> { outDoc.Pages[0].Dictionary[PdfName.Intern("Contents")] };
@@ -132,13 +126,22 @@ public sealed class WatermarkFontEmbeddingTests
             }
         }
 
-        return all.ToString();
+        return (all.ToString(), resourceName);
     }
 
     private static PdfDictionary FontResource(PdfObjectStore store, PdfDictionary pageDict)
     {
         PdfDictionary resources = (store.Resolve(pageDict[PdfName.Intern("Resources")]) as PdfDictionary)!;
         return (store.Resolve(resources[PdfName.Intern("Font")]) as PdfDictionary)!;
+    }
+
+    // The composer assigns its own resource names, so the single embedded mark
+    // font is found by resolving the one entry in the page's /Font dictionary.
+    private static PdfDictionary SingleFont(PdfObjectStore store, PdfDictionary pageDict)
+    {
+        PdfDictionary fonts = FontResource(store, pageDict);
+        PdfName key = fonts.Keys.First();
+        return (store.Resolve(fonts[key]) as PdfDictionary)!;
     }
 
     private static string NameOf(PdfObjectStore store, PdfDictionary dict, string key)

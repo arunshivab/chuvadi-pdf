@@ -76,7 +76,7 @@ Opens a scope on the current flow. Dispose it (for example with `using`) to rest
 
 **Parameters**
 
-- `limits` — The limits to apply; null for none.
+- `limits` — The limits to apply. Null (3.36.0) applies `PdfLimits.Default` (the safe defaults) at the top level, so work run with no limits specified is still guarded; nested in another scope it adds nothing of its own and the enclosing scope's limits alone apply. Pass `PdfLimits.Unlimited` to turn them off.
 - `cancellationToken` — The token to honour.
 
 **Returns:** The new scope.
@@ -104,6 +104,20 @@ Counts content-stream operators against `PdfLimits.MaxContentOperators` and chec
 **Parameters**
 
 - `count` — The number of operators processed.
+
+### `CheckGraphicsStateDepth`
+
+__static__
+
+```csharp
+static void CheckGraphicsStateDepth(int depth)
+```
+
+Checks the graphics-state nesting depth against `PdfLimits.MaxGraphicsStateDepth` and checks cancellation. Content painting calls this on each `q` with the depth the save reaches (3.36.0).
+
+**Parameters**
+
+- `depth` — The number of `q`s not yet balanced by a `Q`.
 
 ### `ChargeMemory`
 

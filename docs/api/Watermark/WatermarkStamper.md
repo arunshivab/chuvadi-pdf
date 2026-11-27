@@ -10,7 +10,7 @@ public static class WatermarkStamper
 
 ## Remarks
 
-Watermarks are applied as additional content streams appended to each targeted page. The original content is untouched. Opacity is implemented via PDF ExtGState (/ca fill opacity, PDF 32000-1:2008 §11.6.4.4). Standard PDF font names (no embedding required): Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats.
+Watermarks are applied as additional content streams appended to each targeted page. The original content is untouched. Opacity is implemented via PDF ExtGState (/ca fill opacity, PDF 32000-1:2008 §11.6.4.4). Since 3.36.0 (D-412) text watermarks are shaped and subset-embedded through the shared mark-text composer: the text is segmented by script, shaped with the LiPi Sans face for each script (or a caller-supplied font), with a monochrome Noto Emoji fallback for code points the primary face lacks, and every face is embedded as a composite Type0/Identity-H font. The watermark is therefore always embedded and is no longer restricted to the Helvetica WinAnsi repertoire.
 
 ## Methods
 
@@ -28,7 +28,9 @@ Applies a text watermark to all (or specified) pages of a document and writes th
 
 - `output` — The stream to write the watermarked PDF to.
 - `document` — The source document.
-- `options` — Watermark configuration. <exception cref="ArgumentException"> (Since 3.35.0) No font is supplied and the text has a character that Helvetica cannot show (WinAnsiEncoding lacks it); nothing is written. Supply `TextWatermarkOptions.FontData` for such text. </exception>
+- `options` — Watermark configuration.
+
+**Remarks:** (Since 3.36.0, D-412) The text is shaped and subset-embedded through the shared mark-text composer. When `TextWatermarkOptions.FontData` is supplied it is the primary face for every code point it covers; otherwise the LiPi Sans face for each script is used, with a Noto Emoji fallback. The watermark is always embedded.
 
 ### `ApplyImage`
 

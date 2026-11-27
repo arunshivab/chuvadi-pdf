@@ -41,6 +41,15 @@ public sealed class PdfReader : IDisposable
     /// </summary>
     public PdfPasswordKind? OpenedWith { get; private init; }
 
+    /// <summary>
+    /// Gets an opaque capture of this document's encryption when it was opened
+    /// from an encrypted file, or null when it was not encrypted (3.36.0, item
+    /// 4). A rewrite can pass it to a save that preserves encryption to keep the
+    /// same passwords, permissions and file key. The raw key is not readable
+    /// from it.
+    /// </summary>
+    public SourceEncryptionLock? EncryptionLock { get; private init; }
+
     private PdfReader(
         Stream stream,
         bool leaveOpen,
@@ -530,14 +539,16 @@ public sealed class PdfReader : IDisposable
         Decryptor? decryptor = null;
         int encryptObjectNumber = -1;
         bool encryptMetadata = true;
+        SourceEncryptionLock? encryptionLock = null;
 
         if (trailer.TryGetValue(PdfName.Intern("Encrypt"), out PdfPrimitive? encryptPrim))
         {
-            (decryptor, encryptObjectNumber, encryptMetadata) = BuildDecryptor(
+            (decryptor, encryptObjectNumber, encryptMetadata, encryptionLock) = BuildDecryptor(
                 parser, xref, trailer, encryptPrim, password, recoveryLog);
         }
 
         Decryptor? finalDecryptor = decryptor;
+        SourceEncryptionLock? finalLock = encryptionLock;
         int finalEncryptObjNum = encryptObjectNumber;
         bool finalEncryptMetadata = encryptMetadata;
 
@@ -597,6 +608,7 @@ public sealed class PdfReader : IDisposable
         return new PdfReader(stream, leaveOpen, trailer, objects, recoveryLog)
         {
             OpenedWith = finalDecryptor?.OpenedWith,
+            EncryptionLock = finalLock,
         };
     }
 
@@ -655,7 +667,7 @@ public sealed class PdfReader : IDisposable
         }
     }
 
-    private static (Decryptor? decryptor, int encryptObjectNumber, bool encryptMetadata)
+    private static (Decryptor? decryptor, int encryptObjectNumber, bool encryptMetadata, SourceEncryptionLock? encryptionLock)
         BuildDecryptor(
             PdfObjectParser parser,
             XrefTable xref,
@@ -709,7 +721,7 @@ public sealed class PdfReader : IDisposable
                 && EncryptionDictionary.Parse(encryptDict) is { OnlyEmbeddedFilesEncrypted: true })
             {
                 recoveryLog.Add("Only the file's embedded files are encrypted (/StmF and /StrF are /Identity); the document was opened without a password, and its embedded files stay encrypted until it is opened with the password.");
-                return (null, encryptObjectNumber, true);
+                return (null, encryptObjectNumber, true, null);
             }
 
             // 3.35.0 (52d): /R 2 with no /V is read as /V 1 on trust; when no
@@ -742,7 +754,28 @@ public sealed class PdfReader : IDisposable
             encryptMetadata = emb.Value;
         }
 
-        return (decryptor, encryptObjectNumber, encryptMetadata);
+        // 3.36.0 (item 4): capture an opaque lock of the source encryption so a
+        // rewrite can preserve it. The /Encrypt dictionary is copied (its O/U/
+        // OE/UE/Perms/P/V/R entries are all direct values), and the trailer /ID
+        // is kept so a viewer re-derives the same key from a password.
+        SourceEncryptionLock? encryptionLock = null;
+        if (EncryptionDictionary.Parse(encryptDict) is EncryptionDictionary parsedLock)
+        {
+            PdfDictionary encryptCopy = new PdfDictionary(encryptDict.Count);
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in encryptDict)
+            {
+                encryptCopy.Set(entry.Key, entry.Value);
+            }
+
+            PdfArray? idArray = trailer.TryGetValue(PdfName.Intern("ID"), out PdfPrimitive? idPrim2)
+                && idPrim2 is PdfArray ida
+                ? ida
+                : null;
+            encryptionLock = new SourceEncryptionLock(
+                decryptor.StreamAlgorithm, parsedLock.KeyBits, decryptor.CopyFileKey(), encryptCopy, idArray);
+        }
+
+        return (decryptor, encryptObjectNumber, encryptMetadata, encryptionLock);
     }
 
     // 3.34.0 (#52d): decrypts one stream. A stream whose first filter is

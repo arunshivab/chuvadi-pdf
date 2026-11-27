@@ -56,6 +56,7 @@ internal static class ContentStreamWalker
         using PdfTokenizer tokenizer = new(ms);
         List<PdfToken> operands = new();
         int tokensSinceCheck = 0;
+        int qDepth = 0;
 
         while (true)
         {
@@ -156,6 +157,18 @@ internal static class ContentStreamWalker
 
                 sink.InlineImage(image, data);
                 continue;
+            }
+
+            // 3.36.0 (D-410 A): bound the graphics-state nesting of this
+            // content stream so a run of a million unbalanced "q"s cannot grow
+            // the sink's state stack without limit.
+            if (token.RawText == "q")
+            {
+                PdfWorkScope.CheckGraphicsStateDepth(++qDepth);
+            }
+            else if (token.RawText == "Q" && qDepth > 0)
+            {
+                qDepth--;
             }
 
             Dispatch(token.RawText, operands, sink);

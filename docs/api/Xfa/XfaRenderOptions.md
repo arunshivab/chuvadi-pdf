@@ -34,7 +34,7 @@ Gets or sets a value indicating whether to throw on unsupported template constru
 XfaScriptMode ScriptMode
 ```
 
-Gets or sets how embedded scripts are handled. Defaults to `XfaScriptMode.Full`.
+Gets or sets how embedded scripts are handled. Defaults to `XfaScriptMode.None` (3.36.0): embedded initialize, calculate and validate scripts are not run unless `XfaScriptMode.Full` is set. When scripts run, a per-render budget (one million script steps, a one-million-character string cap, and the operation's cancellation token) bounds them; exceeding the budget raises an `XfaScriptException`, the remaining scripts are skipped, and the form renders with the values computed so far.
 
 ---
 

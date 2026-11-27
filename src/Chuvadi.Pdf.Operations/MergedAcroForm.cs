@@ -447,10 +447,88 @@ internal static class MergedAcroForm
         ShareState state,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxMergeDepth is not followed.
-        if (depth > MaxMergeDepth)
+        // 3.36.0 (D-430): iterative with an explicit stack instead of recursion,
+        // so a deeply nested field tree cannot exhaust the call stack. Same
+        // per-kid moves, terminal-shares and sub-merges, in the same order, with
+        // the same side effects and MaxMergeDepth bound (3.35.0, DOC-01) as the
+        // former recursion.
+        MergeFrame? root = BuildMergeFrame(fullName, earlier, earlierRef, later, laterId, laterInherited, state, depth);
+        if (root is null)
         {
             return;
+        }
+
+        Stack<MergeFrame> stack = new Stack<MergeFrame>();
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            MergeFrame frame = stack.Peek();
+
+            if (frame.Index < frame.LaterKids.Count)
+            {
+                int i = frame.Index;
+                frame.Index++;
+
+                PdfReference kidRef = (PdfReference)frame.LaterKids[i];
+                PdfDictionary kid = state.ById[kidRef.ObjectId.ObjectNumber];
+                string kidName = KidName(kid)!;
+                int match = FindKid(frame.EarlierKids, kidName, state.ById);
+                if (match < 0)
+                {
+                    // Only the later tree has this child: it moves, keeping what
+                    // it inherited from the later tree.
+                    foreach (KeyValuePair<string, PdfPrimitive> entry in frame.Inherited)
+                    {
+                        PdfName pdfKey = PdfName.Intern(entry.Key);
+                        if (!kid.ContainsKey(pdfKey))
+                        {
+                            kid.Set(pdfKey, entry.Value);
+                        }
+                    }
+
+                    kid.Set(PdfName.Parent, frame.EarlierRef);
+                    frame.EarlierKids.Add(kidRef);
+                    continue;
+                }
+
+                string childName = frame.FullName + "." + kidName;
+                PdfReference earlierKidRef = (PdfReference)frame.EarlierKids[match];
+                PdfDictionary earlierKid = state.ById[earlierKidRef.ObjectId.ObjectNumber];
+                if (IsTerminal(earlierKid, state.ById))
+                {
+                    ShareTerminal(childName, frame.EarlierKids, match, frame.EarlierRef, kid, kidRef.ObjectId.ObjectNumber, state);
+                }
+                else
+                {
+                    MergeFrame? childFrame = BuildMergeFrame(
+                        childName, earlierKid, earlierKidRef, kid, kidRef.ObjectId.ObjectNumber,
+                        frame.Inherited, state, frame.Depth + 1);
+                    if (childFrame is not null)
+                    {
+                        stack.Push(childFrame);
+                    }
+                }
+
+                continue;
+            }
+
+            state.Removed.Add(frame.LaterId);
+            state.Redirected[frame.LaterId] = frame.EarlierRef.ObjectId.ObjectNumber;
+            stack.Pop();
+        }
+    }
+
+    // Reads a parent-merge frame (its inherited entries and both /Kids arrays),
+    // or returns null when past the depth bound (the former recursive early
+    // return, which had no side effects).
+    private static MergeFrame? BuildMergeFrame(
+        string fullName, PdfDictionary earlier, PdfReference earlierRef, PdfDictionary later, int laterId,
+        Dictionary<string, PdfPrimitive> laterInherited, ShareState state, int depth)
+    {
+        if (depth > MaxMergeDepth)
+        {
+            return null;
         }
 
         Dictionary<string, PdfPrimitive> inherited = new Dictionary<string, PdfPrimitive>(laterInherited, StringComparer.Ordinal);
@@ -464,45 +542,42 @@ internal static class MergedAcroForm
 
         PdfArray earlierKids = (PdfArray)Resolve(earlier, Kids, state.ById)!;
         PdfArray laterKids = (PdfArray)Resolve(later, Kids, state.ById)!;
-        for (int i = 0; i < laterKids.Count; i++)
+        return new MergeFrame(fullName, earlierRef, laterId, inherited, earlierKids, laterKids, depth);
+    }
+
+    // One parent-merge in progress: the earlier field its kids join, the later
+    // field being merged away, the inherited entries to apply, both /Kids arrays
+    // and the index of the next later kid to merge.
+    private sealed class MergeFrame
+    {
+        internal MergeFrame(
+            string fullName, PdfReference earlierRef, int laterId, Dictionary<string, PdfPrimitive> inherited,
+            PdfArray earlierKids, PdfArray laterKids, int depth)
         {
-            PdfReference kidRef = (PdfReference)laterKids[i];
-            PdfDictionary kid = state.ById[kidRef.ObjectId.ObjectNumber];
-            string kidName = KidName(kid)!;
-            int match = FindKid(earlierKids, kidName, state.ById);
-            if (match < 0)
-            {
-                // Only the later tree has this child: it moves, keeping what it
-                // inherited from the later tree.
-                foreach (KeyValuePair<string, PdfPrimitive> entry in inherited)
-                {
-                    PdfName pdfKey = PdfName.Intern(entry.Key);
-                    if (!kid.ContainsKey(pdfKey))
-                    {
-                        kid.Set(pdfKey, entry.Value);
-                    }
-                }
-
-                kid.Set(PdfName.Parent, earlierRef);
-                earlierKids.Add(kidRef);
-                continue;
-            }
-
-            string childName = fullName + "." + kidName;
-            PdfReference earlierKidRef = (PdfReference)earlierKids[match];
-            PdfDictionary earlierKid = state.ById[earlierKidRef.ObjectId.ObjectNumber];
-            if (IsTerminal(earlierKid, state.ById))
-            {
-                ShareTerminal(childName, earlierKids, match, earlierRef, kid, kidRef.ObjectId.ObjectNumber, state);
-            }
-            else
-            {
-                MergeParents(childName, earlierKid, earlierKidRef, kid, kidRef.ObjectId.ObjectNumber, inherited, state, depth + 1);
-            }
+            FullName = fullName;
+            EarlierRef = earlierRef;
+            LaterId = laterId;
+            Inherited = inherited;
+            EarlierKids = earlierKids;
+            LaterKids = laterKids;
+            Depth = depth;
         }
 
-        state.Removed.Add(laterId);
-        state.Redirected[laterId] = earlierRef.ObjectId.ObjectNumber;
+        internal string FullName { get; }
+
+        internal PdfReference EarlierRef { get; }
+
+        internal int LaterId { get; }
+
+        internal Dictionary<string, PdfPrimitive> Inherited { get; }
+
+        internal PdfArray EarlierKids { get; }
+
+        internal PdfArray LaterKids { get; }
+
+        internal int Depth { get; }
+
+        internal int Index { get; set; }
     }
 
     // Shares a later terminal field with the earlier one at

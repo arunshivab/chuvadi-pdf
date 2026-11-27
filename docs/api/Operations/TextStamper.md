@@ -15,7 +15,7 @@ public static class TextStamper
 __static__
 
 ```csharp
-static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, string? filePath = null, DateTimeOffset? timestamp = null)
+static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, string? filePath = null, DateTimeOffset? timestamp = null, byte[]? fontData = null)
 ```
 
 Stamps `template` onto the requested pages.
@@ -32,14 +32,17 @@ Stamps `template` onto the requested pages.
 - `fontSize` — Font size in points.
 - `color` — Text colour.
 - `filePath` — Source file path for the `{filename}`/`{filepath}` tokens, or null.
-- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, or `template` is null. </exception> <exception cref="ArgumentException"> (Since 3.35.0) The resolved text has a character that the Helvetica it is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written. </exception>
+- `timestamp` — Caller-supplied timestamp for date/time tokens, or null.
+- `fontData` — Bytes of a TrueType/OpenType font to use as the primary face (shaped and subset-embedded), or null to use the LiPi Sans face for each script. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, or `template` is null. </exception>
+
+**Remarks:** (Since 3.36.0, D-412) The text is shaped and subset-embedded through the shared mark-text composer — Latin and Indic scripts via the LiPi Sans faces with a Noto Emoji fallback — so it is no longer restricted to the Helvetica WinAnsi repertoire and is always embedded.
 
 ### `Apply`
 
 __static__
 
 ```csharp
-static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null)
+static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null, byte[]? fontData = null)
 ```
 
 Stamps `template` onto the requested pages, resolving the `{number}` token from a running `StampNumbering` sequence (Bates / styled page numbering) in a single pass.
@@ -57,7 +60,10 @@ Stamps `template` onto the requested pages, resolving the `{number}` token from 
 - `color` — Text colour.
 - `numbering` — The running numbering sequence used for `{number}`.
 - `filePath` — Source file path for the `{filename}`/`{filepath}` tokens, or null.
-- `timestamp` — Caller-supplied timestamp for date/time tokens, or null. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, `template`, or `numbering` is null. </exception> <exception cref="ArgumentException"> (Since 3.35.0) The resolved text has a character that the Helvetica it is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written. </exception>
+- `timestamp` — Caller-supplied timestamp for date/time tokens, or null.
+- `fontData` — Bytes of a TrueType/OpenType font to use as the primary face (shaped and subset-embedded), or null to use the LiPi Sans face for each script. <exception cref="ArgumentNullException"> Thrown when `output`, `document`, `template`, or `numbering` is null. </exception>
+
+**Remarks:** (Since 3.36.0, D-412) The text is shaped and subset-embedded through the shared mark-text composer — Latin and Indic scripts via the LiPi Sans faces with a Noto Emoji fallback — so it is no longer restricted to the Helvetica WinAnsi repertoire and is always embedded.
 
 ---
 

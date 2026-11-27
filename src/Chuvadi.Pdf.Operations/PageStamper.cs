@@ -683,31 +683,18 @@ public static class PageStamper
 
         private void Walk(PdfDictionary node, Dictionary<int, PdfObjectId> map, ref int counter, int depth = 0)
         {
-            // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
-            if (depth > MaxPageTreeDepth)
-            {
-                return;
-            }
+            // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so
+            // a deep page tree cannot exhaust the call stack. Kids are pushed in
+            // reverse so pages are still mapped in document order; the
+            // MaxPageTreeDepth bound (3.35.0, DOC-01) is unchanged.
+            Stack<(PdfReference Ref, int Depth)> stack = new Stack<(PdfReference, int)>();
+            PushKids(stack, node, depth);
 
-            if (!node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim))
+            while (stack.Count > 0)
             {
-                return;
-            }
+                (PdfReference kidRef, int kidDepth) = stack.Pop();
 
-            if (_target.Objects.Resolve(kidsPrim) is not PdfArray kids)
-            {
-                return;
-            }
-
-            for (int i = 0; i < kids.Count; i++)
-            {
-                if (kids[i] is not PdfReference kidRef)
-                {
-                    continue;
-                }
-
-                PdfPrimitive resolved = _target.Objects.Resolve(kidRef);
-                if (resolved is not PdfDictionary kid)
+                if (_target.Objects.Resolve(kidRef) is not PdfDictionary kid)
                 {
                     continue;
                 }
@@ -715,11 +702,32 @@ public static class PageStamper
                 if (kid.TryGetValue(PdfName.Type, out PdfPrimitive? typePrim)
                     && typePrim is PdfName typeName && typeName.Value == "Pages")
                 {
-                    Walk(kid, map, ref counter, depth + 1);
+                    PushKids(stack, kid, kidDepth + 1);
                 }
                 else
                 {
                     map[counter++] = kidRef.ObjectId;
+                }
+            }
+        }
+
+        // Pushes a /Pages node's /Kids references in reverse (so they pop in
+        // document order), tagged with the node's depth, unless past the depth
+        // bound or without a resolvable /Kids array.
+        private void PushKids(Stack<(PdfReference Ref, int Depth)> stack, PdfDictionary node, int depth)
+        {
+            if (depth > MaxPageTreeDepth
+                || !node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim)
+                || _target.Objects.Resolve(kidsPrim) is not PdfArray kids)
+            {
+                return;
+            }
+
+            for (int i = kids.Count - 1; i >= 0; i--)
+            {
+                if (kids[i] is PdfReference kidRef)
+                {
+                    stack.Push((kidRef, depth));
                 }
             }
         }

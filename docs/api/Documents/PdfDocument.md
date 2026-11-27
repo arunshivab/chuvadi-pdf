@@ -473,6 +473,16 @@ Asynchronously opens an encrypted PDF document from a file path.
 
 **Remarks:** See `OpenAsync(string, CancellationToken)` for I/O semantics.
 
+### `CaptureEncryptionLock`
+
+```csharp
+SourceEncryptionLock? CaptureEncryptionLock() => _reader.EncryptionLock
+```
+
+Captures this document's encryption as an opaque `SourceEncryptionLock` when it was opened from an encrypted file, or returns null when it was not encrypted (3.36.0, item 4). Pass the lock to a save or compression that preserves encryption to write the same protection — the same owner and user passwords, permissions and file key — onto the output without knowing either password. The raw file key is never readable from the returned lock.
+
+**Returns:** The encryption lock, or null when the document is not encrypted.
+
 ### `Save`
 
 ```csharp

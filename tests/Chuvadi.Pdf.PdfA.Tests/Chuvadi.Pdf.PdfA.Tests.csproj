@@ -12,10 +12,12 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Chuvadi.Fonts" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.PdfA\Chuvadi.Pdf.PdfA.csproj" />
+    <ProjectReference Include="..\..\src\Chuvadi.Pdf.Fonts.Rendering\Chuvadi.Pdf.Fonts.Rendering.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.IO\Chuvadi.Pdf.IO.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Documents\Chuvadi.Pdf.Documents.csproj" />
     <ProjectReference Include="..\..\src\Chuvadi.Pdf.Objects\Chuvadi.Pdf.Objects.csproj" />

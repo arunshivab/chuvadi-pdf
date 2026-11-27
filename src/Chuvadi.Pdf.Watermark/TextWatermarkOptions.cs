@@ -53,23 +53,27 @@ public sealed class TextWatermarkOptions
     public double RotationDegrees { get; init; }
 
     /// <summary>
-    /// Gets or initialises the font name. When <see cref="FontData"/> is null
-    /// this must be one of the 14 standard PDF fonts (the watermark is drawn
-    /// with Helvetica metrics). When <see cref="FontData"/> is supplied this is
-    /// recorded as the embedded font's PostScript base-font name. Default:
-    /// Helvetica.
+    /// Gets or initialises the font name. Default: Helvetica.
     /// </summary>
+    /// <remarks>
+    /// Since 3.36.0 (D-412) the watermark is shaped and subset-embedded through
+    /// the shared mark-text composer, so this is no longer used to select a
+    /// standard font or restrict the text to a standard-font repertoire. It is
+    /// retained for source compatibility.
+    /// </remarks>
     public string FontName { get; init; }
 
     /// <summary>
-    /// Gets or initialises the bytes of a TrueType/OpenType (glyf-based) font to
-    /// embed for this watermark. When null (the default) the watermark uses the
-    /// standard Helvetica font. When supplied, the font is embedded as a
-    /// composite Type0/CIDFontType2 font with Identity-H encoding, so watermark
-    /// text in non-Latin scripts (e.g. Tamil, Devanagari) renders with the
-    /// caller's own face. The text is emitted as glyphs in logical order without
-    /// complex shaping (no GSUB/GPOS reordering).
+    /// Gets or initialises the bytes of a TrueType/OpenType font to use as the
+    /// primary face for this watermark. When null (the default) the LiPi Sans
+    /// face for each script is used. When supplied, it is the primary face for
+    /// every code point it covers (the LiPi face covers the rest).
     /// </summary>
+    /// <remarks>
+    /// Since 3.36.0 (D-412) the text is shaped (GSUB/GPOS) and subset-embedded as
+    /// a composite Type0/Identity-H font, with a monochrome Noto Emoji fallback
+    /// for code points the primary face lacks; the watermark is always embedded.
+    /// </remarks>
     public byte[]? FontData { get; init; }
 
     /// <summary>

@@ -160,6 +160,72 @@ public static class FormReader
         PdfPrimitive fieldRef, ReadContext context, string parentName, Inherited inherited,
         int depth = 0)
     {
+        // 3.36.0 (D-430): iterative with an explicit stack instead of recursion,
+        // so a deeply nested field tree cannot exhaust the call stack. Each
+        // field's own data and widgets are read up front; its child fields are
+        // built before its FormField is constructed. Same results and order, and
+        // the same MaxFieldDepth bound — a /T kid past the limit is dropped,
+        // exactly as the former recursive null return was.
+        FieldFrame? root = BuildFieldFrame(fieldRef, context, parentName, inherited, depth, null);
+        if (root is null)
+        {
+            return null;
+        }
+
+        FormField? result = null;
+        Stack<FieldFrame> stack = new Stack<FieldFrame>();
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            FieldFrame frame = stack.Peek();
+
+            if (frame.KidIndex < frame.KidFieldRefs.Count)
+            {
+                PdfPrimitive kidRef = frame.KidFieldRefs[frame.KidIndex];
+                frame.KidIndex++;
+                FieldFrame? kidFrame = BuildFieldFrame(
+                    kidRef, context, frame.FullName, frame.Own, frame.Depth + 1, frame.Children);
+                if (kidFrame is not null)
+                {
+                    stack.Push(kidFrame);
+                }
+
+                continue;
+            }
+
+            FormField built = new FormField(frame.FullName, frame.Type, frame.Value, frame.ObjId, frame.Children)
+            {
+                Widgets = frame.Widgets,
+                Options = frame.Type == FormFieldType.Choice
+                    ? ReadOptions(frame.Opt, context.Store)
+                    : System.Array.Empty<FormChoiceOption>(),
+                Flags = (FormFieldFlags)(frame.Own.Flags ?? 0),
+                MaxLength = frame.Own.MaxLength,
+            };
+
+            stack.Pop();
+            if (frame.ParentChildren is null)
+            {
+                result = built;
+            }
+            else
+            {
+                frame.ParentChildren.Add(built);
+            }
+        }
+
+        return result;
+    }
+
+    // Reads a field's own data (name, inheritance, type, value, widgets) and the
+    // references to its child fields, returning a frame whose FormField is built
+    // once its children are built — or null when the field is past the depth
+    // bound or does not resolve (the former recursive early returns).
+    private static FieldFrame? BuildFieldFrame(
+        PdfPrimitive fieldRef, ReadContext context, string parentName, Inherited inherited, int depth,
+        List<FormField>? parentChildren)
+    {
         // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
         if (depth > MaxFieldDepth)
         {
@@ -192,8 +258,8 @@ public static class FormReader
         // Value
         string? value = ExtractValue(fieldDict, store);
 
-        // Children and widgets
-        List<FormField> children = new List<FormField>();
+        // Child field references (resolved later) and widget dictionaries.
+        List<PdfPrimitive> childRefs = new List<PdfPrimitive>();
         List<(PdfPrimitive Ref, PdfDictionary Dict)> widgetDicts = new List<(PdfPrimitive, PdfDictionary)>();
 
         if (fieldDict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim))
@@ -215,12 +281,7 @@ public static class FormReader
 
                     if (kidDict.TryGetValue(PdfName.Intern("T"), out _))
                     {
-                        FormField? child = ReadField(kids[i], context, fullName, own, depth + 1);
-
-                        if (child is not null)
-                        {
-                            children.Add(child);
-                        }
+                        childRefs.Add(kids[i]);
                     }
                     else
                     {
@@ -242,13 +303,54 @@ public static class FormReader
             widgets.Add(ReadWidget(widgetDicts[i].Ref, widgetDicts[i].Dict, type, opt, i, context));
         }
 
-        return new FormField(fullName, type, value, objId, children)
+        return new FieldFrame(objId, fullName, type, value, own, widgets, opt, childRefs, depth, parentChildren);
+    }
+
+    // One field whose child fields are being built before its own FormField is
+    // constructed. Holds the field's already-read data plus the references to its
+    // child fields and the list its FormField is added to (null for the root).
+    private sealed class FieldFrame
+    {
+        internal FieldFrame(
+            PdfObjectId objId, string fullName, FormFieldType type, string? value, Inherited own,
+            List<FormWidget> widgets, PdfArray? opt, List<PdfPrimitive> kidFieldRefs, int depth,
+            List<FormField>? parentChildren)
         {
-            Widgets = widgets,
-            Options = type == FormFieldType.Choice ? ReadOptions(opt, store) : System.Array.Empty<FormChoiceOption>(),
-            Flags = (FormFieldFlags)(own.Flags ?? 0),
-            MaxLength = own.MaxLength,
-        };
+            ObjId = objId;
+            FullName = fullName;
+            Type = type;
+            Value = value;
+            Own = own;
+            Widgets = widgets;
+            Opt = opt;
+            KidFieldRefs = kidFieldRefs;
+            Depth = depth;
+            ParentChildren = parentChildren;
+        }
+
+        internal PdfObjectId ObjId { get; }
+
+        internal string FullName { get; }
+
+        internal FormFieldType Type { get; }
+
+        internal string? Value { get; }
+
+        internal Inherited Own { get; }
+
+        internal List<FormWidget> Widgets { get; }
+
+        internal PdfArray? Opt { get; }
+
+        internal List<PdfPrimitive> KidFieldRefs { get; }
+
+        internal int Depth { get; }
+
+        internal List<FormField>? ParentChildren { get; }
+
+        internal List<FormField> Children { get; } = new List<FormField>();
+
+        internal int KidIndex { get; set; }
     }
 
     private static readonly string[] AppearanceKeys = ["N", "D"];

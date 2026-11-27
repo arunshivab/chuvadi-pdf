@@ -335,12 +335,12 @@ public sealed class XfaScriptingTests
     }
 
     [Fact]
-    public void RenderOptions_DefaultScriptModeIsFull()
+    public void RenderOptions_DefaultScriptModeIsNone()
     {
-        // The shipped default runs scripts: real forms fill their scripted
-        // fields without the caller opting in.
-        XfaRenderOptions.Default.ScriptMode.Should().Be(XfaScriptMode.Full);
-        new XfaRenderOptions().ScriptMode.Should().Be(XfaScriptMode.Full);
+        // 3.36.0: the shipped default does not run embedded scripts; a caller
+        // opts in with ScriptMode.Full, and a per-render budget then bounds them.
+        XfaRenderOptions.Default.ScriptMode.Should().Be(XfaScriptMode.None);
+        new XfaRenderOptions().ScriptMode.Should().Be(XfaScriptMode.None);
     }
 
     [Fact]

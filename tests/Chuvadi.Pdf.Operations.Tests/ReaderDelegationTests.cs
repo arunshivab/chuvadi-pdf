@@ -169,8 +169,13 @@ public sealed class ReaderDelegationTests
         output.Position = 0;
         using PdfDocument applied = PdfDocument.Open(output, leaveOpen: true);
         string content = PageContent(applied, 1);
-        content.Should().Contain("Page 2 of 3");
-        content.Should().Contain(Fmt(segments[0].X) + " " + Fmt(segments[0].BaselineY),
+
+        // Since 3.36.0 (D-412) the text is shaped and subset-embedded, so the
+        // literal "Page 2 of 3" no longer appears in the stream (it is drawn as
+        // glyph ids); the mark is placed by a CTM at the position ResolveSegments
+        // reports.
+        content.Should().Contain(
+            Fmt(segments[0].X) + " " + Fmt(segments[0].BaselineY) + " cm",
             "Apply places the text exactly where ResolveSegments says");
     }
 

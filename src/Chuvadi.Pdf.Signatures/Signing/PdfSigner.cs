@@ -564,28 +564,48 @@ public static class PdfSigner
         PdfPrimitive node, Chuvadi.Pdf.Objects.PdfObjectStore objects, List<PdfObjectId> sink,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
-        if (depth > MaxPageTreeDepth)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // page tree nested up to MaxPageTreeDepth cannot exhaust the call stack.
+        // Kids are pushed in reverse so pages are still collected in document
+        // order; the depth bound is unchanged (3.35.0, DOC-01).
+        Stack<(PdfPrimitive Node, int Depth)> stack = new Stack<(PdfPrimitive, int)>();
+        stack.Push((node, depth));
 
-        if (node is not PdfReference nodeRef) { return; }
-        PdfDictionary? dict = objects.ResolveAs<PdfDictionary>(nodeRef);
-        if (dict is null) { return; }
-        if (dict.TryGetValue(PdfName.Type, out PdfPrimitive? typeVal)
-            && typeVal is PdfName typeName
-            && typeName.Value == "Page")
+        while (stack.Count > 0)
         {
-            sink.Add(nodeRef.ObjectId);
-            return;
-        }
-        if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsVal))
-        {
-            PdfArray? kids = objects.ResolveAs<PdfArray>(kidsVal);
-            if (kids is not null)
+            (PdfPrimitive current, int currentDepth) = stack.Pop();
+
+            if (currentDepth > MaxPageTreeDepth)
             {
-                foreach (PdfPrimitive child in kids) { CollectPageIds(child, objects, sink, depth + 1); }
+                continue;
+            }
+
+            if (current is not PdfReference nodeRef)
+            {
+                continue;
+            }
+
+            PdfDictionary? dict = objects.ResolveAs<PdfDictionary>(nodeRef);
+            if (dict is null)
+            {
+                continue;
+            }
+
+            if (dict.TryGetValue(PdfName.Type, out PdfPrimitive? typeVal)
+                && typeVal is PdfName typeName
+                && typeName.Value == "Page")
+            {
+                sink.Add(nodeRef.ObjectId);
+                continue;
+            }
+
+            if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsVal)
+                && objects.ResolveAs<PdfArray>(kidsVal) is PdfArray kids)
+            {
+                for (int i = kids.Count - 1; i >= 0; i--)
+                {
+                    stack.Push((kids[i], currentDepth + 1));
+                }
             }
         }
     }

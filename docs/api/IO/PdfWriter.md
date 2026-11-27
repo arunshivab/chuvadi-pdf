@@ -53,7 +53,7 @@ Writes a linearized (Fast Web View) PDF.
 __static__
 
 ```csharp
-static void Write(Stream output, IEnumerable<PdfIndirectObject> objects, PdfDictionary trailer, EncryptionOptions? encryption, SynthesizedMetadata synthesized = SynthesizedMetadata.All, XrefStyle xrefStyle = XrefStyle.Classic)
+static void Write(Stream output, IEnumerable<PdfIndirectObject> objects, PdfDictionary trailer, EncryptionOptions? encryption, SynthesizedMetadata synthesized = SynthesizedMetadata.All, XrefStyle xrefStyle = XrefStyle.Classic, SourceEncryptionLock? preserveEncryption = null)
 ```
 
 Writes a PDF with optional encryption applied to every string and stream inside the written objects.
@@ -66,6 +66,7 @@ Writes a PDF with optional encryption applied to every string and stream inside 
 - `encryption` — Encryption configuration. When null, no encryption is applied.
 - `synthesized` — Which absent document-level metadata to synthesise. Defaults to `SynthesizedMetadata.All`, matching the standard behaviour; reduce it to suppress synthesis of /Info and/or /Metadata.
 - `xrefStyle` — The cross-reference format to emit. Defaults to `XrefStyle.Classic` (a plaintext cross-reference table). `XrefStyle.Stream` packs eligible objects into object streams and writes a compressed cross-reference stream, producing a smaller file (PDF 1.5+). Object streams compose with encryption: each container is encrypted as a whole and the cross-reference stream is left unencrypted, per ISO 32000-1 §7.6.
+- `preserveEncryption` — An opaque lock captured from an encrypted source document (3.36.0, item 4). When supplied, the source's `/Encrypt` dictionary and `/ID` are written back verbatim and objects are re-encrypted with the preserved file key, so the original passwords still open the output. Mutually exclusive with `encryption`.
 
 ### `WriteIncrementalUpdate`
 

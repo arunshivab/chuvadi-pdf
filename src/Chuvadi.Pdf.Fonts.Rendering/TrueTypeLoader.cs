@@ -418,6 +418,37 @@ public sealed class TrueTypeLoader
         return 0;
     }
 
+    /// <summary>
+    /// Resolves a raw character code to a glyph index using only the font's
+    /// cmap subtables (symbol, Macintosh, Unicode), in the order appropriate
+    /// for <paramref name="symbolic"/> fonts. Unlike
+    /// <see cref="GetGlyphIndexForCode"/> this never falls back to treating the
+    /// code as a glyph index, so a caller that must not guess a mapping gets a
+    /// definite 0 (.notdef) when no subtable maps the code.
+    /// </summary>
+    /// <param name="code">The raw single-byte character code.</param>
+    /// <param name="symbolic">Whether the font's descriptor marks it symbolic.</param>
+    /// <returns>The glyph index, or 0 when no cmap subtable maps the code.</returns>
+    public int GetGlyphIndexFromCmap(int code, bool symbolic)
+    {
+        if (symbolic)
+        {
+            if (TryCmap(_cmapSymbol, 0xF000 + code, out int g)) { return g; }
+            if (TryCmap(_cmapSymbol, code, out g)) { return g; }
+            if (TryCmap(_cmapMac, code, out g)) { return g; }
+            if (TryCmap(_cmapUnicode, code, out g)) { return g; }
+        }
+        else
+        {
+            if (TryCmap(_cmapUnicode, code, out int g)) { return g; }
+            if (TryCmap(_cmapMac, code, out g)) { return g; }
+            if (TryCmap(_cmapSymbol, 0xF000 + code, out g)) { return g; }
+            if (TryCmap(_cmapSymbol, code, out g)) { return g; }
+        }
+
+        return 0;
+    }
+
     /// <summary>Maps a Unicode code point to a glyph index via the Unicode cmap.</summary>
     public int GetGlyphIndexUnicode(int codePoint)
     {

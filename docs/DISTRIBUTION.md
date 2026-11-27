@@ -50,32 +50,54 @@ One version for the whole library (mono-versioning). All packages are stamped
 with the same `-p:Version=x.y.z`, which makes the inter-package dependency
 versions line up automatically (a `ProjectReference` becomes a package
 dependency at the same version). This matches the `git tag vX.Y.Z` release flow.
-The current released version is **3.16.0**.
+The current released version is **3.36.0**.
+
+## Release checklist (run at tag time, every release)
+
+Do these in order, on the merged `main` commit you are about to tag:
+
+1. **Date the CHANGELOG heading.** Change the top section from
+   `## [X.Y.Z] - Unreleased` to `## [X.Y.Z] - <tag date, YYYY-MM-DD>`. The
+   heading must never ship as `Unreleased` (v3.35.0 did, by mistake). The date
+   is the day the tag is created.
+2. **Bump the version strings in this file** — the "current released version"
+   line above and the `vX.Y.Z` / `-Version X.Y.Z` values in the block below —
+   to the version being released.
+3. Then tag and build **from the tag**, as below.
 
 ## Build and publish (local feeds)
 
 Chuvadi currently publishes to **local folder feeds only, not nuget.org.**
 From the repository root:
 
-```powershell
-# 1. Produce every package at a version (cleans bin/obj, builds Release,
-#    runs the full test suite, then packs).
-.\build\pack.ps1 -Version 3.16.0
-#    -> artifacts\nupkg\*.nupkg   (33 packages, all at 3.16.0)
+Tag first, then build **from the tag**, so the published packages are provably
+the exact tagged commit — never a later edit that slipped in before the pack.
 
-# 2. Publish by FLAT-COPYING the .nupkg files into each local feed.
+```powershell
+# 1. Tag the release on merged main with a signed, annotated tag, and push it.
+git tag -s v3.36.0 -m "Chuvadi v3.36.0"
+git push origin v3.36.0
+
+# 2. Check out the tag (detached) and produce every package at that version.
+#    pack.ps1 cleans bin/obj, builds Release, runs the full test suite, then
+#    packs — so the .nupkg bytes come from the tagged commit, not the branch.
+git checkout v3.36.0
+.\build\pack.ps1 -Version 3.36.0
+#    -> artifacts\nupkg\*.nupkg   (33 packages, all at 3.36.0)
+
+# 3. Publish by FLAT-COPYING the .nupkg files into each local feed.
 #    Do NOT use `dotnet nuget push` for the local feeds — it creates a
 #    hierarchical id/version layout that the flat-feed consumers do not expect.
 Copy-Item artifacts\nupkg\*.nupkg "C:\Users\aruns\Documents\local-nuget\" -Force
 Copy-Item artifacts\nupkg\*.nupkg "C:\Users\aruns\Documents\ChuvadiReader\ChuvadiReader\localpackages\" -Force
 
-# 3. Tag the release.
-git tag v3.16.0
-git push origin v3.16.0
+# 4. Return to your working branch.
+git checkout -
 ```
 
 `pack.ps1` cleans `bin`/`obj`, builds Release, runs the full test suite (pass
-`-NoTest` to skip), then packs the solution.
+`-NoTest` to skip), then packs the solution. The version passed to `pack.ps1`
+must match the tag, so the package version and the tag never drift apart.
 
 > The meta-package must be in the solution for the solution-level pack to
 > include it. It is already registered in `Chuvadi.slnx`.

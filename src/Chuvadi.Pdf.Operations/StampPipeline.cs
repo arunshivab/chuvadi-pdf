@@ -9,9 +9,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.IO;
+using Chuvadi.Pdf.Objects;
 using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Operations;
@@ -28,15 +30,25 @@ public sealed class StampPipeline
 {
     private readonly PdfDocument _document;
     private readonly StampWriter _writer;
+    private readonly MarkTextComposer _composer;
+    private int _markCounter;
     private int _extGStateCounter;
 
     /// <summary>Creates a pipeline that overlays content onto <paramref name="document"/>.</summary>
     /// <param name="document">The document to stamp.</param>
-    public StampPipeline(PdfDocument document)
+    /// <param name="fontData">
+    /// (Since 3.36.0, D-412) Bytes of a TrueType/OpenType font to use as the
+    /// primary face for every mark this pipeline draws (shaped and subset-embedded),
+    /// or null to use the LiPi Sans face for each script with a Noto Emoji fallback.
+    /// A header/footer added with its own <see cref="HeaderFooterOptions.FontData"/>
+    /// overrides this for that band.
+    /// </param>
+    public StampPipeline(PdfDocument document, byte[]? fontData = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         _document = document;
         _writer = new StampWriter(document);
+        _composer = new MarkTextComposer(fontData);
     }
 
     /// <summary>Adds an anchored text stamp whose template may contain tokens such as <c>{page}</c>.</summary>
@@ -99,7 +111,7 @@ public sealed class StampPipeline
         double radians = rotationDegrees * Math.PI / 180.0;
         double cos = Math.Cos(radians);
         double sin = Math.Sin(radians);
-        double width = StampText.MeasureWidth(text, fontSize) / 1000.0 * fontSize;
+        double width = _composer.Measure(text, fontSize);
 
         HashSet<int>? targets = pages is null ? null : new HashSet<int>(pages);
         int total = _document.PageCount;
@@ -117,9 +129,7 @@ public sealed class StampPipeline
             double originY = cy - (width / 2.0 * sin);
 
             Transform placement = new Transform(cos, sin, -sin, cos, originX, originY);
-            string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-            byte[] bytes = Encoding.Latin1.GetBytes("q\n/" + gsName + " gs\n" + fragment + "Q\n");
-            _writer.AddOverlay(i, bytes);
+            EmitMark(_composer, i, text, placement, fontSize, color, gsName);
         }
 
         return this;
@@ -131,14 +141,21 @@ public sealed class StampPipeline
     public StampPipeline AddHeaderFooter(HeaderFooterOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+
+        // A header/footer may carry its own font (HeaderFooterOptions.FontData),
+        // which overrides the pipeline's default face for its bands.
+        MarkTextComposer composer = options.FontData is null
+            ? _composer
+            : new MarkTextComposer(options.FontData);
+
         if (options.Header is not null)
         {
-            AddBand(options.Header, options, top: true);
+            AddBand(composer, options.Header, options, top: true);
         }
 
         if (options.Footer is not null)
         {
-            AddBand(options.Footer, options, top: false);
+            AddBand(composer, options.Footer, options, top: false);
         }
 
         return this;
@@ -187,6 +204,11 @@ public sealed class StampPipeline
 
     private StampPipeline AddAnchoredText(string template, StampAnchor anchor, double fontSize, ColorF color, double marginX, double marginY, IEnumerable<int>? pages, StampNumbering? numbering, string? filePath, DateTimeOffset? timestamp)
     {
+        return AddAnchoredText(_composer, template, anchor, fontSize, color, marginX, marginY, pages, numbering, filePath, timestamp);
+    }
+
+    private StampPipeline AddAnchoredText(MarkTextComposer composer, string template, StampAnchor anchor, double fontSize, ColorF color, double marginX, double marginY, IEnumerable<int>? pages, StampNumbering? numbering, string? filePath, DateTimeOffset? timestamp)
+    {
         HashSet<int>? targets = pages is null ? null : new HashSet<int>(pages);
         int total = _document.PageCount;
         for (int i = 0; i < total; i++)
@@ -218,17 +240,49 @@ public sealed class StampPipeline
             }
 
             PdfPage page = _document.Pages[i];
-            double textWidth = StampText.MeasureWidth(text, fontSize);
+            double textWidth = composer.Measure(text, fontSize);
             Transform placement = AnchorPlacement.ComputePlacement(anchor, page.MediaBox, textWidth, fontSize, marginX, marginY);
-            string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-            byte[] bytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
-            _writer.AddOverlay(i, bytes);
+            EmitMark(composer, i, text, placement, fontSize, color, null);
         }
 
         return this;
     }
 
-    private void AddBand(BandText band, HeaderFooterOptions options, bool top)
+    // 3.36.0 (D-412): draws one line of mark text on a page through the given
+    // composer — shaped, with LiPi + emoji faces subset-embedded — placed and
+    // rotated by <paramref name="placement"/> used as a CTM, optionally under an
+    // ExtGState (for watermark opacity). Replaces the Helvetica BuildShowText path.
+    private void EmitMark(MarkTextComposer composer, int pageIndex, string text, Transform placement, double fontSize, ColorF color, string? gsName)
+    {
+        string prefix = "CvM" + _markCounter + "F";
+        _markCounter++;
+        ComposedMarkText composed = composer.Compose(text, fontSize, color, _writer.AllocateId, prefix);
+        foreach (PdfIndirectObject obj in composed.FontObjects)
+        {
+            _writer.AddIndirectObject(obj.Id, obj.Value);
+        }
+
+        foreach (KeyValuePair<string, PdfObjectId> font in composed.FontResources)
+        {
+            _writer.AddOverlayFont(pageIndex, font.Key, font.Value);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.Append("q\n");
+        if (gsName is not null)
+        {
+            sb.Append('/').Append(gsName).Append(" gs\n");
+        }
+
+        sb.Append(StampText.Fmt(placement.A)).Append(' ').Append(StampText.Fmt(placement.B)).Append(' ')
+            .Append(StampText.Fmt(placement.C)).Append(' ').Append(StampText.Fmt(placement.D)).Append(' ')
+            .Append(StampText.Fmt(placement.E)).Append(' ').Append(StampText.Fmt(placement.F)).Append(" cm\n");
+        sb.Append(composed.ContentFragment);
+        sb.Append("Q\n");
+        _writer.AddOverlay(pageIndex, Encoding.Latin1.GetBytes(sb.ToString()));
+    }
+
+    private void AddBand(MarkTextComposer composer, BandText band, HeaderFooterOptions options, bool top)
     {
         double marginY = top ? Math.Abs(options.HeaderBaselineOffset) : options.FooterBaselineOffset;
         StampAnchor left = top ? StampAnchor.TopLeft : StampAnchor.BottomLeft;
@@ -237,17 +291,17 @@ public sealed class StampPipeline
 
         if (!string.IsNullOrEmpty(band.Left))
         {
-            AddAnchoredText(band.Left, left, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
+            AddAnchoredText(composer, band.Left, left, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
         }
 
         if (!string.IsNullOrEmpty(band.Center))
         {
-            AddAnchoredText(band.Center, center, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
+            AddAnchoredText(composer, band.Center, center, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
         }
 
         if (!string.IsNullOrEmpty(band.Right))
         {
-            AddAnchoredText(band.Right, right, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
+            AddAnchoredText(composer, band.Right, right, options.FontSize, options.Color, options.MarginX, marginY, options.PageIndices, null, options.FilePath, options.Timestamp);
         }
     }
 

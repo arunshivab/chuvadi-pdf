@@ -715,6 +715,11 @@ dependency; still needs bitonal detection + G4 and JBIG2 encode (#10).
 suite; the optimisation *target knob* ("smallest file at visually lossless")
 that would drive the image-recoding stack does not.
 
+**14. Pdf.Vector image coverage (D-419).** The raster route cannot draw some
+images — 16-bit samples and certain colour spaces — so Pdf.Vector (Print)
+leaves those images out rather than drawing them wrong. Draw them properly in a
+later release so vector output carries every image the page has.
+
 ---
 
 ## Pre-1.0 / distribution housekeeping (separate track)

@@ -5,10 +5,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
+using Chuvadi.Pdf.Objects;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Operations;
 
@@ -42,14 +46,20 @@ public static class TextStamper
     /// <param name="timestamp">
     /// Caller-supplied timestamp for date/time tokens, or null.
     /// </param>
+    /// <param name="fontData">
+    /// Bytes of a TrueType/OpenType font to use as the primary face (shaped and
+    /// subset-embedded), or null to use the LiPi Sans face for each script.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="output"/>, <paramref name="document"/>, or
     /// <paramref name="template"/> is null.
     /// </exception>
-    /// <exception cref="ArgumentException">
-    /// (Since 3.35.0) The resolved text has a character that the Helvetica it
-    /// is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written.
-    /// </exception>
+    /// <remarks>
+    /// (Since 3.36.0, D-412) The text is shaped and subset-embedded through the
+    /// shared mark-text composer — Latin and Indic scripts via the LiPi Sans
+    /// faces with a Noto Emoji fallback — so it is no longer restricted to the
+    /// Helvetica WinAnsi repertoire and is always embedded.
+    /// </remarks>
     public static void Apply(
         Stream output,
         PdfDocument document,
@@ -61,7 +71,8 @@ public static class TextStamper
         double fontSize,
         ColorF color,
         string? filePath = null,
-        DateTimeOffset? timestamp = null)
+        DateTimeOffset? timestamp = null,
+        byte[]? fontData = null)
     {
         PdfWriteGuard.Run(document, "stamped", () =>
         {
@@ -73,6 +84,7 @@ public static class TextStamper
             int total = document.PageCount;
 
             StampWriter writer = new StampWriter(document);
+            MarkTextComposer composer = new MarkTextComposer(fontData);
 
             for (int pageIndex = 0; pageIndex < total; pageIndex++)
             {
@@ -90,13 +102,7 @@ public static class TextStamper
                     continue;
                 }
 
-                Transform placement = AnchorPlacement.ComputePlacement(
-                    anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
-                    fontSize, marginX, marginY);
-
-                string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-                byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
-                writer.AddOverlay(pageIndex, streamBytes);
+                EmitStamp(writer, composer, pageIndex, page, text, anchor, marginX, marginY, fontSize, color);
             }
 
             writer.Write(output);
@@ -127,15 +133,21 @@ public static class TextStamper
     /// <param name="timestamp">
     /// Caller-supplied timestamp for date/time tokens, or null.
     /// </param>
+    /// <param name="fontData">
+    /// Bytes of a TrueType/OpenType font to use as the primary face (shaped and
+    /// subset-embedded), or null to use the LiPi Sans face for each script.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="output"/>, <paramref name="document"/>,
     /// <paramref name="template"/>, or <paramref name="numbering"/> is null.
     /// </exception>
-    /// <exception cref="ArgumentException">
-    /// (Since 3.35.0) The resolved text has a character that the Helvetica it
-    /// is drawn with cannot show (WinAnsiEncoding lacks it); nothing is written.
-    /// </exception>
-    public static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null)
+    /// <remarks>
+    /// (Since 3.36.0, D-412) The text is shaped and subset-embedded through the
+    /// shared mark-text composer — Latin and Indic scripts via the LiPi Sans
+    /// faces with a Noto Emoji fallback — so it is no longer restricted to the
+    /// Helvetica WinAnsi repertoire and is always embedded.
+    /// </remarks>
+    public static void Apply(Stream output, PdfDocument document, IEnumerable<int>? pageIndices, string template, StampAnchor anchor, double marginX, double marginY, double fontSize, ColorF color, StampNumbering numbering, string? filePath = null, DateTimeOffset? timestamp = null, byte[]? fontData = null)
     {
         PdfWriteGuard.Run(document, "stamped", () =>
         {
@@ -148,6 +160,7 @@ public static class TextStamper
             int total = document.PageCount;
 
             StampWriter writer = new StampWriter(document);
+            MarkTextComposer composer = new MarkTextComposer(fontData);
 
             for (int pageIndex = 0; pageIndex < total; pageIndex++)
             {
@@ -172,17 +185,53 @@ public static class TextStamper
                     continue;
                 }
 
-                Transform placement = AnchorPlacement.ComputePlacement(
-                    anchor, page.MediaBox, StampText.MeasureWidth(text, fontSize),
-                    fontSize, marginX, marginY);
-
-                string fragment = StampText.BuildShowText(text, placement, fontSize, color);
-                byte[] streamBytes = Encoding.Latin1.GetBytes("q\n" + fragment + "Q\n");
-                writer.AddOverlay(pageIndex, streamBytes);
+                EmitStamp(writer, composer, pageIndex, page, text, anchor, marginX, marginY, fontSize, color);
             }
 
             writer.Write(output);
         });
+    }
+
+    // 3.36.0 (D-412): draws one line of stamp text on a page through the shared
+    // composer — shaped, with the LiPi + emoji faces subset-embedded — placed by
+    // the anchor transform used as a CTM, replacing the Helvetica show-text path.
+    private static void EmitStamp(
+        StampWriter writer,
+        MarkTextComposer composer,
+        int pageIndex,
+        PdfPage page,
+        string text,
+        StampAnchor anchor,
+        double marginX,
+        double marginY,
+        double fontSize,
+        ColorF color)
+    {
+        double width = composer.Measure(text, fontSize);
+        Transform placement = AnchorPlacement.ComputePlacement(
+            anchor, page.MediaBox, width, fontSize, marginX, marginY);
+
+        string prefix = string.Create(CultureInfo.InvariantCulture, $"CvTs{pageIndex}F");
+        ComposedMarkText composed = composer.Compose(
+            text, fontSize, color, writer.AllocateId, prefix);
+
+        foreach (PdfIndirectObject obj in composed.FontObjects)
+        {
+            writer.AddIndirectObject(obj.Id, obj.Value);
+        }
+
+        foreach (KeyValuePair<string, PdfObjectId> font in composed.FontResources)
+        {
+            writer.AddOverlayFont(pageIndex, font.Key, font.Value);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.Append(string.Create(
+            CultureInfo.InvariantCulture,
+            $"q\n{placement.A:0.######} {placement.B:0.######} {placement.C:0.######} {placement.D:0.######} {placement.E:0.######} {placement.F:0.######} cm\n"));
+        sb.Append(composed.ContentFragment);
+        sb.Append("Q\n");
+        writer.AddOverlay(pageIndex, Encoding.Latin1.GetBytes(sb.ToString()));
     }
 
     private static HashSet<int> ResolveTargets(IEnumerable<int>? pageIndices, int pageCount)

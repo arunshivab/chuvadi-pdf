@@ -374,36 +374,60 @@ public sealed class XfaPackets
         Dictionary<string, XfaGeometry> map,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
-        if (depth > MaxFieldDepth)
+        // 3.36.0 (D-430): iterative with an explicit stack instead of recursion,
+        // so a deeply nested field tree cannot exhaust the call stack. Each
+        // field's /Kids are walked before the field's own geometry is indexed
+        // (first-key-wins is preserved), in the same order and under the same
+        // MaxFieldDepth bound as before.
+        Stack<XfaFieldStep> stack = new Stack<XfaFieldStep>();
+        stack.Push(new XfaExpandStep(entry, parentName, depth));
+
+        while (stack.Count > 0)
         {
-            return;
-        }
+            XfaFieldStep step = stack.Pop();
 
-        PdfObjectId id = entry is PdfReference reference ? reference.ObjectId : PdfObjectId.Invalid;
-        PdfDictionary? dictionary = _document.Objects.ResolveAs<PdfDictionary>(entry);
-
-        if (dictionary is null)
-        {
-            return;
-        }
-
-        string? partial = ReadTextString(dictionary, "T");
-        string name = ComposeName(parentName, partial);
-
-        if (dictionary.TryGetValue(PdfName.Intern("Kids"), out PdfPrimitive? kidsEntry))
-        {
-            PdfArray? kids = _document.Objects.ResolveAs<PdfArray>(kidsEntry);
-
-            if (kids is not null)
+            if (step is XfaEmitStep emit)
             {
-                for (int i = 0; i < kids.Count; i++)
+                EmitGeometry(emit.Id, emit.Name, emit.Dictionary, annotPage, map);
+                continue;
+            }
+
+            XfaExpandStep expand = (XfaExpandStep)step;
+            if (expand.Depth > MaxFieldDepth)
+            {
+                continue;
+            }
+
+            PdfObjectId id = expand.Entry is PdfReference reference ? reference.ObjectId : PdfObjectId.Invalid;
+            PdfDictionary? dictionary = _document.Objects.ResolveAs<PdfDictionary>(expand.Entry);
+            if (dictionary is null)
+            {
+                continue;
+            }
+
+            string name = ComposeName(expand.ParentName, ReadTextString(dictionary, "T"));
+
+            // Push the field's own geometry first so it runs after its children.
+            stack.Push(new XfaEmitStep(id, name, dictionary));
+
+            if (dictionary.TryGetValue(PdfName.Intern("Kids"), out PdfPrimitive? kidsEntry)
+                && _document.Objects.ResolveAs<PdfArray>(kidsEntry) is PdfArray kids)
+            {
+                for (int i = kids.Count - 1; i >= 0; i--)
                 {
-                    WalkField(kids[i], name, annotPage, map, depth + 1);
+                    stack.Push(new XfaExpandStep(kids[i], name, expand.Depth + 1));
                 }
             }
         }
+    }
 
+    // Indexes one field's /Rect geometry by its last name segment (and the
+    // bracket-stripped form), first key wins — the former per-field tail of
+    // WalkField.
+    private void EmitGeometry(
+        PdfObjectId id, string name, PdfDictionary dictionary,
+        Dictionary<PdfObjectId, int> annotPage, Dictionary<string, XfaGeometry> map)
+    {
         if (!dictionary.TryGetValue(PdfName.Intern("Rect"), out PdfPrimitive? rectEntry))
         {
             return;
@@ -445,6 +469,44 @@ public sealed class XfaPackets
                 map[stripped] = geometry;
             }
         }
+    }
+
+    // A unit of XFA field-tree work: expand a field (and its /Kids), or emit one
+    // field's geometry after its subtree has been walked.
+    private abstract class XfaFieldStep
+    {
+    }
+
+    private sealed class XfaExpandStep : XfaFieldStep
+    {
+        internal XfaExpandStep(PdfPrimitive entry, string? parentName, int depth)
+        {
+            Entry = entry;
+            ParentName = parentName;
+            Depth = depth;
+        }
+
+        internal PdfPrimitive Entry { get; }
+
+        internal string? ParentName { get; }
+
+        internal int Depth { get; }
+    }
+
+    private sealed class XfaEmitStep : XfaFieldStep
+    {
+        internal XfaEmitStep(PdfObjectId id, string name, PdfDictionary dictionary)
+        {
+            Id = id;
+            Name = name;
+            Dictionary = dictionary;
+        }
+
+        internal PdfObjectId Id { get; }
+
+        internal string Name { get; }
+
+        internal PdfDictionary Dictionary { get; }
     }
 
     private Dictionary<PdfObjectId, int> BuildAnnotPageMap()

@@ -383,33 +383,44 @@ internal static class LinearizedWriter
         List<int> result,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
-        if (depth > MaxPageTreeDepth)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // deep page tree cannot exhaust the call stack. Kids are pushed in
+        // reverse so pages are still collected in document order; the
+        // MaxPageTreeDepth bound (3.35.0, DOC-01) is unchanged.
+        Stack<(int ObjNum, int Depth)> stack = new Stack<(int, int)>();
+        stack.Push((nodeObjNum, depth));
 
-        if (!byId.TryGetValue(nodeObjNum, out PdfIndirectObject? node) ||
-            node.Value is not PdfDictionary dict)
+        while (stack.Count > 0)
         {
-            return;
-        }
+            (int objNum, int currentDepth) = stack.Pop();
 
-        if (dict.TryGetValue(PdfName.Type, out PdfPrimitive? typeP) &&
-            typeP is PdfName typeName && typeName.Value == "Page")
-        {
-            result.Add(nodeObjNum);
-            return;
-        }
-
-        if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsP) &&
-            kidsP is PdfArray kids)
-        {
-            for (int i = 0; i < kids.Count; i++)
+            if (currentDepth > MaxPageTreeDepth)
             {
-                if (kids[i] is PdfReference r)
+                continue;
+            }
+
+            if (!byId.TryGetValue(objNum, out PdfIndirectObject? node) ||
+                node.Value is not PdfDictionary dict)
+            {
+                continue;
+            }
+
+            if (dict.TryGetValue(PdfName.Type, out PdfPrimitive? typeP) &&
+                typeP is PdfName typeName && typeName.Value == "Page")
+            {
+                result.Add(objNum);
+                continue;
+            }
+
+            if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsP) &&
+                kidsP is PdfArray kids)
+            {
+                for (int i = kids.Count - 1; i >= 0; i--)
                 {
-                    WalkPages(r.ObjectId.ObjectNumber, byId, result, depth + 1);
+                    if (kids[i] is PdfReference r)
+                    {
+                        stack.Push((r.ObjectId.ObjectNumber, currentDepth + 1));
+                    }
                 }
             }
         }

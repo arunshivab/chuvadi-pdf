@@ -100,6 +100,7 @@ public static class PageOperations
                     ?? throw new OperationsException("Null document in merge list.");
 
                 pageOffsets[d] = runningOffset;
+                builder.RegisterOptionalContent(d, doc);
 
                 for (int i = 0; i < doc.PageCount; i++)
                 {
@@ -191,6 +192,7 @@ public static class PageOperations
                 {
                     docIndex = docIndices.Count;
                     docIndices[doc] = docIndex;
+                    builder.RegisterOptionalContent(docIndex, doc);
                 }
 
                 builder.AddPage(doc.Pages[selector.PageIndex], doc.Objects, docIndex);
@@ -305,6 +307,7 @@ public static class PageOperations
             {
                 MemoryStream ms = new MemoryStream();
                 PageBuilder builder = new PageBuilder();
+                builder.RegisterOptionalContent(0, document);
                 builder.AddPage(document.Pages[i], document.Objects);
                 builder.Write(ms);
                 results.Add(ms);
@@ -353,6 +356,7 @@ public static class PageOperations
             }
 
             PageBuilder builder = new PageBuilder();
+            builder.RegisterOptionalContent(0, document);
 
             for (int i = startIndex; i < startIndex + count; i++)
             {
@@ -395,6 +399,7 @@ public static class PageOperations
 
             HashSet<int> toDelete = new HashSet<int>(pageIndices);
             PageBuilder builder = new PageBuilder();
+            builder.RegisterOptionalContent(0, document);
 
             for (int i = 0; i < document.PageCount; i++)
             {
@@ -458,6 +463,7 @@ public static class PageOperations
                 : new HashSet<int>(pageIndices);
 
             PageBuilder builder = new PageBuilder();
+            builder.RegisterOptionalContent(0, document);
 
             for (int i = 0; i < document.PageCount; i++)
             {
@@ -521,6 +527,7 @@ public static class PageOperations
             }
 
             PageBuilder builder = new PageBuilder();
+            builder.RegisterOptionalContent(0, document);
 
             foreach (int idx in newOrder)
             {
@@ -578,6 +585,39 @@ public static class PageOperations
         internal void SetOutline(List<OutlineNode> roots)
         {
             _outlineRoots = roots;
+        }
+
+        // OPS-02: the optional-content properties of each source document, kept
+        // so the output catalog can carry /OCProperties. Without it a viewer
+        // defaults every layer to on, turning hidden layers visible after a
+        // page operation. Keyed by the same document index as the remap.
+        private readonly Dictionary<int, OcSource> _ocSources = new Dictionary<int, OcSource>();
+
+        private readonly record struct OcSource(PdfDictionary Properties, IPdfObjectResolver Resolver);
+
+        private static readonly PdfName OcProperties = PdfName.Intern("OCProperties");
+        private static readonly PdfName OcgsKey = PdfName.Intern("OCGs");
+        private static readonly PdfName DefaultConfig = PdfName.Intern("D");
+        private static readonly PdfName OcName = PdfName.Intern("Name");
+        private static readonly PdfName BaseState = PdfName.Intern("BaseState");
+        private static readonly PdfName OffKey = PdfName.Intern("OFF");
+        private static readonly PdfName OrderKey = PdfName.Intern("Order");
+
+        // Records a source document's /OCProperties against its document index
+        // (OPS-02). Called once per distinct source; later calls for the same
+        // index, and documents without optional content, are ignored.
+        internal void RegisterOptionalContent(int docIndex, PdfDocument document)
+        {
+            if (_ocSources.ContainsKey(docIndex))
+            {
+                return;
+            }
+
+            if (document.Catalog.TryGetValue(OcProperties, out PdfPrimitive? value) && value is not null
+                && document.Objects.Resolve(value) is PdfDictionary properties)
+            {
+                _ocSources[docIndex] = new OcSource(properties, document.Objects);
+            }
         }
 
         internal void AddPage(PdfPage page, IPdfObjectResolver resolver, int docIndex = 0)
@@ -675,6 +715,173 @@ public static class PageOperations
             }
 
             return null;
+        }
+
+        // Builds the output catalog's /OCProperties from the registered source
+        // documents (OPS-02): the layers the written pages actually use, with a
+        // default configuration whose /OFF list and /Order are carried (merge:
+        // unioned, first document's /Name kept), alternate /Configs dropped. A
+        // layer the pages do not use is left out. Returns null when no written
+        // page uses any optional content. References point at the already-copied
+        // layer objects by their remapped numbers.
+        private PdfDictionary? BuildOptionalContent(
+            Dictionary<(int Doc, int Num), int> idRemap, HashSet<(int Doc, int Num)> written)
+        {
+            if (_ocSources.Count == 0)
+            {
+                return null;
+            }
+
+            List<int> order = new List<int>(_ocSources.Keys);
+            order.Sort();
+
+            List<PdfPrimitive> ocgs = new List<PdfPrimitive>();
+            HashSet<int> ocgNumbers = new HashSet<int>();
+            List<PdfPrimitive> off = new List<PdfPrimitive>();
+            HashSet<int> offNumbers = new HashSet<int>();
+            PdfArray orderArray = new PdfArray([]);
+            PdfString? name = null;
+            PdfName? baseState = null;
+
+            foreach (int docIndex in order)
+            {
+                OcSource source = _ocSources[docIndex];
+                if (source.Resolver.Resolve(Lookup(source.Properties, OcgsKey)) is PdfArray declared)
+                {
+                    foreach (PdfPrimitive item in declared)
+                    {
+                        if (TryUsedLayer(item, docIndex, idRemap, written, out int newNum) && ocgNumbers.Add(newNum))
+                        {
+                            ocgs.Add(new PdfReference(new PdfObjectId(newNum, 0)));
+                        }
+                    }
+                }
+
+                if (source.Resolver.Resolve(Lookup(source.Properties, DefaultConfig)) is not PdfDictionary config)
+                {
+                    continue;
+                }
+
+                if (name is null && config.TryGetValue(OcName, out PdfPrimitive? configName) && configName is PdfString nameString)
+                {
+                    name = nameString;
+                }
+
+                if (baseState is null && config.TryGetValue(BaseState, out PdfPrimitive? configBase) && configBase is PdfName baseName)
+                {
+                    baseState = baseName;
+                }
+
+                if (source.Resolver.Resolve(Lookup(config, OffKey)) is PdfArray offArray)
+                {
+                    foreach (PdfPrimitive item in offArray)
+                    {
+                        if (TryUsedLayer(item, docIndex, idRemap, written, out int newNum) && offNumbers.Add(newNum))
+                        {
+                            off.Add(new PdfReference(new PdfObjectId(newNum, 0)));
+                        }
+                    }
+                }
+
+                if (source.Resolver.Resolve(Lookup(config, OrderKey)) is PdfArray configOrder)
+                {
+                    RemapOrder(configOrder, docIndex, source.Resolver, idRemap, written, orderArray);
+                }
+            }
+
+            if (ocgNumbers.Count == 0)
+            {
+                return null;
+            }
+
+            PdfDictionary defaultConfig = new PdfDictionary();
+            if (name is not null)
+            {
+                defaultConfig.Set(OcName, name);
+            }
+
+            if (baseState is not null)
+            {
+                defaultConfig.Set(BaseState, baseState);
+            }
+
+            if (off.Count > 0)
+            {
+                defaultConfig.Set(OffKey, new PdfArray(off.ToArray()));
+            }
+
+            if (orderArray.Count > 0)
+            {
+                defaultConfig.Set(OrderKey, orderArray);
+            }
+
+            PdfDictionary properties = new PdfDictionary();
+            properties.Set(OcgsKey, new PdfArray(ocgs.ToArray()));
+            properties.Set(DefaultConfig, defaultConfig);
+            return properties;
+        }
+
+        private static PdfPrimitive Lookup(PdfDictionary dict, PdfName key) =>
+            dict.TryGetValue(key, out PdfPrimitive? value) && value is not null ? value : PdfNull.Value;
+
+        // True when the item is a reference to a layer object that a written
+        // page uses, giving its remapped output object number.
+        private static bool TryUsedLayer(
+            PdfPrimitive item, int docIndex, Dictionary<(int Doc, int Num), int> idRemap,
+            HashSet<(int Doc, int Num)> written, out int newNum)
+        {
+            newNum = 0;
+            if (item is PdfReference reference
+                && written.Contains((docIndex, reference.ObjectId.ObjectNumber))
+                && idRemap.TryGetValue((docIndex, reference.ObjectId.ObjectNumber), out int mapped))
+            {
+                newNum = mapped;
+                return true;
+            }
+
+            return false;
+        }
+
+        // Copies a /D /Order array (a possibly-nested list of layer references,
+        // sub-group arrays and title strings), keeping its structure, remapping
+        // used-layer references and dropping references to layers no written
+        // page uses. An empty sub-group is left out.
+        private static void RemapOrder(
+            PdfArray source, int docIndex, IPdfObjectResolver resolver,
+            Dictionary<(int Doc, int Num), int> idRemap, HashSet<(int Doc, int Num)> written, PdfArray into)
+        {
+            foreach (PdfPrimitive item in source)
+            {
+                if (item is PdfReference reference && resolver.Resolve(reference) is PdfArray nestedIndirect)
+                {
+                    PdfArray sub = new PdfArray([]);
+                    RemapOrder(nestedIndirect, docIndex, resolver, idRemap, written, sub);
+                    if (sub.Count > 0)
+                    {
+                        into.Add(sub);
+                    }
+                }
+                else if (item is PdfReference)
+                {
+                    if (TryUsedLayer(item, docIndex, idRemap, written, out int newNum))
+                    {
+                        into.Add(new PdfReference(new PdfObjectId(newNum, 0)));
+                    }
+                }
+                else if (item is PdfArray nested)
+                {
+                    PdfArray sub = new PdfArray([]);
+                    RemapOrder(nested, docIndex, resolver, idRemap, written, sub);
+                    if (sub.Count > 0)
+                    {
+                        into.Add(sub);
+                    }
+                }
+                else if (item is PdfString title)
+                {
+                    into.Add(title);
+                }
+            }
         }
 
         internal void Write(Stream output)
@@ -833,6 +1040,14 @@ public static class PageOperations
                 {
                     catalogDict.Set(PdfName.Intern("AcroForm"), acroForm);
                 }
+            }
+
+            // OPS-02: carry the layers the written pages use, so a hidden layer
+            // stays hidden instead of defaulting to visible.
+            PdfDictionary? optionalContent = BuildOptionalContent(idRemap, addedOriginals);
+            if (optionalContent is not null)
+            {
+                catalogDict.Set(OcProperties, optionalContent);
             }
 
             allObjects.Add(new PdfIndirectObject(catalogId, catalogDict));

@@ -12,6 +12,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using Chuvadi.Pdf.Documents;
+using Chuvadi.Pdf.Encryption;
 using Chuvadi.Pdf.Filters;
 using Chuvadi.Pdf.Graphics;
 using Chuvadi.Pdf.Images;
@@ -136,6 +137,21 @@ public sealed record CompressionOptions
     public bool AllowEncryptedRewrite { get; init; }
 
     /// <summary>
+    /// When true, an encrypted document is rewritten with its original
+    /// encryption preserved (3.36.0, item 4): the compressed output keeps the
+    /// same owner and user passwords, permissions and file key, written from the
+    /// lock <see cref="Chuvadi.Pdf.Documents.PdfDocument.CaptureEncryptionLock"/>
+    /// captures at open, so no password needs to be known. This allows the
+    /// rewrite of an encrypted document on its own (without
+    /// <see cref="AllowEncryptedRewrite"/>), and the output stays encrypted
+    /// rather than being emitted in the clear. A legacy RC4 key length that is
+    /// not a standard 128-bit key is refused with a
+    /// <see cref="Chuvadi.Pdf.Primitives.PdfEncryptionException"/> rather than
+    /// re-written weakly; AES-128 and AES-256 are always preserved.
+    /// </summary>
+    public bool PreserveEncryption { get; init; }
+
+    /// <summary>
     /// When true, streams are re-deflated at maximum effort
     /// (<see cref="Chuvadi.Pdf.Filters.DeflateEffort.Maximum"/>): the encoder also
     /// tries the runtime deflater and an iterated optimal ("zopfli-style") parse
@@ -221,6 +237,29 @@ public sealed record CompressionResult
     /// so small text may be hard to read (3.32.0, D-265).
     /// </summary>
     public bool BelowReadableResolution { get; init; }
+
+    /// <summary>Gets the source document's size in bytes (3.36.0).</summary>
+    public long OriginalBytes { get; init; }
+
+    /// <summary>
+    /// Gets the number of bytes written to the output (3.36.0): the rewrite, or
+    /// the original when the rewrite was not smaller and was kept.
+    /// </summary>
+    public long CompressedBytes { get; init; }
+
+    /// <summary>
+    /// Gets the size reduction as a percentage of the original (3.36.0): the
+    /// honest figure for what was actually written — zero when the original was
+    /// kept, and never negative.
+    /// </summary>
+    public double PercentReduced { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the rewrite came out no smaller than the
+    /// source, so the original bytes were written unchanged (3.36.0). The output
+    /// is then never larger than the input, and the operation counts are zero.
+    /// </summary>
+    public bool KeptOriginal { get; init; }
 }
 
 /// <summary>
@@ -557,15 +596,66 @@ public static partial class PdfCompressor
             // Object streams + a compressed cross-reference stream (PDF 1.5+) give
             // the largest lossless structural win, so the compressor enables them by
             // default. Plain document saves via PdfWriter.Write remain classic xref.
-            PdfWriter.Write(output, objects, trailer, null, synthesized, XrefStyle.Stream);
+            // Item 4: preserve the source encryption when asked. The lock keeps
+            // both passwords; a weak legacy RC4 key length is refused rather than
+            // re-written, and encryption that cannot be captured (for example a
+            // document whose embedded files alone were encrypted) is refused
+            // rather than silently emitted in the clear.
+            SourceEncryptionLock? preserve = null;
+            if (options.PreserveEncryption && document.Encryption is not null)
+            {
+                preserve = document.CaptureEncryptionLock()
+                    ?? throw new PdfEncryptionException(
+                        "The document's encryption cannot be preserved on a rewrite.");
+                if ((preserve.Algorithm == EncryptionAlgorithm.Rc4_40
+                        || preserve.Algorithm == EncryptionAlgorithm.Rc4_128)
+                    && preserve.KeyBits != 128)
+                {
+                    throw new PdfEncryptionException(
+                        "Refusing to preserve a legacy RC4 key length that is not a standard 128-bit key; "
+                        + "re-save with AES instead.");
+                }
+            }
+
+            long originalBytes = document.Reader.FileLength;
+            using MemoryStream buffer = new MemoryStream();
+            PdfWriter.Write(buffer, objects, trailer, null, synthesized, XrefStyle.Stream, preserve);
+            byte[] rewritten = buffer.ToArray();
+
+            // Item 9: a rewrite is not always smaller (an already-optimised PDF
+            // can grow). When it is not, write the original bytes unchanged so
+            // the output is never larger than the input, and report that the
+            // original was kept with a zero reduction and zero operation counts.
+            byte[]? original = null;
+            if (originalBytes > 0 && originalBytes <= int.MaxValue && rewritten.Length >= originalBytes)
+            {
+                byte[] source = document.Reader.ReadFileBytes(0, (int)originalBytes);
+                if (source.Length == originalBytes)
+                {
+                    original = source;
+                }
+            }
+
+            byte[] written = original ?? rewritten;
+            output.Write(written, 0, written.Length);
+
+            long compressedBytes = written.Length;
+            double percentReduced = originalBytes > 0
+                ? Math.Max(0.0, (originalBytes - compressedBytes) * 100.0 / originalBytes)
+                : 0.0;
+            bool keptOriginal = original is not null;
 
             return new CompressionResult
             {
-                ObjectsRemoved = objectsRemoved,
-                StreamsCompressed = streamsCompressed,
-                ImagesRecompressed = imagesRecompressed,
-                DuplicatesRemoved = duplicatesRemoved,
-                ContentStreamsMinified = contentStreamsMinified,
+                ObjectsRemoved = keptOriginal ? 0 : objectsRemoved,
+                StreamsCompressed = keptOriginal ? 0 : streamsCompressed,
+                ImagesRecompressed = keptOriginal ? 0 : imagesRecompressed,
+                DuplicatesRemoved = keptOriginal ? 0 : duplicatesRemoved,
+                ContentStreamsMinified = keptOriginal ? 0 : contentStreamsMinified,
+                OriginalBytes = originalBytes,
+                CompressedBytes = compressedBytes,
+                PercentReduced = percentReduced,
+                KeptOriginal = keptOriginal,
             };
         });
     }
@@ -586,7 +676,7 @@ public static partial class PdfCompressor
             return CompressionSkipReason.Signed;
         }
 
-        if (!options.AllowEncryptedRewrite && document.Encryption is not null)
+        if (!options.AllowEncryptedRewrite && !options.PreserveEncryption && document.Encryption is not null)
         {
             return CompressionSkipReason.Encrypted;
         }
@@ -945,38 +1035,48 @@ public static partial class PdfCompressor
         PdfPrimitive node, PdfObjectStore resolver, HashSet<int> contents, HashSet<int> visited,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
-        if (depth > MaxPageTreeDepth)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // deep page tree cannot exhaust the call stack. Same cycle guard
+        // (visited) and MaxPageTreeDepth bound (3.35.0, DOC-01); content targets
+        // go into a set, so traversal order does not matter.
+        Stack<(PdfPrimitive Node, int Depth)> stack = new Stack<(PdfPrimitive, int)>();
+        stack.Push((node, depth));
 
-        if (node is PdfReference nodeRef && !visited.Add(nodeRef.ObjectNumber))
+        while (stack.Count > 0)
         {
-            return;
-        }
+            (PdfPrimitive current, int currentDepth) = stack.Pop();
 
-        PdfPrimitive resolved = resolver.Resolve(node);
-        if (resolved is not PdfDictionary dict)
-        {
-            return;
-        }
-
-        PdfName? type = dict.GetAs<PdfName>(PdfName.Type);
-        if (type is not null && string.Equals(type.Value, "Pages", StringComparison.Ordinal))
-        {
-            if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsValue) &&
-                resolver.Resolve(kidsValue) is PdfArray kids)
+            if (currentDepth > MaxPageTreeDepth)
             {
-                for (int i = 0; i < kids.Count; i++)
+                continue;
+            }
+
+            if (current is PdfReference nodeRef && !visited.Add(nodeRef.ObjectNumber))
+            {
+                continue;
+            }
+
+            if (resolver.Resolve(current) is not PdfDictionary dict)
+            {
+                continue;
+            }
+
+            PdfName? type = dict.GetAs<PdfName>(PdfName.Type);
+            if (type is not null && string.Equals(type.Value, "Pages", StringComparison.Ordinal))
+            {
+                if (dict.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsValue) &&
+                    resolver.Resolve(kidsValue) is PdfArray kids)
                 {
-                    WalkPageTree(kids[i], resolver, contents, visited, depth + 1);
+                    for (int i = kids.Count - 1; i >= 0; i--)
+                    {
+                        stack.Push((kids[i], currentDepth + 1));
+                    }
                 }
             }
-        }
-        else if (dict.TryGetValue(PdfName.Contents, out PdfPrimitive? contentsValue))
-        {
-            AddContentTargets(contentsValue, resolver, contents);
+            else if (dict.TryGetValue(PdfName.Contents, out PdfPrimitive? contentsValue))
+            {
+                AddContentTargets(contentsValue, resolver, contents);
+            }
         }
     }
 

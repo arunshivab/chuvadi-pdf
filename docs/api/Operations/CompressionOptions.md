@@ -138,6 +138,14 @@ bool AllowEncryptedRewrite
 
 When false (the default), an encrypted document is not rewritten: `PdfCompressor.Compress(Chuvadi.Pdf.Documents.PdfDocument, System.IO.Stream, CompressionOptions?)` returns a result whose `CompressionResult.SkipReason` is `CompressionSkipReason.Encrypted` and writes nothing, because the reader exposes decrypted content and the rewrite would emit the document without encryption. Set to true to rewrite the decrypted content anyway.
 
+### `PreserveEncryption`
+
+```csharp
+bool PreserveEncryption
+```
+
+When true, an encrypted document is rewritten with its original encryption preserved (3.36.0, item 4): the compressed output keeps the same owner and user passwords, permissions and file key, written from the lock `Chuvadi.Pdf.Documents.PdfDocument.CaptureEncryptionLock` captures at open, so no password needs to be known. This allows the rewrite of an encrypted document on its own (without `AllowEncryptedRewrite`), and the output stays encrypted rather than being emitted in the clear. A legacy RC4 key length that is not a standard 128-bit key is refused with a `Chuvadi.Pdf.Primitives.PdfEncryptionException` rather than re-written weakly; AES-128 and AES-256 are always preserved.
+
 ### `MaxDeflateStreams`
 
 ```csharp

@@ -28,6 +28,7 @@
     <None Update="fixtures\hybrid_xfa_widget.pdf">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\Chuvadi.Pdf.Authoring.Tests\Fixtures\LiberationSerif-Regular.ttf" Link="Fixtures\LiberationSerif-Regular.ttf" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

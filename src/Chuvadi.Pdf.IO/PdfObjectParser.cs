@@ -436,8 +436,75 @@ internal sealed class PdfObjectParser
     private int _depth;
     private bool _nestingRefused;
 
+    // Step sentinels returned by StepArray/StepDictionary alongside a leaf value
+    // (a PdfPrimitive) or an opened container (a ParseFrame).
+    private static readonly object ContinueStep = new object();
+    private static readonly object CloseStep = new object();
+
     /// <summary>Reads one complete PDF value from the current position.</summary>
     internal PdfPrimitive ReadValue()
+    {
+        // 3.36.0 (D-430): arrays and dictionaries are parsed with an explicit
+        // stack rather than by recursive descent, so a document that nests
+        // containers thousands deep cannot exhaust the native call stack (on a
+        // 1 MB thread stack the former recursion overflowed before the
+        // MaxNesting guard could fire). The depth limit, the refusal and its
+        // exact message, the stream handling and every lenient-recovery path are
+        // unchanged; _depth mirrors the number of open containers exactly as the
+        // recursion did, so the nesting-refusal threshold and measured depth are
+        // identical.
+        _depth = 0;
+        object first = ReadOneValue();
+        if (first is not ParseFrame firstFrame)
+        {
+            return (PdfPrimitive)first;
+        }
+
+        Stack<ParseFrame> stack = new Stack<ParseFrame>();
+        stack.Push(firstFrame);
+
+        while (true)
+        {
+            _depth = stack.Count;
+            ParseFrame top = stack.Peek();
+            object step = top is ArrayFrame ? StepArray() : StepDictionary((DictFrame)top);
+
+            if (ReferenceEquals(step, ContinueStep))
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(step, CloseStep))
+            {
+                PdfPrimitive finished = top is ArrayFrame closedArray
+                    ? new PdfArray(closedArray.Items)
+                    : FinishDictionary((DictFrame)top);
+                stack.Pop();
+                _depth = stack.Count;
+                if (stack.Count == 0)
+                {
+                    return finished;
+                }
+
+                AttachChild(stack.Peek(), finished);
+                continue;
+            }
+
+            if (step is ParseFrame opened)
+            {
+                stack.Push(opened);
+                continue;
+            }
+
+            AttachChild(top, (PdfPrimitive)step);
+        }
+    }
+
+    // Reads one value at the current open-container depth (_depth), refusing when
+    // the nesting limit is reached (identical message and measured depth to the
+    // former recursive guard). Returns a leaf PdfPrimitive, or a ParseFrame when
+    // the value opens an array or dictionary.
+    private object ReadOneValue()
     {
         if (_depth >= MaxNesting)
         {
@@ -453,15 +520,177 @@ internal sealed class PdfObjectParser
                 offset);
         }
 
-        _depth++;
-        try
+        return BeginValue();
+    }
+
+    // Advances one array element: closes the array on ']' (or at the end of its
+    // object when lenient), or reads the next element (a leaf PdfPrimitive, or a
+    // ParseFrame when the element opens a container).
+    private object StepArray()
+    {
+        PdfToken next = PeekToken();
+
+        if (next.Type == PdfTokenType.ArrayEnd)
         {
-            return ReadValueCore();
+            NextToken();
+            return CloseStep;
         }
-        finally
+
+        if (Lenient && next.Type is PdfTokenType.EndOfStream or PdfTokenType.ObjectEnd)
         {
-            _depth--;
+            // 3.35.0 (52h, D-385): an array left open is closed where its
+            // object ends.
+            Damaged("an array not closed", next.ByteOffset, "closed at the end of its object");
+            return CloseStep;
         }
+
+        if (next.Type == PdfTokenType.EndOfStream)
+        {
+            throw new PdfParseException("Unexpected end of stream inside array.");
+        }
+
+        return ReadOneValue();
+    }
+
+    // Advances one dictionary step: reads the next key (Phase A), or the pending
+    // key's value (Phase B). Returns CloseStep on '>>', ContinueStep when it only
+    // consumed a key or recovered from damaged syntax, a leaf PdfPrimitive, or a
+    // ParseFrame when the value opens a container.
+    private object StepDictionary(DictFrame frame)
+    {
+        if (frame.PendingKey is null && !frame.DiscardPending)
+        {
+            PdfToken key = NextToken();
+
+            if (key.Type == PdfTokenType.DictionaryEnd)
+            {
+                return CloseStep;
+            }
+
+            if (key.Type == PdfTokenType.EndOfStream)
+            {
+                throw new PdfParseException("Unexpected end of stream inside dictionary.");
+            }
+
+            if (key.Type != PdfTokenType.Name)
+            {
+                // 3.34.0 (#52h): a token where a key belongs (for example the
+                // second word of a name written with a space in it) is
+                // skipped, with a warning, and the dictionary read on.
+                // A token that opens a value would leave its contents
+                // behind, so those still fail, unless the document was opened
+                // with RepairIfDamaged (3.35.0): then a value with no key is
+                // read and dropped, and "stream" or "endobj" closes the
+                // dictionary (a ">>" written as ">").
+                if (Lenient && key.Type is PdfTokenType.StreamStart)
+                {
+                    Damaged("a dictionary not closed before \"stream\"", key.ByteOffset, "closed there");
+                    frame.StreamFollows = true;
+                    return CloseStep;
+                }
+
+                if (Lenient && key.Type is PdfTokenType.ObjectEnd)
+                {
+                    Damaged("a dictionary not closed before \"endobj\"", key.ByteOffset, "closed there");
+                    PushBack(key);
+                    return CloseStep;
+                }
+
+                if (Lenient && key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart)
+                {
+                    // Read the value that has no key, then drop it (Phase B,
+                    // via DiscardPending), so the dictionary reads on.
+                    PushBack(key);
+                    frame.DiscardPending = true;
+                    frame.DiscardOffset = key.ByteOffset;
+                    return ContinueStep;
+                }
+
+                if (key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart or PdfTokenType.StreamStart)
+                {
+                    throw new PdfParseException(
+                        $"Dictionary key must be a name, got {key.Type} at offset {key.ByteOffset}.");
+                }
+
+                Damaged("a dictionary key that is not a name (" + key.Type + ")", key.ByteOffset, "skipped");
+                return ContinueStep;
+            }
+
+            frame.PendingKey = key;
+            return ContinueStep;
+        }
+
+        return ReadOneValue();
+    }
+
+    // Attaches a finished value to its parent container: appended for an array;
+    // for a dictionary, dropped (a value with no key, or an empty-name key) or
+    // set under the pending key, matching the former recursive dictionary parse.
+    private void AttachChild(ParseFrame parent, PdfPrimitive child)
+    {
+        if (parent is ArrayFrame array)
+        {
+            array.Items.Add(child);
+            return;
+        }
+
+        DictFrame dict = (DictFrame)parent;
+
+        if (dict.DiscardPending)
+        {
+            Damaged("a value with no key in a dictionary", dict.DiscardOffset, "skipped");
+            dict.DiscardPending = false;
+            return;
+        }
+
+        PdfToken key = dict.PendingKey!.Value;
+        dict.PendingKey = null;
+
+        if (IsEmptyName(key.RawBytes))
+        {
+            // 3.34.0 (#52h): an empty key is skipped with its value.
+            Damaged("an empty name as a dictionary key", key.ByteOffset, "skipped with its value");
+            return;
+        }
+
+        dict.Dict.Set(PdfName.FromRawBytes(key.RawBytes), child);
+    }
+
+    // Finishes a closed dictionary: a plain dictionary, or a PdfStream when a
+    // 'stream' keyword follows. Identical to the former recursive stream path.
+    private PdfPrimitive FinishDictionary(DictFrame frame)
+    {
+        PdfDictionary dict = frame.Dict;
+
+        if (!frame.StreamFollows)
+        {
+            PdfToken after = PeekToken();
+
+            if (after.Type != PdfTokenType.StreamStart)
+            {
+                return dict;
+            }
+
+            NextToken(); // consume 'stream'
+        }
+
+        ConsumeStreamLineEnding();
+
+        int length = ResolveLength(dict);
+        byte[] rawBytes = ReadStreamBytes(length);
+
+        // 3.35.0 (52h): "endstream" is consumed only when it is the next
+        // token. Reading up to "endstream" (an indirect or wrong /Length)
+        // already consumes it, and taking the next token anyway swallowed
+        // whatever followed: for a stream written directly inside a
+        // dictionary, the ">>" that closes the dictionary. A missing
+        // endstream is still tolerated.
+        if (PeekToken().Type == PdfTokenType.StreamEnd)
+        {
+            NextToken();
+        }
+
+        return new PdfStream(dict, rawBytes);
     }
 
     // Measures the deepest level reached by the value that starts at the next
@@ -555,7 +784,10 @@ internal sealed class PdfObjectParser
         }
     }
 
-    private PdfPrimitive ReadValueCore()
+    // Reads the next value's first token. Leaf values are returned as a
+    // PdfPrimitive; an array or dictionary opens and is returned as a ParseFrame
+    // for ReadValue's explicit stack to drive (no recursion).
+    private object BeginValue()
     {
         PdfToken token = NextToken();
 
@@ -597,10 +829,10 @@ internal sealed class PdfObjectParser
                 return ReadIntegerOrReference(token);
 
             case PdfTokenType.DictionaryStart:
-                return ReadDictionaryOrStream();
+                return new DictFrame();
 
             case PdfTokenType.ArrayStart:
-                return ReadArray();
+                return new ArrayFrame();
 
             case PdfTokenType.EndOfStream:
             case PdfTokenType.EndOfFile:
@@ -764,140 +996,34 @@ internal sealed class PdfObjectParser
     // past (the document was opened with RepairIfDamaged).
     private bool Lenient => Log?.LenientObjects == true;
 
-    private PdfPrimitive ReadDictionaryOrStream()
+    // ── Parse frames (iterative container state) ──────────────────────────
+
+    // One in-progress container on ReadValue's explicit stack.
+    private abstract class ParseFrame
     {
-        PdfDictionary dict = new PdfDictionary();
-        bool streamFollows = false;
-
-        while (true)
-        {
-            PdfToken key = NextToken();
-
-            if (key.Type == PdfTokenType.DictionaryEnd)
-            {
-                break;
-            }
-
-            if (key.Type == PdfTokenType.EndOfStream)
-            {
-                throw new PdfParseException("Unexpected end of stream inside dictionary.");
-            }
-
-            if (key.Type != PdfTokenType.Name)
-            {
-                // 3.34.0 (#52h): a token where a key belongs (for example the
-                // second word of a name written with a space in it) is
-                // skipped, with a warning, and the dictionary read on.
-                // A token that opens a value would leave its contents
-                // behind, so those still fail, unless the document was opened
-                // with RepairIfDamaged (3.35.0): then a value with no key is
-                // read and dropped, and "stream" or "endobj" closes the
-                // dictionary (a ">>" written as ">").
-                if (Lenient && key.Type is PdfTokenType.StreamStart)
-                {
-                    Damaged("a dictionary not closed before \"stream\"", key.ByteOffset, "closed there");
-                    streamFollows = true;
-                    break;
-                }
-
-                if (Lenient && key.Type is PdfTokenType.ObjectEnd)
-                {
-                    Damaged("a dictionary not closed before \"endobj\"", key.ByteOffset, "closed there");
-                    PushBack(key);
-                    break;
-                }
-
-                if (Lenient && key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart)
-                {
-                    PushBack(key);
-                    _ = ReadValue();
-                    Damaged("a value with no key in a dictionary", key.ByteOffset, "skipped");
-                    continue;
-                }
-
-                if (key.Type is PdfTokenType.DictionaryStart or PdfTokenType.ArrayStart or PdfTokenType.StreamStart)
-                {
-                    throw new PdfParseException(
-                        $"Dictionary key must be a name, got {key.Type} at offset {key.ByteOffset}.");
-                }
-
-                Damaged("a dictionary key that is not a name (" + key.Type + ")", key.ByteOffset, "skipped");
-                continue;
-            }
-
-            PdfPrimitive val = ReadValue();
-            if (IsEmptyName(key.RawBytes))
-            {
-                // 3.34.0 (#52h): an empty key is skipped with its value.
-                Damaged("an empty name as a dictionary key", key.ByteOffset, "skipped with its value");
-                continue;
-            }
-
-            dict.Set(PdfName.FromRawBytes(key.RawBytes), val);
-        }
-
-        if (!streamFollows)
-        {
-            PdfToken after = PeekToken();
-
-            if (after.Type != PdfTokenType.StreamStart)
-            {
-                return dict;
-            }
-
-            NextToken(); // consume 'stream'
-        }
-
-        ConsumeStreamLineEnding();
-
-        int length = ResolveLength(dict);
-        byte[] rawBytes = ReadStreamBytes(length);
-
-        // 3.35.0 (52h): "endstream" is consumed only when it is the next
-        // token. Reading up to "endstream" (an indirect or wrong /Length)
-        // already consumes it, and taking the next token anyway swallowed
-        // whatever followed: for a stream written directly inside a
-        // dictionary, the ">>" that closes the dictionary. A missing
-        // endstream is still tolerated.
-        if (PeekToken().Type == PdfTokenType.StreamEnd)
-        {
-            NextToken();
-        }
-
-        return new PdfStream(dict, rawBytes);
     }
 
-    private PdfArray ReadArray()
+    // An array being built: finished values are appended to Items.
+    private sealed class ArrayFrame : ParseFrame
     {
-        List<PdfPrimitive> items = new List<PdfPrimitive>();
+        internal List<PdfPrimitive> Items { get; } = new List<PdfPrimitive>();
+    }
 
-        while (true)
-        {
-            PdfToken next = PeekToken();
+    // A dictionary being built. PendingKey (non-null) means a value is being
+    // read for that key (Phase B); DiscardPending means a value with no key is
+    // being read to be dropped (lenient recovery). StreamFollows is set when a
+    // lenient "stream" closed the dictionary.
+    private sealed class DictFrame : ParseFrame
+    {
+        internal PdfDictionary Dict { get; } = new PdfDictionary();
 
-            if (next.Type == PdfTokenType.ArrayEnd)
-            {
-                NextToken();
-                break;
-            }
+        internal PdfToken? PendingKey { get; set; }
 
-            if (Lenient && next.Type is PdfTokenType.EndOfStream or PdfTokenType.ObjectEnd)
-            {
-                // 3.35.0 (52h, D-385): an array left open is closed where its
-                // object ends.
-                Damaged("an array not closed", next.ByteOffset, "closed at the end of its object");
-                break;
-            }
+        internal bool DiscardPending { get; set; }
 
-            if (next.Type == PdfTokenType.EndOfStream)
-            {
-                throw new PdfParseException("Unexpected end of stream inside array.");
-            }
+        internal long DiscardOffset { get; set; }
 
-            items.Add(ReadValue());
-        }
-
-        return new PdfArray(items);
+        internal bool StreamFollows { get; set; }
     }
 
     // ── String parsing ────────────────────────────────────────────────────

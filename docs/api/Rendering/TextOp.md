@@ -66,6 +66,14 @@ required AffineMatrix Transform
 
 Combined CTM × text matrix for the glyph origins.
 
+### `Ctm`
+
+```csharp
+AffineMatrix Ctm
+```
+
+The current transformation matrix (CTM) in effect when this text was shown — user space to page space — as `PathOp.Ctm` is for a path (3.36.0, D-419; additive). `Transform` combines the CTM with the text and rise matrices for the glyph origins; this is the CTM alone, so a consumer (such as a vector exporter drawing stroked, "fake bold", text) can place glyph geometry in page space itself. Defaults to `AffineMatrix.Identity`.
+
 ### `RenderingMode`
 
 ```csharp

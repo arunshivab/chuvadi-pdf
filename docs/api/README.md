@@ -259,6 +259,7 @@ python tools/gen_api_docs.py
 | [PdfEncryption](Encryption/PdfEncryption.md) | class | Top-level helper for decrypting an encrypted PDF. |
 | [PdfPasswordKind](Encryption/PdfPasswordKind.md) | enum | Which password opened an encrypted document (3.32.0). |
 | [Rc4](Encryption/Rc4.md) | class | RC4 stream cipher. |
+| [SourceEncryptionLock](Encryption/SourceEncryptionLock.md) | class | Captures the encryption of a source document so a rewrite can keep it byte-for-byte: the same `/Encrypt` dictionary (and therefore the same owner and user passwords, permissions and key derivation) and the same file identifier. |
 | [StandardSecurityHandler](Encryption/StandardSecurityHandler.md) | class | Standard security handler: derives a file encryption key from a user/owner password and the document's /Encrypt dictionary. |
 
 ## Chuvadi.Pdf.Filters
@@ -490,7 +491,7 @@ python tools/gen_api_docs.py
 | [PdfException](Primitives/PdfException.md) | class | Abstract base class for every exception raised by the Chuvadi library. |
 | [PdfInteger](Primitives/PdfInteger.md) | class | Represents a PDF integer object. |
 | [PdfLimitExceededException](Primitives/PdfLimitExceededException.md) | class | Thrown when an operation would go past one of the `PdfLimits` in effect (input size, page count, memory, decoded stream size, page complexity or output pixels). |
-| [PdfLimits](Primitives/PdfLimits.md) | class | Resource limits for opening, rendering and extracting untrusted PDFs. |
+| [PdfLimits](Primitives/PdfLimits.md) | class | Resource limits for opening, rendering, extracting from and writing untrusted PDFs. |
 | [PdfName](Primitives/PdfName.md) | class | Represents a PDF name object (e.g. `/Type`, `/Page`). |
 | [PdfNull](Primitives/PdfNull.md) | class | Represents the PDF null object. |
 | [PdfObjectId](Primitives/PdfObjectId.md) | record struct | Uniquely identifies an indirect object in a PDF file. |

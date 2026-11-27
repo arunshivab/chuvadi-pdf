@@ -10,7 +10,91 @@ rationale live in `docs/CHANGE-LOG.md` (an append-only decision log,
 numbered A01..ANN).
 
 ---
-## [3.35.0] - Unreleased
+## [3.36.0] - 2026-11-27
+
+### Behaviour changes
+
+- **Stamp, watermark, page-number and header/footer text is shaped and
+  embedded** (D-412). Every mark is now drawn through one shared composer: the
+  text is segmented by script, shaped with the LiPi Sans face for each script,
+  falls back to a monochrome Noto Emoji face for code points the primary face
+  lacks, and each face is subset-embedded as a Type0/Identity-H font. This
+  replaces the WinAnsi Helvetica standard-14 path, so marks render Latin, Indic
+  scripts and emoji and are always embedded, and text the old path could not
+  show (e.g. Tamil) now stamps instead of throwing. A caller font may be given
+  as the primary face through `HeaderFooterOptions.FontData`, a new `fontData`
+  argument on both `TextStamper.Apply` overloads, a new `fontData` constructor
+  argument on `StampPipeline`, and `TextWatermarkOptions.FontData` (now the
+  chosen primary face, no longer the only embedded font). Requires
+  Chuvadi.Fonts 1.2.0.
+
+- **Resource limits are enforced by default** (D-410). `PdfLimits.Default` now
+  caps decode size, memory, pixel count, operation count and
+  graphics-state/recursion depth on read and render.
+
+- **`XfaRenderOptions.ScriptMode` now defaults to `None`** (was `Full`), so XFA
+  initialize/calculate/validate scripts do not run unless explicitly enabled.
+
+- **PDF/A conversion reports a glyph-width inconsistency** (ISO 19005-2
+  §6.2.11.5, D-417(2)) for symbolic embedded TrueType fonts whose `/Widths`
+  disagree with the embedded program for the glyphs actually rendered.
+
+- **Encryption can be preserved across a compressing rewrite** (D-417(3)).
+  `PdfDocument.CaptureEncryptionLock()` and `CompressionOptions.PreserveEncryption`
+  keep a document's encryption — both passwords, no password needed — through a
+  compressing rewrite; RC4 with a non-128-bit key length is refused rather than
+  written weakly.
+
+- **`TextOp.Ctm` exposes the CTM in effect at each text-showing operation**
+  (D-419). Additive: no change to existing `TextOp` members or to rendered
+  output.
+
+- **Redaction decodes string tokens before pattern matching and matches in both
+  draw order and reading order** (RED-16/17/18, D-415), redacting the union of
+  the two.
+
+- **Compression never enlarges a file** (item 9). A rewrite that is not smaller
+  is dropped and the original bytes are kept; `CompressionResult` reports the
+  honest reduction.
+
+- **Optional-content (OCG) layers are preserved across page operations**
+  (OPS-02) such as merge and split.
+
+- **Signature analysis no longer counts DSS/object additions reachable only
+  from added signatures as post-signing modifications** (SIG-12).
+
+- **Pathological inputs are now bounded instead of hanging or overflowing**
+  (hardening): CFF subroutine recursion, the TrueType hinting instruction
+  budget, and soft-mask and Type3 recursion depth.
+
+- **`FontWidths` resolves indirect `/DW`, `/W` and inner `/W` elements**
+  (item 76).
+
+### Security
+
+- **Deeply nested PDF structures can no longer exhaust the native call stack**
+  (D-430). Parsing arrays and dictionaries, and walking the page tree, name
+  tree, destination/outline tree and form-field tree (across the reader, page
+  operations, compression, linearization, recovery, signing and AcroForm merge)
+  are now iterative, so a crafted document that nests these thousands deep is
+  refused or read within the existing limits instead of overflowing the stack —
+  a denial of service that crashed the process on small-stack threads (the 1 MB
+  default on Windows) while passing on larger stacks. No depth limits, parsed
+  objects, errors or behaviour changed. The remaining bounded recursions (font
+  interpreters, shading/soft-mask/Type3, optional-content expressions and
+  others, each capped at 128 levels or fewer with small frames) were confirmed
+  to stay well within a 1 MB stack. A regression test runs the deep-nesting
+  paths on a 256 KB stack so this class of bug is caught in CI.
+
+### Dependencies
+
+- **Chuvadi.Fonts bumped to 1.2.0** — adds the monochrome Noto Emoji face used
+  by the mark-text emoji fallback (D-412); it still carries the LiPi Sans
+  faces. `build/fetch-fonts.ps1` and the `Directory.Packages.props` pin are
+  updated.
+
+---
+## [3.35.0] - 2026-11-17
 
 Work in progress (D-385, D-384). Entries are added as each item lands.
 

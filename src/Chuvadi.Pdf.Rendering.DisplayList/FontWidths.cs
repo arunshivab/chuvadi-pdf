@@ -107,40 +107,50 @@ internal sealed class FontWidths
         if (resolver.Resolve(dv) is not PdfArray descArr || descArr.Count == 0) { return fw; }
         if (resolver.Resolve(descArr[0]) is not PdfDictionary descDict) { return fw; }
 
-        // /DW gives default width
+        // /DW gives the default width. Item 76: it may be written as an indirect
+        // reference (CAD producers do), so resolve it before reading — an
+        // unresolved reference left every CID at the 1000 fallback, making Find
+        // boxes and redaction extents wrong.
         if (descDict.TryGetValue(PdfName.Intern("DW"), out PdfPrimitive? dwv))
         {
-            if (dwv is PdfInteger dwi) { fw = new FontWidths(dwi.Value, isComposite: true); }
-            else if (dwv is PdfReal dwr) { fw = new FontWidths(dwr.Value, isComposite: true); }
+            PdfPrimitive dw = resolver.Resolve(dwv);
+            if (dw is PdfInteger dwi) { fw = new FontWidths(dwi.Value, isComposite: true); }
+            else if (dw is PdfReal dwr) { fw = new FontWidths(dwr.Value, isComposite: true); }
         }
 
         // /W is an array of CID-to-width definitions:
         //   c_first [w1 w2 ...]   — widths for cids c_first, c_first+1, ...
         //   c_first c_last w      — uniform width w for cids in [c_first, c_last]
-        if (descDict.TryGetValue(PdfName.Intern("W"), out PdfPrimitive? ww) && ww is PdfArray wArr)
+        // Item 76: the array and its elements may be indirect references, so each
+        // is resolved before use.
+        if (descDict.TryGetValue(PdfName.Intern("W"), out PdfPrimitive? ww)
+            && resolver.Resolve(ww) is PdfArray wArr)
         {
             int i = 0;
             while (i < wArr.Count)
             {
-                if (wArr[i] is not PdfInteger first) { i++; continue; }
+                if (resolver.Resolve(wArr[i]) is not PdfInteger first) { i++; continue; }
                 if (i + 1 >= wArr.Count) { break; }
-                if (wArr[i + 1] is PdfArray inner)
+                PdfPrimitive second = resolver.Resolve(wArr[i + 1]);
+                if (second is PdfArray inner)
                 {
                     int cid = first.Value;
                     for (int j = 0; j < inner.Count; j++)
                     {
-                        if (inner[j] is PdfInteger pi) { fw._widths[cid + j] = pi.Value; }
-                        else if (inner[j] is PdfReal pr) { fw._widths[cid + j] = pr.Value; }
+                        PdfPrimitive element = resolver.Resolve(inner[j]);
+                        if (element is PdfInteger pi) { fw._widths[cid + j] = pi.Value; }
+                        else if (element is PdfReal pr) { fw._widths[cid + j] = pr.Value; }
                     }
                     i += 2;
                 }
-                else if (i + 2 < wArr.Count
-                    && wArr[i + 1] is PdfInteger last
-                    && (wArr[i + 2] is PdfInteger or PdfReal))
+                else if (i + 2 < wArr.Count && second is PdfInteger last)
                 {
-                    double width = wArr[i + 2] is PdfInteger wi ? wi.Value :
-                        ((PdfReal)wArr[i + 2]).Value;
-                    for (int c = first.Value; c <= last.Value; c++) { fw._widths[c] = width; }
+                    PdfPrimitive widthValue = resolver.Resolve(wArr[i + 2]);
+                    if (widthValue is PdfInteger or PdfReal)
+                    {
+                        double width = widthValue is PdfInteger wi ? wi.Value : ((PdfReal)widthValue).Value;
+                        for (int c = first.Value; c <= last.Value; c++) { fw._widths[c] = width; }
+                    }
                     i += 3;
                 }
                 else { i++; }

@@ -82,6 +82,14 @@ ColorF Color
 
 Gets or initialises the text colour. Default: black.
 
+### `FontData`
+
+```csharp
+byte[]? FontData
+```
+
+Gets or initialises the bytes of a TrueType/OpenType font to use as the primary face for the header/footer text, or null (the default) to use the LiPi Sans face for each script.
+
 ### `Background`
 
 ```csharp

@@ -194,6 +194,10 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     private IEnumerable<PdfDictionary> WalkPageDictionaries(
         PdfDictionary node, int depth, HashSet<PdfDictionary> ancestors, Action onLoop)
     {
+        // 3.36.0 (D-430): iterative with an explicit stack instead of recursive
+        // yield, so a deep page tree cannot exhaust the call stack. Same document
+        // order, self/ancestor cycle guard, depth bound, warnings and exception
+        // as the former recursion.
         if (depth > MaxPageTreeDepth)
         {
             throw new PdfCorruptionException(
@@ -204,16 +208,35 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
         // 3.34.0 (Phase B N9): a node without /Kids holds no pages, and a
         // kid that is not a dictionary is skipped, each with a warning; before,
         // either failed the page lookup, as Poppler and MuPDF do not.
-        PdfArray? kids = KidsOf(node);
-        if (kids is null)
+        PdfArray? rootKids = KidsOf(node);
+        if (rootKids is null)
         {
             _warn?.Invoke(NoKidsWarning);
             yield break;
         }
 
-        for (int i = 0; i < kids.Count; i++)
+        Stack<PageWalkFrame> stack = new Stack<PageWalkFrame>();
+        stack.Push(new PageWalkFrame(node, rootKids, depth, null));
+
+        while (stack.Count > 0)
         {
-            PdfPrimitive kidRef = kids.GetAs<PdfPrimitive>(i) ?? PdfNull.Value;
+            PageWalkFrame frame = stack.Peek();
+
+            if (frame.Index >= frame.Kids.Count)
+            {
+                if (frame.ParentNode is not null)
+                {
+                    ancestors.Remove(frame.ParentNode);
+                }
+
+                stack.Pop();
+                continue;
+            }
+
+            int i = frame.Index;
+            frame.Index++;
+
+            PdfPrimitive kidRef = frame.Kids.GetAs<PdfPrimitive>(i) ?? PdfNull.Value;
             PdfPrimitive kid = _resolver.Resolve(kidRef);
 
             if (kid is not PdfDictionary kidDict)
@@ -231,21 +254,57 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
             else if (kidType == PdfName.Pages)
             {
                 // 3.34.0 (#52g): a node that is its own ancestor is skipped.
-                if (ReferenceEquals(kidDict, node) || ancestors.Contains(kidDict))
+                if (ReferenceEquals(kidDict, frame.Node) || ancestors.Contains(kidDict))
                 {
                     onLoop();
                     continue;
                 }
 
-                ancestors.Add(node);
-                foreach (PdfDictionary leaf in WalkPageDictionaries(kidDict, depth + 1, ancestors, onLoop))
+                int childDepth = frame.Depth + 1;
+                if (childDepth > MaxPageTreeDepth)
                 {
-                    yield return leaf;
+                    throw new PdfCorruptionException(
+                        $"Page tree depth exceeds maximum ({MaxPageTreeDepth}); " +
+                        "document may contain a cyclic /Kids reference.");
                 }
 
-                ancestors.Remove(node);
+                ancestors.Add(frame.Node);
+
+                PdfArray? subKids = KidsOf(kidDict);
+                if (subKids is null)
+                {
+                    _warn?.Invoke(NoKidsWarning);
+                    ancestors.Remove(frame.Node);
+                    continue;
+                }
+
+                stack.Push(new PageWalkFrame(kidDict, subKids, childDepth, frame.Node));
             }
         }
+    }
+
+    // One /Pages node being walked: its /Kids array, its depth, the index of the
+    // next kid to visit, and the parent node added to the ancestor set when this
+    // frame was pushed (removed when it is popped) — null for the root frame.
+    private sealed class PageWalkFrame
+    {
+        internal PageWalkFrame(PdfDictionary node, PdfArray kids, int depth, PdfDictionary? parentNode)
+        {
+            Node = node;
+            Kids = kids;
+            Depth = depth;
+            ParentNode = parentNode;
+        }
+
+        internal PdfDictionary Node { get; }
+
+        internal PdfArray Kids { get; }
+
+        internal int Depth { get; }
+
+        internal PdfDictionary? ParentNode { get; }
+
+        internal int Index { get; set; }
     }
 
     /// <inheritdoc/>
@@ -276,73 +335,90 @@ public sealed class PdfPageCollection : IReadOnlyList<PdfPage>
     /// </summary>
     private PdfPage FindPage(PdfDictionary node, int targetIndex, int offset, int depth, HashSet<PdfDictionary> ancestors)
     {
-        if (depth > MaxPageTreeDepth)
+        // 3.36.0 (D-430): iterative descent (the former recursion was a tail
+        // call into the one subtree containing the target), so a deep page tree
+        // cannot exhaust the call stack. Same /Count-guided descent, cycle
+        // guard, depth bound, warnings and exceptions as before.
+        while (true)
         {
-            throw new PdfCorruptionException(
-                $"Page tree depth exceeds maximum ({MaxPageTreeDepth}); " +
-                "document may contain a cyclic /Kids reference.");
-        }
-
-        PdfArray? kids = KidsOf(node);
-        if (kids is null)
-        {
-            _warn?.Invoke(NoKidsWarning);
-            throw new PdfCorruptionException(
-                $"Page index {targetIndex} not found in page tree (a page tree node has no /Kids array).");
-        }
-
-        int localOffset = offset;
-
-        for (int i = 0; i < kids.Count; i++)
-        {
-            PdfPrimitive kidRef = kids.GetAs<PdfPrimitive>(i) ?? PdfNull.Value;
-            PdfPrimitive kid = _resolver.Resolve(kidRef);
-
-            if (kid is not PdfDictionary kidDict)
+            if (depth > MaxPageTreeDepth)
             {
-                _warn?.Invoke(BadKidWarning(i));
-                continue;
+                throw new PdfCorruptionException(
+                    $"Page tree depth exceeds maximum ({MaxPageTreeDepth}); " +
+                    "document may contain a cyclic /Kids reference.");
             }
 
-            PdfName? kidType = kidDict.Type;
-
-            if (kidType == PdfName.Page)
+            PdfArray? kids = KidsOf(node);
+            if (kids is null)
             {
-                if (localOffset == targetIndex)
-                {
-                    return NewPage(kidDict, targetIndex);
-                }
-
-                localOffset++;
+                _warn?.Invoke(NoKidsWarning);
+                throw new PdfCorruptionException(
+                    $"Page index {targetIndex} not found in page tree (a page tree node has no /Kids array).");
             }
-            else if (kidType == PdfName.Pages)
+
+            int localOffset = offset;
+            bool descended = false;
+
+            for (int i = 0; i < kids.Count; i++)
             {
-                // 3.34.0 (#52g): a node that is its own ancestor is skipped
-                // and holds no pages.
-                if (ReferenceEquals(kidDict, node) || ancestors.Contains(kidDict))
+                PdfPrimitive kidRef = kids.GetAs<PdfPrimitive>(i) ?? PdfNull.Value;
+                PdfPrimitive kid = _resolver.Resolve(kidRef);
+
+                if (kid is not PdfDictionary kidDict)
                 {
-                    _warn?.Invoke(LoopWarning);
+                    _warn?.Invoke(BadKidWarning(i));
                     continue;
                 }
 
-                int subtreeCount = CountOf(kidDict);
+                PdfName? kidType = kidDict.Type;
 
-                if (targetIndex < localOffset + subtreeCount)
+                if (kidType == PdfName.Page)
                 {
-                    ancestors.Add(node);
-                    return FindPage(kidDict, targetIndex, localOffset, depth + 1, ancestors);
+                    if (localOffset == targetIndex)
+                    {
+                        return NewPage(kidDict, targetIndex);
+                    }
+
+                    localOffset++;
                 }
+                else if (kidType == PdfName.Pages)
+                {
+                    // 3.34.0 (#52g): a node that is its own ancestor is skipped
+                    // and holds no pages.
+                    if (ReferenceEquals(kidDict, node) || ancestors.Contains(kidDict))
+                    {
+                        _warn?.Invoke(LoopWarning);
+                        continue;
+                    }
 
-                localOffset += subtreeCount;
+                    int subtreeCount = CountOf(kidDict);
+
+                    if (targetIndex < localOffset + subtreeCount)
+                    {
+                        ancestors.Add(node);
+                        node = kidDict;
+                        offset = localOffset;
+                        depth++;
+                        descended = true;
+                        break;
+                    }
+
+                    localOffset += subtreeCount;
+                }
+                else
+                {
+                    // Unknown node type — skip.
+                    localOffset++;
+                }
             }
-            else
+
+            if (descended)
             {
-                // Unknown node type — skip.
-                localOffset++;
+                continue;
             }
-        }
 
-        throw new PdfCorruptionException(
-            $"Page index {targetIndex} not found in page tree (offset={offset}).");
+            throw new PdfCorruptionException(
+                $"Page index {targetIndex} not found in page tree (offset={offset}).");
+        }
     }
 }

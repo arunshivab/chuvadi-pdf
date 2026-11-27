@@ -255,6 +255,54 @@ public sealed class SignatureAudit3350Tests
         r.IsValid.Should().BeFalse();
     }
 
+    // SIG-12: a tampered update that both replaces the page's content stream
+    // and adds a /DSS whose /Certs references that same existing object must
+    // not be admitted as validation data. The replaced content is reached by
+    // the signed page, so it is a modification, not a signature part.
+    [Fact]
+    public void DssPointingAtReplacedContent_IsModified()
+    {
+        byte[] signed = Sign(BuildOnePagePdf("(PAY 100 TO ALICE) Tj"));
+        int dssNumber;
+        PdfDictionary catalog;
+        using (PdfDocument d = Open(signed))
+        {
+            dssNumber = ((PdfInteger)d.Trailer[PdfName.Size]!).Value;
+            catalog = (PdfDictionary)d.Objects.ResolveById(new PdfObjectId(CatalogNumber, 0));
+        }
+
+        PdfDictionary newCatalog = new PdfDictionary();
+        foreach (PdfName key in catalog.Keys)
+        {
+            newCatalog.Set(key, catalog[key]!);
+        }
+
+        newCatalog.Set(PdfName.Intern("DSS"), new PdfReference(new PdfObjectId(dssNumber, 0)));
+
+        PdfDictionary dss = new PdfDictionary();
+        dss.Set(PdfName.Type, PdfName.Intern("DSS"));
+        dss.Set(
+            PdfName.Intern("Certs"),
+            new PdfArray(new PdfPrimitive[] { new PdfReference(new PdfObjectId(ContentsNumber, 0)) }));
+
+        byte[] tampered = PdfWriter.WriteIncrementalUpdate(
+            signed,
+            new[]
+            {
+                new PdfIndirectObject(new PdfObjectId(ContentsNumber, 0), Content("(PAY 1,000,000 TO MALLORY) Tj")),
+                new PdfIndirectObject(new PdfObjectId(CatalogNumber, 0), newCatalog),
+                new PdfIndirectObject(new PdfObjectId(dssNumber, 0), dss),
+            });
+
+        using PdfDocument doc = Open(tampered);
+        SignatureVerificationResult r = doc.Signatures()[0].Verify(doc, Trusted());
+
+        r.IntegrityVerified.Should().BeTrue("the signed revision itself is intact");
+        r.Status.Should().Be(SignatureVerificationStatus.ModifiedAfterSigning);
+        r.IsValid.Should().BeFalse();
+    }
+
+    private const int CatalogNumber = 1;
     private const int ContentsNumber = 4;
     private const int PageNumber = 3;
 
