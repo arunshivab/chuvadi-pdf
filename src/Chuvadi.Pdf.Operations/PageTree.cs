@@ -53,25 +53,25 @@ internal static class PageTree
         HashSet<int> visited,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxPageTreeDepth is not followed.
-        if (depth > MaxPageTreeDepth)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // deep page tree cannot exhaust the call stack. Same visit order, cycle
+        // guard (visited) and MaxPageTreeDepth bound as the former recursion.
+        Stack<WalkFrame> stack = new Stack<WalkFrame>();
+        PushNode(stack, objects, node, depth);
 
-        if (!node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim))
+        while (stack.Count > 0)
         {
-            return;
-        }
+            WalkFrame frame = stack.Peek();
+            if (frame.Index >= frame.Kids.Count)
+            {
+                stack.Pop();
+                continue;
+            }
 
-        if (objects.Resolve(kidsPrim) is not PdfArray kids)
-        {
-            return;
-        }
+            PdfPrimitive kidPrim = frame.Kids[frame.Index];
+            frame.Index++;
 
-        for (int i = 0; i < kids.Count; i++)
-        {
-            if (kids[i] is not PdfReference kidRef)
+            if (kidPrim is not PdfReference kidRef)
             {
                 continue;
             }
@@ -82,8 +82,7 @@ internal static class PageTree
                 continue;
             }
 
-            PdfPrimitive resolved = objects.Resolve(kidRef);
-            if (resolved is not PdfDictionary kid)
+            if (objects.Resolve(kidRef) is not PdfDictionary kid)
             {
                 continue;
             }
@@ -91,12 +90,42 @@ internal static class PageTree
             if (kid.TryGetValue(PdfName.Type, out PdfPrimitive? typePrim)
                 && typePrim is PdfName typeName && typeName.Value == "Pages")
             {
-                Walk(objects, kid, map, ref counter, visited, depth + 1);
+                PushNode(stack, objects, kid, frame.Depth + 1);
             }
             else
             {
                 map[counter++] = kidRef.ObjectId;
             }
         }
+    }
+
+    // Pushes a /Pages node's /Kids as a new frame, unless it is past the depth
+    // bound (3.35.0, DOC-01) or has no resolvable /Kids array.
+    private static void PushNode(
+        Stack<WalkFrame> stack, PdfObjectStore objects, PdfDictionary node, int depth)
+    {
+        if (depth > MaxPageTreeDepth
+            || !node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim)
+            || objects.Resolve(kidsPrim) is not PdfArray kids)
+        {
+            return;
+        }
+
+        stack.Push(new WalkFrame(kids, depth));
+    }
+
+    private sealed class WalkFrame
+    {
+        internal WalkFrame(PdfArray kids, int depth)
+        {
+            Kids = kids;
+            Depth = depth;
+        }
+
+        internal PdfArray Kids { get; }
+
+        internal int Depth { get; }
+
+        internal int Index { get; set; }
     }
 }

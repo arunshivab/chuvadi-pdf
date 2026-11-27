@@ -210,15 +210,25 @@ internal sealed class DestinationResolver
         ref int pageCount,
         int depth)
     {
-        if (depth > MaxPageTreeDepth
-            || !node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim)
-            || store.ResolveAs<PdfArray>(kidsPrim) is not PdfArray kids)
-        {
-            return;
-        }
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // page tree nested up to MaxPageTreeDepth cannot exhaust the call stack.
+        // Same visit order (pages counted in document order), same depth bound
+        // and same /Pages cycle guard as the former recursion.
+        Stack<TreeFrame> stack = new Stack<TreeFrame>();
+        PushPageNode(stack, node, store, depth);
 
-        foreach (PdfPrimitive kidPrim in kids)
+        while (stack.Count > 0)
         {
+            TreeFrame frame = stack.Peek();
+            if (frame.Index >= frame.Kids.Count)
+            {
+                stack.Pop();
+                continue;
+            }
+
+            PdfPrimitive kidPrim = frame.Kids[frame.Index];
+            frame.Index++;
+
             if (store.ResolveAs<PdfDictionary>(kidPrim) is not PdfDictionary kid)
             {
                 continue;
@@ -240,9 +250,41 @@ internal sealed class DestinationResolver
             else if (kidType == PdfName.Pages
                 && (kidPrim is not PdfReference nodeRef || seen.Add(nodeRef.ObjectId.ObjectNumber)))
             {
-                WalkPageTree(kid, store, map, seen, ref pageCount, depth + 1);
+                PushPageNode(stack, kid, store, frame.Depth + 1);
             }
         }
+    }
+
+    // Pushes a /Pages node's kids as a new frame, unless it is past the depth
+    // bound or has no resolvable /Kids array (then nothing is walked under it).
+    private static void PushPageNode(
+        Stack<TreeFrame> stack, PdfDictionary node, PdfObjectStore store, int depth)
+    {
+        if (depth > MaxPageTreeDepth
+            || !node.TryGetValue(PdfName.Kids, out PdfPrimitive? kidsPrim)
+            || store.ResolveAs<PdfArray>(kidsPrim) is not PdfArray kids)
+        {
+            return;
+        }
+
+        stack.Push(new TreeFrame(kids, depth));
+    }
+
+    // One /Pages or name-tree node being walked: its /Kids array and the index
+    // of the next kid to visit, plus the node's depth for the bound.
+    private sealed class TreeFrame
+    {
+        internal TreeFrame(PdfArray kids, int depth)
+        {
+            Kids = kids;
+            Depth = depth;
+        }
+
+        internal PdfArray Kids { get; }
+
+        internal int Depth { get; }
+
+        internal int Index { get; set; }
     }
 
     // Flattens the catalog's named destinations (modern /Names /Dests name tree
@@ -285,6 +327,42 @@ internal sealed class DestinationResolver
         Dictionary<string, PdfPrimitive> map,
         int depth)
     {
+        // 3.36.0 (D-430): iterative pre-order walk with an explicit stack, so a
+        // name tree nested up to MaxNameTreeDepth cannot exhaust the call stack.
+        // Each node's /Names leaf entries are collected before its /Kids are
+        // descended, in the same order (first key wins) and under the same depth
+        // bound as the former recursion.
+        Stack<TreeFrame> stack = new Stack<TreeFrame>();
+        PushNameNode(stack, node, store, map, depth);
+
+        while (stack.Count > 0)
+        {
+            TreeFrame frame = stack.Peek();
+            if (frame.Index >= frame.Kids.Count)
+            {
+                stack.Pop();
+                continue;
+            }
+
+            PdfPrimitive kid = frame.Kids[frame.Index];
+            frame.Index++;
+
+            if (store.ResolveAs<PdfDictionary>(kid) is PdfDictionary kidDict)
+            {
+                PushNameNode(stack, kidDict, store, map, frame.Depth + 1);
+            }
+        }
+    }
+
+    // Collects a name-tree node's /Names leaf entries, then pushes its /Kids as
+    // a new frame, unless it is past the depth bound.
+    private static void PushNameNode(
+        Stack<TreeFrame> stack,
+        PdfDictionary node,
+        PdfObjectStore store,
+        Dictionary<string, PdfPrimitive> map,
+        int depth)
+    {
         if (depth > MaxNameTreeDepth)
         {
             return;
@@ -309,13 +387,7 @@ internal sealed class DestinationResolver
         if (node.TryGetValue(PdfName.Intern("Kids"), out PdfPrimitive? kidsPrim)
             && store.ResolveAs<PdfArray>(kidsPrim) is PdfArray kids)
         {
-            foreach (PdfPrimitive kid in kids)
-            {
-                if (store.ResolveAs<PdfDictionary>(kid) is PdfDictionary kidDict)
-                {
-                    CollectNameTree(kidDict, store, map, depth + 1);
-                }
-            }
+            stack.Push(new TreeFrame(kids, depth));
         }
     }
 }

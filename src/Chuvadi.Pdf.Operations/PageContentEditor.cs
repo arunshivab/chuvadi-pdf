@@ -3,7 +3,6 @@
 // SPEC:  PDF 32000-1:2008 §8.10.1 (form XObjects), §11.6.4.4 (/ca), §7.8.2 (content)
 // PHASE: Document operations — wrap and re-render existing page content.
 
-using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -90,11 +89,19 @@ internal sealed class PageContentEditor
         edit.Overlays.AddRange(overlayStreams);
     }
 
-    /// <summary>Adds extra resource entries (fonts, ExtGState) to a page's overlay scope.</summary>
-    internal void AddOverlayFontResource(int pageIndex, string resourceName, PdfDictionary fontDict)
+    // 3.36.0 (D-412): allocates a fresh object id, adds an embedded-font object,
+    // and registers an embedded (Type0) overlay font by resource name for a page,
+    // so header/footer text can be drawn in shaped, subset-embedded LiPi and
+    // emoji faces rather than a shared Helvetica standard-14 font.
+    internal PdfObjectId AllocateId() => NextId();
+
+    internal void AddIndirectObject(PdfObjectId id, PdfPrimitive value) =>
+        _extraObjects.Add(new PdfIndirectObject(id, value));
+
+    internal void AddOverlayEmbeddedFont(int pageIndex, string resourceName, PdfObjectId type0FontId)
     {
         PageEdit edit = GetOrCreate(pageIndex);
-        edit.OverlayFonts[resourceName] = fontDict;
+        edit.OverlayFontRefs[resourceName] = type0FontId;
     }
 
     private PageEdit GetOrCreate(int pageIndex)
@@ -194,12 +201,12 @@ internal sealed class PageContentEditor
             resources.Set(PdfName.Intern("ExtGState"), extGState);
         }
 
-        if (edit.OverlayFonts.Count > 0)
+        if (edit.OverlayFontRefs.Count > 0)
         {
             PdfDictionary fonts = new PdfDictionary();
-            foreach (KeyValuePair<string, PdfDictionary> f in edit.OverlayFonts)
+            foreach (KeyValuePair<string, PdfObjectId> f in edit.OverlayFontRefs)
             {
-                fonts.Set(PdfName.Intern(f.Key), f.Value);
+                fonts.Set(PdfName.Intern(f.Key), new PdfReference(f.Value));
             }
 
             resources.Set(PdfName.Font, fonts);
@@ -346,7 +353,6 @@ internal sealed class PageContentEditor
 
         internal List<byte[]> Overlays { get; } = new List<byte[]>();
 
-        internal Dictionary<string, PdfDictionary> OverlayFonts { get; } =
-            new Dictionary<string, PdfDictionary>(StringComparer.Ordinal);
+        internal Dictionary<string, PdfObjectId> OverlayFontRefs { get; } = new Dictionary<string, PdfObjectId>();
     }
 }

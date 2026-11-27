@@ -29,6 +29,15 @@ public sealed class XfaRenderOptions
     /// </summary>
     public bool FailOnUnsupported { get; init; }
 
-    /// <summary>Gets or sets how embedded scripts are handled. Defaults to <see cref="XfaScriptMode.Full"/>.</summary>
-    public XfaScriptMode ScriptMode { get; init; } = XfaScriptMode.Full;
+    /// <summary>
+    /// Gets or sets how embedded scripts are handled. Defaults to
+    /// <see cref="XfaScriptMode.None"/> (3.36.0): embedded initialize, calculate
+    /// and validate scripts are not run unless <see cref="XfaScriptMode.Full"/>
+    /// is set. When scripts run, a per-render budget (one million script steps,
+    /// a one-million-character string cap, and the operation's cancellation
+    /// token) bounds them; exceeding the budget raises an
+    /// <c>XfaScriptException</c>, the remaining scripts are skipped, and the
+    /// form renders with the values computed so far.
+    /// </summary>
+    public XfaScriptMode ScriptMode { get; init; } = XfaScriptMode.None;
 }

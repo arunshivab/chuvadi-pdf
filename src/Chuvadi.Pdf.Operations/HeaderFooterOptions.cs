@@ -84,6 +84,19 @@ public sealed class HeaderFooterOptions
     public ColorF Color { get; init; } = ColorF.Black;
 
     /// <summary>
+    /// Gets or initialises the bytes of a TrueType/OpenType font to use as the
+    /// primary face for the header/footer text, or null (the default) to use the
+    /// LiPi Sans face for each script.
+    /// </summary>
+    /// <remarks>
+    /// (Since 3.36.0, D-412) The text is shaped and subset-embedded through the
+    /// shared mark-text composer. When supplied, this is the primary face for
+    /// every code point it covers; the LiPi face covers the rest, with a Noto
+    /// Emoji fallback. The header/footer text is always embedded.
+    /// </remarks>
+    public byte[]? FontData { get; init; }
+
+    /// <summary>
     /// Gets or initialises a background fill drawn behind page content when a
     /// reflow strategy is used, or null for none.
     /// </summary>

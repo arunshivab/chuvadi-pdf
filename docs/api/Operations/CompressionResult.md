@@ -90,6 +90,38 @@ bool BelowReadableResolution
 
 True when the page images are below `ImageLevelOptions.ReadableDpi` (only possible with `ImageLevelOptions.AllowBelowReadableResolution`), so small text may be hard to read (3.32.0, D-265).
 
+### `OriginalBytes`
+
+```csharp
+long OriginalBytes
+```
+
+Gets the source document's size in bytes (3.36.0).
+
+### `CompressedBytes`
+
+```csharp
+long CompressedBytes
+```
+
+Gets the number of bytes written to the output (3.36.0): the rewrite, or the original when the rewrite was not smaller and was kept.
+
+### `PercentReduced`
+
+```csharp
+double PercentReduced
+```
+
+Gets the size reduction as a percentage of the original (3.36.0): the honest figure for what was actually written — zero when the original was kept, and never negative.
+
+### `KeptOriginal`
+
+```csharp
+bool KeptOriginal
+```
+
+Gets a value indicating whether the rewrite came out no smaller than the source, so the original bytes were written unchanged (3.36.0). The output is then never larger than the input, and the operation counts are zero.
+
 ---
 
 _Source: [`src/Chuvadi.Pdf.Operations/PdfCompressor.cs`](../../../src/Chuvadi.Pdf.Operations/PdfCompressor.cs)_

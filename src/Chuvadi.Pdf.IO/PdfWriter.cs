@@ -116,17 +116,31 @@ public static class PdfWriter
     /// container is encrypted as a whole and the cross-reference stream is left
     /// unencrypted, per ISO 32000-1 §7.6.
     /// </param>
+    /// <param name="preserveEncryption">
+    /// An opaque lock captured from an encrypted source document (3.36.0, item
+    /// 4). When supplied, the source's <c>/Encrypt</c> dictionary and <c>/ID</c>
+    /// are written back verbatim and objects are re-encrypted with the preserved
+    /// file key, so the original passwords still open the output. Mutually
+    /// exclusive with <paramref name="encryption"/>.
+    /// </param>
     public static void Write(
         Stream output,
         IEnumerable<PdfIndirectObject> objects,
         PdfDictionary trailer,
         EncryptionOptions? encryption,
         SynthesizedMetadata synthesized = SynthesizedMetadata.All,
-        XrefStyle xrefStyle = XrefStyle.Classic)
+        XrefStyle xrefStyle = XrefStyle.Classic,
+        SourceEncryptionLock? preserveEncryption = null)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(objects);
         ArgumentNullException.ThrowIfNull(trailer);
+        if (encryption is not null && preserveEncryption is not null)
+        {
+            throw new ArgumentException(
+                "Pass either new encryption options or a source encryption lock to preserve, not both.",
+                nameof(preserveEncryption));
+        }
 
         // Write PDF header.
         output.Write(PdfHeader, 0, PdfHeader.Length);
@@ -176,6 +190,36 @@ public static class PdfWriter
             trailer.Set(PdfName.Intern("Encrypt"), new PdfReference(encryptId));
             encryptor = new Encryptor(encryption.FileKey, encryption.Algorithm);
             encryptMetadata = encryption.EncryptMetadata;
+        }
+        else if (preserveEncryption is not null)
+        {
+            // 3.36.0 (item 4): re-apply the source document's encryption. The
+            // /Encrypt dictionary is written back verbatim (so every password,
+            // permission and key-derivation entry is identical) and the source
+            // /ID is restored (R≤4 hashes /ID[0] into the key), so both the
+            // original owner and user passwords still open the output. The
+            // objects are re-encrypted with the preserved file key.
+            encryptObjectNumber = maxObjectNumber + 1;
+            PdfObjectId encryptId = new PdfObjectId(encryptObjectNumber, 0);
+
+            PdfDictionary encryptDict = new PdfDictionary(preserveEncryption.EncryptDictionary.Count);
+            foreach (KeyValuePair<PdfName, PdfPrimitive> entry in preserveEncryption.EncryptDictionary)
+            {
+                encryptDict.Set(entry.Key, entry.Value);
+            }
+
+            sortedObjects.Add(new PdfIndirectObject(encryptId, encryptDict));
+            maxObjectNumber = encryptObjectNumber;
+
+            trailer.Set(PdfName.Intern("Encrypt"), new PdfReference(encryptId));
+            if (preserveEncryption.Id is PdfArray preservedId)
+            {
+                trailer.Set(PdfName.Intern("ID"), preservedId);
+            }
+
+            encryptor = new Encryptor(preserveEncryption.CopyFileKey(), preserveEncryption.Algorithm);
+            encryptMetadata = !(encryptDict.TryGetValue(PdfName.Intern("EncryptMetadata"), out PdfPrimitive? emv)
+                && emv is PdfBoolean emb && !emb.Value);
         }
 
         if (xrefStyle == XrefStyle.Stream)

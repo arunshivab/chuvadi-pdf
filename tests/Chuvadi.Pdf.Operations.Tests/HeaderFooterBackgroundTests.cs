@@ -81,14 +81,17 @@ public sealed class HeaderFooterBackgroundTests
 
         // Baseline is measured from the top of the band (PageH), so it lands
         // PageH - HeaderBaselineDrop = inside the band [PageH - Band, PageH].
+        // Since 3.36.0 (D-412) each segment is placed by a CTM (q … cm) with the
+        // composed text at a local origin, so the baseline appears in the cm, not
+        // in a Tm text matrix.
         int baseline = PageH - HeaderBaselineDrop;
         baseline.Should().BeInRange(PageH - Band, PageH);
-        ops.Should().Contain($" {baseline} Tm");
+        ops.Should().Contain($" {baseline} cm");
 
         // The old (buggy) baseline subtracted the band height, landing below
         // the band; it must not be emitted.
         int buggyBaseline = PageH - Band - HeaderBaselineDrop;
-        ops.Should().NotContain($" {buggyBaseline} Tm");
+        ops.Should().NotContain($" {buggyBaseline} cm");
     }
 
     [Fact]

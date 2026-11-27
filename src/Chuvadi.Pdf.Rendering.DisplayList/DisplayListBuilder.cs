@@ -184,6 +184,16 @@ public static class DisplayListBuilder
         private readonly Dictionary<(PdfStream Cell, PdfColor? Color), PageDisplayList> _tilingCellCache = new();
         private const int MaxFormDepth = 12;
 
+        // A soft mask's group (ReadSoftMask/BuildSoftMaskGroup) and a Type 3
+        // glyph's procedure (GetOrBuildType3GlyphList) each build a sub-list;
+        // a mask whose group sets a soft mask, or a glyph that draws itself,
+        // would recurse without bound (c08, c09). The depth is carried into the
+        // sub-builder, which guards and stops.
+        private int _softMaskDepth;
+        private const int MaxSoftMaskDepth = 8;
+        private int _type3Depth;
+        private const int MaxType3Depth = 8;
+
         // Type 3 font state: parsed fonts per resource key, cached glyph
         // sub-display-lists, and a d1 colour-suppression flag.
         private readonly Dictionary<string, Type3Font?> _type3FontCache = new();
@@ -1436,11 +1446,20 @@ public static class DisplayListBuilder
                 return cached;
             }
 
+            // c09: a Type 3 glyph whose procedure draws a Type 3 glyph can
+            // recurse; beyond the depth cap an empty glyph is returned.
+            if (_type3Depth >= MaxType3Depth)
+            {
+                return new PageDisplayList(new List<RenderOp>(), 0, 0, 0);
+            }
+
             Builder sub = new Builder(_doc, _visibility);
             sub._warned = _warned;
             sub._pageNumber = _pageNumber;
             sub._resources = type3.Resources ?? _resources;
             sub._stack.Current.FillColor = fill;
+            sub._type3Depth = _type3Depth + 1;
+            sub._softMaskDepth = _softMaskDepth;
 
             ContentStreamWalker.Walk(glyph.Content, sub);
 
@@ -1624,6 +1643,13 @@ public static class DisplayListBuilder
                 return;
             }
 
+            // c08: a soft mask whose group sets another soft mask can cycle;
+            // beyond the depth cap the mask is dropped rather than recursed.
+            if (_softMaskDepth >= MaxSoftMaskDepth)
+            {
+                return;
+            }
+
             PdfPrimitive sm = _doc.Objects.Resolve(smv);
             if (sm is PdfName nm)
             {
@@ -1685,6 +1711,8 @@ public static class DisplayListBuilder
             Builder sub = new Builder(_doc, _visibility);
             sub._warned = _warned;
             sub._pageNumber = _pageNumber;
+            sub._softMaskDepth = _softMaskDepth + 1;
+            sub._type3Depth = _type3Depth;
             byte[] content;
             try
             {
@@ -2406,6 +2434,7 @@ public static class DisplayListBuilder
                 FontSize = s.FontSize,
                 Glyphs = glyphs,
                 Transform = combined,
+                Ctm = s.Ctm,
                 RenderingMode = s.RenderingMode,
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
@@ -2625,6 +2654,7 @@ public static class DisplayListBuilder
                 FontSize = s.FontSize,
                 Glyphs = pending,
                 Transform = transform,
+                Ctm = s.Ctm,
                 RenderingMode = s.RenderingMode,
                 FillColor = s.FillColor,
                 StrokeColor = s.StrokeColor,
@@ -2703,6 +2733,7 @@ public static class DisplayListBuilder
                         },
                     },
                     Transform = combined,
+                    Ctm = s.Ctm,
                     RenderingMode = s.RenderingMode,
                     FillColor = s.FillColor,
                     StrokeColor = s.StrokeColor,

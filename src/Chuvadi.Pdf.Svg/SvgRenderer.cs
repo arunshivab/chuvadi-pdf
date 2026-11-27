@@ -169,6 +169,10 @@ public sealed class SvgRenderer
             throw new ArgumentOutOfRangeException(nameof(pageIndex));
         }
 
+        // 3.36.0 (D-410 A): SVG rendering honours the document's PdfLimits
+        // (the safe defaults when none were set), like the raster renderer.
+        using Chuvadi.Pdf.Primitives.PdfWorkScope scope = Chuvadi.Pdf.Primitives.PdfWorkScope.Enter(document.Objects.Limits);
+
         OptionalContentVisibility visibility = _opts.IgnoreOptionalContent
             ? OptionalContentVisibility.AllVisible
             : PageVisibility(document.Pages[pageIndex], _opts.AnnotationMode).WithOverrides(_opts.LayerVisibility).WithOverridesById(_opts.LayerVisibilityById);

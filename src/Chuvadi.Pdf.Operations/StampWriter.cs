@@ -25,6 +25,7 @@ internal sealed class StampWriter
     private readonly PdfDocument _document;
     private readonly List<PdfIndirectObject> _extraObjects = new List<PdfIndirectObject>();
     private readonly Dictionary<int, List<byte[]>> _overlays = new Dictionary<int, List<byte[]>>();
+    private readonly Dictionary<int, Dictionary<string, PdfObjectId>> _overlayFonts = new Dictionary<int, Dictionary<string, PdfObjectId>>();
     private readonly Dictionary<string, PdfDictionary> _extGStates = new Dictionary<string, PdfDictionary>();
     private PdfObjectId? _outlineRootId;
     private int _nextObjectNumber;
@@ -84,7 +85,7 @@ internal sealed class StampWriter
             }
 
             PdfPage page = _document.Pages[entry.Key];
-            PdfDictionary modified = BuildModifiedPage(page, entry.Value);
+            PdfDictionary modified = BuildModifiedPage(entry.Key, page, entry.Value);
             allObjects.Add(new PdfIndirectObject(pageId, modified));
             modifiedPageNumbers.Add(pageId.ObjectNumber);
         }
@@ -119,6 +120,21 @@ internal sealed class StampWriter
         return NextId();
     }
 
+    // 3.36.0 (D-412): registers an embedded (Type0) font, by resource name, for
+    // the overlays on one page. The font's own objects are added through
+    // AddIndirectObject; this records the name→id reference the page's /Font
+    // resources need so the overlay's Tf operators resolve.
+    internal void AddOverlayFont(int pageIndex, string resourceName, PdfObjectId type0FontId)
+    {
+        if (!_overlayFonts.TryGetValue(pageIndex, out Dictionary<string, PdfObjectId>? fonts))
+        {
+            fonts = new Dictionary<string, PdfObjectId>();
+            _overlayFonts[pageIndex] = fonts;
+        }
+
+        fonts[resourceName] = type0FontId;
+    }
+
     internal void AddIndirectObject(PdfObjectId id, PdfPrimitive value)
     {
         _extraObjects.Add(new PdfIndirectObject(id, value));
@@ -134,7 +150,7 @@ internal sealed class StampWriter
         _extGStates[name] = state;
     }
 
-    private PdfDictionary BuildModifiedPage(PdfPage page, List<byte[]> overlays)
+    private PdfDictionary BuildModifiedPage(int pageIndex, PdfPage page, List<byte[]> overlays)
     {
         PdfDictionary pageDict = ObjectImporter.CopyDictionary(page.Dictionary);
 
@@ -156,14 +172,25 @@ internal sealed class StampWriter
             }
         }
 
-        // Merge a Helvetica font resource into the page's resources.
+        // 3.36.0 (D-412): merge the page's embedded (Type0) overlay fonts into
+        // its resources as indirect references. The mark text is shaped and the
+        // faces subset-embedded as Type0 fonts, so there is no shared Helvetica
+        // standard-14 font any more.
         PdfDictionary resources = page.Resources is not null
             ? ObjectImporter.CopyDictionary(page.Resources)
             : new PdfDictionary();
 
-        PdfDictionary fonts = GetOrCreateSubdict(resources, "Font");
-        fonts.Set(PdfName.Intern(StampText.FontResourceName), StampText.BuildHelveticaFont());
-        resources.Set(PdfName.Font, fonts);
+        if (_overlayFonts.TryGetValue(pageIndex, out Dictionary<string, PdfObjectId>? overlayFonts)
+            && overlayFonts.Count > 0)
+        {
+            PdfDictionary fonts = GetOrCreateSubdict(resources, "Font");
+            foreach (KeyValuePair<string, PdfObjectId> font in overlayFonts)
+            {
+                fonts.Set(PdfName.Intern(font.Key), new PdfReference(font.Value));
+            }
+
+            resources.Set(PdfName.Font, fonts);
+        }
 
         if (_extGStates.Count > 0)
         {

@@ -18,6 +18,14 @@ PdfPasswordKind? OpenedWith
 
 Gets which password opened the document (3.32.0), or null when the document is not encrypted.
 
+### `EncryptionLock`
+
+```csharp
+SourceEncryptionLock? EncryptionLock
+```
+
+Gets an opaque capture of this document's encryption when it was opened from an encrypted file, or null when it was not encrypted (3.36.0, item 4). A rewrite can pass it to a save that preserves encryption to keep the same passwords, permissions and file key. The raw key is not readable from it.
+
 ### `Trailer`
 
 ```csharp

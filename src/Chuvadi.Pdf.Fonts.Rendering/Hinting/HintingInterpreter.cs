@@ -231,6 +231,14 @@ internal sealed class HintingInterpreter
     private int _sp;
     private int _callDepth;
 
+    // Per-program instruction budget (3.36.0): the call-depth guard stops deep
+    // recursion, but a flat runaway — a LOOPCALL with a huge count, or a
+    // backward JMPR/JROT/JROF looping forever — stays shallow. This bounds the
+    // instructions one glyph (or the fpgm/prep) may run. Reset at each program
+    // entry; charged once per instruction, across called functions.
+    private long _instructionsExecuted;
+    private const long MaxInstructionsPerRun = 10_000_000;
+
     /// <summary>
     /// Initialises a <see cref="HintingInterpreter"/> with tables sized from the
     /// given limits.
@@ -289,6 +297,7 @@ internal sealed class HintingInterpreter
     {
         ArgumentNullException.ThrowIfNull(fontProgram);
         _sp = 0;
+        _instructionsExecuted = 0;
         Execute(fontProgram);
     }
 
@@ -303,6 +312,7 @@ internal sealed class HintingInterpreter
     internal void RunProgram(byte[] program)
     {
         ArgumentNullException.ThrowIfNull(program);
+        _instructionsExecuted = 0;
         Execute(program);
     }
 
@@ -315,6 +325,8 @@ internal sealed class HintingInterpreter
         while (ip < code.Length)
         {
             byte op = code[ip];
+
+            ChargeInstruction();
 
             if (op == OpNPushB)
             {
@@ -886,6 +898,17 @@ internal sealed class HintingInterpreter
         return endf + 1;
     }
 
+    // Charges one unit against the per-program instruction budget (3.36.0),
+    // throwing when it is spent so a runaway loop or LOOPCALL is stopped.
+    private void ChargeInstruction()
+    {
+        if (++_instructionsExecuted > MaxInstructionsPerRun)
+        {
+            throw new FontRenderingException(
+                "A hinting program ran more than 10 million instructions; it was stopped.");
+        }
+    }
+
     private void CallFunction()
     {
         int functionNumber = Pop();
@@ -900,6 +923,9 @@ internal sealed class HintingInterpreter
 
         for (int i = 0; i < count; i++)
         {
+            // Charge each iteration so a huge count with an empty or cheap body
+            // is bounded even when it runs no charged instructions itself.
+            ChargeInstruction();
             CallBody(body);
         }
     }

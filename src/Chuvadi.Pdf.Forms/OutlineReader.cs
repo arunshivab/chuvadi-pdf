@@ -85,51 +85,116 @@ public static class OutlineReader
         List<OutlineItem> result,
         int depth = 0)
     {
-        PdfPrimitive? current = startPrim;
+        // 3.36.0 (D-430): iterative with an explicit continuation stack, so an
+        // outline nested up to MaxDepth cannot exhaust the call stack. Siblings
+        // are read in order; an item is created only after its children are
+        // gathered (as before); the cycle guard, depth bound and item shape are
+        // unchanged.
+        Stack<SiblingFrame> stack = new Stack<SiblingFrame>();
+        stack.Push(new SiblingFrame(startPrim, result, depth));
 
-        while (current is not null)
+        while (stack.Count > 0)
         {
+            SiblingFrame frame = stack.Peek();
+
+            if (frame.AwaitingChild)
+            {
+                // The child walk for the sibling we paused on has finished; its
+                // items are in frame.PendingChildren. Create that sibling's item
+                // and advance to its /Next.
+                frame.Result.Add(new OutlineItem(
+                    frame.PendingTitle, frame.PendingDestination?.PageIndex ?? -1, frame.PendingChildren)
+                {
+                    Destination = frame.PendingDestination,
+                    SourceDictionary = frame.PendingDict,
+                    SourceDocument = document,
+                });
+                frame.AwaitingChild = false;
+                frame.Current = frame.PendingDict!.TryGetValue(PdfName.Intern("Next"), out PdfPrimitive? nextAfter)
+                    ? nextAfter
+                    : null;
+                continue;
+            }
+
+            if (frame.Current is null)
+            {
+                stack.Pop();
+                continue;
+            }
+
+            PdfPrimitive current = frame.Current;
             int objNum = current is PdfReference r ? r.ObjectId.ObjectNumber : -1;
 
             if (objNum > 0 && !visited.Add(objNum))
             {
-                break; // cycle detected
+                frame.Current = null; // cycle detected: end this sibling chain
+                continue;
             }
 
             PdfDictionary? dict = store.ResolveAs<PdfDictionary>(current);
 
             if (dict is null)
             {
-                break;
+                frame.Current = null;
+                continue;
             }
 
             string title = ExtractTitle(dict, store);
             PdfDestination? destination = ResolveDestination(dict, store, destinations);
 
-            // Recurse into children
-            List<OutlineItem> children = new List<OutlineItem>();
-
             // 3.35.0 (DOC-01): bookmarks nested deeper than MaxDepth levels
             // are not read; before, a deep enough nesting ended the process.
-            if (depth < MaxDepth && dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
+            if (frame.Depth < MaxDepth && dict.TryGetValue(PdfName.Intern("First"), out PdfPrimitive? firstChild))
             {
-                WalkSiblings(document, firstChild, store, destinations, visited, children, depth + 1);
+                frame.AwaitingChild = true;
+                frame.PendingTitle = title;
+                frame.PendingDestination = destination;
+                frame.PendingDict = dict;
+                frame.PendingChildren = new List<OutlineItem>();
+                stack.Push(new SiblingFrame(firstChild, frame.PendingChildren, frame.Depth + 1));
+                continue;
             }
 
-            result.Add(new OutlineItem(title, destination?.PageIndex ?? -1, children)
+            frame.Result.Add(new OutlineItem(title, destination?.PageIndex ?? -1, new List<OutlineItem>())
             {
                 Destination = destination,
                 SourceDictionary = dict,
                 SourceDocument = document,
             });
 
-            if (!dict.TryGetValue(PdfName.Intern("Next"), out PdfPrimitive? nextPrim))
-            {
-                break;
-            }
-
-            current = nextPrim;
+            frame.Current = dict.TryGetValue(PdfName.Intern("Next"), out PdfPrimitive? nextPrim)
+                ? nextPrim
+                : null;
         }
+    }
+
+    // One sibling chain being walked: the current sibling, the list its items go
+    // into, and its nesting depth. When a sibling has children, the frame pauses
+    // (AwaitingChild) with that sibling's details until the child walk completes.
+    private sealed class SiblingFrame
+    {
+        internal SiblingFrame(PdfPrimitive? current, List<OutlineItem> result, int depth)
+        {
+            Current = current;
+            Result = result;
+            Depth = depth;
+        }
+
+        internal PdfPrimitive? Current { get; set; }
+
+        internal List<OutlineItem> Result { get; }
+
+        internal int Depth { get; }
+
+        internal bool AwaitingChild { get; set; }
+
+        internal string PendingTitle { get; set; } = string.Empty;
+
+        internal PdfDestination? PendingDestination { get; set; }
+
+        internal PdfDictionary? PendingDict { get; set; }
+
+        internal List<OutlineItem> PendingChildren { get; set; } = new List<OutlineItem>();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

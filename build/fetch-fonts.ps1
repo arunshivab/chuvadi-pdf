@@ -5,9 +5,11 @@
 .DESCRIPTION
     chuvadi-pdf depends on two font packages, published as release assets of
     the Chuvadi monorepo, not on nuget.org (D-46, D-147, D-311):
-    - Chuvadi.Fonts 1.1.0 (the LiPi Sans faces);
+    - Chuvadi.Fonts 1.2.0 (the LiPi Sans faces plus the monochrome Noto Emoji
+      face the 3.36.0 mark-text composer falls back to, D-412/D-424);
     - Chuvadi.Fonts.Liberation 1.0.0 (the Liberation faces the standard-14
-      embedding engine uses, 3.33.0), which depends on Chuvadi.Fonts 1.1.0.
+      embedding engine uses, 3.33.0), which depends on Chuvadi.Fonts (>= 1.1.0;
+      the pinned 1.2.0 satisfies it).
 
     This script downloads each file into .fonts-feed\ (gitignored), checks its
     SHA-256 against the value pinned below, and fails if they differ.
@@ -27,9 +29,9 @@ $ErrorActionPreference = 'Stop'
 $Packages = @(
     @{
         Id = 'Chuvadi.Fonts'
-        File = 'Chuvadi.Fonts.1.1.0.nupkg'
-        Url = 'https://github.com/arunshivab/chuvadi/releases/download/fonts-v1.1.0/Chuvadi.Fonts.1.1.0.nupkg'
-        Sha256 = 'E6F5FFA6061DBAB3D472C100E1E91846B33AF485D2D2CB7A956902834D1F742C'
+        File = 'Chuvadi.Fonts.1.2.0.nupkg'
+        Url = 'https://github.com/arunshivab/chuvadi/releases/download/fonts-v1.2.0/Chuvadi.Fonts.1.2.0.nupkg'
+        Sha256 = '9EFFDE2FE5A14236D5224A379D21A451ED6C059804CC680E6D4FF843A2068C56'
     },
     @{
         Id = 'Chuvadi.Fonts.Liberation'

@@ -74,37 +74,109 @@ public static class SignatureReader
         string? parentName,
         int depth = 0)
     {
-        // 3.35.0 (DOC-01): nesting deeper than MaxFieldDepth is not followed.
-        if (depth > MaxFieldDepth)
+        // 3.36.0 (D-430): iterative with an explicit stack instead of recursion,
+        // so a deeply nested field tree cannot exhaust the call stack. Each
+        // field's /Kids are walked before the field's own signature is lifted,
+        // in the same order, under the same MaxFieldDepth bound as before.
+        Stack<FieldStep> stack = new Stack<FieldStep>();
+        stack.Push(new ExpandStep(fields, parentName, depth));
+
+        while (stack.Count > 0)
+        {
+            FieldStep step = stack.Pop();
+
+            if (step is EmitStep emit)
+            {
+                EmitSignature(emit.FieldDict, emit.Name, resolver, output);
+                continue;
+            }
+
+            ExpandStep expand = (ExpandStep)step;
+            if (expand.Depth > MaxFieldDepth)
+            {
+                continue;
+            }
+
+            // Reverse order so fields are processed front-to-back, and push the
+            // field's own emit before its children so the children run first.
+            for (int i = expand.Fields.Count - 1; i >= 0; i--)
+            {
+                if (resolver.Resolve(expand.Fields[i]) is not PdfDictionary fieldDict)
+                {
+                    continue;
+                }
+
+                string? localName = ResolveText(resolver, fieldDict, NameT);
+                string? qualifiedName = JoinFieldName(expand.ParentName, localName);
+
+                stack.Push(new EmitStep(fieldDict, qualifiedName));
+
+                PdfArray? kids = ResolveEntry<PdfArray>(resolver, fieldDict, NameKids);
+                if (kids is not null && kids.Count > 0 && LooksLikeFieldNode(resolver, kids))
+                {
+                    stack.Push(new ExpandStep(kids, qualifiedName, expand.Depth + 1));
+                }
+            }
+        }
+    }
+
+    // Lifts a signature from a field dictionary, if it is a /Sig field with a
+    // usable value (the former per-field tail of WalkFieldArray).
+    private static void EmitSignature(
+        PdfDictionary fieldDict, string? qualifiedName, IPdfObjectResolver resolver, List<PdfSignature> output)
+    {
+        PdfName? ft = ResolveEntry<PdfName>(resolver, fieldDict, NameFT);
+        if (ft is null || ft.Value != "Sig")
         {
             return;
         }
 
-        foreach (PdfPrimitive entry in fields)
+        PdfDictionary? sigDict = ResolveEntry<PdfDictionary>(resolver, fieldDict, NameV);
+        if (sigDict is null)
         {
-            PdfPrimitive resolvedEntry = resolver.Resolve(entry);
-            if (resolvedEntry is not PdfDictionary fieldDict) { continue; }
-
-            string? localName = ResolveText(resolver, fieldDict, NameT);
-            string? qualifiedName = JoinFieldName(parentName, localName);
-
-            // Recurse into /Kids to find nested fields.
-            PdfArray? kids = ResolveEntry<PdfArray>(resolver, fieldDict, NameKids);
-            if (kids is not null && kids.Count > 0 && LooksLikeFieldNode(resolver, kids))
-            {
-                WalkFieldArray(kids, resolver, output, qualifiedName, depth + 1);
-            }
-
-            // Lift if this is a signature field with a value.
-            PdfName? ft = ResolveEntry<PdfName>(resolver, fieldDict, NameFT);
-            if (ft is null || ft.Value != "Sig") { continue; }
-
-            PdfDictionary? sigDict = ResolveEntry<PdfDictionary>(resolver, fieldDict, NameV);
-            if (sigDict is null) { continue; }
-
-            PdfSignature? signature = TryLiftSignature(qualifiedName ?? string.Empty, sigDict, resolver);
-            if (signature is not null) { output.Add(signature); }
+            return;
         }
+
+        PdfSignature? signature = TryLiftSignature(qualifiedName ?? string.Empty, sigDict, resolver);
+        if (signature is not null)
+        {
+            output.Add(signature);
+        }
+    }
+
+    // A unit of field-tree work: expand a /Kids array, or emit one field's
+    // signature after its subtree has been walked.
+    private abstract class FieldStep
+    {
+    }
+
+    private sealed class ExpandStep : FieldStep
+    {
+        internal ExpandStep(PdfArray fields, string? parentName, int depth)
+        {
+            Fields = fields;
+            ParentName = parentName;
+            Depth = depth;
+        }
+
+        internal PdfArray Fields { get; }
+
+        internal string? ParentName { get; }
+
+        internal int Depth { get; }
+    }
+
+    private sealed class EmitStep : FieldStep
+    {
+        internal EmitStep(PdfDictionary fieldDict, string? name)
+        {
+            FieldDict = fieldDict;
+            Name = name;
+        }
+
+        internal PdfDictionary FieldDict { get; }
+
+        internal string? Name { get; }
     }
 
     /// <summary>True when the kids array's first element looks like a form-field dict (has /T or /FT or /Kids).</summary>

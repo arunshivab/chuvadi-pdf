@@ -74,24 +74,43 @@ internal static class PatternLocator
         // A string split across two content streams (not allowed, but drawn
         // by viewers) shows with or without a space at the split, depending
         // on the viewer; such a page is also matched with spaces ignored.
+        // RED-18: text is matched in BOTH draw order and reading order, and the
+        // union is redacted. Draw order catches a value whose pieces overlap at
+        // a seam (where a position sort would misread them); reading order
+        // catches a value drawn out of stream order (where draw order never
+        // joins it up). A match found by both lands on the same glyphs, so the
+        // redaction is idempotent.
         bool splitString = SplitsStringAcrossStreams(document, document.Pages[pageIndex].Dictionary);
+        List<Glyph> pageReading = SortedReadingOrder(page);
         foreach ((int start, int end) in Matches(page, patterns, result.Found, splitString))
         {
             AddBoxes(page, start, end, result.Boxes, result.OverlayBoxes);
         }
 
+        foreach ((int start, int end) in Matches(pageReading, patterns, result.Found, splitString))
+        {
+            AddBoxes(pageReading, start, end, result.Boxes, result.OverlayBoxes);
+        }
+
         // Each tile copy of a pattern cell is matched on its own.
         foreach (List<Glyph> tile in walk.Tiles)
         {
+            List<Glyph> tileReading = SortedReadingOrder(tile);
             foreach ((int start, int end) in Matches(tile, patterns, result.Found))
             {
                 AddBoxes(tile, start, end, result.Boxes, result.OverlayBoxes);
+            }
+
+            foreach ((int start, int end) in Matches(tileReading, patterns, result.Found))
+            {
+                AddBoxes(tileReading, start, end, result.Boxes, result.OverlayBoxes);
             }
         }
 
         foreach (KeyValuePair<PdfDictionary, List<Glyph>> annotation in annotations)
         {
-            if (Matches(annotation.Value, patterns, result.Found).Count > 0)
+            if (Matches(annotation.Value, patterns, result.Found).Count > 0
+                || Matches(SortedReadingOrder(annotation.Value), patterns, result.Found).Count > 0)
             {
                 result.Annotations.Add(annotation.Key);
             }
@@ -728,6 +747,71 @@ internal static class PatternLocator
         double a = next.Full.X - previous.Full.Right;
         double b = previous.Full.X - next.Full.Right;
         return Math.Max(a, b);
+    }
+
+    // Returns the glyphs in reading order — top line first, left to right
+    // within a line — without changing the caller's list (RED-18). Lines are
+    // grouped by baseline within half an em, matching the line-break rule in
+    // Matches; draw order breaks ties, so a line already in order keeps its
+    // sequence and a match found in draw order is found again at the same place.
+    private static List<Glyph> SortedReadingOrder(List<Glyph> glyphs)
+    {
+        if (glyphs.Count < 2)
+        {
+            return new List<Glyph>(glyphs);
+        }
+
+        int count = glyphs.Count;
+        int[] byBaseline = new int[count];
+        for (int i = 0; i < count; i++)
+        {
+            byBaseline[i] = i;
+        }
+
+        Array.Sort(byBaseline, (a, b) =>
+        {
+            int cmp = glyphs[b].Baseline.CompareTo(glyphs[a].Baseline);
+            return cmp != 0 ? cmp : a.CompareTo(b);
+        });
+
+        List<List<int>> lines = new List<List<int>>();
+        foreach (int index in byBaseline)
+        {
+            if (lines.Count == 0)
+            {
+                lines.Add(new List<int> { index });
+                continue;
+            }
+
+            List<int> current = lines[lines.Count - 1];
+            Glyph head = glyphs[current[0]];
+            Glyph glyph = glyphs[index];
+            double em = Math.Max(Math.Max(head.FontSize, glyph.FontSize), 0.01);
+            if (Math.Abs(glyph.Baseline - head.Baseline) <= em * 0.5)
+            {
+                current.Add(index);
+            }
+            else
+            {
+                lines.Add(new List<int> { index });
+            }
+        }
+
+        List<Glyph> ordered = new List<Glyph>(count);
+        foreach (List<int> line in lines)
+        {
+            line.Sort((a, b) =>
+            {
+                int cmp = glyphs[a].X0.CompareTo(glyphs[b].X0);
+                return cmp != 0 ? cmp : a.CompareTo(b);
+            });
+            foreach (int index in line)
+            {
+                ordered.Add(glyphs[index]);
+            }
+        }
+
+        return ordered;
     }
 
     // One box per line of the matched glyphs (ink-inside boxes joined).

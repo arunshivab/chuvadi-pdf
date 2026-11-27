@@ -136,7 +136,11 @@ public static class XfaRenderer
             return;
         }
 
-        XfaScriptHost host = new XfaScriptHost(root);
+        // The budget's cancellation token comes from the ambient work scope, so
+        // a caller that wants a time limit passes a token with a timeout.
+        System.Threading.CancellationToken token =
+            Chuvadi.Pdf.Primitives.PdfWorkScope.Current?.CancellationToken ?? System.Threading.CancellationToken.None;
+        XfaScriptHost host = new XfaScriptHost(root, token);
 
         if (mode == XfaScriptMode.Full)
         {

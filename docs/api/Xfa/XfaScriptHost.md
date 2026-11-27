@@ -18,7 +18,38 @@ Initializes a new instance of the `XfaScriptHost` class.
 
 - `root` — The template root the scripts resolve references against. <exception cref="ArgumentNullException">`root` is null.</exception>
 
+### `XfaScriptHost(XfaNode root, CancellationToken cancellationToken)`
+
+Initializes a new instance of the `XfaScriptHost` class that honours `cancellationToken` while scripts run (3.36.0).
+
+**Parameters**
+
+- `root` — The template root the scripts resolve references against.
+- `cancellationToken` — The token checked as scripts run. <exception cref="ArgumentNullException">`root` is null.</exception>
+
 ## Methods
+
+### `ChargeStep`
+
+```csharp
+void ChargeStep()
+```
+
+Charges one script step against the per-render budget and honours the cancellation token (3.36.0). The engines call it as they run. Throws `XfaScriptException` when `MaxScriptSteps` is passed — the runner then skips the rest of the scripts — or `OperationCanceledException` when the token is cancelled, which ends the render. <exception cref="XfaScriptException">The step budget is spent.</exception>
+
+### `CheckStringLength`
+
+__static__
+
+```csharp
+static void CheckStringLength(long length)
+```
+
+Guards against runaway string growth (3.36.0): throws `XfaScriptException` when a string a script would build is longer than `MaxStringLength`.
+
+**Parameters**
+
+- `length` — The length of the string about to be built. <exception cref="XfaScriptException">The length cap is passed.</exception>
 
 ### `Resolve`
 
@@ -67,6 +98,24 @@ Writes a property of a node.
 - `node` — The node to modify.
 - `property` — The property name (rawValue / value / text / presence).
 - `value` — The new value.
+
+## Fields
+
+### `MaxScriptSteps`
+
+```csharp
+const long MaxScriptSteps = 1_000_000
+```
+
+One million — the script-step budget for one render (3.36.0).
+
+### `MaxStringLength`
+
+```csharp
+const int MaxStringLength = 1_000_000
+```
+
+One million — the cap on a script string's length (3.36.0).
 
 ---
 

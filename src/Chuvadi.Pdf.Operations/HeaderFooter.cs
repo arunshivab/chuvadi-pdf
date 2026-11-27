@@ -8,8 +8,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Chuvadi.Pdf.Authoring;
 using Chuvadi.Pdf.Documents;
 using Chuvadi.Pdf.Graphics;
+using Chuvadi.Pdf.Objects;
+using Chuvadi.Pdf.Primitives;
 
 namespace Chuvadi.Pdf.Operations;
 
@@ -95,7 +98,9 @@ public static class HeaderFooter
             return Array.Empty<HeaderFooterSegment>();
         }
 
-        return ComputeSegments(options, Frame(document.Pages[pageIndex], options).Box, pageIndex, total);
+        return ComputeSegments(
+            options, Frame(document.Pages[pageIndex], options).Box, pageIndex, total,
+            new MarkTextComposer(options.FontData));
     }
 
     /// <summary>
@@ -134,6 +139,7 @@ public static class HeaderFooter
         int total)
     {
         StampWriter writer = new StampWriter(document);
+        MarkTextComposer composer = new MarkTextComposer(options.FontData);
 
         for (int pageIndex = 0; pageIndex < total; pageIndex++)
         {
@@ -142,8 +148,13 @@ public static class HeaderFooter
                 continue;
             }
 
+            int page0 = pageIndex;
             PdfPage page = document.Pages[pageIndex];
-            string fragment = BuildBandFragments(options, page, pageIndex, total);
+            string fragment = BuildBandFragments(
+                options, page, pageIndex, total, composer,
+                writer.AllocateId,
+                obj => writer.AddIndirectObject(obj.Id, obj.Value),
+                (name, id) => writer.AddOverlayFont(page0, name, id));
 
             if (fragment.Length == 0)
             {
@@ -167,6 +178,7 @@ public static class HeaderFooter
         int total)
     {
         PageContentEditor editor = new PageContentEditor(document);
+        MarkTextComposer composer = new MarkTextComposer(options.FontData);
 
         for (int pageIndex = 0; pageIndex < total; pageIndex++)
         {
@@ -207,7 +219,12 @@ public static class HeaderFooter
                 contentTransform = toUser.Invert().Multiply(contentTransform).Multiply(toUser);
             }
 
-            string fragment = BuildBandFragments(options, page, pageIndex, total);
+            int page0 = pageIndex;
+            string fragment = BuildBandFragments(
+                options, page, pageIndex, total, composer,
+                editor.AllocateId,
+                obj => editor.AddIndirectObject(obj.Id, obj.Value),
+                (name, id) => editor.AddOverlayEmbeddedFont(page0, name, id));
 
             List<byte[]> overlays = new List<byte[]>();
             if (fragment.Length > 0)
@@ -243,7 +260,6 @@ public static class HeaderFooter
 
             editor.TransformAndOverlay(
                 pageIndex, contentTransform, options.Background, backgroundBands, overlays);
-            editor.AddOverlayFontResource(pageIndex, StampText.FontResourceName, StampText.BuildHelveticaFont());
         }
 
         editor.Write(output);
@@ -251,15 +267,28 @@ public static class HeaderFooter
 
     // Builds the text-show fragment for header and footer segments on one page.
     // Drawn from ComputeSegments so ResolveSegments previews match exactly.
+    //
+    // 3.36.0 (D-412): each segment is shaped and subset-embedded through the
+    // shared MarkTextComposer (LiPi faces by script + Noto Emoji fallback, or a
+    // chosen font), replacing the old WinAnsi Helvetica show-text. The composer
+    // builds each segment in local text space (baseline on y = 0, origin x = 0);
+    // this wraps it in q/cm/Q to place it, registers its subset-embedded font
+    // objects via <paramref name="addObject"/> and their resource names via
+    // <paramref name="registerFont"/>, and allocates object ids with
+    // <paramref name="allocateId"/>.
     private static string BuildBandFragments(
         HeaderFooterOptions options,
         PdfPage page,
         int pageIndex,
-        int total)
+        int total,
+        MarkTextComposer composer,
+        Func<PdfObjectId> allocateId,
+        Action<PdfIndirectObject> addObject,
+        Action<string, PdfObjectId> registerFont)
     {
         StringBuilder sb = new StringBuilder();
         (PdfRectangle box, Transform toUser) = Frame(page, options);
-        List<HeaderFooterSegment> segments = ComputeSegments(options, box, pageIndex, total);
+        List<HeaderFooterSegment> segments = ComputeSegments(options, box, pageIndex, total, composer);
         if (segments.Count > 0 && !toUser.IsIdentity)
         {
             // Display space → user space for every segment that follows.
@@ -267,10 +296,30 @@ public static class HeaderFooter
                 $"{toUser.A:0.######} {toUser.B:0.######} {toUser.C:0.######} {toUser.D:0.######} {toUser.E:0.######} {toUser.F:0.######} cm\n"));
         }
 
+        int segIndex = 0;
         foreach (HeaderFooterSegment segment in segments)
         {
-            Transform placement = new Transform(1, 0, 0, 1, segment.X, segment.BaselineY);
-            sb.Append(StampText.BuildShowText(segment.Text, placement, options.FontSize, options.Color));
+            string prefix = string.Create(
+                CultureInfo.InvariantCulture, $"Hf{pageIndex}s{segIndex}");
+            ComposedMarkText composed = composer.Compose(
+                segment.Text, options.FontSize, options.Color, allocateId, prefix);
+
+            foreach (PdfIndirectObject obj in composed.FontObjects)
+            {
+                addObject(obj);
+            }
+
+            foreach (KeyValuePair<string, PdfObjectId> font in composed.FontResources)
+            {
+                registerFont(font.Key, font.Value);
+            }
+
+            sb.Append(string.Create(
+                CultureInfo.InvariantCulture,
+                $"q\n1 0 0 1 {segment.X:0.######} {segment.BaselineY:0.######} cm\n"));
+            sb.Append(composed.ContentFragment);
+            sb.Append("Q\n");
+            segIndex++;
         }
 
         return sb.ToString();
@@ -304,7 +353,8 @@ public static class HeaderFooter
         HeaderFooterOptions options,
         PdfRectangle mediaBox,
         int pageIndex,
-        int total)
+        int total,
+        MarkTextComposer composer)
     {
         StampContext ctx = BuildContext(options, pageIndex, total);
         List<HeaderFooterSegment> segments = new List<HeaderFooterSegment>();
@@ -315,13 +365,13 @@ public static class HeaderFooter
             // page top, Y2), per HeaderBaselineOffset's contract, so the header
             // text sits inside the band rather than below it (mirrors the footer).
             double y = mediaBox.Y2 + options.HeaderBaselineOffset;
-            AddBand(segments, HeaderFooterBand.Header, header, ctx, mediaBox, y, options);
+            AddBand(segments, HeaderFooterBand.Header, header, ctx, mediaBox, y, options, composer);
         }
 
         if (options.Footer is BandText footer)
         {
             double y = mediaBox.Y1 + options.FooterBaselineOffset;
-            AddBand(segments, HeaderFooterBand.Footer, footer, ctx, mediaBox, y, options);
+            AddBand(segments, HeaderFooterBand.Footer, footer, ctx, mediaBox, y, options, composer);
         }
 
         return segments;
@@ -334,11 +384,12 @@ public static class HeaderFooter
         StampContext ctx,
         PdfRectangle mediaBox,
         double baselineY,
-        HeaderFooterOptions options)
+        HeaderFooterOptions options,
+        MarkTextComposer composer)
     {
-        AddOne(segments, band, text.Left, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Left);
-        AddOne(segments, band, text.Center, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Center);
-        AddOne(segments, band, text.Right, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Right);
+        AddOne(segments, band, text.Left, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Left, composer);
+        AddOne(segments, band, text.Center, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Center, composer);
+        AddOne(segments, band, text.Right, ctx, mediaBox, baselineY, options, HeaderFooterAlignment.Right, composer);
     }
 
     private static void AddOne(
@@ -349,7 +400,8 @@ public static class HeaderFooter
         PdfRectangle mediaBox,
         double baselineY,
         HeaderFooterOptions options,
-        HeaderFooterAlignment align)
+        HeaderFooterAlignment align,
+        MarkTextComposer composer)
     {
         if (template is null)
         {
@@ -362,7 +414,7 @@ public static class HeaderFooter
             return;
         }
 
-        double width = StampText.MeasureWidth(text, options.FontSize);
+        double width = composer.Measure(text, options.FontSize);
         double x = align switch
         {
             HeaderFooterAlignment.Left => mediaBox.X1 + options.MarginX,

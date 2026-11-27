@@ -287,6 +287,17 @@ public sealed class TextOp : RenderOp
     /// <summary>Combined CTM × text matrix for the glyph origins.</summary>
     public required AffineMatrix Transform { get; init; }
 
+    /// <summary>
+    /// The current transformation matrix (CTM) in effect when this text was
+    /// shown — user space to page space — as <see cref="PathOp.Ctm"/> is for a
+    /// path (3.36.0, D-419; additive). <see cref="Transform"/> combines the CTM
+    /// with the text and rise matrices for the glyph origins; this is the CTM
+    /// alone, so a consumer (such as a vector exporter drawing stroked, "fake
+    /// bold", text) can place glyph geometry in page space itself. Defaults to
+    /// <see cref="AffineMatrix.Identity"/>.
+    /// </summary>
+    public AffineMatrix Ctm { get; init; } = AffineMatrix.Identity;
+
     /// <summary>Text rendering mode (PDF §9.3.6).</summary>
     public TextRenderingMode RenderingMode { get; init; } = TextRenderingMode.Fill;
 

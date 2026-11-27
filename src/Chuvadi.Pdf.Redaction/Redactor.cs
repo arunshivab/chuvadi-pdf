@@ -6517,37 +6517,35 @@ public static class Redactor
         return 0;
     }
 
+    // Decodes a show-operator string operand to one char per content byte,
+    // resolving every PDF escape (RED-16/17): the redactor keeps or cuts glyphs
+    // by index, so an undecoded escape such as \( \\ \351 or a line
+    // continuation would otherwise count as several chars and shift every later
+    // cut. Delegates to the single authoritative decoders in PdfString so the
+    // byte codes match the content parser exactly.
     private static string ExtractString(PdfToken token)
     {
-        string raw = token.RawText;
-
+        byte[] decoded;
         if (token.Type == PdfTokenType.LiteralString)
         {
-            if (raw.Length >= 2 && raw[0] == '(' && raw[raw.Length - 1] == ')')
-            {
-                return raw.Substring(1, raw.Length - 2);
-            }
+            decoded = PdfString.DecodeLiteralToken(token.RawBytes);
         }
         else if (token.Type == PdfTokenType.HexString)
         {
-            if (raw.Length >= 2 && raw[0] == '<' && raw[raw.Length - 1] == '>')
-            {
-                string hex = raw.Substring(1, raw.Length - 2);
-                StringBuilder sb = new StringBuilder(hex.Length / 2);
-
-                for (int i = 0; i + 1 < hex.Length; i += 2)
-                {
-                    if (byte.TryParse(hex.Substring(i, 2), NumberStyles.HexNumber, null, out byte b))
-                    {
-                        sb.Append((char)b);
-                    }
-                }
-
-                return sb.ToString();
-            }
+            decoded = PdfString.DecodeHexToken(token.RawBytes);
+        }
+        else
+        {
+            return token.RawText;
         }
 
-        return raw;
+        char[] chars = new char[decoded.Length];
+        for (int i = 0; i < decoded.Length; i++)
+        {
+            chars[i] = (char)decoded[i];
+        }
+
+        return new string(chars);
     }
 
     private static PdfDictionary CopyDictionary(PdfDictionary source)

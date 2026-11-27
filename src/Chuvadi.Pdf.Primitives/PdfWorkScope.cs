@@ -70,13 +70,21 @@ public sealed class PdfWorkScope : IDisposable
     /// Opens a scope on the current flow. Dispose it (for example with
     /// <c>using</c>) to restore the previous scope.
     /// </summary>
-    /// <param name="limits">The limits to apply; null for none.</param>
+    /// <param name="limits">
+    /// The limits to apply. Null (3.36.0) applies <see cref="PdfLimits.Default"/>
+    /// (the safe defaults) at the top level, so work run with no limits
+    /// specified is still guarded; nested in another scope it adds nothing of
+    /// its own and the enclosing scope's limits alone apply. Pass
+    /// <see cref="PdfLimits.Unlimited"/> to turn them off.
+    /// </param>
     /// <param name="cancellationToken">The token to honour.</param>
     /// <returns>The new scope.</returns>
     public static PdfWorkScope Enter(PdfLimits? limits, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        PdfWorkScope scope = new PdfWorkScope(limits ?? new PdfLimits(), cancellationToken, Live(CurrentScope.Value));
+        PdfWorkScope? parent = Live(CurrentScope.Value);
+        PdfLimits effective = limits ?? (parent is null ? PdfLimits.Default : PdfLimits.Unlimited);
+        PdfWorkScope scope = new PdfWorkScope(effective, cancellationToken, parent);
         CurrentScope.Value = scope;
         return scope;
     }
@@ -108,6 +116,25 @@ public sealed class PdfWorkScope : IDisposable
             if (s.Limits.MaxContentOperators is long max && total > max)
             {
                 throw new PdfLimitExceededException(nameof(PdfLimits.MaxContentOperators), max, total);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks the graphics-state nesting depth against
+    /// <see cref="PdfLimits.MaxGraphicsStateDepth"/> and checks cancellation.
+    /// Content painting calls this on each <c>q</c> with the depth the save
+    /// reaches (3.36.0).
+    /// </summary>
+    /// <param name="depth">The number of <c>q</c>s not yet balanced by a <c>Q</c>.</param>
+    public static void CheckGraphicsStateDepth(int depth)
+    {
+        for (PdfWorkScope? s = Live(CurrentScope.Value); s is not null; s = Live(s._parent))
+        {
+            s.CancellationToken.ThrowIfCancellationRequested();
+            if (s.Limits.MaxGraphicsStateDepth is int max && depth > max)
+            {
+                throw new PdfLimitExceededException(nameof(PdfLimits.MaxGraphicsStateDepth), max, depth);
             }
         }
     }

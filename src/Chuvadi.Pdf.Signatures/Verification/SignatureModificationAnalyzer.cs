@@ -185,6 +185,18 @@ internal static class SignatureModificationAnalyzer
             CollectReachable(now, dss, addedSignatureParts, 0);
         }
 
+        // SIG-12: a signature or validation part is legitimately new in the
+        // update. An object the signed revision already reaches — pointed at by
+        // a new /DSS or a new signature field's /V or /AP — is a smuggled
+        // change, not a part. Dropping those from the admitted set makes a
+        // later change to them (replaced page content, a rebuilt page tree)
+        // report as a modification instead of being waved through. New parts
+        // have new object numbers, which the signed revision cannot reach, so
+        // they survive; the legitimate fill-of-an-empty-field and LTV/DSS cases
+        // keep their own object-number branches below.
+        HashSet<int> signedReachable = ReachableFromTrailer(signed);
+        addedSignatureParts.ExceptWith(signedReachable);
+
         int catalogNumber = whole.Trailer.TryGetValue(PdfName.Intern("Root"), out PdfPrimitive? root) && root is PdfReference rootRef
             ? rootRef.ObjectNumber
             : -1;

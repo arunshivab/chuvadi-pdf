@@ -34,7 +34,7 @@
 
   <ItemGroup>
     <!-- Chuvadi's own LiPi Sans font pack (fonts-v1.1.0 release, D-147, D-311). -->
-    <PackageVersion Include="Chuvadi.Fonts" Version="1.1.0" />
+    <PackageVersion Include="Chuvadi.Fonts" Version="1.2.0" />
     <!-- The Liberation fonts for the standard-14 embedding engine
          (fonts-liberation-v1.0.0 release, 3.33.0, D-307/D-308, D-311). -->
     <PackageVersion Include="Chuvadi.Fonts.Liberation" Version="1.0.0" />

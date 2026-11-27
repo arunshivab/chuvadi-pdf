@@ -5,6 +5,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Threading;
 using Chuvadi.Pdf.Xfa.Model;
 
 namespace Chuvadi.Pdf.Xfa.Scripting;
@@ -17,18 +19,80 @@ namespace Chuvadi.Pdf.Xfa.Scripting;
 /// </summary>
 public sealed class XfaScriptHost
 {
+    /// <summary>One million — the script-step budget for one render (3.36.0).</summary>
+    public const long MaxScriptSteps = 1_000_000;
+
+    /// <summary>One million — the cap on a script string's length (3.36.0).</summary>
+    public const int MaxStringLength = 1_000_000;
+
     private readonly XfaNode _root;
     private readonly Dictionary<string, XfaNode> _byName =
         new Dictionary<string, XfaNode>(StringComparer.Ordinal);
+    private readonly CancellationToken _cancellationToken;
+    private long _steps;
 
     /// <summary>Initializes a new instance of the <see cref="XfaScriptHost"/> class.</summary>
     /// <param name="root">The template root the scripts resolve references against.</param>
     /// <exception cref="ArgumentNullException"><paramref name="root"/> is null.</exception>
     public XfaScriptHost(XfaNode root)
+        : this(root, CancellationToken.None)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="XfaScriptHost"/> class that
+    /// honours <paramref name="cancellationToken"/> while scripts run (3.36.0).
+    /// </summary>
+    /// <param name="root">The template root the scripts resolve references against.</param>
+    /// <param name="cancellationToken">The token checked as scripts run.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="root"/> is null.</exception>
+    public XfaScriptHost(XfaNode root, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(root);
         _root = root;
+        _cancellationToken = cancellationToken;
         IndexNames(root);
+    }
+
+    /// <summary>
+    /// Charges one script step against the per-render budget and honours the
+    /// cancellation token (3.36.0). The engines call it as they run. Throws
+    /// <see cref="XfaScriptException"/> when <see cref="MaxScriptSteps"/> is
+    /// passed — the runner then skips the rest of the scripts — or
+    /// <see cref="OperationCanceledException"/> when the token is cancelled,
+    /// which ends the render.
+    /// </summary>
+    /// <exception cref="XfaScriptException">The step budget is spent.</exception>
+    public void ChargeStep()
+    {
+        if ((++_steps & 0x3FF) == 0)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        if (_steps > MaxScriptSteps)
+        {
+            throw new XfaScriptException(
+                "The scripts exceeded the " + MaxScriptSteps.ToString(CultureInfo.InvariantCulture)
+                + "-step budget for one render.");
+        }
+    }
+
+    /// <summary>
+    /// Guards against runaway string growth (3.36.0): throws
+    /// <see cref="XfaScriptException"/> when a string a script would build is
+    /// longer than <see cref="MaxStringLength"/>.
+    /// </summary>
+    /// <param name="length">The length of the string about to be built.</param>
+    /// <exception cref="XfaScriptException">The length cap is passed.</exception>
+    public static void CheckStringLength(long length)
+    {
+        if (length > MaxStringLength)
+        {
+            throw new XfaScriptException(
+                "A script built a string longer than the " + MaxStringLength.ToString(CultureInfo.InvariantCulture)
+                + "-character cap.");
+        }
     }
 
     /// <summary>
